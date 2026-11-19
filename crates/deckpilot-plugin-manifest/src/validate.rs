@@ -20,7 +20,8 @@ use crate::model::{
     Action, ActionControls, ControlKind, Credential, CredentialScheme, Effect, HttpMethod,
     MAX_INPUTS_PER_KIND, MAX_NAVIGATION_ENTRIES, MAX_NAVIGATION_ID, MAX_NAVIGATION_LABEL,
     MAX_VIEWS, Manifest, NAVIGATION_API, Node, Parameter, ParameterKind, ParameterValue,
-    Permission, PermissionKind, ProfileScope, Setting, UserOriginSlot, VariableScope,
+    Permission, PermissionKind, ProfileScope, Setting, UserOriginSlot, VIEW_CONTEXT_API,
+    VariableScope,
 };
 use crate::{MANIFEST_VERSION, path_rules};
 
@@ -359,6 +360,7 @@ pub(crate) fn check(manifest: &Manifest) -> Checker {
     actions(&mut c, manifest);
     navigation(&mut c, manifest);
     api_level_features(&mut c, manifest);
+    view_context_api_level(&mut c, manifest);
     variables(&mut c, manifest);
     settings(&mut c, manifest);
     credentials(&mut c, manifest);
@@ -1311,6 +1313,27 @@ fn api_level_features(c: &mut Checker, m: &Manifest) {
     }
     if m.contributes.views.is_some() {
         gate("contributes.views".into());
+    }
+}
+
+/// A view's `context` came with plugin API 1.4: a manifest using it must
+/// require 1.4 (agents up to 1.3 refuse the field anyway).
+fn view_context_api_level(c: &mut Checker, m: &Manifest) {
+    let required = m.engines.plugin_api;
+    if required.minimum >= VIEW_CONTEXT_API {
+        return;
+    }
+    for (index, view) in m.contributes.views().iter().enumerate() {
+        if view.context.is_some() {
+            c.error(
+                format!("contributes.views[{index}].context"),
+                IssueCode::Conflict,
+                format!(
+                    "needs plugin API {VIEW_CONTEXT_API}: set engines.pluginApi to \
+                     `^{VIEW_CONTEXT_API}` (it is `{required}`)"
+                ),
+            );
+        }
     }
 }
 

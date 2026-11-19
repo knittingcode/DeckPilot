@@ -11,7 +11,8 @@ use deckpilot_plugin_abi::capability::AuthScheme;
 use deckpilot_plugin_abi::{ActionOutcome, HttpMethod, ParamValue, Params};
 use deckpilot_plugin_broker::{ApprovedPermission, ApprovedPermissions};
 use deckpilot_plugin_manifest::{
-    IconFormat, IconTheme, MAX_RASTER_ICON_BYTES, Manifest, PermissionKind, Sha256Digest, ViewKind,
+    IconFormat, IconTheme, MAX_RASTER_ICON_BYTES, Manifest, PermissionKind, Sha256Digest,
+    ViewContext, ViewKind,
 };
 use deckpilot_plugin_store::{
     AuditRecord, GrantKey, GrantScope, GrantStatus, InstallSource, PRIVATE_NETWORK_KEY,
@@ -380,6 +381,12 @@ pub fn navigation(manifest: &Manifest) -> Vec<ipc::PluginNavigationEntry> {
                         ViewKind::Settings => "settings",
                     }
                     .to_owned(),
+                    // Only the app's toolbar follows it; no data goes to the
+                    // plugin for it.
+                    context: view
+                        .context
+                        .filter(|context| *context != ViewContext::None)
+                        .map(|context| context.as_str().to_owned()),
                 },
             })
         })
@@ -753,6 +760,31 @@ mod tests {
             entry: entry.into(),
             theme,
         }
+    }
+
+    /// Plugin API 1.4: a view's context reaches the app as declared, `none`
+    /// left out; it changes none of the plugin's permissions.
+    #[test]
+    fn navigation_views_carry_their_context() {
+        let mut value = serde_json::to_value(navigation_manifest()).unwrap();
+        value["engines"]["pluginApi"] = serde_json::json!("^1.4");
+        let before: Manifest = serde_json::from_value(value.clone()).unwrap();
+        value["contributes"]["views"] = serde_json::json!([
+            {"id": "live", "kind": "variables", "context": "device+profile"},
+            {"id": "config", "kind": "settings", "context": "none"}
+        ]);
+        let manifest: Manifest = serde_json::from_value(value).unwrap();
+        manifest.validate().unwrap();
+        let entries = navigation(&manifest);
+        assert_eq!(entries[0].view.context.as_deref(), Some("device+profile"));
+        assert_eq!(entries[1].view.context, None);
+        assert_eq!(
+            serde_json::to_value(&entries[1]).unwrap()["view"],
+            serde_json::json!({"id": "config", "kind": "settings"})
+        );
+        // The declaration grants nothing: the same permissions as without it.
+        assert_eq!(permissions(&manifest, &[]), permissions(&before, &[]));
+        assert_eq!(manifest.permissions, before.permissions);
     }
 
     #[test]

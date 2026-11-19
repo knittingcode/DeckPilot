@@ -365,6 +365,10 @@
         "kind": {
           "enum": ["variables", "actions", "settings"],
           "description": "variables: the plugin's variables, live; actions: the Action Library filtered to the plugin; settings: the plugin's configuration page."
+        },
+        "context": {
+          "enum": ["none", "device", "profile", "device+profile"],
+          "description": "Plugin API 1.4 (engines.pluginApi ^1.4). Which of the app's toolbar selectors the view shows: the device, the profile being edited, both or neither (the default when absent). It changes only the app's chrome: it gives the plugin no device or profile data and grants no permission."
         }
       }
     },

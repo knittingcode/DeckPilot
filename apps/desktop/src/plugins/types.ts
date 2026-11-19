@@ -225,6 +225,12 @@ export type PluginViewKind = "variables" | "actions" | "settings"
 export interface PluginView {
   id: string
   kind: PluginViewKind | (string & {})
+  /**
+   * Which of the app's toolbar selectors the view shows (plugin API 1.4;
+   * `lib/toolbar-context.ts`). Absent from older agents and manifests:
+   * `none`. Only the app's chrome follows it; the plugin gets no data.
+   */
+  context?: string
 }
 
 /** One toolbar entry of a plugin (`PluginNavigationEntry`). */

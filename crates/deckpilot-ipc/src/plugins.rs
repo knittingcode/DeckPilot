@@ -123,6 +123,12 @@ pub struct PluginView {
     /// page). A string, so that a client ignores kinds a later agent adds
     /// rather than failing on them.
     pub kind: String,
+    /// Which of the app's toolbar selectors the view shows (plugin API
+    /// 1.4): `none`, `device`, `profile` or `device+profile`. Left out for
+    /// `none` and by older agents; a client treats absent and unknown
+    /// values as `none`. Only the app's chrome follows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
 }
 
 /// The theme a navigation icon is shown in.
@@ -1479,6 +1485,7 @@ mod tests {
                 view: PluginView {
                     id: "dashboard".into(),
                     kind: "variables".into(),
+                    context: None,
                 },
             }],
             ..summary.clone()
@@ -1492,6 +1499,20 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<PluginSummary>(json).unwrap(),
             navigating
+        );
+        // A view's context (plugin API 1.4) is additive too: left out for
+        // none, read as none from an older agent, kept as sent otherwise.
+        let older: PluginView =
+            serde_json::from_value(serde_json::json!({"id": "v", "kind": "actions"})).unwrap();
+        assert_eq!(older.context, None);
+        let with_context = PluginView {
+            id: "v".into(),
+            kind: "actions".into(),
+            context: Some("device+profile".into()),
+        };
+        assert_eq!(
+            serde_json::to_value(&with_context).unwrap(),
+            serde_json::json!({"id": "v", "kind": "actions", "context": "device+profile"})
         );
         let request = crate::Request::GetPluginIcon {
             plugin: "a.b".into(),

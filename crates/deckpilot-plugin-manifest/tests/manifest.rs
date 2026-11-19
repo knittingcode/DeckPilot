@@ -244,6 +244,80 @@ fn controls_navigation_and_views_parse_and_validate() {
     Manifest::parse_and_validate(&later.to_string()).unwrap();
 }
 
+/// Plugin API 1.4: a view says which toolbar selectors the app shows with
+/// it. Optional (absent is `none`), one of four values, and it needs
+/// `^1.4`; it grants nothing.
+#[test]
+fn views_declare_their_toolbar_context() {
+    use deckpilot_plugin_manifest::{VIEW_CONTEXT_API, ViewContext};
+    assert_eq!(VIEW_CONTEXT_API, ApiLevel::new(1, 4));
+    let validator = schema();
+
+    // Absent: `none`, and a 1.3 manifest stays valid as it was.
+    let plain = Manifest::parse_and_validate(&navigation_example().to_string()).unwrap();
+    for view in plain.contributes.views() {
+        assert_eq!(view.context, None);
+        assert_eq!(view.context(), ViewContext::None);
+    }
+
+    for (name, context) in [
+        ("none", ViewContext::None),
+        ("device", ViewContext::Device),
+        ("profile", ViewContext::Profile),
+        ("device+profile", ViewContext::DeviceProfile),
+    ] {
+        let mut value = navigation_example();
+        set(&mut value, "/engines/pluginApi", json!("^1.4"));
+        set(&mut value, "/contributes/views/0/context", json!(name));
+        assert_eq!(
+            schema_errors(&validator, &value),
+            [] as [String; 0],
+            "{name}"
+        );
+        let manifest = Manifest::parse_and_validate(&value.to_string()).unwrap();
+        assert_eq!(manifest.contributes.views()[0].context(), context);
+        assert_eq!(context.as_str(), name);
+        // It round-trips as written.
+        assert_eq!(serde_json::to_value(&manifest).unwrap(), value);
+        // The declaration grants no permission and changes none.
+        assert_eq!(manifest.permissions, plain.permissions);
+    }
+
+    // Anything else is refused, by the model and by the schema.
+    for bad in [
+        json!("devices"),
+        json!("Device"),
+        json!("device,profile"),
+        json!(""),
+        json!(1),
+        json!(["device"]),
+    ] {
+        let mut value = navigation_example();
+        set(&mut value, "/engines/pluginApi", json!("^1.4"));
+        set(&mut value, "/contributes/views/0/context", bad.clone());
+        assert!(
+            Manifest::parse_and_validate(&value.to_string()).is_err(),
+            "{bad} is not a context"
+        );
+        assert!(
+            !schema_errors(&validator, &value).is_empty(),
+            "{bad}: schema"
+        );
+    }
+
+    // It needs plugin API 1.4, and says so.
+    let mut old = navigation_example();
+    set(&mut old, "/contributes/views/1/context", json!("profile"));
+    let error = Manifest::parse_and_validate(&old.to_string()).unwrap_err();
+    assert!(
+        error.to_string().contains(
+            "contributes.views[1].context: needs plugin API 1.4: set engines.pluginApi to \
+             `^1.4` (it is `^1.3`)"
+        ),
+        "{error}"
+    );
+}
+
 #[test]
 fn schema_accepts_the_positive_fixtures() {
     let validator = schema();

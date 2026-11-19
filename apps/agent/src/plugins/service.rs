@@ -69,9 +69,10 @@ const INVALID_PARAMETERS: &str = "invalid-parameters";
 /// The plugin API level this agent provides: 1.1 adds `time.now` and
 /// `random.bytes`, 1.2 key state (`docs/marketplace/plugin-key-state.md`),
 /// 1.3 the manifest's action `controls`, `navigation` and `views`
-/// (`docs/device-controls.md` §4). A plugin whose manifest asks for a
+/// (`docs/device-controls.md` §4), 1.4 a view's `context` (which toolbar
+/// selectors the app shows with it). A plugin whose manifest asks for a
 /// higher minor is `incompatible`.
-const PLUGIN_API: ApiLevel = ApiLevel::new(1, 3);
+const PLUGIN_API: ApiLevel = ApiLevel::new(1, 4);
 /// Longest any invocation may take, whatever the manifest says.
 const MAX_INVOCATION: Duration = Duration::from_secs(600);
 /// Where the registry's verified state is kept (outside `plugins/`,
