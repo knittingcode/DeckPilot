@@ -616,7 +616,7 @@ impl SwitchLayout {
             deprecated: false,
             controls: Some(deckpilot_core::ActionControls::keys()),
             node: NodeSpec {
-                icon: Some("layout-template".into()),
+                icon: Some("app-window".into()),
                 outputs: vec![
                     output("layoutId", "Layout id"),
                     output("layoutName", "Layout"),

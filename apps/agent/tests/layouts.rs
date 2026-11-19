@@ -178,8 +178,12 @@ fn shows(mock: &MockBackend, device: &DeviceId, index: u16, title: &str) -> bool
         .keys
         .and_then(|keys| keys.image)
         .unwrap();
+    // The log action's type icon, as keys are drawn icon first.
+    let icon = support::registry()
+        .definition(&general::log_id())
+        .and_then(|definition| definition.node.icon.clone());
     let frame = deckpilot_agent::render::render_with(
-        &KeyFace::new(FaceStyle::Action, title),
+        &KeyFace::new(FaceStyle::Action, title).with_symbol(icon),
         spec.width,
         spec.height,
         &deckpilot_agent::render::Icons::default(),
