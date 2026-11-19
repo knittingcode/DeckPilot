@@ -50,7 +50,7 @@ pub mod hard {
 }
 
 /// The engine name reported in `ready`.
-pub const ENGINE_NAME: &str = "wasmtime-50.0.1/cranelift";
+pub const ENGINE_NAME: &str = "wasmtime-50.0.2/cranelift";
 
 /// Effective limits after clamping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

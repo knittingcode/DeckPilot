@@ -39,8 +39,16 @@ ubuntu_sources_only() {
   done
 }
 
+# A mirror can also stay reachable but crawl: one runner took 12 min 40 s
+# for the 68 MB of packages (89 kB/s), where the whole step usually takes
+# half a minute, and apt's timeouts only catch a connection that sends
+# nothing. The packages are therefore downloaded first, within $1 seconds;
+# a download that runs out of time moves on to the next mirror and keeps
+# the packages it already has (/var/cache/apt/archives). Only the download
+# is cut short, never dpkg, so no half-installed package is left behind.
 install() {
   timeout 600 sudo apt-get update -o APT::Update::Error-Mode=any &&
+    timeout "$1" sudo apt-get install -y --download-only "${PACKAGES[@]}" &&
     timeout 1200 sudo apt-get install -y "${PACKAGES[@]}"
 }
 
@@ -56,13 +64,16 @@ use_mirror() {
 }
 
 ubuntu_sources_only
-if install; then
+if install 300; then
   exit 0
 fi
+last="${MIRRORS[${#MIRRORS[@]}-1]}"
 for mirror in "${MIRRORS[@]}"; do
-  echo "::warning::installing Linux packages failed; trying $mirror"
+  echo "::warning::installing Linux packages failed or was too slow; trying $mirror"
   use_mirror "$mirror"
-  if install; then
+  # The last mirror gets the time the whole installation had before.
+  if [ "$mirror" = "$last" ]; then download_timeout=1200; else download_timeout=300; fi
+  if install "$download_timeout"; then
     exit 0
   fi
 done
