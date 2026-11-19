@@ -31,8 +31,9 @@ async fn the_client_negotiates_with_a_real_older_agent() {
         panic!("status expected");
     };
     assert_eq!(status.version, version);
-    assert_eq!(status.running_executions, None, "older agents cannot say");
     if protocol < 5 {
+        // Agents before background executions cannot say.
+        assert_eq!(status.running_executions, None, "older agents cannot say");
         let refused = client
             .request(Request::ListExecutions {
                 workflow: None,
