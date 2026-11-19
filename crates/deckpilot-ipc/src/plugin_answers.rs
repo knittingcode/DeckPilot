@@ -485,6 +485,7 @@ mod tests {
             action_count: None,
             health: None,
             navigation: Vec::new(),
+            installed_for: None,
         }
     }
 
@@ -507,6 +508,8 @@ mod tests {
             audit: vec![],
             icon: (icon > 0).then(|| format!("data:image/png;base64,{}", "A".repeat(icon))),
             storage: None,
+            dependencies: Vec::new(),
+            dependents: Vec::new(),
         }
     }
 

@@ -586,6 +586,60 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "plugins::PluginRetention::is_default")]
         keep: plugins::PluginRetention,
     },
+    /// Resolves what installing `plugin` (`version`, or the best one)
+    /// takes, with the optional integrations in `optional`, downloads and
+    /// verifies every package of it, and answers the plan; installs
+    /// nothing. Since protocol 10, feature
+    /// [`plugins::feature::DEPENDENCIES`].
+    PlanPluginInstall {
+        plugin: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        optional: Vec<String>,
+    },
+    /// Carries out the plan of `planPluginInstall` the user confirmed
+    /// (`fingerprint`), with `consent` per plugin (grant keys of that
+    /// plugin only); `activate` enables everything once installed. All or
+    /// nothing. Since protocol 10, feature
+    /// [`plugins::feature::DEPENDENCIES`].
+    InstallPluginPlan {
+        plugin: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        optional: Vec<String>,
+        fingerprint: String,
+        #[serde(default)]
+        consent: BTreeMap<String, Vec<String>>,
+        #[serde(default)]
+        activate: bool,
+    },
+    /// What disabling (or with `uninstall`, uninstalling) `plugin`
+    /// affects. Since protocol 10, feature
+    /// [`plugins::feature::DEPENDENCIES`].
+    PlanPluginRemoval {
+        plugin: String,
+        #[serde(default)]
+        uninstall: bool,
+    },
+    /// Disables or uninstalls `plugin` as `planPluginRemoval` described:
+    /// with `withDependents`, the enabled plugins that require it are
+    /// disabled first (never uninstalled); after an uninstall, the
+    /// `orphans` listed (plugins installed only as dependencies that
+    /// nothing needs any more) are uninstalled too, with the same `keep`.
+    /// Since protocol 10, feature [`plugins::feature::DEPENDENCIES`].
+    RemovePlugin {
+        plugin: String,
+        #[serde(default)]
+        uninstall: bool,
+        #[serde(default, skip_serializing_if = "plugins::PluginRetention::is_default")]
+        keep: plugins::PluginRetention,
+        #[serde(default)]
+        with_dependents: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        orphans: Vec<String>,
+    },
     /// Runs one action of an enabled plugin in its sandboxed host. Since
     /// protocol 10.
     InvokePluginAction {
@@ -726,7 +780,11 @@ impl Request {
             | Self::RetryModuleMigration { .. }
             | Self::DecideModuleMigration { .. }
             | Self::GrantPluginUserOrigin { .. }
-            | Self::RevokePluginUserOrigin { .. } => plugins::check_request(self),
+            | Self::RevokePluginUserOrigin { .. }
+            | Self::PlanPluginInstall { .. }
+            | Self::InstallPluginPlan { .. }
+            | Self::PlanPluginRemoval { .. }
+            | Self::RemovePlugin { .. } => plugins::check_request(self),
             Self::InstallPlugin { source, consent } => {
                 source.check()?;
                 plugins::check_consent(consent)
@@ -992,6 +1050,16 @@ pub enum Response {
     PluginUpdate {
         plugin: String,
         outcome: plugins::PluginUpdateOutcome,
+    },
+    /// Answer to `planPluginInstall`. Since protocol 10, feature
+    /// [`plugins::feature::DEPENDENCIES`].
+    PluginInstallPlan {
+        plan: Box<plugins::PluginInstallPlan>,
+    },
+    /// Answer to `planPluginRemoval`. Since protocol 10, feature
+    /// [`plugins::feature::DEPENDENCIES`].
+    PluginRemovalPlan {
+        plan: Box<plugins::PluginRemovalPlan>,
     },
     /// Answer to `invokePluginAction`. Since protocol 10.
     PluginActionResult {
@@ -1300,6 +1368,10 @@ impl Request {
             | Self::RollbackPlugin { .. }
             | Self::UninstallPlugin { .. }
             | Self::InvokePluginAction { .. }
+            | Self::PlanPluginInstall { .. }
+            | Self::InstallPluginPlan { .. }
+            | Self::PlanPluginRemoval { .. }
+            | Self::RemovePlugin { .. }
             | Self::ListKnownPlugins
             | Self::GetPluginSettings { .. }
             | Self::SetPluginSettings { .. }

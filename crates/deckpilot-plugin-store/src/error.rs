@@ -109,6 +109,23 @@ pub enum StoreError {
     /// or out of bounds. Never contains a secret.
     #[error("{0}")]
     InvalidData(String),
+    /// Enabled plugins require this one (`deps.rs`): disabling or
+    /// uninstalling it is refused unless they are disabled with it.
+    #[error("{id} is required by {}; disable {} first", .dependents.join(", "), if .dependents.len() == 1 { "it" } else { "them" })]
+    RequiredBy {
+        id: PluginId,
+        dependents: Vec<String>,
+    },
+    /// A dependency plan failed at `step`; what it had done is undone
+    /// (`undo_failed` lists what could not be, left in a state recovery
+    /// and the user can resolve).
+    #[error("{step} failed: {source}{}", if .undo_failed.is_empty() { String::new() } else { format!(" (could not undo: {})", .undo_failed.join("; ")) })]
+    PlanFailed {
+        step: String,
+        #[source]
+        source: Box<StoreError>,
+        undo_failed: Vec<String>,
+    },
     #[error("the secret cleanup of plugin {id} failed: {message}")]
     Hook { id: PluginId, message: String },
     /// An injected crash (tests): the operation stopped exactly here, with

@@ -27,6 +27,10 @@
 //! | `listModuleMigrations` | `moduleMigrations` | the built-in modules moving to their first-party plugins: phase, reason, attempts, routing, aliases and what waits for consent ([`ModuleMigrationInfo`]) |
 //! | `decideModuleMigration` | `moduleMigration` | approves or declines, item by item, what a migration waits for |
 //! | `retryModuleMigration` | `moduleMigration` | runs a failed (or declined) migration again |
+//! | `planPluginInstall` | `pluginInstallPlan` | resolves a plugin's dependencies, downloads and verifies every package, and answers the plan with each plugin's permissions; installs nothing (feature [`feature::DEPENDENCIES`]) |
+//! | `installPluginPlan` | `plugin` | carries out the confirmed plan (its `fingerprint`) with consent per plugin, dependencies first, all or nothing (feature [`feature::DEPENDENCIES`]) |
+//! | `planPluginRemoval` | `pluginRemovalPlan` | what disabling or uninstalling a plugin affects: dependents, optional actions that stop, orphaned dependencies (feature [`feature::DEPENDENCIES`]) |
+//! | `removePlugin` | `ok` | disables or uninstalls a plugin, with its enabled dependents disabled first and the orphans the user chose uninstalled (feature [`feature::DEPENDENCIES`]) |
 //!
 //! Progress and state changes arrive as `pluginEvent` messages
 //! ([`PluginEvent`]) on connections that sent `subscribePluginEvents`
@@ -97,6 +101,13 @@ pub mod feature {
     /// it ignores `navigation` and answers with the plugin's own icon, so a
     /// client asks for a navigation icon only when the agent lists it.
     pub const NAVIGATION: &str = "navigation";
+    /// Plugin dependencies (plugin API 1.4): `planPluginInstall`,
+    /// `installPluginPlan`, `planPluginRemoval` and `removePlugin`, and the
+    /// `dependencies` of [`PluginDetails`](super::PluginDetails) and
+    /// [`AvailableVersion`](super::AvailableVersion). An agent without it
+    /// knows no dependencies; a client then installs one plugin at a time
+    /// as before.
+    pub const DEPENDENCIES: &str = "dependencies";
 }
 
 /// One toolbar entry of an installed plugin (`contributes.navigation`,
@@ -206,6 +217,16 @@ pub mod reason {
     /// [`ErrorCode::Failed`](crate::ErrorCode::Failed), which every client
     /// knows; the connection stays open.
     pub const ANSWER_TOO_LARGE: &str = "answerTooLarge";
+    /// Enabled plugins require this one: disable them with it
+    /// (`removePlugin` with `withDependents`), or first.
+    pub const REQUIRED_BY: &str = "requiredBy";
+    /// The dependencies cannot be resolved: missing, a version conflict,
+    /// a cycle, or no compatible version.
+    pub const DEPENDENCY: &str = "dependency";
+    /// What `installPluginPlan` would do is no longer the plan the user
+    /// confirmed (the registry or the installed plugins changed): plan
+    /// again.
+    pub const PLAN_CHANGED: &str = "planChanged";
 }
 
 /// Most consent items one `decideModuleMigration` may decide.
@@ -443,6 +464,10 @@ pub struct PluginSummary {
     /// agents without [`feature::NAVIGATION`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub navigation: Vec<PluginNavigationEntry>,
+    /// Installed only because this plugin needed it (feature
+    /// [`feature::DEPENDENCIES`]); absent for a plugin the user installed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_for: Option<String>,
 }
 
 /// Failures of a plugin's host the agent saw since it started (kept in
@@ -526,6 +551,13 @@ pub struct PluginDetails {
     /// before the field, and when plugins.db cannot be read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage: Option<PluginStorageUsage>,
+    /// The active version's dependencies with their state here (feature
+    /// [`feature::DEPENDENCIES`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<PluginDependencyInfo>,
+    /// Installed plugins that declare a dependency on this one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependents: Vec<PluginDependentInfo>,
 }
 
 /// One action of a `getPluginActions` page.
@@ -604,6 +636,10 @@ pub struct AvailableVersion {
     /// When the registry published it, in seconds since the Unix epoch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub published_at: Option<i64>,
+    /// Its dependencies, from the signed registry detail, with their state
+    /// here (feature [`feature::DEPENDENCIES`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<PluginDependencyInfo>,
 }
 
 /// The publisher of a registry plugin, as the registry index lists it.
@@ -973,6 +1009,9 @@ pub struct ModuleMigrationInfo {
 
 /// Checks the plugin data and module migration requests.
 pub(crate) fn check_request(request: &crate::Request) -> Result<(), String> {
+    if let Some(checked) = check_dependency_request(request) {
+        return checked;
+    }
     match request {
         crate::Request::SetPluginSettings { plugin, values } => {
             check_text("plugin", plugin)?;
@@ -1453,6 +1492,7 @@ mod tests {
                 deckpilot: Some(">=0.5.0 <1.0.0".into()),
                 platforms: vec!["macos".into(), "linux".into()],
                 published_at: Some(1_700_000_000),
+                dependencies: Vec::new(),
             }],
             ..old
         };
@@ -1730,4 +1770,246 @@ mod tests {
         let back: PluginActionInfo = serde_json::from_value(json).unwrap();
         assert_eq!(back.definition, Some(definition));
     }
+}
+
+// ------------------------------------------------------------ dependencies
+
+/// The state of a dependency on this computer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DependencyState {
+    /// Installed (or built in), enabled, in a version that fits.
+    Satisfied,
+    /// Installed in a version that fits, not enabled.
+    Disabled,
+    /// Installed in a version outside the range.
+    WrongVersion,
+    /// Not installed (or no such built-in module).
+    Missing,
+    /// Installed, but broken, quarantined or busy.
+    Unusable,
+}
+
+/// One declared dependency of a plugin version.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginDependencyInfo {
+    /// A plugin id, or a built-in module id (`builtin`).
+    pub id: String,
+    /// The versions it accepts, e.g. `>=1.2.0 <2.0.0`.
+    pub version: String,
+    /// An optional integration: never installed by itself.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub justification: Option<String>,
+    /// A built-in module of DeckPilot or a plugin of the application
+    /// bundle: never downloaded.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub builtin: bool,
+    /// What satisfies it here, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub state: DependencyState,
+    /// The version installed here, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_version: Option<String>,
+    /// The actions that need it (an optional integration's).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+/// An installed plugin that declares a dependency on another.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginDependentInfo {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    /// The versions it accepts.
+    pub version: String,
+    /// Only its `actions` need it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+/// What a plan does with one plugin or module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlanStepAction {
+    /// Installed and enabled in a version that fits: nothing to do.
+    Keep,
+    /// Installed and disabled: enabled once everything is installed.
+    Enable,
+    /// Downloaded from the registry, verified and installed.
+    Install,
+    /// An installed dependency moved to a newer version.
+    Update,
+    /// A built-in module that is on: nothing to do.
+    Builtin,
+    /// A built-in module that is off: the user turns it on in Settings ›
+    /// Modules ([`PluginPlanStep::blocker`]).
+    EnableBuiltin,
+}
+
+/// One plugin or module of an install plan, dependencies first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginPlanStep {
+    pub id: String,
+    pub name: String,
+    /// The version it has once the plan ran.
+    pub version: String,
+    pub action: PlanStepAction,
+    /// The installed version an update replaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_version: Option<String>,
+    /// The plugin the user asked for.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub requested: bool,
+    /// An optional integration the user selected.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional: bool,
+    /// A built-in module or a plugin of the application bundle.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub builtin: bool,
+    /// Who needs it, worded for the user (`acme.app 1.0.0 needs >=1.0.0`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_by: Vec<String>,
+    /// For `install` and `enable`: every permission it declares, with its
+    /// state; for `update`: the new and broadened ones. The user consents
+    /// to each plugin's own permissions; nothing is inherited.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permissions: Vec<PluginPermission>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher: Option<PublisherInfo>,
+    /// Why the plan cannot run as it is (a built-in module to turn on, a
+    /// plugin the user turned off), when it cannot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocker: Option<String>,
+}
+
+/// An optional integration left out of a plan, for the user to select.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginOptionalIntegration {
+    /// The plugin that declares it.
+    pub of: String,
+    pub dependency: PluginDependencyInfo,
+}
+
+/// Everything installing a plugin takes, resolved and verified (every
+/// package of it downloaded and checked against the signed registry)
+/// before anything is installed. Answer to `planPluginInstall`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginInstallPlan {
+    pub plugin: String,
+    pub version: String,
+    /// Dependencies before their dependents; the requested plugin last.
+    pub steps: Vec<PluginPlanStep>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional: Vec<PluginOptionalIntegration>,
+    /// Identifies this plan: `installPluginPlan` carries it back and is
+    /// refused ([`reason::PLAN_CHANGED`]) if the plan is no longer the same.
+    pub fingerprint: String,
+}
+
+/// What disabling or uninstalling a plugin affects. Answer to
+/// `planPluginRemoval`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginRemovalPlan {
+    pub plugin: String,
+    pub uninstall: bool,
+    /// Installed plugins that require it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_by: Vec<PluginDependentInfo>,
+    /// Enabled plugins that would be disabled with it (transitively), in
+    /// that order; the removal is refused unless `withDependents`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disables: Vec<String>,
+    /// Installed plugins whose optional actions stop.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub used_by: Vec<PluginDependentInfo>,
+    /// Plugins installed only as dependencies that nothing else needs
+    /// once it is uninstalled: offered for removal, never removed unless
+    /// listed in `removePlugin`'s `orphans`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub orphans: Vec<PluginDependentInfo>,
+}
+
+/// The checks of the dependency requests (feature
+/// [`feature::DEPENDENCIES`]); `None` for any other request.
+fn check_dependency_request(request: &crate::Request) -> Option<Result<(), String>> {
+    matches!(
+        request,
+        crate::Request::PlanPluginRemoval { .. }
+            | crate::Request::PlanPluginInstall { .. }
+            | crate::Request::InstallPluginPlan { .. }
+            | crate::Request::RemovePlugin { .. }
+    )
+    .then(|| check_dependency_fields(request))
+}
+
+fn check_dependency_fields(request: &crate::Request) -> Result<(), String> {
+    match request {
+        crate::Request::PlanPluginRemoval { plugin, .. } => check_text("plugin", plugin),
+        crate::Request::PlanPluginInstall {
+            plugin,
+            version,
+            optional,
+        } => {
+            check_text("plugin", plugin)?;
+            if let Some(version) = version {
+                check_text("version", version)?;
+            }
+            check_ids("optional", optional)
+        }
+        crate::Request::InstallPluginPlan {
+            plugin,
+            version,
+            optional,
+            fingerprint,
+            consent,
+            ..
+        } => {
+            check_text("plugin", plugin)?;
+            if let Some(version) = version {
+                check_text("version", version)?;
+            }
+            check_ids("optional", optional)?;
+            check_text("fingerprint", fingerprint)?;
+            check_plan_consent(consent)
+        }
+        crate::Request::RemovePlugin {
+            plugin, orphans, ..
+        } => {
+            check_text("plugin", plugin)?;
+            check_ids("orphans", orphans)
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Most entries of a consent map or an id list in a dependency request.
+pub const MAX_PLAN_ENTRIES: usize = 32;
+
+pub(crate) fn check_ids(field: &str, ids: &[String]) -> Result<(), String> {
+    if ids.len() > MAX_PLAN_ENTRIES {
+        return Err(format!("{field} lists at most {MAX_PLAN_ENTRIES} plugins"));
+    }
+    ids.iter().try_for_each(|id| check_text(field, id))
+}
+
+pub(crate) fn check_plan_consent(consent: &BTreeMap<String, Vec<String>>) -> Result<(), String> {
+    if consent.len() > MAX_PLAN_ENTRIES {
+        return Err(format!("consent lists at most {MAX_PLAN_ENTRIES} plugins"));
+    }
+    consent.iter().try_for_each(|(plugin, keys)| {
+        check_text("plugin", plugin)?;
+        check_consent(keys)
+    })
 }

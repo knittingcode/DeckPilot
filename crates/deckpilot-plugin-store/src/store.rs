@@ -4,6 +4,7 @@
 //! while the manager runs). The write helpers take a transaction's
 //! connection and are only called by the manager.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -508,6 +509,21 @@ impl PluginStore {
     /// migration check this first and leave a tombstoned plugin alone.
     pub fn tombstone(&self, id: &PluginId) -> Result<Option<Tombstone>> {
         load_tombstone(self.connection(), id)
+    }
+
+    /// The plugins installed only as another plugin's dependency, with
+    /// the plugin whose install brought each one in. Every other installed
+    /// plugin was installed by the user.
+    pub fn dependency_installs(&self) -> Result<BTreeMap<PluginId, String>> {
+        let mut statement = self.connection().prepare(
+            "SELECT plugin_id, required_by FROM plugin_dependency_installs ORDER BY plugin_id",
+        )?;
+        let rows: Vec<(String, String)> = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        rows.into_iter()
+            .map(|(id, by)| Ok((parse_id(&id)?, by)))
+            .collect()
     }
 
     /// Every tombstone, by plugin id.
@@ -1189,4 +1205,28 @@ fn load_journal(conn: &Connection) -> Result<Vec<JournalEntry>> {
             })
         })
         .collect()
+}
+
+// ------------------------------------------------------ dependency installs
+
+pub(crate) fn set_dependency_install(
+    conn: &Connection,
+    id: &PluginId,
+    required_by: &str,
+    now: i64,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO plugin_dependency_installs (plugin_id, required_by, installed_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT (plugin_id) DO NOTHING",
+        params![id.as_str(), required_by, now],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn delete_dependency_install(conn: &Connection, id: &PluginId) -> Result<bool> {
+    Ok(conn.execute(
+        "DELETE FROM plugin_dependency_installs WHERE plugin_id = ?1",
+        params![id.as_str()],
+    )? > 0)
 }

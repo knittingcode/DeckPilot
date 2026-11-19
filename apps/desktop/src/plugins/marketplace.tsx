@@ -46,6 +46,13 @@ import {
 } from "./model"
 import { grantOfInfo, grantsOf } from "./permissions"
 import { PermissionReviewDialog, type ReviewRequest } from "./review-dialog"
+import {
+  InstallPlanDialog,
+  RemovalDialog,
+  type InstallPlanRequest,
+  type RemovalRequest,
+} from "./dependencies"
+import { removalNeedsReview } from "./dependency-text"
 import type {
   ActionParamValue,
   AvailablePlugin,
@@ -58,6 +65,7 @@ import type {
   PluginRetention,
   RuntimeAvailability,
 } from "./types"
+import { DEPENDENCIES_FEATURE } from "./types"
 import { UpdatesView } from "./updates"
 
 type Tab = "discover" | "installed" | "updates"
@@ -158,6 +166,8 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
   const [tab, setTab] = useState<Tab>(initialTab)
   const [selected, setSelected] = useState<string | null>(null)
   const [review, setReview] = useState<ReviewRequest | null>(null)
+  const [planReview, setPlanReview] = useState<InstallPlanRequest | null>(null)
+  const [removal, setRemoval] = useState<RemovalRequest | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [progress, setProgress] = useState<Map<string, Progress>>(new Map())
   /** A package file waiting for the user to confirm its installation. */
@@ -252,6 +262,9 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
 
   const { snapshot, availability, migrations } = load
   const blocked = installBlock(snapshot)
+  // Dependency plans (plugin API 1.4): agents without them install one
+  // plugin at a time, as before.
+  const plans = (snapshot.runtime.features ?? []).includes(DEPENDENCIES_FEATURE)
   const canRun = snapshot.runtime.executionSupported
   const updates = updateCandidates(snapshot)
 
@@ -340,6 +353,70 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
     })
   }
 
+  /**
+   * The full install plan (dependencies, built-in modules, every plugin's
+   * permissions), resolved and verified by the agent before the dialog
+   * opens; nothing is installed until the user confirms it.
+   */
+  const reviewPlan = (plugin: AvailablePlugin, version: AvailableVersion) => {
+    const replan = (optional: string[]) => client.planInstall(plugin.id, version.version, optional)
+    setBusy(plugin.id)
+    replan([])
+      .then((plan) => {
+        returnFocus.current =
+          document.activeElement instanceof HTMLElement ? document.activeElement : null
+        setPlanReview({
+          name: plugin.name,
+          plan,
+          optional: [],
+          activate: canRun,
+          replan,
+          confirm: (confirmed, optional, consent) =>
+            run(
+              plugin.id,
+              () => client.installPlan(confirmed, optional, consent, canRun),
+              confirmed.steps.length > 1
+                ? `${plugin.name} installed with ${String(confirmed.steps.length - 1)} more`
+                : `${plugin.name} installed`,
+            ),
+        })
+      })
+      .catch((error: unknown) => {
+        toastError(pluginErrorText(error))
+      })
+      .finally(() => {
+        setBusy(null)
+      })
+  }
+
+  /**
+   * Disabling or uninstalling with what it affects: plugins that need it
+   * are turned off with it (after the user saw them), orphaned
+   * dependencies are removed only if checked. Nothing to show: done at once.
+   */
+  const reviewRemoval = (item: PluginDetails, uninstall: boolean, keep?: PluginRetention) => {
+    const id = item.summary.id
+    const name = item.summary.name
+    const remove = (withDependents: boolean, orphans: string[]) =>
+      run(
+        id,
+        () => client.removePlugin(id, uninstall, keep, withDependents, orphans),
+        uninstall ? `${name} uninstalled` : `${name} disabled`,
+      )
+    client
+      .planRemoval(id, uninstall)
+      .then((plan) => {
+        if (!removalNeedsReview(plan)) return remove(false, [])
+        returnFocus.current =
+          document.activeElement instanceof HTMLElement ? document.activeElement : null
+        setRemoval({ name, plan, confirm: remove })
+        return undefined
+      })
+      .catch((error: unknown) => {
+        toastError(pluginErrorText(error))
+      })
+  }
+
   const actions: MarketplaceActions = {
     busy,
     blocked,
@@ -349,6 +426,10 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
       setSelected(id)
     },
     install: (plugin, version) => {
+      if (plans) {
+        reviewPlan(plugin, version)
+        return
+      }
       openReview({
         mode: "install",
         pluginId: plugin.id,
@@ -408,6 +489,10 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
     setEnabled: (item, enabled) => {
       const id = item.summary.id
       if (!enabled) {
+        if (plans) {
+          reviewRemoval(item, false, undefined)
+          return
+        }
         runReported(id, () => client.disablePlugin(id), `${item.summary.name} disabled`)
         return
       }
@@ -423,6 +508,10 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
     },
     uninstall: (item, keep) => {
       const id = item.summary.id
+      if (plans) {
+        reviewRemoval(item, true, keep)
+        return
+      }
       const kept = [keep?.settings && "settings", keep?.credentials && "credentials"].filter(
         Boolean,
       )
@@ -536,6 +625,24 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
         </Tabs>
       )}
       {review && <PermissionReviewDialog request={review} onClose={closeReview} />}
+      {planReview && (
+        <InstallPlanDialog
+          request={planReview}
+          onClose={() => {
+            setPlanReview(null)
+            returnFocus.current?.focus()
+          }}
+        />
+      )}
+      {removal && (
+        <RemovalDialog
+          request={removal}
+          onClose={() => {
+            setRemoval(null)
+            returnFocus.current?.focus()
+          }}
+        />
+      )}
       {consentFor && (
         <MigrationConsentDialog
           migration={consentFor}

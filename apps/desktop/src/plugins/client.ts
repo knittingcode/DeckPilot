@@ -24,7 +24,9 @@ import type {
   PluginCredentialSlot,
   PluginDetails,
   PluginEvent,
+  PluginInstallPlan,
   PluginNavigationItem,
+  PluginRemovalPlan,
   PluginRetention,
   PluginRuntimeStatus,
   PluginSettings,
@@ -174,6 +176,31 @@ export function createTauriPluginClient(): PluginClient {
       }),
     revokeUserOrigin: (plugin, setting) =>
       call<PluginSettings>("revoke_plugin_user_origin", { plugin, setting }),
+    planInstall: (plugin, version, optional) =>
+      call<PluginInstallPlan>("plan_plugin_install", {
+        plugin,
+        version: version ?? null,
+        optional: [...optional],
+      }),
+    installPlan: (plan, optional, consent, activate) =>
+      call<PluginDetails>("install_plugin_plan", {
+        plugin: plan.plugin,
+        version: plan.version,
+        optional: [...optional],
+        fingerprint: plan.fingerprint,
+        consent,
+        activate,
+      }),
+    planRemoval: (plugin, uninstall) =>
+      call<PluginRemovalPlan>("plan_plugin_removal", { plugin, uninstall }),
+    removePlugin: (plugin, uninstall, keep, withDependents, orphans) =>
+      call<null>("remove_plugin", {
+        plugin,
+        uninstall,
+        keep: keep ?? null,
+        withDependents,
+        orphans: [...orphans],
+      }).then(() => undefined),
     invokeAction: (plugin, action, params) =>
       call<PluginActionOutcome>("invoke_plugin_action", { plugin, action, params }),
     listModuleMigrations: () => call<ModuleMigration[]>("list_module_migrations"),

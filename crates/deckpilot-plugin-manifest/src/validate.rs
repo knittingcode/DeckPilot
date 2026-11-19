@@ -12,6 +12,7 @@ use std::fmt::Display;
 use semver::Version;
 
 use crate::compat::parse_number;
+use crate::dependency::{DEPENDENCIES_API, MAX_DEPENDENCIES, MAX_DEPENDENCY_JUSTIFICATION};
 use crate::error::{Issue, IssueCode};
 use crate::identity::{
     RESERVED_PUBLISHERS, is_camel_key, is_local_id, is_publisher_id, is_variable_segment,
@@ -366,6 +367,7 @@ pub(crate) fn check(manifest: &Manifest) -> Checker {
     credentials(&mut c, manifest);
     error_codes(&mut c, manifest);
     needs_project(&mut c, manifest);
+    dependencies(&mut c, manifest);
     c
 }
 
@@ -1742,6 +1744,85 @@ fn needs_project(c: &mut Checker, m: &Manifest) {
                 PermissionKind::Profile.as_str()
             ),
         );
+    }
+}
+
+/// `dependencies` and `contributes.actions[].requiresDependencies` (plugin
+/// API 1.4, `dependency.rs`): at most [`MAX_DEPENDENCIES`] entries, each
+/// id once and never the plugin itself, a range some version satisfies, a
+/// justification of 1-200 characters; every `requiresDependencies` entry
+/// names a declared dependency. Both need `engines.pluginApi` `^1.4`.
+fn dependencies(c: &mut Checker, m: &Manifest) {
+    let gate = |c: &mut Checker, field: String| {
+        if m.engines.plugin_api.minimum < DEPENDENCIES_API {
+            c.error(
+                field,
+                IssueCode::Conflict,
+                format!(
+                    "needs plugin API {DEPENDENCIES_API}: set engines.pluginApi to \
+                     `^{DEPENDENCIES_API}` (it is `{}`)",
+                    m.engines.plugin_api
+                ),
+            );
+        }
+    };
+    if let Some(list) = &m.dependencies {
+        gate(c, "dependencies".into());
+        c.count("dependencies", list.len(), 1, MAX_DEPENDENCIES);
+        for (index, dependency) in list.iter().enumerate() {
+            let path = format!("dependencies[{index}]");
+            if dependency.id.as_str() == m.id.as_str() {
+                c.error(
+                    format!("{path}.id"),
+                    IssueCode::Conflict,
+                    "a plugin cannot depend on itself",
+                );
+            }
+            if !dependency.version.is_satisfiable() {
+                c.error(
+                    format!("{path}.version"),
+                    IssueCode::UnsatisfiableRange,
+                    format!("`{}` matches no version", dependency.version),
+                );
+            }
+            if let Some(text) = &dependency.justification {
+                c.text(
+                    &format!("{path}.justification"),
+                    text,
+                    1,
+                    MAX_DEPENDENCY_JUSTIFICATION,
+                );
+            } else if dependency.is_optional() {
+                c.warn(
+                    format!("{path}.justification"),
+                    "say what the optional integration adds; it is shown before installing",
+                );
+            }
+        }
+        c.unique("dependencies", list.iter().map(|d| d.id.as_str()));
+    }
+    for (index, action) in m.contributes.actions().iter().enumerate() {
+        let Some(requires) = &action.requires_dependencies else {
+            continue;
+        };
+        let path = format!("contributes.actions[{index}].requiresDependencies");
+        gate(c, path.clone());
+        c.count(&path, requires.len(), 1, MAX_DEPENDENCIES);
+        for (i, id) in requires.iter().enumerate() {
+            match m.dependency(id) {
+                None => c.error(
+                    format!("{path}[{i}]"),
+                    IssueCode::UnknownReference,
+                    format!("`{id}` is not one of `dependencies`"),
+                ),
+                Some(dependency) if dependency.is_required() => c.warn(
+                    format!("{path}[{i}]"),
+                    format!("`{id}` is a required dependency: every action needs it already"),
+                ),
+                Some(_) => {}
+            }
+        }
+        c.unique(&path, requires);
     }
 }
 

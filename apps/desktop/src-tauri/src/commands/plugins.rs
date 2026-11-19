@@ -18,9 +18,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use deckpilot_ipc::plugins::{
     self, AvailablePlugin, KnownPlugin, ModuleMigrationInfo, NavigationIconTheme,
-    PluginActionOutcome, PluginCredentialSlot, PluginDetails, PluginInstallSource,
-    PluginNavigationEntry, PluginRetention, PluginRuntimeStatus, PluginSettings, PluginState,
-    PluginSummary, PluginUpdateOutcome, RegistryStatus,
+    PluginActionOutcome, PluginCredentialSlot, PluginDetails, PluginInstallPlan,
+    PluginInstallSource, PluginNavigationEntry, PluginRemovalPlan, PluginRetention,
+    PluginRuntimeStatus, PluginSettings, PluginState, PluginSummary, PluginUpdateOutcome,
+    RegistryStatus,
 };
 use deckpilot_ipc::{
     AgentClient, Capability, ClientError, ClientKind, ErrorCode, Request, Response, plugin_answers,
@@ -496,6 +497,114 @@ pub async fn uninstall_plugin(
     {
         Response::Ok => {
             state.plugin_actions().remove(&plugin);
+            Ok(())
+        }
+        other => Err(PluginError::unexpected(&other)),
+    }
+}
+
+/// Refreshes the action types of every installed plugin after a change
+/// that touched several (a plan, a removal with its dependents).
+async fn resync_plugin_actions(state: &AppState) {
+    match installed_plugins(state).await {
+        Ok(plugins) => state.plugin_actions().replace(&plugins),
+        Err(_) => state.plugin_actions().clear(),
+    }
+}
+
+/// What installing `plugin` takes (its dependencies, each plugin's
+/// permissions), resolved and verified by the agent; installs nothing.
+#[tauri::command]
+pub async fn plan_plugin_install(
+    state: State<'_, AppState>,
+    plugin: String,
+    version: Option<String>,
+    optional: Option<Vec<String>>,
+) -> PluginResult<PluginInstallPlan> {
+    match plugin_request(
+        &state,
+        Request::PlanPluginInstall {
+            plugin,
+            version,
+            optional: optional.unwrap_or_default(),
+        },
+    )
+    .await?
+    {
+        Response::PluginInstallPlan { plan } => Ok(*plan),
+        other => Err(PluginError::unexpected(&other)),
+    }
+}
+
+/// Carries out the plan the user confirmed (`fingerprint`), with the
+/// permissions the user granted to each plugin of it (`consent`, by
+/// plugin id); `activate` enables everything once installed.
+#[tauri::command]
+pub async fn install_plugin_plan(
+    state: State<'_, AppState>,
+    plugin: String,
+    version: Option<String>,
+    optional: Option<Vec<String>>,
+    fingerprint: String,
+    consent: BTreeMap<String, Vec<String>>,
+    activate: bool,
+) -> PluginResult<PluginDetails> {
+    let details = plugin_details(
+        &state,
+        Request::InstallPluginPlan {
+            plugin,
+            version,
+            optional: optional.unwrap_or_default(),
+            fingerprint,
+            consent,
+            activate,
+        },
+    )
+    .await?;
+    resync_plugin_actions(&state).await;
+    Ok(details)
+}
+
+/// What disabling (`uninstall`: uninstalling) `plugin` affects.
+#[tauri::command]
+pub async fn plan_plugin_removal(
+    state: State<'_, AppState>,
+    plugin: String,
+    uninstall: bool,
+) -> PluginResult<PluginRemovalPlan> {
+    match plugin_request(&state, Request::PlanPluginRemoval { plugin, uninstall }).await? {
+        Response::PluginRemovalPlan { plan } => Ok(*plan),
+        other => Err(PluginError::unexpected(&other)),
+    }
+}
+
+/// Disables or uninstalls `plugin` as its removal plan described:
+/// `with_dependents` disables the enabled plugins that require it first;
+/// `orphans` are dependencies nothing needs any more that the user chose
+/// to uninstall too.
+#[tauri::command]
+pub async fn remove_plugin(
+    state: State<'_, AppState>,
+    plugin: String,
+    uninstall: bool,
+    keep: Option<PluginRetention>,
+    with_dependents: bool,
+    orphans: Option<Vec<String>>,
+) -> PluginResult<()> {
+    match plugin_request(
+        &state,
+        Request::RemovePlugin {
+            plugin,
+            uninstall,
+            keep: keep.unwrap_or_default(),
+            with_dependents,
+            orphans: orphans.unwrap_or_default(),
+        },
+    )
+    .await?
+    {
+        Response::Ok => {
+            resync_plugin_actions(&state).await;
             Ok(())
         }
         other => Err(PluginError::unexpected(&other)),

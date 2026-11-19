@@ -322,6 +322,7 @@ pub(crate) fn add_version(
         engines: manifest.engines.clone(),
         platforms: manifest.platforms.clone(),
         permissions,
+        dependencies: manifest.dependencies.clone(),
         manifest_sha256: verified.integrity().manifest_sha256,
         source: new.source,
         package: PackageRef {

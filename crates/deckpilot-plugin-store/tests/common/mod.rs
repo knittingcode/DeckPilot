@@ -131,9 +131,52 @@ fn noise(len: usize, seed: u64) -> Vec<u8> {
 
 /// The bytes of a package and what the registry would pin for them.
 pub fn built(id: &str, version: &str, permissions: &[Value]) -> (Vec<u8>, ExpectedPackage) {
+    built_from(
+        id,
+        version,
+        permissions,
+        manifest_json(id, version, permissions),
+    )
+}
+
+/// A verified package of `id` (plugin API 1.4) declaring `dependencies`
+/// (a JSON array, or `null` for none), its first action needing the ids
+/// of `action_needs`.
+pub fn package_with_dependencies(
+    id: &str,
+    version: &str,
+    permissions: &[Value],
+    dependencies: Value,
+    action_needs: &[&str],
+) -> VerifiedPackage {
+    let manifest = manifest_json_with(id, version, permissions, |value| {
+        value["engines"]["pluginApi"] = Value::from("^1.4");
+        if !dependencies.is_null() {
+            value["dependencies"] = dependencies;
+        }
+        if !action_needs.is_empty() {
+            value["contributes"]["actions"][0]["requiresDependencies"] =
+                Value::from(action_needs.to_vec());
+        }
+    });
+    let (bytes, expected) = built_from(id, version, permissions, manifest);
+    verify_package(
+        &bytes,
+        &expected,
+        &deckpilot_plugin_package::Limits::default(),
+    )
+    .unwrap()
+}
+
+fn built_from(
+    id: &str,
+    version: &str,
+    permissions: &[Value],
+    manifest: Vec<u8>,
+) -> (Vec<u8>, ExpectedPackage) {
     let mut builder = PackageBuilder::new();
     builder
-        .add("manifest.json", manifest_json(id, version, permissions))
+        .add("manifest.json", manifest)
         .unwrap()
         .add(
             "plugin.wasm",

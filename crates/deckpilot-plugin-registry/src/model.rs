@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use deckpilot_plugin_manifest::{
-    Engines, FIRST_PARTY_PUBLISHER, MAX_PACKAGE_BYTES, Permission, Platform, PluginId,
-    Sha256Digest, check_relative_path, is_publisher_id,
+    Dependency, Engines, FIRST_PARTY_PUBLISHER, MAX_DEPENDENCIES, MAX_PACKAGE_BYTES, Permission,
+    Platform, PluginId, Sha256Digest, check_relative_path, is_publisher_id,
 };
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -655,6 +655,13 @@ pub struct DetailVersion {
     /// Kept as JSON values: the manifest's `permissions` must be the same
     /// value (shown for consent before the download).
     pub permissions: Vec<serde_json::Value>,
+    /// The manifest's `dependencies` (plugin API 1.4), so a client resolves
+    /// what a plugin needs before downloading anything. The installer
+    /// refuses a package whose manifest declares other dependencies.
+    /// Absent for a version without any (and from registries before the
+    /// field), so documents of plugins without dependencies are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependencies: Option<Vec<Dependency>>,
     pub manifest_sha256: Sha256Digest,
     pub source: VersionSource,
     pub package: PackageRef,
@@ -730,6 +737,7 @@ impl PluginDetail {
                 serde_json::from_value::<Permission>(permission.clone())
                     .map_err(|e| format!("{at}.permissions: {e}"))?;
             }
+            check_dependencies(&self.id, &at, entry.dependencies.as_deref())?;
             let source = &entry.source;
             if !is_repository(&source.repository) {
                 return Err(format!("{at}.source.repository is not owner/name"));
@@ -782,6 +790,33 @@ impl PluginDetail {
     pub fn version(&self, version: &Version) -> Option<&DetailVersion> {
         self.versions.iter().find(|v| v.version == *version)
     }
+}
+
+/// A version's `dependencies`: 1-16 entries, each id once, never the
+/// plugin itself (the manifest rules, which the publishing tool checked).
+fn check_dependencies(
+    id: &PluginId,
+    at: &str,
+    dependencies: Option<&[Dependency]>,
+) -> Result<(), String> {
+    let Some(dependencies) = dependencies else {
+        return Ok(());
+    };
+    if dependencies.is_empty() || dependencies.len() > MAX_DEPENDENCIES {
+        return Err(format!(
+            "{at}.dependencies has 0 or more than {MAX_DEPENDENCIES} entries"
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for dependency in dependencies {
+        if dependency.id.as_str() == id.as_str() {
+            return Err(format!("{at}.dependencies names the plugin itself"));
+        }
+        if !seen.insert(dependency.id.as_str()) {
+            return Err(format!("{at}.dependencies names {} twice", dependency.id));
+        }
+    }
+    Ok(())
 }
 
 /// `[a-z0-9.-]+` (a release asset file name without its extension).

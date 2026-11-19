@@ -61,6 +61,9 @@ use super::variables::PublishedVariables;
 use super::worker::{EngineFailure, EngineReply, Events, StateReply};
 use super::{PluginSettings, platform, platform_problem};
 
+#[path = "dependencies.rs"]
+mod dependencies;
+
 /// Who decides in the audit log.
 const DECIDED_BY: &str = "user";
 /// The shared code of an invocation whose parameters do not match the
@@ -70,8 +73,9 @@ const INVALID_PARAMETERS: &str = "invalid-parameters";
 /// `random.bytes`, 1.2 key state (`docs/marketplace/plugin-key-state.md`),
 /// 1.3 the manifest's action `controls`, `navigation` and `views`
 /// (`docs/device-controls.md` §4), 1.4 a view's `context` (which toolbar
-/// selectors the app shows with it). A plugin whose manifest asks for a
-/// higher minor is `incompatible`.
+/// selectors the app shows with it), `dependencies` and actions'
+/// `requiresDependencies` (`docs/marketplace/dependencies.md`). A plugin
+/// whose manifest asks for a higher minor is `incompatible`.
 const PLUGIN_API: ApiLevel = ApiLevel::new(1, 4);
 /// Longest any invocation may take, whatever the manifest says.
 const MAX_INVOCATION: Duration = Duration::from_secs(600);
@@ -147,6 +151,15 @@ fn store_error(error: &StoreError) -> IpcError {
         | E::VersionInstalled { .. }
         | E::NotNewer { .. }
         | E::Tombstoned { .. } => self::error(ErrorCode::Failed, reason::INVALID_STATE, message),
+        E::RequiredBy { .. } => self::error(ErrorCode::Failed, reason::REQUIRED_BY, message),
+        // The step's own reason, with the whole message.
+        E::PlanFailed { source, .. } => {
+            let inner = store_error(source);
+            match inner.reason.clone() {
+                Some(why) => self::error(inner.code, &why, message),
+                None => IpcError::new(inner.code, message),
+            }
+        }
         _ => {
             warn!(%error, "plugin store error");
             IpcError::new(ErrorCode::Failed, message)
@@ -313,6 +326,11 @@ pub(super) struct PluginService {
     /// until then and whenever no alias exists. Its secrets never leave
     /// this process and are never logged.
     snapshot: Option<LegacySnapshot>,
+    /// The agent's built-in modules, for dependencies on them (sent by
+    /// the agent after every module load).
+    builtins: BTreeMap<String, deckpilot_plugin_store::deps::BuiltinModule>,
+    /// The verified packages of the last install plan.
+    plan_cache: Option<dependencies::PlanCache>,
 }
 
 /// What the agent saw of each plugin's host since it started
@@ -456,6 +474,8 @@ impl PluginService {
             health: HealthLog::default(),
             bundle,
             snapshot: None,
+            builtins: BTreeMap::new(),
+            plan_cache: None,
         };
         if service.registry.is_some() {
             let _ = service.refresh();
@@ -619,12 +639,16 @@ impl PluginService {
                 // to them stay unavailable as before.
                 variables: Vec::new(),
                 unavailable: Some("the plugin is not installed".to_owned()),
+                action_unavailable: BTreeMap::new(),
+                requires: Vec::new(),
             });
+        let graph = self.graph();
         records
             .iter()
             .filter_map(|record| {
                 let manifest = &record.active()?.manifest;
                 let grants = store.grants(&record.id).unwrap_or_default();
+                let (missing, action_unmet) = self.unmet(manifest, &graph);
                 Some(CatalogPlugin {
                     id: record.id.to_string(),
                     name: manifest.name.clone(),
@@ -632,7 +656,12 @@ impl PluginService {
                     description: manifest.description.clone(),
                     actions: manifest.contributes.actions().to_vec(),
                     variables: manifest.contributes.variables().to_vec(),
-                    unavailable: convert::unavailable_with(record, &grants),
+                    unavailable: convert::unavailable_with(record, &grants).or(missing),
+                    action_unavailable: action_unmet,
+                    requires: manifest
+                        .required_dependencies()
+                        .map(|d| d.id.to_string())
+                        .collect(),
                 })
             })
             .chain(gone)
@@ -734,6 +763,7 @@ impl PluginService {
             });
         }
         details.storage = self.storage_usage(id);
+        self.add_dependencies(&mut details, id);
         Ok(Response::Plugin {
             plugin: Box::new(details),
         })
@@ -742,6 +772,8 @@ impl PluginService {
     /// `listPlugins`, or with `paged` `listPluginsPaged` (no actions).
     fn list(&self, paged: bool) -> Result<Response, IpcError> {
         let store = self.manager.store();
+        let graph = self.graph();
+        let auto = store.dependency_installs().unwrap_or_default();
         let plugins = store.plugins().map_err(|e| store_error(&e))?;
         Ok(Response::Plugins {
             plugins: plugins
@@ -750,6 +782,8 @@ impl PluginService {
                     let mut summary =
                         convert::summary(record, &store.grants(&record.id).unwrap_or_default());
                     summary.health = self.health.get(record.id.as_str());
+                    self.apply_unmet(&mut summary, record, &graph);
+                    summary.installed_for = auto.get(&record.id).cloned();
                     if paged {
                         plugin_answers::paged_summary(&mut summary);
                     }
@@ -767,7 +801,22 @@ impl PluginService {
             .store()
             .grants(id)
             .map_err(|e| store_error(&e))?;
-        let entries = convert::action_entries(&record, &grants);
+        let mut entries = convert::action_entries(&record, &grants);
+        if let Some(manifest) = record.active().map(|v| &v.manifest) {
+            let (missing, unmet) = self.unmet(manifest, &self.graph());
+            for entry in &mut entries {
+                let action = &mut entry.action;
+                if let (true, Some(why)) = (
+                    action.available,
+                    missing
+                        .clone()
+                        .or_else(|| unmet.get(&action.action).cloned()),
+                ) {
+                    action.available = false;
+                    action.unavailable_reason = Some(why);
+                }
+            }
+        }
         let total = u32::try_from(entries.len()).unwrap_or(u32::MAX);
         let (actions, next) = plugin_answers::page_actions(entries, from);
         for entry in actions.iter().filter(|e| e.too_large) {
@@ -1258,7 +1307,11 @@ impl PluginService {
             Request::EnablePlugin { plugin, consent } => {
                 self.enable(&plugin_id(&plugin)?, &consent)
             }
-            Request::DisablePlugin { plugin } => self.disable(&plugin_id(&plugin)?),
+            Request::DisablePlugin { plugin } => {
+                let id = plugin_id(&plugin)?;
+                self.guard_removal(&id, deckpilot_plugin_store::deps::Removal::Disable)?;
+                self.disable(&id)
+            }
             Request::GrantPluginPermissions {
                 plugin,
                 permissions,
@@ -1283,13 +1336,21 @@ impl PluginService {
                 self.details(&id)
             }
             Request::RollbackPlugin { plugin } => self.rollback(&plugin_id(&plugin)?),
-            Request::UninstallPlugin { plugin, keep } => self.uninstall(
-                &plugin_id(&plugin)?,
-                Retention {
-                    settings: keep.settings,
-                    credentials: keep.credentials,
-                },
-            ),
+            Request::UninstallPlugin { plugin, keep } => {
+                let id = plugin_id(&plugin)?;
+                self.guard_removal(&id, deckpilot_plugin_store::deps::Removal::Uninstall)?;
+                self.uninstall(
+                    &id,
+                    Retention {
+                        settings: keep.settings,
+                        credentials: keep.credentials,
+                    },
+                )
+            }
+            request @ (Request::PlanPluginInstall { .. }
+            | Request::InstallPluginPlan { .. }
+            | Request::PlanPluginRemoval { .. }
+            | Request::RemovePlugin { .. }) => self.handle_dependencies(request),
             other => self.handle_data(other),
         }
     }
@@ -1394,6 +1455,7 @@ impl PluginService {
             .iter()
             .filter_map(|r| Some((r.id.to_string(), r.active()?.version.to_string())))
             .collect();
+        let graph = self.graph();
         let mut plugins = Vec::new();
         if let Some(index) = registry.client().index() {
             for entry in &index.plugins {
@@ -1413,7 +1475,12 @@ impl PluginService {
                             .iter()
                             .find(|r| r.matches(&entry.id, &v.version))
                             .map(|r| r.reason.clone());
-                        available_version(v, revoked, host.as_ref())
+                        let mut available = available_version(v, revoked, host.as_ref());
+                        available.dependencies = self.available_dependencies(
+                            v.dependencies.as_deref().unwrap_or_default(),
+                            &graph,
+                        );
+                        available
                     })
                     .collect();
                 versions.reverse();
@@ -1648,6 +1715,10 @@ impl PluginService {
                     format!("{id} {version} is not newer than the installed version"),
                 ));
             }
+            // Dependencies (plugin API 1.4): never a version another
+            // installed plugin refuses, never one whose dependencies are
+            // not there.
+            self.check_update(id, &version)?;
             let (expected, bytes) = self.fetch(id, &version)?;
             self.progress(id.as_str(), PluginOperation::Update, PluginStage::Verifying);
             let verified = verify_package(&bytes, &expected, &Limits::default())
@@ -1795,6 +1866,7 @@ impl PluginService {
     }
 
     fn rollback(&mut self, id: &PluginId) -> Result<Response, IpcError> {
+        self.check_rollback(id)?;
         self.stop_host(id);
         let result = match self.registry.as_ref() {
             Some(registry) => self.manager.rollback(id, registry.client()),
@@ -2037,6 +2109,12 @@ impl PluginService {
                     format!("{id} has no action `{action}`"),
                 )
             })?;
+        // Dependencies (plugin API 1.4): a required one missing stops every
+        // action, an optional one only the actions that name it.
+        let (missing, unmet) = self.unmet(&active.manifest, &self.graph());
+        if let Some(why) = missing.or_else(|| unmet.get(action).cloned()) {
+            return Err(error(ErrorCode::Failed, reason::NOT_ENABLED, why));
+        }
         let node = declaration.node.clone().unwrap_or_default();
         let timeout = Duration::from_millis(node.timeout_ms()).min(MAX_INVOCATION);
         let outputs = super::lane::declared_outputs(&declaration);
@@ -2405,6 +2483,7 @@ fn available_version(
             .map(|p| platform_id(*p).to_owned())
             .collect(),
         published_at: Some(v.published_at.timestamp()),
+        dependencies: Vec::new(),
     }
 }
 

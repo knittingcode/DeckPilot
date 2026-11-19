@@ -64,8 +64,16 @@ pub(crate) struct CatalogPlugin {
     /// The active version's variables (`contributes.variables`).
     pub variables: Vec<deckpilot_plugin_manifest::Variable>,
     /// Why its actions cannot run (disabled, broken, quarantined, this
-    /// platform, a permission not granted); `None`: they can.
+    /// platform, a permission not granted, a required dependency not
+    /// there); `None`: they can.
     pub unavailable: Option<String>,
+    /// Why single actions cannot run although the plugin can: an optional
+    /// dependency they name (`requiresDependencies`) is not there.
+    pub action_unavailable: std::collections::BTreeMap<String, String>,
+    /// The ids of its required dependencies (plugins or built-in
+    /// modules): the module registry then refuses to disable a built-in
+    /// module an enabled plugin requires.
+    pub requires: Vec<String>,
 }
 
 /// A plugin as a feature module: no capabilities (a plugin reaches
@@ -116,7 +124,17 @@ impl PluginModule {
                 pages: Vec::new(),
                 capabilities: Vec::new(),
                 config: Vec::new(),
-                dependencies: Vec::new(),
+                // Only while it runs: a plugin that cannot run (for lack
+                // of one of them, say) does not hold its dependencies.
+                dependencies: if plugin.unavailable.is_none() {
+                    plugin
+                        .requires
+                        .iter()
+                        .filter_map(|id| ModuleId::new(id.clone()).ok())
+                        .collect()
+                } else {
+                    Vec::new()
+                },
                 enabled_by_default: plugin.unavailable.is_none(),
                 portability: Portability::default(),
                 migrations: Vec::new(),
@@ -144,7 +162,10 @@ impl FeatureModule for PluginModule {
             .filter_map(|action| {
                 match PluginActionHandler::new(&self.plugin.id, action, self.invoker.clone()) {
                     Ok(handler) => {
-                        Some(Box::new(handler.with_state(action, runs)) as Box<dyn ActionHandler>)
+                        let unmet = self.plugin.action_unavailable.get(&action.id).cloned();
+                        let runs = runs && unmet.is_none();
+                        Some(Box::new(handler.with_state(action, runs).with_unmet(unmet))
+                            as Box<dyn ActionHandler>)
                     }
                     Err(problem) => {
                         warn!(plugin = %self.plugin.id, action = %action.id, %problem,
@@ -233,6 +254,10 @@ pub(crate) struct PluginActionHandler {
     /// `None`: never (no `state` in the manifest, or the plugin's actions
     /// cannot run).
     state: Option<RefreshPolicy>,
+    /// Why this action cannot run although its plugin can: a dependency it
+    /// names is missing or disabled. It then fails at once, never reaching
+    /// the plugin.
+    unmet: Option<String>,
 }
 
 impl PluginActionHandler {
@@ -246,7 +271,13 @@ impl PluginActionHandler {
             action: action.id.clone(),
             invoker,
             state: None,
+            unmet: None,
         })
+    }
+
+    fn with_unmet(mut self, unmet: Option<String>) -> Self {
+        self.unmet = unmet;
+        self
     }
 
     /// With the action's `state` from the manifest, while the plugin's
@@ -435,6 +466,12 @@ impl ActionHandler for PluginActionHandler {
         parameters: &ActionParameters,
         context: &ExecutionContext<'_>,
     ) -> ActionResult {
+        if let Some(why) = &self.unmet {
+            return ActionResult::error(
+                "plugin-unavailable",
+                format!("{} is unavailable: {why}", self.definition.name),
+            );
+        }
         catch_unwind(AssertUnwindSafe(|| self.run(parameters, context))).unwrap_or_else(|_| {
             warn!(plugin = %self.plugin, action = %self.action, "a plugin action handler panicked");
             ActionResult::error(

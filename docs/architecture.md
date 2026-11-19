@@ -93,6 +93,20 @@ starts **locked** until the configuration app hands it the key derived from
 the password. It also enforces automatic locking (see
 [security.md](security.md#trust-boundary-between-the-app-and-the-agent)).
 
+With the `plugins` feature it also runs the plugin backend
+([marketplace/agent-integration.md](marketplace/agent-integration.md)): the
+plugin store (`deckpilot-plugin-store`, its own encrypted `plugins.db`), the
+signed registry client, the permission broker and one sandboxed host per
+running plugin. Plugin dependencies (plugin API 1.4,
+[marketplace/dependencies.md](marketplace/dependencies.md)) are resolved by
+`deckpilot_plugin_store::deps` from the installed plugins, the built-in
+modules of the agent's module registry and the signed registry, and carried
+out all or nothing by `PluginManager::apply_plan`, with each plugin's own
+consent. Each installed plugin is a feature module of the module registry
+that declares its required dependencies, so the module registry's
+dependency rules (a module required by an enabled module cannot be turned
+off) cover plugins and built-in modules alike.
+
 ### `deckpilot-keystore`
 
 Storage of database keys in the platform credential store (macOS Keychain,

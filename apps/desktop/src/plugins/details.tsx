@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 
 import { Notice, PermissionList, PluginIcon, PublisherLine } from "./components"
+import { DependencySection, DependentsSection } from "./dependencies"
 import type { MarketplaceActions } from "./marketplace"
 import {
   STATE_LABELS,
@@ -165,6 +166,12 @@ export function PluginDetailsView({
               {installReason}
             </span>
           )}
+          {installed?.summary.installedFor && (
+            <span className="text-sm text-muted-foreground">
+              Installed for {installed.summary.installedFor}; it is offered for removal once nothing
+              needs it.
+            </span>
+          )}
           {known && (
             <span className="text-sm text-muted-foreground">
               Installed here before as {known.name}, last version {known.lastVersion} (
@@ -219,6 +226,21 @@ export function PluginDetailsView({
             <p>{shown.withdrawn}</p>
           </Notice>
         )}
+
+        {installed && installed.summary.version === shown?.version ? (
+          <DependencySection
+            title="Dependencies"
+            dependencies={installed.dependencies ?? shown.dependencies ?? []}
+          />
+        ) : (
+          shown && (
+            <DependencySection
+              title={`Dependencies of version ${shown.version}`}
+              dependencies={shown.dependencies ?? []}
+            />
+          )
+        )}
+        {installed && <DependentsSection dependents={installed.dependents ?? []} />}
 
         {shown && (
           <section aria-labelledby="plugin-detail-permissions" className="grid gap-2">

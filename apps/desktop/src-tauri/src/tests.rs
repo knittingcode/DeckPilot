@@ -3404,6 +3404,37 @@ fn plugin_refusal(h: &Harness, cmd: &str, args: Value) -> (String, String) {
 
 /// Every plugin command, with the arguments the frontend sends.
 fn plugin_commands() -> Vec<(&'static str, Value)> {
+    let mut commands = plugin_lifecycle_commands();
+    commands.extend(plugin_dependency_commands());
+    commands
+}
+
+/// The dependency commands (agents with the `dependencies` feature).
+fn plugin_dependency_commands() -> Vec<(&'static str, Value)> {
+    vec![
+        (
+            "plan_plugin_install",
+            json!({ "plugin": "example.hello", "version": null, "optional": ["example.extra"] }),
+        ),
+        (
+            "install_plugin_plan",
+            json!({ "plugin": "example.hello", "version": null, "optional": [],
+                "fingerprint": "0f", "consent": { "example.hello": ["notifications"] },
+                "activate": true }),
+        ),
+        (
+            "plan_plugin_removal",
+            json!({ "plugin": "example.hello", "uninstall": true }),
+        ),
+        (
+            "remove_plugin",
+            json!({ "plugin": "example.hello", "uninstall": true, "keep": null,
+                "withDependents": true, "orphans": ["example.base"] }),
+        ),
+    ]
+}
+
+fn plugin_lifecycle_commands() -> Vec<(&'static str, Value)> {
     vec![
         ("list_plugins", json!({})),
         ("list_plugin_navigation", json!({})),

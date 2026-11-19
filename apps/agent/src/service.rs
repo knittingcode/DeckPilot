@@ -1054,7 +1054,11 @@ impl Agent {
             | Request::DecideModuleMigration { .. }
             | Request::RetryModuleMigration { .. }
             | Request::GrantPluginUserOrigin { .. }
-            | Request::RevokePluginUserOrigin { .. } => {
+            | Request::RevokePluginUserOrigin { .. }
+            | Request::PlanPluginInstall { .. }
+            | Request::InstallPluginPlan { .. }
+            | Request::PlanPluginRemoval { .. }
+            | Request::RemovePlugin { .. } => {
                 unreachable!("plugin requests are handled by handle_command")
             }
             Request::Unlock { .. }
@@ -1276,6 +1280,7 @@ impl Agent {
         self.modules = load_modules(store)?;
         stages.done("modules");
         self.plugins.migrate(store, &self.modules);
+        self.plugins.builtins(&self.modules);
         register_plugin_modules(&mut self.modules, &self.plugins);
         stages.done("plugins");
         self.update_variable_permissions();
