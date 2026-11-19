@@ -15,6 +15,16 @@ released either. 0.6.0 is the first version intended for publication.
 
 ## [Unreleased]
 
+### Security
+
+- The plugin sandbox uses Wasmtime 50.0.2 (was 50.0.1), which fixes the
+  Wasmtime advisories of 2026-11-16 (RUSTSEC-2026-0566 to 0573). One of
+  them applies to DeckPilot's sandbox, which is built without Wasmtime's
+  `gc` feature: a plugin module using a function subtype check could make
+  its plugin host process abort (RUSTSEC-2026-0570). Each plugin runs in
+  its own sandboxed host process, so the abort stopped only that plugin,
+  never the agent or other plugins.
+
 ### Fixed
 
 - `deckpilot-registry package` checks each file path the manifest names
