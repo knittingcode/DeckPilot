@@ -520,6 +520,19 @@ pub enum DeckRequest {
     NextPage { wrap_around: bool },
     /// Shows the previous top-level page of the layout on the device.
     PreviousPage { wrap_around: bool },
+    /// Shows another layout of the active profile on the device (*Switch
+    /// layout*): `layout` must be assigned to the profile and made for the
+    /// device's model. `page`: the page to show (the home page when it is
+    /// not given or gone). `history`: what happens to the layout left
+    /// (see [`crate::LayoutHistory`]). Never switches the profile.
+    SwitchLayout {
+        layout: crate::LayoutId,
+        page: Option<crate::PageId>,
+        history: crate::HistoryMode,
+    },
+    /// Shows the layout the device showed before the current one in this
+    /// profile (*Back to previous layout*); nothing when there is none.
+    PreviousLayout,
     /// Activates another profile, for every device.
     SwitchProfile {
         target: ProfileTarget,
@@ -546,7 +559,10 @@ impl DeckRequest {
     /// action, and so cannot be applied without one.
     pub fn needs_device(self) -> bool {
         match self {
-            Self::NextPage { .. } | Self::PreviousPage { .. } => true,
+            Self::NextPage { .. }
+            | Self::PreviousPage { .. }
+            | Self::SwitchLayout { .. }
+            | Self::PreviousLayout => true,
             Self::SwitchProfile { .. }
             | Self::Brightness { .. }
             | Self::RunAction { .. }

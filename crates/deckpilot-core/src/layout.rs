@@ -102,7 +102,7 @@ impl Trigger {
     }
 
     /// A representative input, used to check whether a control supports the trigger.
-    fn sample_input(self) -> ControlInput {
+    pub(crate) fn sample_input(self) -> ControlInput {
         match self {
             // Gestures need the release too (checked separately).
             Self::Press | Self::Click | Self::DoubleClick | Self::LongPress => ControlInput::Press,
@@ -530,11 +530,16 @@ impl DeviceLayout {
                     control,
                 });
             }
+            // Workflows belong to profiles: a layout shared by several
+            // profiles starts a workflow only in the profiles that have it
+            // (`shared_layouts::availability`), so a missing one is not an
+            // error of the layout.
             let target_exists = match &binding.target {
                 BindingTarget::Action { action, .. } => profile.action(*action).is_some(),
-                BindingTarget::Workflow { workflow } => profile.workflow(*workflow).is_some(),
                 BindingTarget::OpenPage { page } => self.page(*page).is_some(),
-                BindingTarget::Back | BindingTarget::Stateful(_) => true,
+                BindingTarget::Workflow { .. }
+                | BindingTarget::Back
+                | BindingTarget::Stateful(_) => true,
             };
             if !target_exists {
                 issues.push(LayoutIssue::DanglingTarget {
@@ -542,18 +547,10 @@ impl DeviceLayout {
                     control,
                 });
             }
-            if let BindingTarget::Action { overrides, .. } = &binding.target
-                && overrides
-                    .projects()
-                    .any(|project| profile.project(project).is_none())
-            {
-                issues.push(LayoutIssue::InvalidOverrides {
-                    page: name(),
-                    control,
-                    trigger: binding.trigger,
-                    reason: "a project that is not in this profile".into(),
-                });
-            }
+            // A project override that is not one of the profile's is
+            // unavailable in this profile (`shared_layouts::availability`),
+            // not an error: the layout may be shared with the profile that
+            // has the project. The run is refused here.
             if let Some(icon) = binding.appearance.as_ref().and_then(|a| a.icon)
                 && profile.icon(icon.id).is_none()
             {
@@ -1469,7 +1466,8 @@ mod tests {
             .collect();
         assert_eq!(controls, [key(2), key(3), key(4), key(5)], "{issues:#?}");
 
-        // A project of another profile.
+        // A project of another profile: the layout may be shared with the
+        // profile that has it, so it is unavailable here, not an error.
         layout.page_mut(home).unwrap().bindings = vec![bind(
             key(0),
             Trigger::Click,
@@ -1479,9 +1477,10 @@ mod tests {
                 crate::ParameterValue::Project(crate::ProjectId::new()),
             ),
         )];
+        assert!(layout.validate(&catalog(), &profile).is_empty());
         assert!(matches!(
-            layout.validate(&catalog(), &profile)[..],
-            [LayoutIssue::InvalidOverrides { .. }]
+            crate::shared_layouts::availability(&layout, &profile)[..],
+            [crate::Unavailable::Project { .. }]
         ));
     }
 
