@@ -12,7 +12,17 @@ page says what happens then and how it is tested.
 | ----- | ----------------- | ------------ | --------------- |
 | Tag `v0.5.0-2` (signed draft test build, never published) | 0.5.0-2 | 4 | 5 |
 | Releases 0.6.0, 0.7.0, 0.8.0 and 0.8.1 | 0.6.0, 0.7.0, 0.8.0, 0.8.1 | 10 | 9 |
-| Current main (shared layouts) | see `Cargo.toml` | 11 | 10 |
+| Release 0.9.0 | 0.9.0 | 11 | 10 |
+| Current main | see `Cargo.toml` | 11 | 10 |
+
+Besides these, 0.9.0 provides plugin API 1.4 (0.8.0 and 0.8.1 provide
+1.3): a view's `context` and a manifest's `dependencies` and
+`requiresDependencies` need it, and older agents refuse a manifest that
+uses them; manifests without them install as before. The plugin store
+(`plugins.db`, separate from the configuration database) goes from
+schema 4 to 5, an additive table for dependencies, after an encrypted
+backup in `plugins/.backups/`; a 0.8.1 agent refuses the upgraded file
+without writing to it.
 
 Schema 10 moves layouts, action instances and icons into shared tables
 and rewrites the profile documents (document version 6); see
