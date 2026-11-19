@@ -15,6 +15,13 @@ released either. 0.6.0 is the first version intended for publication.
 
 ## [Unreleased]
 
+### Fixed
+
+- `deckpilot-registry package` checks each file path the manifest names
+  before reading it, so a path such as `assets/../../icon.svg` is refused
+  without reading anything outside the plugin directory. Such a package was
+  already refused; only the read happened first.
+
 ## [0.8.0] - 2026-11-18
 
 ### Added
