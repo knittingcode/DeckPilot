@@ -56,10 +56,13 @@ export function VariablesTable({
   shared,
   selected,
   onEdit,
+  namespace,
 }: {
   shared: SharedVariable[]
   selected: string | null
   onEdit: (key: string) => void
+  /** Only the variables under this namespace, e.g. a plugin's `plugins.acme.weather`. */
+  namespace?: string
 }) {
   const app = useContext(AppContext)
   const scope = useVariableScope()
@@ -74,7 +77,10 @@ export function VariablesTable({
   const catalog = useVariableCatalog(catalogScope, "", undefined, live)
   // Without the agent: the known core ids, without values.
   const entries: CatalogEntry[] = live ? catalog.entries : SYSTEM_VARIABLES
-  const rows = useMemo(() => catalogRows(entries, shared), [entries, shared])
+  const rows = useMemo(() => {
+    const all = catalogRows(entries, shared)
+    return namespace ? all.filter((row) => row.reference.startsWith(`${namespace}.`)) : all
+  }, [entries, shared, namespace])
   const shown = filterRows(rows, filter)
   const previews = useReferencePreviews(
     catalogScope,

@@ -13,6 +13,7 @@ order: 12
 - **From where**: DeckPilot's plugin registry, the one the [Plugin Marketplace](https://knittingcode.github.io/deckpilot-plugins/en/) shows. A package file can be installed from disk only if its bytes are a version that the verified registry lists; there is no unverified sideloading.
 - **The first plugins**, by DeckPilot: Air Quality (Polish air quality stations, data from GIOŚ), Markets (ECB euro reference rates, via Frankfurter), Pomodoro, Break & Hydration, and Memory (a game on your keys).
 - **Built in**: the GitHub, GitLab and Jira integrations and notifications come with DeckPilot as plugins and cannot be replaced from a registry. When you update from a release without plugins, each configured integration moves to its plugin; a stored token or a server on a private network is used by the plugin only after you agree. Configurations a plugin cannot serve yet, such as GitHub Enterprise, stay on the built-in integration.
+- **Toolbar entries**: an enabled plugin can add up to four buttons to the toolbar, left of the notifications. Each opens a view DeckPilot draws itself: the plugin's variables with their current values, its actions in the Action Library, or its settings. Hover over an entry for its name. Entries that do not fit are under **More plugin views**; right-click an entry to move it left or right, and the order is kept on this computer. Disabling or uninstalling the plugin removes its entries. A plugin cannot add pages, web content or code of its own to the app; its icons are shown as images only.
 
 ## How installing works
 

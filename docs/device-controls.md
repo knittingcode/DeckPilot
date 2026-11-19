@@ -2,10 +2,9 @@
 
 Which physical controls an action can be bound to, how DeckPilot decides
 whether a binding can run, and what every layer does with one that cannot.
-*Design record*: the contract of the device-capability redesign. Sections
-1 to 3 are implemented; sections 4 and 5 (the plugin manifest and the
-app's shell) are planned and listed here so the types already fit them.
-Where the code differs, the code and its tests win.
+*Design record*: the contract of the device-capability redesign. Every
+section is implemented. Where the code differs, the code and its tests
+win.
 
 ## 1. Control model (`deckpilot-device`)
 
@@ -181,7 +180,11 @@ seeded Stream Deck + layout has a tap on the touch strip bound to *Log*
 (keys only): it is reported and kept. The Stream Deck + has no driver, so
 such bindings never ran before either.
 
-## 4. Plugin manifest (planned, plugin API 1.3)
+## 4. Plugin manifest (plugin API 1.3)
+
+Status: implemented. The agent provides plugin API 1.3 (`PLUGIN_API` in
+`apps/agent/src/plugins/service.rs`); the author reference is
+[marketplace/sdk/manifest.md](marketplace/sdk/manifest.md#controls).
 
 `contributes.actions[].controls` (optional), the same shape as
 `ActionControls`:
@@ -191,26 +194,83 @@ such bindings never ran before either.
               "encoder": ["rotate-clockwise", "rotate-counter-clockwise"] }
 ```
 
-- Using `controls` (or `contributes.navigation`) requires
-  `engines.pluginApi` `^1.3`; agents up to 1.2 refuse such a manifest
-  (unknown fields).
+- Using `controls`, `contributes.navigation` or `contributes.views`
+  requires `engines.pluginApi` `^1.3` (a validator rule of
+  `deckpilot-plugin-manifest`); agents up to 1.2 refuse such a manifest
+  (unknown fields), which is the intended gate.
 - Without `controls`: the legacy default of section 2. A plugin declaring
   `device.requires: ["dials"]` without `controls` still gets no encoder
   binding.
-- Validation (`ActionControls::issues` holds the core of it): kinds are
-  `key`, `encoder`, `touchZone`; inputs valid for the kind (no rotation on
-  a key, no tap on an encoder); no empty set; at most
-  `MAX_INPUTS_PER_KIND` (8) inputs per kind.
-- Plugin navigation entries and host-rendered views
-  (`contributes.navigation`) are specified with that change.
+- Validation (the rules of `ActionControls::issues`, in the manifest
+  validator with JSON paths): kinds are `key`, `encoder`, `touchZone`;
+  inputs valid for the kind (no rotation on a key, no tap on an encoder);
+  no empty set; each input once; at most `MAX_INPUTS_PER_KIND` (8) inputs
+  per kind.
+- The agent registers a plugin action's `ActionType.controls` from the
+  manifest's `controls` as sets (`apps/agent/src/plugins/engine.rs`);
+  `None` without them.
 
-Until then the agent converts manifest actions with `controls: None`
-(`apps/agent/src/plugins/engine.rs`).
+`contributes.navigation` (≤ 4 entries: `id`, `label` ≤ 24 characters,
+`icon`, `view`) and `contributes.views` (≤ 8: `id`, `kind` ∈ `variables`,
+`actions`, `settings`) add toolbar entries that open host-rendered views:
 
-## 5. App shell (planned)
+- `view` names a declared view; ids are unique local ids (≤ 32
+  characters).
+- Icons are package files under `assets/` (`.png`, `.webp`, `.svg`; no
+  absolute path, scheme, `..` or backslash) and so in the integrity
+  record. PNG/WebP ≤ 256 KiB and ≤ 512×512 (from the header); SVG ≤ 64 KiB,
+  parsed (quick-xml) and rebuilt from an allow-list; scripts,
+  `foreignObject`, event handlers, links other than `#id`, `<style>` with
+  `url(`/`@import`, DTDs and entities are refused
+  (`deckpilot_plugin_manifest::sanitize_svg`). The package reader refuses
+  such a file at build and install time; the agent re-checks the digest
+  and sanitizes again on every request.
+- IPC (feature `navigation` in `PluginRuntimeStatus.features`):
+  `PluginSummary.navigation` lists the entries with their views;
+  `getPluginIcon` with `navigation: { entry, theme }` sends the icon in
+  chunks (`image/png`, `image/webp` or `image/svg+xml`).
+- Desktop commands: `list_plugin_navigation` (entries of enabled plugins)
+  and `get_plugin_navigation_icon` (a `data:` URL for `<img>`, `null` on
+  any failure so the app shows a fallback icon). The toolbar itself comes
+  with the app shell (section 5).
 
-The device editor will show incompatible actions disabled, with the
-reason ("Requires a dial. The selected Stream Deck MK.2 key supports press
-actions only."), refuse a drop on an incompatible control and offer a
-compatible-only filter, using `ActionType.controls` and the
-`preview_layout` reasons above.
+## 5. App shell
+
+Status: implemented in the device editor and the toolbar
+(`apps/desktop/src/lib/compatibility.ts`, `layout-editor/`,
+`shell/plugin-navigation.ts`). The app mirrors the rules of section 2 only
+to explain and to disable what the backend would refuse; `save_layout`
+stays the authority.
+
+- **Library.** With one control selected, entries (profile actions and
+  catalog types) that cannot go on it at all are shown disabled with the
+  reason, e.g. "Requires a dial. The selected Stream Deck MK.2 key
+  supports press actions only." (`controlKindUnsupported`), or "Requires a
+  press on a dial. The selected Knob Box dial supports turn actions only."
+  (no input the action takes is one the control has). **Compatible only**
+  hides them (`deckpilot.editor.compatibleOnly`, local storage).
+- **Drops.** A drop that would bind an action to a control it cannot run
+  from (also a moved control's bindings) is refused: nothing changes, the
+  control shows `data-drop="rejected"` with a red outline, the reason is
+  in a toast and announced (dnd-kit announcements and a live region). A
+  compatible drop picks the first free trigger the action can run from.
+- **Inspector.** Each trigger's choices disable actions incompatible with
+  it ("(not on this control)"), from the reason variants: "Does not react
+  to double click on a dial. On a dial it reacts to press, turn right, turn
+  left and click." (`inputUnsupportedByAction`), "The selected … dial has
+  no press; it supports turn actions only." (`inputUnsupportedByControl`).
+  A stored incompatible binding (`preview_layout` `incompatible`) shows
+  "Not run from this control: <reason> It stays assigned but is not run."
+- **Save.** A refusal shows the backend's reason with the trigger named
+  as in the editor; bindings kept by `save_layout` (`incompatible`) are
+  listed in a warning.
+- **Plugin toolbar entries.** `list_plugin_navigation` (read again on
+  plugin events), in the user's order (`deckpilot.toolbar.pluginOrder`),
+  at most four in the toolbar and the rest under "More plugin views" (all
+  of them in a narrow window). Icons come from `get_plugin_navigation_icon`
+  for the current theme and are shown only through `<img>` when they are
+  a base64 `data:` URL of PNG, WebP or SVG; anything else shows the app's
+  own icon. An entry opens `plugin-view/<plugin>/<entry>`, a view the app
+  draws for the kind (`variables`: the variables table under the plugin's
+  namespace; `actions`: the Action Library with the plugin's actions;
+  `settings`: its configuration form). Unknown kinds have no entry.

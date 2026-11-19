@@ -15,6 +15,8 @@ released either. 0.6.0 is the first version intended for publication.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-18
+
 ### Added
 
 - System monitor keys. The System module has four new read-only actions,
@@ -33,6 +35,35 @@ released either. 0.6.0 is the first version intended for publication.
   keys; Next page, Previous page, Brightness and the project switching
   actions also work on a dial, once per turn or press. Actions of plugins
   work on keys, as before. See `docs/device-controls.md`.
+- Plugin API 1.3: a plugin's manifest can declare which controls and
+  inputs each of its actions works on (`controls`, for example a dial's
+  turns), and up to four toolbar entries (`navigation`) that open views
+  DeckPilot draws itself: the plugin's variables, its actions or its
+  settings (`views`). A manifest using them needs `"pluginApi": "^1.3"`.
+  Without `controls` a plugin action still works on keys only, and
+  `device.requires` grants no dial. The Rust plugin SDK has
+  `Action::controls(..)`. See `docs/marketplace/sdk/manifest.md`.
+- Toolbar icons of plugins are checked when a package is built and
+  installed: PNG or WebP up to 256 KiB and 512×512 pixels, or SVG up to
+  64 KiB without scripts, event handlers, external, `data:` or
+  `javascript:` links, style imports or entities. The agent re-checks and
+  sanitizes them each time it serves one, and the app shows them only as
+  images, with its own icon when there is none to show.
+- The Device Editor explains which actions fit the selected control. In
+  the Action Library, actions that cannot run from it stay visible but
+  disabled, with the reason ("Requires a dial. The selected Stream Deck
+  MK.2 key supports press actions only."), and **Compatible only** hides
+  them. Dropping such an action on a control is refused, shown on the
+  control and announced; the inspector offers each trigger only the
+  actions that can run from it, says why a saved binding is kept but not
+  run, and a refused save names the trigger as the editor does.
+- Toolbar entries of enabled plugins, left of the notifications: each
+  opens a view DeckPilot draws, the plugin's live variables, its actions
+  in the Action Library or its settings. Their icons are shown only as
+  images (DeckPilot's own icon when there is none), more than fit are
+  under *More plugin views*, the order can be changed from an entry's
+  context menu and is kept on this computer, and they go away when the
+  plugin is disabled or uninstalled.
 
 ### Changed
 
@@ -70,6 +101,11 @@ released either. 0.6.0 is the first version intended for publication.
 
 ### Fixed
 
+- Opening the plugin database no longer takes its write lock when its
+  schema is already current, and waits for another process's lock while it
+  checks the key. Before, the agent and anything else opening it at the
+  same time could wait on one another until one failed with "database is
+  locked", and a busy database could be reported as a wrong key.
 - Linux: the `.deb` and `.rpm` packages now depend on the AppIndicator
   library the background agent's tray icon uses
   (`libayatana-appindicator3-1` on Debian and Ubuntu; the `.rpm` requires

@@ -122,9 +122,9 @@ case "${1-}" in
     if ldconfig -p | grep -q 'libayatana-appindicator3\.so\.1 '; then
       echo "::warning::libayatana-appindicator3 is installed already: this check does not show that the package pulls it in"
     fi
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends -o Acquire::Retries=3 "$package"
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 "$package"
     # The test's own tools (not dependencies of the package).
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends -o Acquire::Retries=3 xvfb xauth dbus
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 xvfb xauth dbus
     ldconfig -p | grep -q 'libayatana-appindicator3\.so\.1 ' \
       || fail "libayatana-appindicator3.so.1 is not installed after installing $package with its dependencies"
     agent /usr/bin/deckpilot-agent

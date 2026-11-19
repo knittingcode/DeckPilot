@@ -169,6 +169,81 @@ fn full_manifest_parses_and_validates() {
     );
 }
 
+/// Plugin API 1.3: `controls`, `navigation` and `views`.
+#[test]
+fn controls_navigation_and_views_parse_and_validate() {
+    use deckpilot_plugin_manifest::{
+        ControlKind, IconTheme, InputCapability, NavigationIcon, ViewKind,
+    };
+    let value = navigation_example();
+    assert_eq!(schema_errors(&schema(), &value), [] as [String; 0]);
+    let manifest = Manifest::parse_and_validate(&value.to_string()).unwrap();
+    assert_eq!(serde_json::to_value(&manifest).unwrap(), value);
+
+    let controls = manifest.contributes.actions()[0].controls.as_ref().unwrap();
+    let sets = controls.as_sets();
+    assert_eq!(
+        sets.keys().copied().collect::<Vec<_>>(),
+        [
+            ControlKind::Key,
+            ControlKind::Encoder,
+            ControlKind::TouchZone
+        ]
+    );
+    assert!(sets[&ControlKind::Encoder].contains(&InputCapability::RotateClockwise));
+    assert_eq!(
+        sets[&ControlKind::TouchZone].iter().collect::<Vec<_>>(),
+        [&InputCapability::Tap]
+    );
+
+    let navigation = manifest.contributes.navigation();
+    assert_eq!(navigation.len(), 2);
+    assert_eq!(
+        manifest.contributes.view_of(&navigation[0]).unwrap().kind,
+        ViewKind::Variables
+    );
+    assert_eq!(
+        navigation[0].icon.file(IconTheme::Dark),
+        Some("assets/nav-dark.svg")
+    );
+    assert_eq!(
+        navigation[1].icon.file(IconTheme::Dark),
+        Some("assets/setup.png")
+    );
+    // One theme only: the other theme shows the same file.
+    let light_only: NavigationIcon =
+        serde_json::from_value(json!({"light": "assets/l.svg"})).unwrap();
+    assert_eq!(light_only.file(IconTheme::Dark), Some("assets/l.svg"));
+
+    // The icons are package files the integrity record must hold.
+    let files = manifest.referenced_files();
+    for icon in ["assets/nav.svg", "assets/nav-dark.svg", "assets/setup.png"] {
+        assert!(files.contains(icon), "{icon}");
+    }
+
+    // A manifest without them is what it was: keys only, no navigation.
+    let plain = Manifest::parse_and_validate(EXAMPLE).unwrap();
+    assert!(plain.contributes.actions()[0].controls.is_none());
+    assert_eq!(plain.contributes.navigation().len(), 0);
+    assert!(plain.navigation_icon_files().is_empty());
+
+    // Every message names the level to declare.
+    let mut old = value.clone();
+    set(&mut old, "/engines/pluginApi", json!("^1.2"));
+    let error = Manifest::parse_and_validate(&old.to_string()).unwrap_err();
+    assert!(
+        error.to_string().contains(
+            "contributes.actions[0].controls: needs plugin API 1.3: set engines.pluginApi to \
+             `^1.3` (it is `^1.2`)"
+        ),
+        "{error}"
+    );
+    // A later major is at least 1.3 too.
+    let mut later = value;
+    set(&mut later, "/engines/pluginApi", json!("^2.0"));
+    Manifest::parse_and_validate(&later.to_string()).unwrap();
+}
+
 #[test]
 fn schema_accepts_the_positive_fixtures() {
     let validator = schema();
@@ -1165,6 +1240,307 @@ fn fixtures() -> Vec<Fixture> {
             expect: TooLarge,
             schema_rejects: Some(false),
         },
+    ]
+    .into_iter()
+    .chain(navigation_fixtures())
+    .collect()
+}
+
+/// The example at plugin API 1.3 with controls, navigation and views.
+fn navigation_example() -> Value {
+    let mut value = example();
+    set(&mut value, "/engines/pluginApi", json!("^1.3"));
+    set(
+        &mut value,
+        "/contributes/actions/0/controls",
+        json!({"key": ["press", "click", "long-press"],
+               "encoder": ["rotate-clockwise", "rotate-counter-clockwise"],
+               "touchZone": ["tap"]}),
+    );
+    set(
+        &mut value,
+        "/contributes/navigation",
+        json!([
+            {"id": "dashboard", "label": "GitHub",
+             "icon": {"light": "assets/nav.svg", "dark": "assets/nav-dark.svg"},
+             "view": "dashboard"},
+            {"id": "setup", "label": "Setup", "icon": "assets/setup.png", "view": "settings"}
+        ]),
+    );
+    set(
+        &mut value,
+        "/contributes/views",
+        json!([{"id": "dashboard", "kind": "variables"}, {"id": "settings", "kind": "settings"}]),
+    );
+    value
+}
+
+fn mutate_navigation(
+    name: &'static str,
+    schema: bool,
+    expect: Expect,
+    f: impl FnOnce(&mut Value),
+) -> Fixture {
+    let mut value = navigation_example();
+    f(&mut value);
+    Fixture {
+        name,
+        text: value.to_string(),
+        expect,
+        schema_rejects: Some(schema),
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn navigation_fixtures() -> Vec<Fixture> {
+    use Expect::{Invalid, Structure};
+    use IssueCode as C;
+    let controls = "/contributes/actions/0/controls";
+    vec![
+        // Controls.
+        mutate_navigation(
+            "controls of an unknown kind",
+            true,
+            Structure("unknown variant `dial`"),
+            |v| set(v, &format!("{controls}/dial"), json!(["press"])),
+        ),
+        mutate_navigation(
+            "controls with an unknown input",
+            true,
+            Structure("unknown variant `push`"),
+            |v| set(v, &format!("{controls}/key"), json!(["push"])),
+        ),
+        mutate_navigation(
+            "controls without a kind",
+            true,
+            Invalid("contributes.actions[0].controls", C::Count),
+            |v| set(v, controls, json!({})),
+        ),
+        mutate_navigation(
+            "controls with an empty kind",
+            true,
+            Invalid("contributes.actions[0].controls.encoder", C::Count),
+            |v| set(v, &format!("{controls}/encoder"), json!([])),
+        ),
+        mutate_navigation(
+            "a rotation on a key",
+            true,
+            Invalid("contributes.actions[0].controls.key[1]", C::InvalidValue),
+            |v| {
+                set(
+                    v,
+                    &format!("{controls}/key"),
+                    json!(["press", "rotate-clockwise"]),
+                );
+            },
+        ),
+        mutate_navigation(
+            "a tap on an encoder",
+            true,
+            Invalid(
+                "contributes.actions[0].controls.encoder[0]",
+                C::InvalidValue,
+            ),
+            |v| set(v, &format!("{controls}/encoder"), json!(["tap"])),
+        ),
+        mutate_navigation(
+            "a press on a touch zone",
+            true,
+            Invalid(
+                "contributes.actions[0].controls.touchZone[0]",
+                C::InvalidValue,
+            ),
+            |v| set(v, &format!("{controls}/touchZone"), json!(["press"])),
+        ),
+        mutate_navigation(
+            "an input twice",
+            true,
+            Invalid("contributes.actions[0].controls.key[1]", C::Duplicate),
+            |v| set(v, &format!("{controls}/key"), json!(["press", "press"])),
+        ),
+        mutate_navigation(
+            "more than eight inputs on a kind",
+            true,
+            Invalid("contributes.actions[0].controls.encoder", C::Count),
+            |v| {
+                set(
+                    v,
+                    &format!("{controls}/encoder"),
+                    json!([
+                        "rotate-clockwise",
+                        "rotate-counter-clockwise",
+                        "press",
+                        "release",
+                        "click",
+                        "double-click",
+                        "long-press",
+                        "long-press",
+                        "press"
+                    ]),
+                );
+            },
+        ),
+        // The API level gate.
+        mutate_navigation(
+            "controls below plugin API 1.3",
+            false,
+            Invalid("contributes.actions[0].controls", C::Conflict),
+            |v| set(v, "/engines/pluginApi", json!("^1.2")),
+        ),
+        mutate_navigation(
+            "navigation below plugin API 1.3",
+            false,
+            Invalid("contributes.navigation", C::Conflict),
+            |v| set(v, "/engines/pluginApi", json!("^1.0")),
+        ),
+        mutate_navigation(
+            "views below plugin API 1.3",
+            false,
+            Invalid("contributes.views", C::Conflict),
+            |v| set(v, "/engines/pluginApi", json!("^1.1")),
+        ),
+        // Navigation and views.
+        mutate_navigation(
+            "five navigation entries",
+            true,
+            Invalid("contributes.navigation", C::Count),
+            |v| {
+                for i in 0..3 {
+                    push(
+                        v,
+                        "/contributes/navigation",
+                        json!({"id": format!("more{i}"), "label": "More",
+                               "icon": "assets/setup.png", "view": "settings"}),
+                    );
+                }
+            },
+        ),
+        mutate_navigation(
+            "an entry naming an undeclared view",
+            false,
+            Invalid("contributes.navigation[1].view", C::UnknownReference),
+            |v| set(v, "/contributes/navigation/1/view", json!("nowhere")),
+        ),
+        mutate_navigation(
+            "two entries with one id",
+            false,
+            Invalid("contributes.navigation[1]", C::Duplicate),
+            |v| set(v, "/contributes/navigation/1/id", json!("dashboard")),
+        ),
+        mutate_navigation(
+            "two views with one id",
+            false,
+            Invalid("contributes.views[1]", C::Duplicate),
+            |v| set(v, "/contributes/views/1/id", json!("dashboard")),
+        ),
+        mutate_navigation(
+            "a navigation id that is not a local id",
+            true,
+            Invalid("contributes.navigation[0].id", C::InvalidId),
+            |v| set(v, "/contributes/navigation/0/id", json!("Dash_board")),
+        ),
+        mutate_navigation(
+            "an empty label",
+            true,
+            Invalid("contributes.navigation[0].label", C::Length),
+            |v| set(v, "/contributes/navigation/0/label", json!("")),
+        ),
+        mutate_navigation(
+            "a label longer than 24 characters",
+            true,
+            Invalid("contributes.navigation[0].label", C::Length),
+            |v| set(v, "/contributes/navigation/0/label", json!("x".repeat(25))),
+        ),
+        mutate_navigation(
+            "a label with a line break",
+            false,
+            Invalid("contributes.navigation[0].label", C::InvalidValue),
+            |v| set(v, "/contributes/navigation/0/label", json!("Git\nHub")),
+        ),
+        mutate_navigation(
+            "an unknown view kind",
+            true,
+            Structure("unknown variant `html`"),
+            |v| set(v, "/contributes/views/0/kind", json!("html")),
+        ),
+        mutate_navigation(
+            "an unknown navigation field",
+            true,
+            Structure("unknown field `url`"),
+            |v| {
+                set(
+                    v,
+                    "/contributes/navigation/0/url",
+                    json!("https://x.example"),
+                );
+            },
+        ),
+        mutate_navigation(
+            "an icon object without a file",
+            true,
+            Invalid("contributes.navigation[0].icon", C::Count),
+            |v| set(v, "/contributes/navigation/0/icon", json!({})),
+        ),
+        mutate_navigation(
+            "an icon leaving the package",
+            true,
+            Invalid("contributes.navigation[1].icon", C::InvalidPath),
+            |v| {
+                set(
+                    v,
+                    "/contributes/navigation/1/icon",
+                    json!("assets/../x.png"),
+                );
+            },
+        ),
+        mutate_navigation(
+            "an absolute icon path",
+            true,
+            Invalid("contributes.navigation[1].icon", C::InvalidPath),
+            |v| set(v, "/contributes/navigation/1/icon", json!("/etc/x.png")),
+        ),
+        mutate_navigation(
+            "a remote icon",
+            true,
+            Invalid("contributes.navigation[0].icon.light", C::InvalidPath),
+            |v| {
+                set(
+                    v,
+                    "/contributes/navigation/0/icon/light",
+                    json!("https://evil.example/x.svg"),
+                );
+            },
+        ),
+        mutate_navigation(
+            "a data: icon",
+            true,
+            Invalid("contributes.navigation[0].icon.dark", C::InvalidPath),
+            |v| {
+                set(
+                    v,
+                    "/contributes/navigation/0/icon/dark",
+                    json!("data:image/svg+xml,<svg/>"),
+                );
+            },
+        ),
+        mutate_navigation(
+            "a backslash in an icon path",
+            true,
+            Invalid("contributes.navigation[1].icon", C::InvalidPath),
+            |v| set(v, "/contributes/navigation/1/icon", json!("assets\\x.png")),
+        ),
+        mutate_navigation(
+            "an icon outside assets",
+            true,
+            Invalid("contributes.navigation[1].icon", C::InvalidPath),
+            |v| set(v, "/contributes/navigation/1/icon", json!("nav.png")),
+        ),
+        mutate_navigation(
+            "an icon of another format",
+            true,
+            Invalid("contributes.navigation[1].icon", C::InvalidPath),
+            |v| set(v, "/contributes/navigation/1/icon", json!("assets/nav.gif")),
+        ),
     ]
 }
 

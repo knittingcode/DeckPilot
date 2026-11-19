@@ -33,6 +33,7 @@
 
 mod compat;
 mod error;
+mod icon;
 mod identity;
 mod integrity;
 mod model;
@@ -45,6 +46,10 @@ pub use compat::{
     RangeError, VersionRange,
 };
 pub use error::{Issue, IssueCode, ManifestError, ValidationErrors};
+pub use icon::{
+    IconError, IconFormat, MAX_ICON_SIDE, MAX_RASTER_ICON_BYTES, MAX_SVG_ICON_BYTES, check_icon,
+    display_icon, sanitize_svg,
+};
 pub use identity::{
     FIRST_PARTY_PUBLISHER, IdError, MAX_PLUGIN_NAME_LEN, MAX_PUBLISHER_LEN, PluginId,
     RESERVED_PUBLISHERS, is_publisher_id, lower_camel,

@@ -42,3 +42,34 @@ where
         .deserialize_map(UniqueVisitor(PhantomData))
         .map(Some)
 }
+
+/// A required object with unique keys of any type (`controls`).
+pub(crate) fn deserialize_keyed<'de, D, K, V>(deserializer: D) -> Result<BTreeMap<K, V>, D::Error>
+where
+    D: Deserializer<'de>,
+    K: Deserialize<'de> + Ord,
+    V: Deserialize<'de>,
+{
+    struct KeyedVisitor<K, V>(PhantomData<(K, V)>);
+
+    impl<'de, K: Deserialize<'de> + Ord, V: Deserialize<'de>> Visitor<'de> for KeyedVisitor<K, V> {
+        type Value = BTreeMap<K, V>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("an object with unique keys")
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, mut access: A) -> Result<Self::Value, A::Error> {
+            let mut map = BTreeMap::new();
+            while let Some((key, value)) = access.next_entry::<K, V>()? {
+                if map.contains_key(&key) {
+                    return Err(A::Error::custom("duplicate key"));
+                }
+                map.insert(key, value);
+            }
+            Ok(map)
+        }
+    }
+
+    deserializer.deserialize_map(KeyedVisitor(PhantomData))
+}

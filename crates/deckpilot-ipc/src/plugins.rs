@@ -91,7 +91,62 @@ pub mod feature {
     /// `getPluginIcon`: answers that fit one IPC message whatever the
     /// plugin's number of actions and outputs and its icon's size.
     pub const PAGED_ANSWERS: &str = "pagedAnswers";
+    /// Plugin API 1.3 navigation: [`PluginSummary::navigation`](super::PluginSummary::navigation)
+    /// and `getPluginIcon` with `navigation`
+    /// ([`NavigationIconRef`](super::NavigationIconRef)). An agent without
+    /// it ignores `navigation` and answers with the plugin's own icon, so a
+    /// client asks for a navigation icon only when the agent lists it.
+    pub const NAVIGATION: &str = "navigation";
 }
+
+/// One toolbar entry of an installed plugin (`contributes.navigation`,
+/// plugin API 1.3). It opens a view the app renders itself; the plugin
+/// ships no UI code. Its icon is read with `getPluginIcon` and
+/// [`NavigationIconRef`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginNavigationEntry {
+    /// Unique within the plugin.
+    pub id: String,
+    /// At most 24 characters.
+    pub label: String,
+    pub view: PluginView,
+}
+
+/// A host-rendered view (`contributes.views`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginView {
+    pub id: String,
+    /// `variables` (the plugin's variables, live), `actions` (the Action
+    /// Library filtered to the plugin) or `settings` (its configuration
+    /// page). A string, so that a client ignores kinds a later agent adds
+    /// rather than failing on them.
+    pub kind: String,
+}
+
+/// The theme a navigation icon is shown in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NavigationIconTheme {
+    Light,
+    Dark,
+}
+
+/// Which navigation icon a `getPluginIcon` asks for (feature
+/// [`feature::NAVIGATION`]): the entry's file for the theme, else its file
+/// for the other theme.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NavigationIconRef {
+    /// [`PluginNavigationEntry::id`].
+    pub entry: String,
+    pub theme: NavigationIconTheme,
+}
+
+/// Media types of navigation icons; the plugin's own icon is always
+/// `image/png`.
+pub const NAVIGATION_ICON_MEDIA_TYPES: [&str; 3] = ["image/png", "image/webp", "image/svg+xml"];
 
 /// Stable, machine-readable reasons of plugin errors
 /// ([`IpcError::reason`](crate::IpcError::reason)). The message explains
@@ -376,6 +431,12 @@ pub struct PluginSummary {
     /// until an invocation failed, and from agents before the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<PluginHealth>,
+    /// The active version's toolbar entries (`contributes.navigation`,
+    /// plugin API 1.3), in manifest order, whatever the plugin's state:
+    /// the app shows them for enabled plugins only. Empty (left out) from
+    /// agents without [`feature::NAVIGATION`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub navigation: Vec<PluginNavigationEntry>,
 }
 
 /// Failures of a plugin's host the agent saw since it started (kept in
@@ -478,16 +539,20 @@ pub struct PluginActionEntry {
 }
 
 /// One chunk of a plugin's icon (`getPluginIcon`): the active version's
-/// 128 px PNG, checked against its integrity record on every request.
+/// 128 px PNG, or with `navigation` a navigation entry's PNG, WebP or
+/// (sanitized) SVG, checked against its integrity record on every request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginIconChunk {
-    /// `image/png`.
+    /// `image/png`; for a navigation icon one of
+    /// [`NAVIGATION_ICON_MEDIA_TYPES`].
     pub media_type: String,
-    /// The whole file's size in bytes.
+    /// The whole file's size in bytes (of a sanitized SVG: of the bytes
+    /// sent).
     pub size: u64,
-    /// The whole file's sha256 (lowercase hex): the same in every chunk of
-    /// one file, so a client sees that it changed between chunks.
+    /// The whole file's sha256 (lowercase hex; of a sanitized SVG: of the
+    /// bytes sent): the same in every chunk of one file, so a client sees
+    /// that it changed between chunks.
     pub sha256: String,
     /// Where this chunk starts in the file.
     pub offset: u64,
@@ -927,8 +992,15 @@ pub(crate) fn check_request(request: &crate::Request) -> Result<(), String> {
             }
             Ok(())
         }
-        crate::Request::GetPluginIcon { plugin, offset } => {
+        crate::Request::GetPluginIcon {
+            plugin,
+            offset,
+            navigation,
+        } => {
             check_text("plugin", plugin)?;
+            if let Some(navigation) = navigation {
+                check_text("navigation entry", &navigation.entry)?;
+            }
             if *offset > MAX_ICON_BYTES as u64 {
                 return Err(format!("offset must be at most {MAX_ICON_BYTES}"));
             }
@@ -1389,6 +1461,61 @@ mod tests {
         assert_eq!(back, full);
     }
 
+    /// Navigation (feature `navigation`): left out when empty, so the
+    /// summary of an older agent and of a plugin without entries is the
+    /// same; `getPluginIcon` without `navigation` is the original request.
+    fn navigation_is_additive(summary: &PluginSummary) {
+        assert_eq!(summary.navigation, Vec::new());
+        assert!(
+            serde_json::to_value(summary)
+                .unwrap()
+                .get("navigation")
+                .is_none()
+        );
+        let navigating = PluginSummary {
+            navigation: vec![PluginNavigationEntry {
+                id: "dashboard".into(),
+                label: "GitHub".into(),
+                view: PluginView {
+                    id: "dashboard".into(),
+                    kind: "variables".into(),
+                },
+            }],
+            ..summary.clone()
+        };
+        let json = serde_json::to_value(&navigating).unwrap();
+        assert_eq!(
+            json["navigation"],
+            serde_json::json!([{"id": "dashboard", "label": "GitHub",
+                "view": {"id": "dashboard", "kind": "variables"}}])
+        );
+        assert_eq!(
+            serde_json::from_value::<PluginSummary>(json).unwrap(),
+            navigating
+        );
+        let request = crate::Request::GetPluginIcon {
+            plugin: "a.b".into(),
+            offset: 0,
+            navigation: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            serde_json::json!({"type": "getPluginIcon", "plugin": "a.b", "offset": 0})
+        );
+        let request = crate::Request::GetPluginIcon {
+            plugin: "a.b".into(),
+            offset: 0,
+            navigation: Some(NavigationIconRef {
+                entry: "dashboard".into(),
+                theme: NavigationIconTheme::Dark,
+            }),
+        };
+        assert_eq!(
+            serde_json::to_value(&request).unwrap()["navigation"],
+            serde_json::json!({"entry": "dashboard", "theme": "dark"})
+        );
+    }
+
     #[test]
     fn health_and_icon_are_additive() {
         let summary: PluginSummary = serde_json::from_value(serde_json::json!({
@@ -1427,6 +1554,7 @@ mod tests {
             })
         );
         assert_eq!(serde_json::from_value::<PluginSummary>(json).unwrap(), sick);
+        navigation_is_additive(&summary);
 
         let details: PluginDetails = serde_json::from_value(serde_json::json!({
             "summary": serde_json::to_value(&summary).unwrap(),

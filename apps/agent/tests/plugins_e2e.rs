@@ -4076,6 +4076,7 @@ async fn a_plugin_larger_than_one_message_is_listed_shown_and_edited() {
             .request(Request::GetPluginIcon {
                 plugin: BIG.into(),
                 offset,
+                navigation: None,
             })
             .await
             .unwrap();

@@ -17,9 +17,10 @@ use crate::identity::{
     RESERVED_PUBLISHERS, is_camel_key, is_local_id, is_publisher_id, is_variable_segment,
 };
 use crate::model::{
-    Action, Credential, CredentialScheme, Effect, HttpMethod, Manifest, Node, Parameter,
-    ParameterKind, ParameterValue, Permission, PermissionKind, ProfileScope, Setting,
-    UserOriginSlot, VariableScope,
+    Action, ActionControls, ControlKind, Credential, CredentialScheme, Effect, HttpMethod,
+    MAX_INPUTS_PER_KIND, MAX_NAVIGATION_ENTRIES, MAX_NAVIGATION_ID, MAX_NAVIGATION_LABEL,
+    MAX_VIEWS, Manifest, NAVIGATION_API, Node, Parameter, ParameterKind, ParameterValue,
+    Permission, PermissionKind, ProfileScope, Setting, UserOriginSlot, VariableScope,
 };
 use crate::{MANIFEST_VERSION, path_rules};
 
@@ -356,6 +357,8 @@ pub(crate) fn check(manifest: &Manifest) -> Checker {
     top_level(&mut c, manifest);
     permissions(&mut c, manifest);
     actions(&mut c, manifest);
+    navigation(&mut c, manifest);
+    api_level_features(&mut c, manifest);
     variables(&mut c, manifest);
     settings(&mut c, manifest);
     credentials(&mut c, manifest);
@@ -1147,8 +1150,168 @@ fn actions(c: &mut Checker, m: &Manifest) {
                 requires.iter().map(|x| format!("{x:?}")),
             );
         }
+        if let Some(controls) = &action.controls {
+            self::controls(c, &format!("{path}.controls"), controls);
+        }
     }
     c.unique("contributes.actions", actions.iter().map(|a| &a.id));
+}
+
+/// `controls`: the rules of `deckpilot_core::ActionControls::issues` (at
+/// least one kind, no empty list, only inputs a control of the kind can
+/// produce, at most [`MAX_INPUTS_PER_KIND`] per kind), plus no input twice.
+fn controls(c: &mut Checker, path: &str, controls: &ActionControls) {
+    if controls.bindings.is_empty() {
+        c.error(
+            path,
+            IssueCode::Count,
+            "declares no control kind: name at least one of key, encoder and touchZone, or \
+             leave `controls` out for keys only",
+        );
+    }
+    for (kind, inputs) in &controls.bindings {
+        let field = format!("{path}.{}", control_kind_name(*kind));
+        c.count(&field, inputs.len(), 1, MAX_INPUTS_PER_KIND);
+        for (i, input) in inputs.iter().enumerate() {
+            if !input.applies_to(*kind) {
+                c.error(
+                    format!("{field}[{i}]"),
+                    IssueCode::InvalidValue,
+                    format!("a {kind} has no `{input}` input"),
+                );
+            }
+        }
+        c.unique(&field, inputs.iter().map(|i| i.as_str()));
+    }
+}
+
+/// The manifest name of a control kind.
+fn control_kind_name(kind: ControlKind) -> &'static str {
+    match kind {
+        ControlKind::Key => "key",
+        ControlKind::Encoder => "encoder",
+        ControlKind::TouchZone => "touchZone",
+    }
+}
+
+/// `contributes.navigation` and `contributes.views`: counts, ids, labels,
+/// each entry's view declared, icon files package-relative PNG, WebP or
+/// SVG files under `assets/`.
+fn navigation(c: &mut Checker, m: &Manifest) {
+    let views = m.contributes.views();
+    c.count("contributes.views", views.len(), 0, MAX_VIEWS);
+    for (index, view) in views.iter().enumerate() {
+        navigation_id(c, &format!("contributes.views[{index}].id"), &view.id);
+    }
+    c.unique("contributes.views", views.iter().map(|v| &v.id));
+
+    let entries = m.contributes.navigation();
+    c.count(
+        "contributes.navigation",
+        entries.len(),
+        0,
+        MAX_NAVIGATION_ENTRIES,
+    );
+    for (index, entry) in entries.iter().enumerate() {
+        let path = format!("contributes.navigation[{index}]");
+        navigation_id(c, &format!("{path}.id"), &entry.id);
+        c.text(
+            &format!("{path}.label"),
+            &entry.label,
+            1,
+            MAX_NAVIGATION_LABEL,
+        );
+        if entry.label.trim() != entry.label || entry.label.chars().any(char::is_control) {
+            c.error(
+                format!("{path}.label"),
+                IssueCode::InvalidValue,
+                "must not start or end with spaces or contain control characters",
+            );
+        }
+        if !views.iter().any(|v| v.id == entry.view) {
+            c.error(
+                format!("{path}.view"),
+                IssueCode::UnknownReference,
+                format!("`{}` is not one of contributes.views", entry.view),
+            );
+        }
+        let files = entry.icon.files();
+        if files.is_empty() {
+            c.error(
+                format!("{path}.icon"),
+                IssueCode::Count,
+                "names no file: set `light`, `dark` or both, or give one path",
+            );
+        }
+        for (field, file) in files {
+            let at = if field.is_empty() {
+                format!("{path}.icon")
+            } else {
+                format!("{path}.icon.{field}")
+            };
+            navigation_icon_path(c, &at, file);
+        }
+    }
+    c.unique("contributes.navigation", entries.iter().map(|e| &e.id));
+}
+
+fn navigation_id(c: &mut Checker, path: &str, id: &str) {
+    if !is_local_id(id, MAX_NAVIGATION_ID) {
+        c.error(
+            path,
+            IssueCode::InvalidId,
+            format!(
+                "`{id}` must be 1-{MAX_NAVIGATION_ID} lowercase letters and digits, starting \
+                 with a letter, with single hyphens"
+            ),
+        );
+    }
+}
+
+/// A navigation icon: a package-relative `.png`, `.webp` or `.svg` under
+/// `assets/` (no scheme, no absolute path, no `..`, no backslash).
+fn navigation_icon_path(c: &mut Checker, path: &str, value: &str) {
+    if let Err(message) = path_rules::check_relative(value) {
+        c.error(path, IssueCode::InvalidPath, format!("`{value}` {message}"));
+    } else if !value.starts_with("assets/") || crate::icon::IconFormat::of_path(value).is_none() {
+        c.error(
+            path,
+            IssueCode::InvalidPath,
+            format!("`{value}` must be a .png, .webp or .svg file under assets/"),
+        );
+    }
+}
+
+/// `controls`, `navigation` and `views` came with plugin API 1.3: a
+/// manifest using them must require it, so that it never installs on an
+/// agent that would ignore them (agents before 1.3 refuse the fields
+/// anyway).
+fn api_level_features(c: &mut Checker, m: &Manifest) {
+    if m.engines.plugin_api.minimum >= NAVIGATION_API {
+        return;
+    }
+    let required = m.engines.plugin_api;
+    let mut gate = |field: String| {
+        c.error(
+            field,
+            IssueCode::Conflict,
+            format!(
+                "needs plugin API {NAVIGATION_API}: set engines.pluginApi to \
+                 `^{NAVIGATION_API}` (it is `{required}`)"
+            ),
+        );
+    };
+    for (index, action) in m.contributes.actions().iter().enumerate() {
+        if action.controls.is_some() {
+            gate(format!("contributes.actions[{index}].controls"));
+        }
+    }
+    if m.contributes.navigation.is_some() {
+        gate("contributes.navigation".into());
+    }
+    if m.contributes.views.is_some() {
+        gate("contributes.views".into());
+    }
 }
 
 /// Rule 7.
