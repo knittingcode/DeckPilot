@@ -5,7 +5,7 @@ import { DeviceCanvas } from "@/components/device-canvas"
 import { ErrorNotice, Loading } from "@/components/page"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { SettingsSection } from "@/components/settings-layout"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { useAsync } from "@/hooks/use-async"
@@ -29,50 +29,45 @@ export function SupportedModels() {
   const experimental = models.filter((model) => !isSupported(model))
   return (
     <DndContext>
-      <section aria-labelledby="supported-models" className="grid gap-4">
-        <div className="grid gap-1">
-          <h2 id="supported-models" className="text-base font-semibold">
-            Supported Models
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            Models tested on a physical device on at least one platform. The badges show the status
-            on each platform.
-          </p>
-        </div>
+      <SettingsSection
+        title="Supported Models"
+        description="Models tested on a physical device on at least one platform. The badges show the status on each platform."
+      >
         {state.status === "loading" && <Loading />}
         {state.status === "error" && <ErrorNotice error={state.error} />}
         {state.status === "ready" && supported.length === 0 && (
           <p className="text-sm text-muted-foreground">No model has been verified yet.</p>
         )}
-        {supported.map((model) => (
-          <ModelCard key={model.id} model={model} />
-        ))}
+        {supported.length > 0 && (
+          <div className="grid divide-y border-y">
+            {supported.map((model) => (
+              <ModelCard key={model.id} model={model} />
+            ))}
+          </div>
+        )}
         {experimental.length > 0 && (
           <div className="flex items-center gap-2">
             <Switch
               id="show-experimental"
+              size="sm"
               checked={showExperimental}
               onCheckedChange={setShowExperimental}
             />
             <Label htmlFor="show-experimental">Show experimental models</Label>
           </div>
         )}
-      </section>
+      </SettingsSection>
       {showExperimental && experimental.length > 0 && (
-        <section aria-labelledby="experimental-models" className="grid gap-4">
-          <div className="grid gap-1">
-            <h2 id="experimental-models" className="text-base font-semibold">
-              Experimental, not verified
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              These models have not been tested on a physical device on any platform. Layouts can be
-              designed for them, but they are not supported.
-            </p>
+        <SettingsSection
+          title="Experimental, not verified"
+          description="These models have not been tested on a physical device on any platform. Layouts can be designed for them, but they are not supported."
+        >
+          <div className="grid divide-y border-y">
+            {experimental.map((model) => (
+              <ModelCard key={model.id} model={model} />
+            ))}
           </div>
-          {experimental.map((model) => (
-            <ModelCard key={model.id} model={model} />
-          ))}
-        </section>
+        </SettingsSection>
       )}
     </DndContext>
   )
@@ -87,7 +82,7 @@ export function PlatformBadges({ model }: { model: DeviceModel }) {
         return (
           <Badge
             key={platform}
-            variant={entry.level === "physicallyVerified" ? "default" : "outline"}
+            variant={entry.level === "physicallyVerified" ? "secondary" : "outline"}
             title={entry.evidence || LEVELS[entry.level].detail}
           >
             {PLATFORM_LABELS[platform]}: {LEVELS[entry.level].label}
@@ -132,17 +127,17 @@ function ModelCard({ model }: { model: DeviceModel }) {
     ["USB identity", model.usb ? `${hex(model.usb.vendorId)}:${hex(model.usb.productId)}` : "—"],
   ]
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex flex-wrap items-center gap-2">
-          {model.name}
-          <PlatformBadges model={model} />
-        </CardTitle>
-        <CardDescription>
-          {model.vendor} · <span className="font-mono">{model.id}</span>
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-6 lg:grid-cols-[auto_1fr]">
+    <article aria-label={model.name} className="grid gap-3 py-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="grid gap-0.5">
+          <h4 className="text-sm leading-5 font-medium">{model.name}</h4>
+          <p className="text-caption text-muted-foreground">
+            {model.vendor} · <span className="font-mono">{model.id}</span>
+          </p>
+        </div>
+        <PlatformBadges model={model} />
+      </div>
+      <div className="grid gap-6 lg:grid-cols-[auto_1fr]">
         <div className="overflow-x-auto">
           <DeviceCanvas model={model} size="sm" />
         </div>
@@ -169,7 +164,7 @@ function ModelCard({ model }: { model: DeviceModel }) {
                       </span>
                     )}
                   </dt>
-                  <dd className="text-muted-foreground">
+                  <dd className="text-caption text-muted-foreground">
                     {entry.evidence || LEVELS[entry.level].detail}
                   </dd>
                 </div>
@@ -188,7 +183,7 @@ function ModelCard({ model }: { model: DeviceModel }) {
             </Button>
           </div>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </article>
   )
 }

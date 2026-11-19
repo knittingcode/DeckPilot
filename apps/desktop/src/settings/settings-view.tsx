@@ -1,4 +1,5 @@
 import { Page } from "@/components/page"
+import { SettingsHeader } from "@/components/settings-layout"
 import { useAppContext } from "@/lib/app-context"
 import { ModuleSettingsForm } from "@/settings/pages/module-settings"
 import { CATEGORIES, findSettingsPage } from "@/settings/registry"
@@ -12,7 +13,6 @@ export function SettingsView({ id }: { id: string }) {
   return (
     <Page
       title={page.title}
-      description={page.description}
       breadcrumbs={[
         {
           label: "Settings",
@@ -23,7 +23,9 @@ export function SettingsView({ id }: { id: string }) {
         { label: CATEGORIES.find((c) => c.id === page.category)?.label ?? "" },
       ]}
     >
-      <div className="mx-auto grid w-full max-w-3xl gap-6">
+      {/* The page's sections: 2rem apart, each a heading over plain rows. */}
+      <div className="mx-auto grid w-full max-w-3xl content-start gap-8 pb-4">
+        <SettingsHeader title={page.title} description={page.description} />
         {View ? (
           <View />
         ) : (

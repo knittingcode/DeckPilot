@@ -1,11 +1,11 @@
-import { ArrowRight, Download, Info } from "lucide-react"
+import { ArrowRight, ChevronRight, Download, Info } from "lucide-react"
 import { Suspense } from "react"
 
 import { AgentBadge, AgentCompatibilityNotice, AgentStopped, DeviceRow } from "@/components/agent"
 import { EmptyState, ErrorNotice, Loading, Page } from "@/components/page"
+import { SettingsGroup, SettingsRow, SettingsSection } from "@/components/settings-layout"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Select,
   SelectContent,
@@ -43,7 +43,7 @@ export function DashboardPage() {
       {state.status === "loading" && <Loading />}
       {state.status === "error" && <ErrorNotice error={state.error} />}
       {state.status === "ready" && (
-        <>
+        <div className="mx-auto grid w-full max-w-3xl gap-8">
           {state.data[1].launch?.firstAfterUpdate && (
             <Alert>
               <Info />
@@ -74,18 +74,15 @@ export function DashboardPage() {
           )}
           <AgentCompatibilityNotice />
 
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardDescription>Active profile</CardDescription>
-                <CardTitle className="text-xl">
-                  {state.data[0].activeProfile?.name ?? "None"}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
+          <SettingsSection title="Now">
+            <SettingsGroup>
+              <SettingsRow
+                label="Active profile"
+                description="The profile that runs on the device."
+              >
                 {profiles.profiles.length > 0 ? (
                   <Select value={activeId ?? undefined} onValueChange={activate}>
-                    <SelectTrigger className="w-60" aria-label="Active profile">
+                    <SelectTrigger size="sm" className="w-56" aria-label="Active profile">
                       <SelectValue placeholder="Choose a profile" />
                     </SelectTrigger>
                     <SelectContent>
@@ -106,32 +103,33 @@ export function DashboardPage() {
                     Create a profile
                   </Button>
                 )}
-              </CardContent>
-            </Card>
-            {dashboardCards(modules).map(({ key, card: ModuleCard }) => (
-              <Suspense key={key} fallback={<Loading />}>
-                <ModuleCard />
-              </Suspense>
-            ))}
-          </div>
+              </SettingsRow>
+              {dashboardCards(modules).map(({ key, card: ModuleCard }) => (
+                <Suspense key={key} fallback={<Loading />}>
+                  <ModuleCard />
+                </Suspense>
+              ))}
+            </SettingsGroup>
+          </SettingsSection>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
+          <SettingsSection
+            title={
+              <>
                 Background agent <AgentBadge />
-              </CardTitle>
-              {agent?.status && (
-                <CardDescription>
-                  Version {agent.status.version} · {agent.status.devices.length} device
-                  {agent.status.devices.length === 1 ? "" : "s"}
-                </CardDescription>
-              )}
-            </CardHeader>
-            <CardContent className="grid gap-2">
+              </>
+            }
+            description={
+              agent?.status &&
+              `Version ${agent.status.version} · ${agent.status.devices.length} device${
+                agent.status.devices.length === 1 ? "" : "s"
+              }`
+            }
+          >
+            <SettingsGroup>
               {agent && !agent.running && <AgentStopped />}
               {agent?.status &&
                 (agent.status.devices.length === 0 ? (
-                  <EmptyState title="No Stream Deck detected">
+                  <EmptyState variant="plain" title="No Stream Deck detected">
                     Connect a supported device; it is picked up automatically.
                   </EmptyState>
                 ) : (
@@ -139,40 +137,36 @@ export function DashboardPage() {
                     <DeviceRow key={device.id.serial} device={device} />
                   ))
                 ))}
-            </CardContent>
-          </Card>
+            </SettingsGroup>
+          </SettingsSection>
 
           {active.status === "ready" && active.data && (
-            <div className="grid gap-4 sm:grid-cols-3">
-              {(
-                [
-                  ["Actions", active.data.profile.actions.length, "actions"],
-                  ["Workflows", active.data.profile.workflows.length, "workflows"],
-                  ["Layouts", active.data.profile.layouts.length, "designer"],
-                ] as [string, number, PageId][]
-              ).map(([label, count, target]) => (
-                <button
-                  key={label}
-                  type="button"
-                  className="rounded-xl text-left focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-                  onClick={() => {
-                    navigate(target)
-                  }}
-                >
-                  <Card className="transition-colors hover:bg-accent/50">
-                    <CardHeader>
-                      <CardDescription>{label} in the active profile</CardDescription>
-                      {/* Inside a button: no heading, the label describes the number. */}
-                      <CardTitle as="div" className="text-2xl tabular-nums">
-                        {count}
-                      </CardTitle>
-                    </CardHeader>
-                  </Card>
-                </button>
-              ))}
-            </div>
+            <SettingsSection title={`In ${active.data.profile.name}`}>
+              <SettingsGroup>
+                {(
+                  [
+                    ["Actions", active.data.profile.actions.length, "actions"],
+                    ["Workflows", active.data.profile.workflows.length, "workflows"],
+                    ["Layouts", active.data.profile.layouts.length, "designer"],
+                  ] as [string, number, PageId][]
+                ).map(([label, count, target]) => (
+                  <button
+                    key={label}
+                    type="button"
+                    className="flex w-full items-center gap-3 rounded-sm py-2 text-left text-sm outline-none hover:bg-muted/50 focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                    onClick={() => {
+                      navigate(target)
+                    }}
+                  >
+                    <span className="flex-1 font-medium">{label}</span>
+                    <span className="text-muted-foreground tabular-nums">{count}</span>
+                    <ChevronRight aria-hidden className="size-4 text-muted-foreground" />
+                  </button>
+                ))}
+              </SettingsGroup>
+            </SettingsSection>
           )}
-        </>
+        </div>
       )}
     </Page>
   )

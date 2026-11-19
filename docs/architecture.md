@@ -266,7 +266,9 @@ device's colours are theme tokens (`--device-*` in `index.css`).
 
 Pages render only their content; their title,
 subtitle, breadcrumbs, status and commands go to the titlebar through
-`useTitlebar` (`lib/titlebar.ts`). Any component of a page may contribute —
+`useTitlebar` (`lib/titlebar.ts`). Settings pages are the exception for the
+subtitle: the section's title and description head its content
+(`SettingsHeader`), the titlebar shows the breadcrumbs. Any component of a page may contribute —
 including module pages — and the titlebar imports no page or module. Actions
 have a placement: *primary* (always visible), *secondary* (visible while
 there is room, otherwise in the overflow menu) or *overflow*.
@@ -282,6 +284,19 @@ Platform differences live in `use-window-chrome.ts`:
   `titlebar_double_click`.
 - **Windows and Linux:** the native titlebar and window manager decorations
   stay unchanged; the app titlebar is a toolbar below them.
+
+Content pages share one flat layout vocabulary
+(`components/settings-layout.tsx`): sections with a heading, description and
+commands (`SettingsSection`, `SectionHeader`), groups of rows separated by
+hairlines (`SettingsGroup`, `SettingsRow`: label and description left, the
+control right, wrapping under the label in a narrow window), label–value
+lists (`PropertyList`), a dot-and-word state (`InlineStatus`) and one framed
+container for editors and configuration forms (`Panel`, a hairline border
+without shadow, never nested). Lists and tables separate rows with
+hairlines instead of boxing each item; `EmptyState` has a `plain` variant
+for them. Cards (`components/ui/card.tsx`) remain only in the device
+editor. Status colours (`--success`, `--warning`) and the 13 px
+`text-caption` size are tokens in `index.css`.
 
 Sizes are tokens in `index.css` (`--titlebar-height`, `--titlebar-control`,
 `--titlebar-icon`, …). Before the selectors the toolbar only leaves room

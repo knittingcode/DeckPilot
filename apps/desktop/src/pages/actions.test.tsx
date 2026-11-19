@@ -23,8 +23,8 @@ const containers = action("a-docker", "Docker status", ACTION_TYPES.dockerStatus
 const repo = action("a-git", "Shop status", ACTION_TYPES.gitStatus.id)
 
 const modules = builtInModules({ git: { enabled: false } })
-/** The title of the editor card. */
-const TITLE = "[data-slot=card-title]"
+/** The title of the editor panel. */
+const TITLE = "[data-slot=section-title]"
 
 function library(actions = [docs, containers, repo]) {
   return profileView({ actions, workflows: [stepWorkflow("w", "Start", ["a-docs"])] })

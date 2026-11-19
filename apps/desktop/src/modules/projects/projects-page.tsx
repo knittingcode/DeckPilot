@@ -34,9 +34,13 @@ import { toast } from "sonner"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { EmptyState, ErrorNotice, Loading, Page } from "@/components/page"
 import { RequireProfile } from "@/components/require-profile"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  InlineStatus,
+  SettingsGroup,
+  SettingsRow,
+  SettingsSection,
+} from "@/components/settings-layout"
 import {
   Dialog,
   DialogContent,
@@ -110,12 +114,12 @@ function Projects() {
     checks.reload()
   }
   return (
-    <Tabs defaultValue="projects">
+    <Tabs defaultValue="projects" className="mx-auto w-full max-w-3xl gap-4">
       <TabsList>
         <TabsTrigger value="projects">Projects</TabsTrigger>
         <TabsTrigger value="machine">This machine</TabsTrigger>
       </TabsList>
-      <TabsContent value="projects" className="grid gap-4">
+      <TabsContent value="projects" className="grid content-start gap-8">
         <ProjectCycle
           view={state.data}
           profileId={profileId}
@@ -123,7 +127,7 @@ function Projects() {
           onChange={reloadAll}
         />
       </TabsContent>
-      <TabsContent value="machine">
+      <TabsContent value="machine" className="grid content-start gap-8">
         <MachineResources checks={resourceChecks} onChange={reloadAll} />
       </TabsContent>
     </Tabs>
@@ -205,31 +209,37 @@ function ProjectCycle({
 
   return (
     <>
-      <Card>
-        <CardHeader>
-          <CardTitle>Project switcher</CardTitle>
-          <CardDescription>
-            Switching only changes which project actions refer to. Nothing is checked out, restarted
-            or launched.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          {projects.length === 0 ? null : profiles.activeProfileId === profileId ? (
-            <ProjectSwitcher
-              profileId={profileId}
-              projects={projects}
-              activeProjectId={view.activeProjectId}
-            />
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              {view.profile.name} is not active on the device. Its active project is{" "}
-              {projects.find((p) => p.id === view.activeProjectId)?.key ?? "not set"}; it is
-              restored when the profile is activated.
-            </p>
-          )}
-          {projects.length > 0 && (
-            <div className="grid max-w-sm gap-2">
-              <Label htmlFor="default-project">Default project</Label>
+      <SettingsSection
+        title="Project switcher"
+        description="Switching only changes which project actions refer to. Nothing is checked out, restarted or launched."
+      >
+        {projects.length > 0 && (
+          <SettingsGroup>
+            {profiles.activeProfileId === profileId ? (
+              <SettingsRow label="Active project">
+                <ProjectSwitcher
+                  profileId={profileId}
+                  projects={projects}
+                  activeProjectId={view.activeProjectId}
+                />
+              </SettingsRow>
+            ) : (
+              <SettingsRow
+                label="Active project"
+                description={
+                  <>
+                    {view.profile.name} is not active on the device. Its active project is{" "}
+                    {projects.find((p) => p.id === view.activeProjectId)?.key ?? "not set"}; it is
+                    restored when the profile is activated.
+                  </>
+                }
+              />
+            )}
+            <SettingsRow
+              label="Default project"
+              htmlFor="default-project"
+              description="Selected when the profile is activated and no project was chosen before."
+            >
               <Select
                 value={view.profile.defaultProject ?? "first"}
                 onValueChange={(value) => {
@@ -244,7 +254,7 @@ function ProjectCycle({
                     })
                 }}
               >
-                <SelectTrigger id="default-project" className="w-full">
+                <SelectTrigger id="default-project" size="sm" className="w-56">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -256,71 +266,61 @@ function ProjectCycle({
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">
-                Selected when the profile is activated and no project was chosen before.
-              </p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader className="flex flex-row items-start gap-2">
-          <div className="grid flex-1 gap-1.5">
-            <CardTitle>Cycle order</CardTitle>
-            <CardDescription>
-              Drag to reorder. Next and previous project follow this order.
-            </CardDescription>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {projects.length === 0 ? (
-            <EmptyState title="No projects in this profile">
-              Projects give actions a context, such as the repository of the active project.
-            </EmptyState>
-          ) : (
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-              <SortableContext
-                items={projects.map((p) => p.id)}
-                strategy={verticalListSortingStrategy}
-              >
-                <ol className="grid gap-2">
-                  {projects.map((project, index) => (
-                    <SortableProject
-                      key={project.id}
-                      project={project}
-                      index={index}
-                      active={project.id === view.activeProjectId}
-                      isDefault={project.id === view.profile.defaultProject}
-                      statusOf={statusOf}
-                      onEdit={() => {
-                        setDialog({ mode: "edit", project })
-                      }}
-                      onCopy={
-                        otherProfiles.length > 0
-                          ? () => {
-                              setDialog({ mode: "copy", project })
-                            }
-                          : undefined
-                      }
-                      onDelete={() => {
-                        api
-                          .deleteProject(profileId, project.id)
-                          .then(() => {
-                            toast.success("Project deleted")
-                            changed()
-                          })
-                          .catch((e: unknown) => {
-                            toastFailure(`${project.key} was not deleted`, e)
-                          })
-                      }}
-                    />
-                  ))}
-                </ol>
-              </SortableContext>
-            </DndContext>
-          )}
-        </CardContent>
-      </Card>
+            </SettingsRow>
+          </SettingsGroup>
+        )}
+      </SettingsSection>
+      <SettingsSection
+        title="Cycle order"
+        description="Drag to reorder. Next and previous project follow this order."
+      >
+        {projects.length === 0 ? (
+          <EmptyState variant="plain" title="No projects in this profile">
+            Projects give actions a context, such as the repository of the active project.
+          </EmptyState>
+        ) : (
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+            <SortableContext
+              items={projects.map((p) => p.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              <ol className="grid divide-y border-y">
+                {projects.map((project, index) => (
+                  <SortableProject
+                    key={project.id}
+                    project={project}
+                    index={index}
+                    active={project.id === view.activeProjectId}
+                    isDefault={project.id === view.profile.defaultProject}
+                    statusOf={statusOf}
+                    onEdit={() => {
+                      setDialog({ mode: "edit", project })
+                    }}
+                    onCopy={
+                      otherProfiles.length > 0
+                        ? () => {
+                            setDialog({ mode: "copy", project })
+                          }
+                        : undefined
+                    }
+                    onDelete={() => {
+                      api
+                        .deleteProject(profileId, project.id)
+                        .then(() => {
+                          toast.success("Project deleted")
+                          changed()
+                        })
+                        .catch((e: unknown) => {
+                          toastFailure(`${project.key} was not deleted`, e)
+                        })
+                    }}
+                  />
+                ))}
+              </ol>
+            </SortableContext>
+          </DndContext>
+        )}
+      </SettingsSection>
       <Dialog
         open={dialog !== null}
         onOpenChange={(open) => {
@@ -383,7 +383,7 @@ function SortableProject({
     <li
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
-      className="flex items-start gap-2 rounded-lg border bg-card p-3 data-[active=true]:border-primary"
+      className="flex items-start gap-2 bg-background py-2"
       data-active={active}
     >
       <button
@@ -402,8 +402,8 @@ function SortableProject({
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-mono text-sm font-semibold">{project.key}</span>
           <span className="text-sm">{project.name}</span>
-          {active && <Badge>Active</Badge>}
-          {isDefault && <Badge variant="outline">Default</Badge>}
+          {active && <InlineStatus tone="positive">Active</InlineStatus>}
+          {isDefault && <span className="text-caption text-muted-foreground">Default</span>}
         </div>
         {resources.length > 0 && (
           <ul className="grid gap-0.5 text-xs text-muted-foreground">
@@ -417,7 +417,7 @@ function SortableProject({
           </ul>
         )}
       </div>
-      <Button variant="ghost" size="icon" aria-label={`Edit ${project.key}`} onClick={onEdit}>
+      <Button variant="ghost" size="icon-sm" aria-label={`Edit ${project.key}`} onClick={onEdit}>
         <Pencil />
       </Button>
       {onCopy && (
@@ -433,7 +433,7 @@ function SortableProject({
       )}
       <ConfirmDialog
         trigger={
-          <Button variant="ghost" size="icon" aria-label={`Delete ${project.key}`}>
+          <Button variant="ghost" size="icon-sm" aria-label={`Delete ${project.key}`}>
             <Trash2 />
           </Button>
         }
@@ -619,7 +619,7 @@ function ProjectForm({
             <Button
               type="button"
               variant="ghost"
-              size="icon"
+              size="icon-sm"
               aria-label="Remove resource"
               onClick={() => {
                 setRows((current) => current.filter((_, i) => i !== index))
@@ -657,15 +657,10 @@ const PICKABLE: ResourceKind[] = ["directory", "application", "terminal"]
 function MachineResources({ checks, onChange }: { checks: ResourceCheck[]; onChange: () => void }) {
   const [editing, setEditing] = useState<ResourceCheck | "new" | null>(null)
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-start gap-2">
-        <div className="grid flex-1 gap-1.5">
-          <CardTitle>Resources on this machine</CardTitle>
-          <CardDescription>
-            Logical resources used by projects, mapped to paths, applications or URLs on this
-            computer. These mappings are never part of a profile.
-          </CardDescription>
-        </div>
+    <SettingsSection
+      title="Resources on this machine"
+      description="Logical resources used by projects, mapped to paths, applications or URLs on this computer. These mappings are never part of a profile."
+      actions={
         <Button
           size="sm"
           onClick={() => {
@@ -674,58 +669,71 @@ function MachineResources({ checks, onChange }: { checks: ResourceCheck[]; onCha
         >
           <Plus /> Add mapping
         </Button>
-      </CardHeader>
-      <CardContent className="grid gap-2">
-        {checks.length === 0 && <EmptyState title="No resources used or mapped yet" />}
-        {checks.map((check) => (
-          <div key={check.key} className="flex flex-wrap items-center gap-2 rounded-lg border p-3">
-            <StatusIcon status={check.status} />
-            <div className="grid min-w-0 flex-1 gap-0.5">
-              <span className="font-mono text-sm">{check.key}</span>
-              <span className="truncate text-xs text-muted-foreground select-text">
-                {check.value
-                  ? `${check.kind ? RESOURCE_KIND_LABELS[check.kind] : ""}: ${check.value}`
-                  : "Not set on this machine"}
-              </span>
-              {check.usedBy.length > 0 && (
-                <span className="text-xs text-muted-foreground">
-                  Used by {check.usedBy.join(", ")}
+      }
+    >
+      {checks.length === 0 && (
+        <EmptyState variant="plain" title="No resources used or mapped yet" />
+      )}
+      {checks.length > 0 && (
+        <div className="grid divide-y border-y">
+          {checks.map((check) => (
+            <div key={check.key} className="flex flex-wrap items-center gap-2 py-2">
+              <StatusIcon status={check.status} />
+              <div className="grid min-w-0 flex-1 gap-0.5">
+                <span className="font-mono text-sm">{check.key}</span>
+                <span className="truncate text-xs text-muted-foreground select-text">
+                  {check.value
+                    ? `${check.kind ? RESOURCE_KIND_LABELS[check.kind] : ""}: ${check.value}`
+                    : "Not set on this machine"}
                 </span>
+                {check.usedBy.length > 0 && (
+                  <span className="text-xs text-muted-foreground">
+                    Used by {check.usedBy.join(", ")}
+                  </span>
+                )}
+              </div>
+              <InlineStatus
+                tone={
+                  check.status === "ok"
+                    ? "positive"
+                    : check.status === "missing"
+                      ? "warning"
+                      : "neutral"
+                }
+              >
+                {STATUS[check.status].label}
+              </InlineStatus>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`Edit ${check.key}`}
+                onClick={() => {
+                  setEditing(check)
+                }}
+              >
+                <Pencil />
+              </Button>
+              {check.value && (
+                <ConfirmDialog
+                  trigger={
+                    <Button variant="ghost" size="icon-sm" aria-label={`Remove ${check.key}`}>
+                      <Trash2 />
+                    </Button>
+                  }
+                  title={`Remove the mapping for ${check.key}?`}
+                  description="Actions using this resource cannot resolve it on this machine until it is mapped again."
+                  confirmLabel="Remove"
+                  onConfirm={() => {
+                    api.removeResourceBinding(check.key).then(onChange, (e: unknown) => {
+                      toastFailure(`The mapping for ${check.key} was not removed`, e)
+                    })
+                  }}
+                />
               )}
             </div>
-            <Badge variant={check.status === "ok" ? "secondary" : "outline"}>
-              {STATUS[check.status].label}
-            </Badge>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={`Edit ${check.key}`}
-              onClick={() => {
-                setEditing(check)
-              }}
-            >
-              <Pencil />
-            </Button>
-            {check.value && (
-              <ConfirmDialog
-                trigger={
-                  <Button variant="ghost" size="icon" aria-label={`Remove ${check.key}`}>
-                    <Trash2 />
-                  </Button>
-                }
-                title={`Remove the mapping for ${check.key}?`}
-                description="Actions using this resource cannot resolve it on this machine until it is mapped again."
-                confirmLabel="Remove"
-                onConfirm={() => {
-                  api.removeResourceBinding(check.key).then(onChange, (e: unknown) => {
-                    toastFailure(`The mapping for ${check.key} was not removed`, e)
-                  })
-                }}
-              />
-            )}
-          </div>
-        ))}
-      </CardContent>
+          ))}
+        </div>
+      )}
       <Dialog
         open={editing !== null}
         onOpenChange={(open) => {
@@ -745,7 +753,7 @@ function MachineResources({ checks, onChange }: { checks: ResourceCheck[]; onCha
           )}
         </DialogContent>
       </Dialog>
-    </Card>
+    </SettingsSection>
   )
 }
 

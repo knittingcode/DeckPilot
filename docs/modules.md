@@ -5,7 +5,7 @@ persistence, IPC, the action engine, devices and layouts) knows nothing about
 individual features. A module contributes:
 
 - action types and their executors (`ActionHandler`s),
-- navigation pages and dashboard cards in the configuration app,
+- navigation pages and dashboard entries in the configuration app,
 - a configuration schema (edited in Settings › Modules),
 - declared capabilities (what its code may do),
 - dependencies on other modules and the platforms it supports.
@@ -526,7 +526,7 @@ Within that scope:
 The agent and the app read module states at start; the app changes them and
 asks the agent to reload. When a module is disabled:
 
-- its pages, dashboard cards and action types disappear from the app,
+- its pages, dashboard entries and action types disappear from the app,
 - its action types are not executable; running a stored action reports
   "the Projects module is disabled",
 - actions, workflows and layouts that use it are kept unchanged and shown as

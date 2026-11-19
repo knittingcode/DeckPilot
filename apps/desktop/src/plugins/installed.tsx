@@ -58,7 +58,7 @@ export function InstalledView({
 }) {
   if (snapshot.installed.length === 0) {
     return (
-      <EmptyState title="No plugins installed">
+      <EmptyState variant="plain" title="No plugins installed">
         <Button variant="outline" size="sm" className="mt-2" onClick={onBrowse}>
           Browse plugins
         </Button>
@@ -84,7 +84,7 @@ export function InstalledView({
           <RefreshCw /> Refresh
         </Button>
       </div>
-      <ul className="grid gap-3" aria-label="Installed plugins">
+      <ul className="grid divide-y border-y" aria-label="Installed plugins">
         {[...snapshot.installed]
           .sort((a, b) => a.summary.name.localeCompare(b.summary.name))
           .map((item) => (
@@ -164,15 +164,12 @@ function InstalledItem({
     : undefined
 
   return (
-    <li
-      className={cn("rounded-xl border bg-card p-4", !enabled && "bg-muted/30")}
-      aria-labelledby={`${id}-name`}
-    >
+    <li className="py-3" aria-labelledby={`${id}-name`}>
       <div className="flex items-start gap-3">
         <PluginIcon muted={!enabled} src={item.icon} />
         <div className="grid min-w-0 flex-1 gap-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span id={`${id}-name`} className="font-medium">
+            <span id={`${id}-name`} className="text-sm font-medium">
               {summary.name}
             </span>
             <span className="text-xs text-muted-foreground">v{summary.version}</span>
@@ -444,7 +441,7 @@ function ActionList({ item, actions }: { item: PluginDetails; actions: Marketpla
   return (
     <section className="grid gap-2" aria-label={`Actions of ${item.summary.name}`}>
       <h4 className="text-xs font-medium text-muted-foreground uppercase">Actions</h4>
-      <ul className="grid gap-2">
+      <ul className="grid divide-y border-y">
         {item.summary.actions.map((action) => (
           <ActionRow key={action.action} item={item} action={action} actions={actions} />
         ))}
@@ -500,7 +497,7 @@ function ActionRow({
 
   const id = `action-${item.summary.id}-${action.action}`
   return (
-    <li className="grid gap-2 rounded-lg border p-3" aria-labelledby={`${id}-name`}>
+    <li className="grid gap-2 py-2.5" aria-labelledby={`${id}-name`}>
       <div className="flex flex-wrap items-center gap-2">
         <span id={`${id}-name`} className="text-sm font-medium">
           {action.name}

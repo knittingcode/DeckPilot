@@ -1,7 +1,7 @@
-import { ArrowRightLeft, Download, Upload } from "lucide-react"
+import { Download, Upload } from "lucide-react"
 
+import { SettingsGroup, SettingsRow } from "@/components/settings-layout"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { api } from "@/lib/api"
 import { toastFailure } from "@/lib/failure"
 
@@ -16,35 +16,42 @@ export function PortabilityCard() {
     })
   }
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <ArrowRightLeft className="size-4" /> Export and import
-        </CardTitle>
-        <CardDescription>
-          Move profiles, projects, actions, workflows, layouts, module and application settings to
-          another computer in an encrypted file — and keep one as your backup. Paths and other
-          settings of this computer, keys and passwords are not included.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-wrap gap-2">
-        <Button
-          variant="outline"
-          onClick={() => {
-            open("portability.export")
-          }}
+    <div className="grid gap-3">
+      <p className="text-sm text-muted-foreground">
+        Move profiles, projects, actions, workflows, layouts, module and application settings to
+        another computer in an encrypted file — and keep one as your backup. Paths and other
+        settings of this computer, keys and passwords are not included.
+      </p>
+      <SettingsGroup>
+        <SettingsRow
+          label="Export"
+          description="Saves the configuration to an encrypted file protected by a password you choose."
         >
-          <Download /> Export…
-        </Button>
-        <Button
-          variant="outline"
-          onClick={() => {
-            open("portability.import")
-          }}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              open("portability.export")
+            }}
+          >
+            <Download /> Export…
+          </Button>
+        </SettingsRow>
+        <SettingsRow
+          label="Import"
+          description="Reads an encrypted export; you review what changes before anything is applied."
         >
-          <Upload /> Import…
-        </Button>
-      </CardContent>
-    </Card>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              open("portability.import")
+            }}
+          >
+            <Upload /> Import…
+          </Button>
+        </SettingsRow>
+      </SettingsGroup>
+    </div>
   )
 }

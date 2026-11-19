@@ -201,7 +201,7 @@ switching the unlock method, changing these settings, and deleting the
 unencrypted copy of a legacy database. Changing the password requires the
 current password. Switching profiles or projects, device operations and
 running workflows never ask. Module credentials (schema 7, for example the
-*Credentials* card of the HTTP module's settings) are not a sensitive
+*Credentials* section of the HTTP module's settings) are not a sensitive
 operation: the app never reads a secret
 back, but adding, replacing or removing a credential does not ask for
 authentication.

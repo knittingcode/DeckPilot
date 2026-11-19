@@ -1,6 +1,4 @@
-import { History } from "lucide-react"
-
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { SettingsSection } from "@/components/settings-layout"
 import { useAsync } from "@/hooks/use-async"
 import { api } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
@@ -14,28 +12,21 @@ export function MigrationNotesCard() {
   const profileName = (id: string | null) =>
     profiles.profiles.find((p) => p.id === id)?.name ?? "a deleted profile"
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <History className="size-4" /> Data upgrade notes
-        </CardTitle>
-        <CardDescription>
-          Upgrading the database changed the following stored data. Review the affected items.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <ul className="grid gap-2 text-sm">
-          {state.data.map((note, index) => (
-            <li key={index} className="grid gap-0.5">
-              <span>{note.message}</span>
-              <span className="text-xs text-muted-foreground">
-                {note.profile ? `Profile ${profileName(note.profile)} · ` : ""}
-                {formatTimestamp(note.createdAt)}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </CardContent>
-    </Card>
+    <SettingsSection
+      title="Data upgrade notes"
+      description="Upgrading the database changed the following stored data. Review the affected items."
+    >
+      <ul className="grid divide-y border-y text-sm">
+        {state.data.map((note, index) => (
+          <li key={index} className="grid gap-0.5 py-2">
+            <span>{note.message}</span>
+            <span className="text-caption text-muted-foreground">
+              {note.profile ? `Profile ${profileName(note.profile)} · ` : ""}
+              {formatTimestamp(note.createdAt)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </SettingsSection>
   )
 }

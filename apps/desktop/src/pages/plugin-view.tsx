@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 
 import { EmptyState, Page } from "@/components/page"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { SettingsSection } from "@/components/settings-layout"
 import { useAppContext } from "@/lib/app-context"
 import { ActionLibraryView } from "@/pages/actions"
 import { VariablesTable } from "@/pages/variables-table"
@@ -62,23 +62,23 @@ function VariablesView({ item }: { item: PluginNavigationItem }) {
   const namespace = pluginVariableNamespace(item.plugin)
   return (
     <Page title={item.label} description={`Variables of ${item.pluginName}`}>
-      <Card data-plugin-view="variables">
-        <CardHeader>
-          <CardTitle>Variables of {item.pluginName}</CardTitle>
-          <CardDescription>
+      <SettingsSection
+        data-plugin-view="variables"
+        title={`Variables of ${item.pluginName}`}
+        description={
+          <>
             Live values the plugin publishes under <code>{namespace}</code>. Insert one in an action
             or a key label with {"{{ reference }}"}.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <VariablesTable
-            shared={[]}
-            selected={null}
-            onEdit={() => undefined}
-            namespace={namespace}
-          />
-        </CardContent>
-      </Card>
+          </>
+        }
+      >
+        <VariablesTable
+          shared={[]}
+          selected={null}
+          onEdit={() => undefined}
+          namespace={namespace}
+        />
+      </SettingsSection>
     </Page>
   )
 }
@@ -115,14 +115,13 @@ function SettingsView({ item }: { item: PluginNavigationItem }) {
   const [generation, setGeneration] = useState(0)
   return (
     <Page title={item.label} description={`Settings of ${item.pluginName}`}>
-      <Card data-plugin-view="settings" className="max-w-2xl">
-        <CardHeader>
-          <CardTitle>Settings of {item.pluginName}</CardTitle>
-          <CardDescription>
-            Stored by the agent for this plugin only. Also in Settings › Extensions › Plugins.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
+      <SettingsSection
+        data-plugin-view="settings"
+        className="max-w-2xl"
+        title={`Settings of ${item.pluginName}`}
+        description="Stored by the agent for this plugin only. Also in Settings › Extensions › Plugins."
+      >
+        <div className="grid gap-4 border-t pt-4">
           {client && (
             <PluginConfiguration
               key={generation}
@@ -135,8 +134,8 @@ function SettingsView({ item }: { item: PluginNavigationItem }) {
               onChanged={() => undefined}
             />
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </SettingsSection>
     </Page>
   )
 }

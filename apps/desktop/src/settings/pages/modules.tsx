@@ -1,4 +1,4 @@
-import { ChevronDown, Info, Search, Settings2 } from "lucide-react"
+import { ChevronDown, Search, Settings2 } from "lucide-react"
 import { createElement, useState } from "react"
 import { toast } from "sonner"
 
@@ -63,69 +63,70 @@ export function ModulesSettings() {
 
   return (
     <>
-      <p className="flex items-start gap-2 text-sm text-muted-foreground">
-        <Info className="mt-0.5 size-4 shrink-0" />
+      <p className="text-sm text-muted-foreground">
         <span>
           Disabling a module hides its pages and action types. Actions, workflows and layouts that
           use it are kept and shown as unavailable until you enable it again. All modules are built
           into DeckPilot; installing modules from other sources is not supported.
         </span>
       </p>
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <div className="relative flex-1">
-          <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            type="search"
-            placeholder="Search modules"
-            aria-label="Search modules"
-            className="pl-8"
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value)
-            }}
-          />
-        </div>
-        <ToggleGroup
-          type="single"
-          variant="outline"
-          size="sm"
-          value={filter}
-          onValueChange={(value) => {
-            if (value) setFilter(value as ModuleFilter)
-          }}
-          aria-label="Show modules"
-          className="flex-wrap"
-        >
-          {FILTERS.map((item) => (
-            <ToggleGroupItem key={item.value} value={item.value} className="px-2.5">
-              {item.label}
-              <span className="text-xs text-muted-foreground tabular-nums">
-                {count(item.value)}
-              </span>
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-      </div>
-      {shown.length === 0 ? (
-        <EmptyState title="No modules found">
-          {query ? "No module matches your search." : "No module is in this state."}
-        </EmptyState>
-      ) : (
-        <ul className="grid gap-3" aria-label="Modules">
-          {shown.map((module) => (
-            <ModuleItem
-              key={module.id}
-              module={module}
-              modules={modules}
-              busy={pending !== null}
-              hasSettings={withSettings.has(module.id)}
-              onToggle={(enabled) => {
-                toggle(module, enabled)
+      <div className="grid gap-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              type="search"
+              placeholder="Search modules"
+              aria-label="Search modules"
+              className="h-8 pl-8"
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value)
               }}
             />
-          ))}
-        </ul>
-      )}
+          </div>
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            value={filter}
+            onValueChange={(value) => {
+              if (value) setFilter(value as ModuleFilter)
+            }}
+            aria-label="Show modules"
+            className="flex-wrap"
+          >
+            {FILTERS.map((item) => (
+              <ToggleGroupItem key={item.value} value={item.value} className="px-2.5">
+                {item.label}
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {count(item.value)}
+                </span>
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </div>
+        {shown.length === 0 ? (
+          <EmptyState variant="plain" title="No modules found">
+            {query ? "No module matches your search." : "No module is in this state."}
+          </EmptyState>
+        ) : (
+          <ul className="grid divide-y border-y" aria-label="Modules">
+            {shown.map((module) => (
+              <ModuleItem
+                key={module.id}
+                module={module}
+                modules={modules}
+                busy={pending !== null}
+                hasSettings={withSettings.has(module.id)}
+                onToggle={(enabled) => {
+                  toggle(module, enabled)
+                }}
+              />
+            ))}
+          </ul>
+        )}
+      </div>
     </>
   )
 }
@@ -149,30 +150,27 @@ function ModuleItem({
   const id = `module-${module.id}`
   const dependents = modules.filter((m) => m.dependencies.includes(module.id))
   return (
-    <li
-      className={cn("rounded-xl border bg-card p-4", !module.enabled && "bg-muted/30")}
-      aria-labelledby={`${id}-name`}
-    >
+    <li className="py-3" aria-labelledby={`${id}-name`}>
       <div className="flex items-start gap-3">
         <div
           className={cn(
-            "flex size-10 shrink-0 items-center justify-center rounded-lg border",
-            module.enabled ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground",
+            "flex size-8 shrink-0 items-center justify-center rounded-md bg-muted",
+            module.enabled ? "text-foreground" : "text-muted-foreground",
           )}
           aria-hidden
         >
-          {createElement(moduleIcon(module.id), { className: "size-5" })}
+          {createElement(moduleIcon(module.id), { className: "size-4" })}
         </div>
-        <div className="grid min-w-0 flex-1 gap-1">
+        <div className="grid min-w-0 flex-1 gap-0.5">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span id={`${id}-name`} className="font-medium">
+            <span id={`${id}-name`} className="text-sm font-medium">
               {module.name}
             </span>
             <span className="text-xs text-muted-foreground">v{module.version}</span>
-            <Badge variant="secondary">Built-in</Badge>
+            <span className="text-xs text-muted-foreground">· Built-in</span>
             {!module.supported && <Badge variant="outline">Not available on this system</Badge>}
           </div>
-          <p className="text-sm text-muted-foreground">{module.description}</p>
+          <p className="text-caption text-muted-foreground">{module.description}</p>
           <p className="text-xs text-muted-foreground">
             {module.actionTypes.length} action type{module.actionTypes.length === 1 ? "" : "s"}
             {module.pages.length > 0 && ` · ${module.pages.map((p) => p.title).join(", ")} page`}
@@ -192,11 +190,11 @@ function ModuleItem({
           onCheckedChange={onToggle}
         />
       </div>
-      <div className="mt-3 flex flex-wrap gap-2 pl-13">
+      <div className="mt-1.5 flex flex-wrap gap-1 pl-9">
         {hasSettings && (
           <Button
-            variant="outline"
-            size="sm"
+            variant="ghost"
+            size="xs"
             onClick={() => {
               openSettings(`module:${module.id}`)
             }}
@@ -206,7 +204,8 @@ function ModuleItem({
         )}
         <Button
           variant="ghost"
-          size="sm"
+          size="xs"
+          className="text-muted-foreground"
           aria-expanded={expanded}
           aria-controls={`${id}-details`}
           onClick={() => {
@@ -218,7 +217,10 @@ function ModuleItem({
         </Button>
       </div>
       {expanded && (
-        <div id={`${id}-details`} className="mt-3 grid gap-4 border-t pt-3 text-sm sm:grid-cols-2">
+        <div
+          id={`${id}-details`}
+          className="mt-2 ml-11 grid gap-4 rounded-md bg-muted/50 p-3 text-sm sm:grid-cols-2"
+        >
           <Detail title="Permissions">
             {module.capabilities.length === 0 ? (
               <p className="text-muted-foreground">None</p>

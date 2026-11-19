@@ -35,9 +35,9 @@ export function UpdatesView({
       </div>
       {actions.blocked && <p className="text-sm text-muted-foreground">{actions.blocked}</p>}
       {updates.length === 0 ? (
-        <EmptyState title="All plugins are up to date" />
+        <EmptyState variant="plain" title="All plugins are up to date" />
       ) : (
-        <ul className="grid gap-3" aria-label="Available updates">
+        <ul className="grid divide-y border-y" aria-label="Available updates">
           {updates.map((update) => {
             const { summary } = update.plugin
             const to = update.kind === "staged" ? update.pending.version : update.version
@@ -48,11 +48,11 @@ export function UpdatesView({
             return (
               <li
                 key={summary.id}
-                className="flex flex-wrap items-center gap-3 rounded-xl border bg-card p-4"
+                className="flex flex-wrap items-center gap-3 py-3"
                 aria-label={`${summary.name} ${summary.version} to ${to}`}
               >
                 <div className="grid min-w-0 flex-1 gap-1">
-                  <span className="font-medium">{summary.name}</span>
+                  <span className="text-sm font-medium">{summary.name}</span>
                   <span className="text-xs text-muted-foreground">
                     {summary.version} → {to}
                   </span>

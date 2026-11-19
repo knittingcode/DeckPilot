@@ -1,6 +1,6 @@
 import { MigrationNotesCard } from "@/components/migration-notes"
 import { ErrorNotice, Loading } from "@/components/page"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Property, PropertyList, SettingsSection } from "@/components/settings-layout"
 import { useAsync } from "@/hooks/use-async"
 import { api } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
@@ -10,10 +10,10 @@ export function StorageSettings() {
   const { state } = useAsync(() => api.getOverview(), String(revision))
   return (
     <>
-      <Card>
-        <CardHeader>
-          <CardTitle>Configuration database</CardTitle>
-          <CardDescription>
+      <SettingsSection
+        title="Configuration database"
+        description={
+          <>
             Profiles, projects, actions, workflows and layouts are stored on this computer only, in
             an encrypted SQLite database. How it is unlocked is set under{" "}
             <button
@@ -26,35 +26,30 @@ export function StorageSettings() {
               Security
             </button>
             .
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {state.status === "loading" && <Loading />}
-          {state.status === "error" && <ErrorNotice error={state.error} />}
-          {state.status === "ready" && (
-            <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[10rem_1fr]">
-              <dt className="text-muted-foreground">Location</dt>
-              <dd className="font-mono text-xs break-all select-text">{state.data.databasePath}</dd>
-              <dt className="text-muted-foreground">Encryption</dt>
-              <dd>SQLCipher (AES-256)</dd>
-              {agent?.status && (
-                <>
-                  <dt className="text-muted-foreground">Agent data</dt>
-                  <dd className="font-mono text-xs break-all select-text">
-                    {agent.status.dataDir}
-                  </dd>
-                </>
-              )}
-              <dt className="text-muted-foreground">Contents</dt>
-              <dd>
-                {state.data.profileCount} profile{state.data.profileCount === 1 ? "" : "s"},{" "}
-                {state.data.resourceBindingCount} resource binding
-                {state.data.resourceBindingCount === 1 ? "" : "s"} of this computer
-              </dd>
-            </dl>
-          )}
-        </CardContent>
-      </Card>
+          </>
+        }
+      >
+        {state.status === "loading" && <Loading />}
+        {state.status === "error" && <ErrorNotice error={state.error} />}
+        {state.status === "ready" && (
+          <PropertyList className="border-t pt-3">
+            <Property label="Location" mono>
+              {state.data.databasePath}
+            </Property>
+            <Property label="Encryption">SQLCipher (AES-256)</Property>
+            {agent?.status && (
+              <Property label="Agent data" mono>
+                {agent.status.dataDir}
+              </Property>
+            )}
+            <Property label="Contents">
+              {state.data.profileCount} profile{state.data.profileCount === 1 ? "" : "s"},{" "}
+              {state.data.resourceBindingCount} resource binding
+              {state.data.resourceBindingCount === 1 ? "" : "s"} of this computer
+            </Property>
+          </PropertyList>
+        )}
+      </SettingsSection>
       <MigrationNotesCard />
     </>
   )

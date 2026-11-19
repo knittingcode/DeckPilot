@@ -30,19 +30,19 @@ export function PluginIcon({ muted = false, src }: { muted?: boolean; src?: stri
         src={src}
         alt=""
         aria-hidden
-        className={cn("size-10 shrink-0 rounded-lg border object-cover", muted && "opacity-60")}
+        className={cn("size-8 shrink-0 rounded-md object-cover", muted && "opacity-60")}
       />
     )
   }
   return (
     <div
       className={cn(
-        "flex size-10 shrink-0 items-center justify-center rounded-lg border",
-        muted ? "bg-muted text-muted-foreground" : "bg-primary/10 text-primary",
+        "flex size-8 shrink-0 items-center justify-center rounded-md bg-muted",
+        muted ? "text-muted-foreground" : "text-foreground",
       )}
       aria-hidden
     >
-      <Puzzle className="size-5" />
+      <Puzzle className="size-4" />
     </div>
   )
 }
@@ -279,9 +279,9 @@ export function PermissionList({
             </h4>
             <p className="text-xs text-muted-foreground">{group.description}</p>
           </div>
-          <ul className="grid gap-2">
+          <ul className="grid divide-y border-y">
             {group.grants.map((grant) => (
-              <li key={grant.key} className="flex items-start gap-3 rounded-lg border p-3">
+              <li key={grant.key} className="flex items-start gap-3 py-2.5">
                 <div className="grid min-w-0 flex-1 gap-0.5 text-sm">
                   <span className="font-medium break-words">{grant.title}</span>
                   <span className="font-mono text-xs text-muted-foreground">{grant.key}</span>
