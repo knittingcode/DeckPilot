@@ -177,6 +177,55 @@ check "an owner that is not running is refused" test "$status" = 1
 status=0; ts bogus > /dev/null 2>&1 || status=$?
 check "an unknown command exits 2" test "$status" = 2
 
+# --- retention: prune, auto-prune, low-disk warning ------------------------------
+# Fresh pool; slot contents are plain files (no cargo needed).
+export DECKPILOT_TARGET_POOL="$work/pool-prune"
+export DECKPILOT_MIN_FREE_GB=0
+fill() { # <slot n> <KiB>
+  mkdir -p "$DECKPILOT_TARGET_POOL/slot-$1/debug"
+  dd if=/dev/zero of="$DECKPILOT_TARGET_POOL/slot-$1/debug/blob" bs=1024 count="$2" 2> /dev/null
+}
+age_slot() { touch -t 202001010000 "$DECKPILOT_TARGET_POOL/slot-$1/.deckpilot-slot-used"; }
+fill 1 64; fill 2 64; age_slot 1; : > "$DECKPILOT_TARGET_POOL/slot-2/.deckpilot-slot-used"
+out=$(ts prune --dry-run 2>&1)
+check "prune --dry-run names the idle slot" grep -q "would empty slot-1" <<< "$out"
+check "prune --dry-run removes nothing" test -f "$DECKPILOT_TARGET_POOL/slot-1/debug/blob"
+check "prune --dry-run leaves a recent slot alone" test -z "$(grep slot-2 <<< "$out" || true)"
+holder; hp=$last_holder
+mkdir "$DECKPILOT_TARGET_POOL/slot-1.lock" && : > "$DECKPILOT_TARGET_POOL/slot-1.lock/claimed"
+printf '%s %s\n' "$hp" "$(ps -o lstart= -p "$hp" | sed 's/^ *//; s/ *$//')" > "$DECKPILOT_TARGET_POOL/slot-1.lock/owner"
+out=$(ts prune 2>&1)
+check "prune keeps an idle slot that is in use" test -f "$DECKPILOT_TARGET_POOL/slot-1/debug/blob"
+check "prune says it kept the slot in use" grep -q "slot-1 is in use" <<< "$out"
+kill "$hp"; wait "$hp" 2> /dev/null || true
+out=$(ts prune 2>&1)
+check "prune empties an idle free slot" test -z "$(ls -A "$DECKPILOT_TARGET_POOL/slot-1")"
+check "prune releases the slot it emptied" test ! -d "$DECKPILOT_TARGET_POOL/slot-1.lock"
+check "prune keeps a recent slot" test -f "$DECKPILOT_TARGET_POOL/slot-2/debug/blob"
+fill 2 3072
+ts prune --max-size 1M > /dev/null 2>&1
+check "prune --max-size empties an oversized slot" test -z "$(ls -A "$DECKPILOT_TARGET_POOL/slot-2")"
+rejects_bad_size() { ! ts prune --max-size 3X 2> /dev/null; }
+check "prune rejects a malformed size" rejects_bad_size
+fill 1 64; fill 2 64; age_slot 2
+# Slot 1 was last used here, so it is handed out without a scrub.
+(git rev-parse --show-toplevel 2> /dev/null || pwd -P) > "$DECKPILOT_TARGET_POOL/slot-1/.deckpilot-slot-user"
+holder; ha=$last_holder
+s=$(ts acquire --owner "$ha" 2> "$work/acq.err")
+check "acquire empties other idle free slots" test -z "$(ls -A "$DECKPILOT_TARGET_POOL/slot-2")"
+check "acquire keeps the slot it hands out" test -f "$s/debug/blob"
+check "acquire stamps the slot as used" test -f "$s/.deckpilot-slot-used"
+ts release --owner "$ha" "$s"
+fill 2 64; age_slot 2
+DECKPILOT_TARGET_SLOT_AUTOPRUNE=0 ts run -- true 2> /dev/null
+check "DECKPILOT_TARGET_SLOT_AUTOPRUNE=0 disables pruning on acquire" test -f "$DECKPILOT_TARGET_POOL/slot-2/debug/blob"
+err=$(DECKPILOT_MIN_FREE_GB=100000000 ts run -- true 2>&1 > /dev/null)
+check "acquire warns when the disk is low" grep -q "warning: only" <<< "$err"
+check "the warning names the cleanup commands" grep -q "target-slot.sh prune" <<< "$err"
+check "status shows idle time" grep -q "idle " <<< "$(ts status)"
+unset DECKPILOT_MIN_FREE_GB
+export DECKPILOT_TARGET_POOL="$work/pool"
+
 # --- two cargo builds ----------------------------------------------------------
 if [ "${TARGET_SLOT_SKIP_CARGO:-0}" != 1 ] && command -v cargo > /dev/null 2>&1; then
   export CARGO_INCREMENTAL=0
