@@ -34,7 +34,7 @@ import { ErrorNotice } from "@/components/page"
 import { ParameterField } from "@/components/parameter-field"
 import { UsageList } from "@/components/usage-list"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Panel } from "@/components/settings-layout"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -234,194 +234,189 @@ export function StepEditor({
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{isNew ? "New workflow" : initial.name}</CardTitle>
-        <CardDescription>
-          Steps run in order in the agent. Each step uses an action from this profile.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        {errors.length > 0 && <ErrorNotice error={errors.join(" ")} />}
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="grid gap-2">
-            <Label htmlFor="workflow-name">Name</Label>
-            <Input
-              id="workflow-name"
-              value={workflow.name}
-              placeholder="Start Work"
-              onChange={(e) => {
-                setWorkflow({ ...workflow, name: e.target.value })
-              }}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="workflow-description">Description</Label>
-            <Input
-              id="workflow-description"
-              value={workflow.description ?? ""}
-              placeholder="Optional"
-              onChange={(e) => {
-                setWorkflow({ ...workflow, description: e.target.value })
-              }}
-            />
-          </div>
-        </div>
-
+    <Panel
+      title={isNew ? "New workflow" : initial.name}
+      description="Steps run in order in the agent. Each step uses an action from this profile."
+    >
+      {errors.length > 0 && <ErrorNotice error={errors.join(" ")} />}
+      <div className="grid gap-4 sm:grid-cols-2">
         <div className="grid gap-2">
-          <Label id="workflow-steps-label">Steps</Label>
-          {workflow.steps.length === 0 && (
-            <p className="text-sm text-muted-foreground">Add actions below.</p>
-          )}
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-            <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-              <ol className="grid gap-2" aria-labelledby="workflow-steps-label">
-                {workflow.steps.map((step, index) => (
-                  <SortableStep
-                    key={ids[index]}
-                    id={ids[index] ?? ""}
-                    index={index}
-                    count={workflow.steps.length}
-                    step={step}
-                    view={view}
-                    actions={actions}
-                    types={types}
-                    onChange={(change) => {
-                      setWorkflow(updateStep(workflow, index, change))
-                    }}
-                    onMove={(to) => {
-                      setWorkflow(moveStep(workflow, index, to))
-                    }}
-                    onRemove={() => {
-                      setWorkflow(removeStep(workflow, index))
-                    }}
-                  />
-                ))}
-              </ol>
-            </SortableContext>
-          </DndContext>
-          <div className="flex flex-wrap items-center gap-2">
-            <Select value={addAction} onValueChange={setAddAction}>
-              <SelectTrigger className="w-72" aria-label="Action to add">
-                <SelectValue placeholder="Choose an action" />
-              </SelectTrigger>
-              <SelectContent>
-                {actions.map((action) => {
-                  const why = pluginActionUnavailable(modules, action.actionType)
-                  const usable = !why && types.some((t) => t.id === action.actionType)
-                  return (
-                    <SelectItem
-                      key={action.id}
-                      value={action.id}
-                      disabled={!usable}
-                      title={why ?? undefined}
-                    >
-                      {action.name}
-                      {!usable && (why ? ` (unavailable: ${why})` : " (unavailable)")}
-                    </SelectItem>
-                  )
-                })}
-              </SelectContent>
-            </Select>
-            <Button
-              variant="outline"
-              disabled={!addAction}
-              onClick={() => {
-                setWorkflow({ ...workflow, steps: [...workflow.steps, newStep(addAction)] })
-                setAddAction("")
-              }}
-            >
-              <Plus /> Add step
-            </Button>
-            {delayType && (
-              <Button variant="outline" onClick={() => void addDelay()}>
-                <Timer /> Add delay
-              </Button>
-            )}
-          </div>
+          <Label htmlFor="workflow-name">Name</Label>
+          <Input
+            id="workflow-name"
+            value={workflow.name}
+            placeholder="Start Work"
+            onChange={(e) => {
+              setWorkflow({ ...workflow, name: e.target.value })
+            }}
+          />
         </div>
-
-        <div className="flex flex-wrap gap-2">
-          <Button onClick={() => void save()} disabled={!dirty && !isNew}>
-            <Save /> Save
-          </Button>
-          {embedded && !isNew && (
-            <Button
-              variant="outline"
-              disabled={!canRun || running || starting}
-              title={runBlocked ?? `Run “${initial.name}”`}
-              onClick={run}
-            >
-              <Play /> Run
-            </Button>
-          )}
-          {!isNew && !embedded && (
-            <>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  api
-                    .duplicateWorkflow(profileId, workflow.id, `${initial.name} (copy)`)
-                    .then((copy) => {
-                      toast.success("Workflow duplicated")
-                      onChanged(copy.id)
-                    })
-                    .catch((e: unknown) => {
-                      toastFailure("The workflow was not duplicated", e)
-                    })
-                }}
-              >
-                <Copy /> Duplicate
-              </Button>
-              <ConfirmDialog
-                trigger={
-                  <Button variant="ghost" disabled={usages.length > 0}>
-                    <Trash2 /> Delete
-                  </Button>
-                }
-                title={`Delete “${initial.name}”?`}
-                description="The workflow is removed from this profile."
-                onConfirm={() => {
-                  api
-                    .deleteWorkflow(profileId, workflow.id)
-                    .then(() => {
-                      toast.success("Workflow deleted")
-                      onChanged()
-                    })
-                    .catch((e: unknown) => {
-                      toastFailure("The workflow was not deleted", e)
-                    })
-                }}
-              />
-            </>
-          )}
+        <div className="grid gap-2">
+          <Label htmlFor="workflow-description">Description</Label>
+          <Input
+            id="workflow-description"
+            value={workflow.description ?? ""}
+            placeholder="Optional"
+            onChange={(e) => {
+              setWorkflow({ ...workflow, description: e.target.value })
+            }}
+          />
         </div>
+      </div>
 
-        {lastRun && (
-          <div className="grid gap-1 rounded-md bg-muted p-3 text-xs" role="status">
-            <p className="font-medium">
-              Last run: {EXECUTION_STATE_LABEL[lastRun.state]}
-              {lastRun.state === "running" && ` (${lastRun.completedNodes}/${lastRun.totalNodes})`}
-              {lastRun.message ? ` — ${lastRun.message}` : ""}
-            </p>
-            <ol className="grid gap-0.5 font-mono">
-              {lastRun.nodes.map((node) => (
-                <li key={node.node}>
-                  {actions.find((a) => a.id === node.action)?.name ?? node.node} — {node.status}
-                  {node.message ? `: ${node.message}` : ""}
-                </li>
+      <div className="grid gap-2">
+        <Label id="workflow-steps-label">Steps</Label>
+        {workflow.steps.length === 0 && (
+          <p className="text-sm text-muted-foreground">Add actions below.</p>
+        )}
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+          <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+            <ol className="grid gap-2" aria-labelledby="workflow-steps-label">
+              {workflow.steps.map((step, index) => (
+                <SortableStep
+                  key={ids[index]}
+                  id={ids[index] ?? ""}
+                  index={index}
+                  count={workflow.steps.length}
+                  step={step}
+                  view={view}
+                  actions={actions}
+                  types={types}
+                  onChange={(change) => {
+                    setWorkflow(updateStep(workflow, index, change))
+                  }}
+                  onMove={(to) => {
+                    setWorkflow(moveStep(workflow, index, to))
+                  }}
+                  onRemove={() => {
+                    setWorkflow(removeStep(workflow, index))
+                  }}
+                />
               ))}
             </ol>
-          </div>
+          </SortableContext>
+        </DndContext>
+        <div className="flex flex-wrap items-center gap-2">
+          <Select value={addAction} onValueChange={setAddAction}>
+            <SelectTrigger className="w-72" aria-label="Action to add">
+              <SelectValue placeholder="Choose an action" />
+            </SelectTrigger>
+            <SelectContent>
+              {actions.map((action) => {
+                const why = pluginActionUnavailable(modules, action.actionType)
+                const usable = !why && types.some((t) => t.id === action.actionType)
+                return (
+                  <SelectItem
+                    key={action.id}
+                    value={action.id}
+                    disabled={!usable}
+                    title={why ?? undefined}
+                  >
+                    {action.name}
+                    {!usable && (why ? ` (unavailable: ${why})` : " (unavailable)")}
+                  </SelectItem>
+                )
+              })}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            disabled={!addAction}
+            onClick={() => {
+              setWorkflow({ ...workflow, steps: [...workflow.steps, newStep(addAction)] })
+              setAddAction("")
+            }}
+          >
+            <Plus /> Add step
+          </Button>
+          {delayType && (
+            <Button variant="outline" onClick={() => void addDelay()}>
+              <Timer /> Add delay
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={() => void save()} disabled={!dirty && !isNew}>
+          <Save /> Save
+        </Button>
+        {embedded && !isNew && (
+          <Button
+            variant="outline"
+            disabled={!canRun || running || starting}
+            title={runBlocked ?? `Run “${initial.name}”`}
+            onClick={run}
+          >
+            <Play /> Run
+          </Button>
         )}
-        {!isNew && !embedded && usages.length > 0 && (
-          <div className="grid gap-1">
-            <h3 className="text-sm font-medium">Used in</h3>
-            <UsageList usages={usages} />
-          </div>
+        {!isNew && !embedded && (
+          <>
+            <Button
+              variant="outline"
+              onClick={() => {
+                api
+                  .duplicateWorkflow(profileId, workflow.id, `${initial.name} (copy)`)
+                  .then((copy) => {
+                    toast.success("Workflow duplicated")
+                    onChanged(copy.id)
+                  })
+                  .catch((e: unknown) => {
+                    toastFailure("The workflow was not duplicated", e)
+                  })
+              }}
+            >
+              <Copy /> Duplicate
+            </Button>
+            <ConfirmDialog
+              trigger={
+                <Button variant="ghost" disabled={usages.length > 0}>
+                  <Trash2 /> Delete
+                </Button>
+              }
+              title={`Delete “${initial.name}”?`}
+              description="The workflow is removed from this profile."
+              onConfirm={() => {
+                api
+                  .deleteWorkflow(profileId, workflow.id)
+                  .then(() => {
+                    toast.success("Workflow deleted")
+                    onChanged()
+                  })
+                  .catch((e: unknown) => {
+                    toastFailure("The workflow was not deleted", e)
+                  })
+              }}
+            />
+          </>
         )}
-      </CardContent>
-    </Card>
+      </div>
+
+      {lastRun && (
+        <div className="grid gap-1 rounded-md bg-muted p-3 text-xs" role="status">
+          <p className="font-medium">
+            Last run: {EXECUTION_STATE_LABEL[lastRun.state]}
+            {lastRun.state === "running" && ` (${lastRun.completedNodes}/${lastRun.totalNodes})`}
+            {lastRun.message ? ` — ${lastRun.message}` : ""}
+          </p>
+          <ol className="grid gap-0.5 font-mono">
+            {lastRun.nodes.map((node) => (
+              <li key={node.node}>
+                {actions.find((a) => a.id === node.action)?.name ?? node.node} — {node.status}
+                {node.message ? `: ${node.message}` : ""}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+      {!isNew && !embedded && usages.length > 0 && (
+        <div className="grid gap-1">
+          <h3 className="text-sm font-medium">Used in</h3>
+          <UsageList usages={usages} />
+        </div>
+      )}
+    </Panel>
   )
 }
 

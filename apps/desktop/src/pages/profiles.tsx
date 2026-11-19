@@ -43,7 +43,7 @@ import { useTitlebar } from "@/hooks/use-titlebar"
 import { api } from "@/lib/api"
 import { failureMessage, toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
-import { formatTimestamp } from "@/lib/format"
+import { formatShortTimestamp, formatTimestamp } from "@/lib/format"
 import type { ProfileSummary } from "@/lib/types"
 
 type DialogState =
@@ -113,9 +113,9 @@ export function ProfilesSettings() {
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>Name</TableHead>
-                <TableHead className="hidden w-48 sm:table-cell">Last modified</TableHead>
-                <TableHead className="w-24">Status</TableHead>
-                <TableHead className="w-36">
+                <TableHead className="hidden w-44 sm:table-cell">Last modified</TableHead>
+                <TableHead className="w-20">Status</TableHead>
+                <TableHead className="w-32">
                   <span className="sr-only">Actions</span>
                 </TableHead>
               </TableRow>
@@ -140,7 +140,12 @@ export function ProfilesSettings() {
                       </button>
                     </TableCell>
                     <TableCell className="hidden text-caption text-muted-foreground tabular-nums sm:table-cell">
-                      {formatTimestamp(profile.updatedAt)}
+                      <time
+                        dateTime={new Date(profile.updatedAt * 1000).toISOString()}
+                        title={formatTimestamp(profile.updatedAt)}
+                      >
+                        {formatShortTimestamp(profile.updatedAt)}
+                      </time>
                     </TableCell>
                     <TableCell>
                       {active ? (

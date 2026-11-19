@@ -44,7 +44,11 @@ export function SectionHeader({
       className={cn("flex flex-wrap items-end justify-between gap-x-4 gap-y-2", className)}
     >
       <div className="grid min-w-0 flex-1 basis-64 gap-0.5">
-        <Heading id={id} className="flex items-center gap-2 text-sm leading-6 font-semibold">
+        <Heading
+          id={id}
+          data-slot="section-title"
+          className="flex items-center gap-2 text-sm leading-6 font-semibold"
+        >
           {title}
         </Heading>
         {description && (
@@ -210,5 +214,43 @@ export function InlineStatus({
       <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", DOT[tone])} />
       {children}
     </span>
+  )
+}
+
+/**
+ * A functional container: an editor or configuration form that belongs
+ * together, e.g. the variable being edited. A hairline frame without a
+ * shadow; never nested in another panel.
+ */
+export function Panel({
+  title,
+  description,
+  actions,
+  className,
+  children,
+  ...props
+}: Omit<ComponentProps<"div">, "title"> & {
+  title: ReactNode
+  description?: ReactNode
+  actions?: ReactNode
+}) {
+  const id = useId()
+  return (
+    <div
+      role="group"
+      data-slot="panel"
+      aria-labelledby={id}
+      className={cn("grid rounded-lg border", className)}
+      {...props}
+    >
+      <SectionHeader
+        id={id}
+        title={title}
+        description={description}
+        actions={actions}
+        className="border-b px-4 py-2.5"
+      />
+      <div className="grid gap-4 p-4">{children}</div>
+    </div>
   )
 }

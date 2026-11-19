@@ -28,11 +28,11 @@ export function ProjectSwitcher({
     })
   }
   if (projects.length === 0) {
-    return <p className="text-sm text-muted-foreground">This profile has no projects.</p>
+    return <p className="text-caption text-muted-foreground">This profile has no projects.</p>
   }
   if (!isActiveProfile) {
     return (
-      <p className="text-sm text-muted-foreground">
+      <p className="max-w-64 text-caption text-muted-foreground">
         Projects can be switched for the profile that is active on the device.
       </p>
     )
@@ -41,7 +41,7 @@ export function ProjectSwitcher({
     <div className="flex flex-wrap items-center gap-2">
       <Button
         variant="outline"
-        size="icon"
+        size="icon-sm"
         aria-label="Previous project"
         onClick={() => {
           run(() => api.cycleProject(profileId, "previous"))
@@ -52,6 +52,7 @@ export function ProjectSwitcher({
       <ToggleGroup
         type="single"
         variant="outline"
+        size="sm"
         value={activeProjectId ?? ""}
         onValueChange={(id) => {
           if (id) run(() => api.selectProject(profileId, id))
@@ -71,7 +72,7 @@ export function ProjectSwitcher({
       </ToggleGroup>
       <Button
         variant="outline"
-        size="icon"
+        size="icon-sm"
         aria-label="Next project"
         onClick={() => {
           run(() => api.cycleProject(profileId, "next"))
