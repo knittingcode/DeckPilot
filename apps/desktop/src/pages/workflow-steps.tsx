@@ -271,7 +271,7 @@ export function StepEditor({
         )}
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
           <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-            <ol className="grid gap-2" aria-labelledby="workflow-steps-label">
+            <ol className="grid divide-y border-y" aria-labelledby="workflow-steps-label">
               {workflow.steps.map((step, index) => (
                 <SortableStep
                   key={ids[index]}
@@ -461,8 +461,9 @@ function SortableStep({
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={cn(
-        "grid gap-3 rounded-lg border bg-card p-3",
-        isDragging && "opacity-70 shadow-lg",
+        "grid gap-2 bg-background py-3",
+        // Lifted while dragged, so it reads above the list.
+        isDragging && "relative z-10 rounded-md opacity-90 shadow-lg",
       )}
     >
       <div className="flex flex-wrap items-center gap-2">
