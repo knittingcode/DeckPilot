@@ -24,6 +24,7 @@ on:
       - Cargo.toml
       - Cargo.lock
       - rust-toolchain.toml
+      - tools/ci/rust-pinned-toolchain.sh
       - .github/workflows/plugins-agent.yml
   pull_request:
     paths:
@@ -35,6 +36,7 @@ on:
       - Cargo.toml
       - Cargo.lock
       - rust-toolchain.toml
+      - tools/ci/rust-pinned-toolchain.sh
       - .github/workflows/plugins-agent.yml
   workflow_dispatch:
 
@@ -76,6 +78,12 @@ jobs:
           rustup toolchain install
           rustup target add wasm32-unknown-unknown
           rustc --version
+      # rust-cache hashes every installed toolchain into its key; without
+      # this, a runner whose image preinstalls a newer stable misses main's
+      # cache (tools/ci/rust-pinned-toolchain.sh).
+      - name: Only the pinned Rust toolchain
+        shell: bash
+        run: tools/ci/rust-pinned-toolchain.sh
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: |
