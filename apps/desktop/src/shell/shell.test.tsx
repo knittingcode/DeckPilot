@@ -369,18 +369,49 @@ describe("main window shell", { timeout: 20_000 }, () => {
     expect(api.openWindow).not.toHaveBeenCalled()
   })
 
-  it("keeps the other workspace pages in the rail", async () => {
+  it("keeps the workspace pages in a rail that is always collapsed to icons", async () => {
+    localStorage.setItem("deckpilot.rail", "expanded") // from an earlier version
     const { user } = await renderShell()
-    const rail = screen.getByRole("button", { name: "Toggle Sidebar" })
-    await user.click(rail)
-    expect(localStorage.getItem("deckpilot.rail")).toBe("expanded")
+    const rail = screen.getByRole("generic", { name: "Workspace" }).closest("[data-state]")
+    expect(rail).toHaveAttribute("data-state", "collapsed")
+    expect(rail).toHaveAttribute("data-collapsible", "icon")
+    // The earlier version's choice is neither honoured nor kept.
+    expect(localStorage.getItem("deckpilot.rail")).toBeNull()
+    // No toggle, and ⌘B / Ctrl+B do nothing.
+    expect(screen.queryByRole("button", { name: /Toggle Sidebar/i })).not.toBeInTheDocument()
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "b", metaKey: true }))
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "b", ctrlKey: true }))
+    })
+    expect(rail).toHaveAttribute("data-state", "collapsed")
+
+    // Every page has its name as label (and tooltip); the current one is marked.
     for (const name of ["Device Editor", "Dashboard", "Action Library", "Workflows"]) {
       expect(screen.getAllByRole("button", { name }).length).toBeGreaterThan(0)
     }
-    expect(screen.getByRole("button", { name: "Device Editor" })).toHaveAttribute(
+    const editor = screen.getByRole("button", { name: "Device Editor" })
+    expect(editor).toHaveAttribute("aria-current", "page")
+    expect(editor).toHaveAttribute("data-active", "true")
+    await user.hover(editor)
+    expect(await screen.findByRole("tooltip", { name: "Device Editor" })).toBeInTheDocument()
+
+    // The same rail beside the settings, with nothing marked.
+    await user.click(gearOf(screen.getByRole("banner", { name: "Toolbar" })))
+    await screen.findByRole("generic", { name: "Settings" })
+    expect(rail).toHaveAttribute("data-state", "collapsed")
+    expect(screen.getByRole("button", { name: "Device Editor" })).not.toHaveAttribute(
       "aria-current",
-      "page",
     )
+    // Keyboard: the rail's buttons are reachable and work with Enter.
+    screen.getByRole("button", { name: "Workflows" }).focus()
+    await user.keyboard("{Enter}")
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Workflows" })).toHaveAttribute(
+        "aria-current",
+        "page",
+      )
+    })
+    expect(rail).toHaveAttribute("data-state", "collapsed")
   })
 
   it("shows notifications from the toolbar with the number of unread ones", async () => {

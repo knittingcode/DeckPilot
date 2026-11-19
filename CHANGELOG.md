@@ -23,6 +23,9 @@ released either. 0.6.0 is the first version intended for publication.
   history, and the gear is highlighted while the settings are shown.
   Settings reopen at the section shown last. The device editor keeps its
   page, key, inspector and unsaved changes while the settings are open.
+- The navigation rail is always collapsed to icons, with each page's name
+  as a tooltip and a clearer mark on the current page. The toolbar's sidebar
+  toggle and the ⌘B / Ctrl+B shortcut are gone.
 
 ## [0.8.1] - 2026-11-19
 

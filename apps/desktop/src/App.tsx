@@ -100,11 +100,8 @@ function PageLoading() {
   )
 }
 
-const RAIL_KEY = "deckpilot.rail"
-
-function storedRail(): boolean {
-  return browserStorage()?.getItem(RAIL_KEY) === "expanded"
-}
+/** Where earlier versions remembered an expanded rail; the rail is always collapsed now. */
+const OBSOLETE_RAIL_KEY = "deckpilot.rail"
 
 /**
  * The main window: the toolbar (device and profile, the page's context,
@@ -159,18 +156,16 @@ function Studio() {
   }, [inSettings])
   const [status] = useState(createStatusStores)
   const [executions] = useState(() => new ExecutionStore())
-  const [rail, setRailState] = useState(storedRail)
   const chrome = useWindowChrome()
   // Plugin toolbar entries, read again whenever the plugins are.
   const plugins = usePluginNavigation(data.pluginModules)
   const { go } = navigation
 
-  const setRail = useCallback((open: boolean) => {
-    setRailState(open)
+  useEffect(() => {
     try {
-      browserStorage()?.setItem(RAIL_KEY, open ? "expanded" : "collapsed")
+      browserStorage()?.removeItem(OBSOLETE_RAIL_KEY)
     } catch {
-      // Remembered for this session only.
+      // Nothing is read from it any more.
     }
   }, [])
 
@@ -266,8 +261,9 @@ function Studio() {
           <ExecutionsContext value={executions}>
             <EditorSelectionProvider dirtyRef={dirtyRef}>
               <SidebarProvider
-                open={rail}
-                onOpenChange={setRail}
+                // The rail is always collapsed to icons: no toggle, no ⌘B.
+                open={false}
+                keyboardShortcut={false}
                 className="h-svh min-h-0 flex-col overflow-hidden"
                 style={{ "--statusbar-height": "var(--statusbar-size)" } as React.CSSProperties}
               >

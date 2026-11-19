@@ -229,8 +229,10 @@ the profile to edit while the device editor has unsaved changes.
 ### Main window shell
 
 The main window has one toolbar (`AppTitlebar`), a slim navigation rail
-(`AppSidebar`, collapsed to icons by default) and the page. The toolbar, left
-to right: the navigation region (rail toggle, back, forward), the device and
+(`AppSidebar`, always collapsed to icons: each has its name as label and
+tooltip, the current page is marked; nothing expands it, there is no toggle
+and no ⌘B / Ctrl+B) and the page. The toolbar, left to right: the
+navigation region (back, forward), the device and
 profile selectors (`shell/toolbar.tsx`), the page's context, then plugin
 navigation entries (`shell/plugin-navigation.ts`; with a separator only when
 there are any), notifications, the Marketplace and the settings. The device
@@ -283,10 +285,8 @@ Platform differences live in `use-window-chrome.ts`:
 
 Sizes are tokens in `index.css` (`--titlebar-height`, `--titlebar-control`,
 `--titlebar-icon`, …). The navigation region (traffic-light safe area,
-sidebar toggle, back, forward) has a fixed width, so it never moves when the
-sidebar collapses; a separate element continues the expanded sidebar's
-background and divider. Native dialog windows (`ModalShell`) have no app
-titlebar.
+back, forward) has a fixed width that only tokens and fullscreen decide.
+Native dialog windows (`ModalShell`) have no app titlebar.
 
 ### Status bar
 

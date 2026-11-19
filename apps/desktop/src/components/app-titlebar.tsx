@@ -14,7 +14,6 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 import { SHORTCUTS } from "@/hooks/use-navigation"
 import { useTitlebarState } from "@/hooks/use-titlebar"
 import { type WindowChrome, windowDragHandlers } from "@/hooks/use-window-chrome"
@@ -72,8 +71,6 @@ export function AppTitlebar({
   trailing?: React.ReactNode
 }) {
   const config = useTitlebarState(store)
-  const { state, isMobile } = useSidebar()
-  const aligned = state === "expanded" && !isMobile
   // The latest callbacks, also when only they changed.
   const select = (action: TitlebarAction) => {
     store.action(action.id)?.onSelect?.()
@@ -88,18 +85,14 @@ export function AppTitlebar({
     >
       {/*
         Fixed navigation region: the traffic-light safe area followed by the
-        sidebar toggle and history. Its width depends only on tokens and the
-        window's fullscreen state — never on the sidebar — so the controls
-        stay put when the sidebar collapses or expands.
+        history. Its width depends only on tokens and the window's fullscreen
+        state. The navigation rail is always collapsed to icons, so nothing
+        here toggles it.
       */}
       <div
         data-slot="titlebar-navigation"
-        className={cn(
-          "flex w-(--titlebar-navigation-width) shrink-0 items-center gap-(--titlebar-gap) pr-(--titlebar-padding-x) pl-[calc(var(--titlebar-controls-inset)+var(--titlebar-padding-x))]",
-          aligned && "bg-sidebar",
-        )}
+        className="flex w-(--titlebar-navigation-width) shrink-0 items-center gap-(--titlebar-gap) pr-(--titlebar-padding-x) pl-[calc(var(--titlebar-controls-inset)+var(--titlebar-padding-x))]"
       >
-        <SidebarTrigger className={CONTROL_ICON} title={`Toggle sidebar (${SHORTCUTS.sidebar})`} />
         <nav aria-label="History" className="flex items-center gap-(--titlebar-gap)">
           <Button
             variant="ghost"
@@ -125,17 +118,6 @@ export function AppTitlebar({
           </Button>
         </nav>
       </div>
-      {/* Continues the expanded sidebar (background and divider) up to its edge. */}
-      <div
-        aria-hidden
-        data-slot="titlebar-sidebar-extension"
-        className={cn(
-          "shrink-0 transition-[width] duration-200 ease-linear",
-          aligned
-            ? "w-[max(0px,calc(var(--sidebar-width)-var(--titlebar-navigation-width)))] border-r bg-sidebar"
-            : "w-0",
-        )}
-      />
       {leading && (
         <div
           data-slot="titlebar-leading"
