@@ -1034,7 +1034,7 @@ dependencies = [
  "deckpilot-storage",
  "flate2",
  "getrandom 0.4.3",
- "hkdf 0.12.4",
+ "hkdf",
  "interprocess",
  "rcgen",
  "reqwest",
@@ -1043,7 +1043,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.1",
  "tao",
  "tar",
  "tempfile",
@@ -1090,7 +1090,7 @@ dependencies = [
  "deckpilot-render",
  "deckpilot-storage",
  "deckpilot-update",
- "hkdf 0.12.4",
+ "hkdf",
  "minisign",
  "rcgen",
  "reqwest",
@@ -1098,7 +1098,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.1",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -1395,7 +1395,7 @@ dependencies = [
  "flate2",
  "semver",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.1",
  "tar",
  "tempfile",
  "thiserror 2.0.21",
@@ -2443,15 +2443,6 @@ dependencies = [
  "libc",
  "pkg-config",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "hkdf"
-version = "0.12.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
-dependencies = [
- "hmac 0.12.1",
 ]
 
 [[package]]
@@ -4759,7 +4750,7 @@ dependencies = [
  "cbc",
  "futures-util",
  "getrandom 0.4.3",
- "hkdf 0.13.0",
+ "hkdf",
  "hybrid-array",
  "num",
  "once_cell",
