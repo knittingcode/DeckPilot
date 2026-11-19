@@ -168,7 +168,7 @@ describe("appearance editor", () => {
         "data:image/png;base64,key0-#000000",
       )
     })
-    expect(api.previewLayout).toHaveBeenCalledWith("p", layout, "home", null, true)
+    expect(api.previewLayout).toHaveBeenCalledWith("p", layout, "home", null, true, null)
 
     await user.click(control("Key 2"))
     const background = within(panel().getByRole("group", { name: "Background swatches" }))

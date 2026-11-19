@@ -1,6 +1,19 @@
 import { useDraggable, useDroppable } from "@dnd-kit/core"
-import { useRef, type KeyboardEvent, type ReactElement, type ReactNode } from "react"
+import {
+  useRef,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactElement,
+  type ReactNode,
+} from "react"
 
+import {
+  BODY_PADDING,
+  DIAL_SIZE,
+  KEY_GAP,
+  deviceGeometry,
+  gridWidth,
+} from "@/components/device-geometry"
 import { FaceTile } from "@/components/key-face"
 import { IS_MAC } from "@/hooks/use-navigation"
 import {
@@ -48,6 +61,12 @@ interface CanvasProps {
   /** Wraps each control, e.g. in a context menu. */
   wrapControl?: (control: ControlId, element: ReactElement) => ReactNode
   size?: "sm" | "md"
+  /**
+   * The size of one key in CSS pixels, e.g. from `keySize` to fit the
+   * space the preview has; everything else scales with it. Without it, the
+   * `size` step.
+   */
+  keySize?: number
 }
 
 const ARROWS: Record<string, Direction> = {
@@ -62,6 +81,18 @@ function selectMode(event: { shiftKey: boolean; metaKey: boolean; ctrlKey: boole
   if (IS_MAC ? event.metaKey : event.ctrlKey) return "toggle"
   return "only"
 }
+
+/**
+ * What every control shares: a dark LCD behind a hairline border, a subtle
+ * hover and the keyboard focus outline, offset beyond the selection ring.
+ */
+const KEY_BASE = cn(
+  "relative block w-full min-w-0 overflow-hidden border border-device-key-border bg-device-key",
+  "transition-[border-color,filter,box-shadow] duration-100 disabled:cursor-default",
+  "ring-offset-1 ring-offset-device-body",
+  "enabled:hover:border-device-key-hover enabled:hover:brightness-110",
+  "outline-none focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-device-focus focus-visible:outline-solid",
+)
 
 function Control({
   control,
@@ -99,6 +130,16 @@ function Control({
   const onPointerDown = props.draggable
     ? (drag.listeners?.onPointerDown as React.PointerEventHandler | undefined)
     : undefined
+  // Selection, an accepted and a refused drop are rings around the key
+  // (box shadows) and keyboard focus is an outline outside them: none of
+  // them changes the key's size or the layout.
+  const mark = refused
+    ? "ring-2 ring-destructive"
+    : drop.isOver
+      ? "ring-2 ring-device-drop"
+      : selected
+        ? "ring-2 ring-device-selected"
+        : undefined
   const button = (
     <button
       ref={(node) => {
@@ -107,6 +148,7 @@ function Control({
       }}
       type="button"
       data-control={key}
+      data-shape={shape}
       data-drop={refused ? "rejected" : drop.isOver ? "accepted" : undefined}
       disabled={!interactive}
       tabIndex={interactive ? (tabStop ? 0 : -1) : undefined}
@@ -114,15 +156,13 @@ function Control({
       aria-pressed={interactive ? selected : undefined}
       title={summary ? `${controlLabel(control)}: ${summary}` : controlLabel(control)}
       className={cn(
-        "relative block w-full min-w-0 outline-none disabled:cursor-default",
-        shape === "key" && "aspect-square rounded-lg",
-        shape === "zone" && "aspect-[2/1] rounded-md",
-        shape === "dial" && "aspect-square rounded-full",
-        "ring-offset-2 ring-offset-device-body focus-visible:ring-2 focus-visible:ring-device-focus",
-        selected && "ring-2 ring-device-selected",
-        drop.isOver && !refused && "ring-2 ring-device-drop",
-        refused && "ring-2 ring-destructive",
-        drag.isDragging && "opacity-50",
+        KEY_BASE,
+        shape === "key" && "aspect-square rounded-[var(--key-radius)]",
+        shape === "zone" && "aspect-[2/1] rounded-[calc(var(--key-radius)*0.6)]",
+        shape === "dial" &&
+          "aspect-square rounded-full border-2 border-device-dial-border bg-device-dial",
+        mark,
+        drag.isDragging && "opacity-40",
       )}
       onPointerDown={onPointerDown}
       onClick={(event) => props.onSelect?.(control, selectMode(event))}
@@ -132,42 +172,41 @@ function Control({
       }}
     >
       {shape === "dial" ? (
-        <div className="flex size-full flex-col items-center justify-center rounded-full border-4 border-device-dial-border bg-device-dial p-1 text-center text-[10px] leading-tight text-device-dial-foreground">
+        <span className="flex size-full flex-col items-center justify-center rounded-full bg-device-dial p-[12%] text-center text-[length:max(9px,calc(var(--key)*0.12))] leading-tight text-device-dial-foreground">
           <span className="line-clamp-2">
             {(props.captions?.get(key) ?? "").split(" · ")[0]?.replace(/^[^:]*: /, "")}
           </span>
-        </div>
+        </span>
       ) : image ? (
-        // The key as the device draws it; the button carries the name.
-        <img
-          src={image}
-          alt=""
-          className={cn(
-            "size-full bg-black object-cover",
-            shape === "zone" ? "rounded-md" : "rounded-lg",
-          )}
-        />
+        // The key as the device draws it, edge to edge; the button carries the name.
+        <img src={image} alt="" draggable={false} className="size-full object-cover" />
       ) : (
-        <FaceTile
-          face={face}
-          icon={props.icons?.get(key)}
-          compact={shape === "zone"}
-          className={shape === "zone" ? "rounded-md" : "rounded-lg"}
-        />
+        <FaceTile face={face} icon={props.icons?.get(key)} compact={shape === "zone"} />
       )}
     </button>
   )
   return props.wrapControl ? props.wrapControl(control, button) : button
 }
 
-/** A device drawn from its capabilities: keys, touch zones and dials. */
+/** The CSS size of one key: `keySize` pixels, else the size step. */
+function keyUnit(size: "sm" | "md", keySize: number | undefined): string {
+  if (keySize !== undefined && keySize > 0) return `${keySize}px`
+  return size === "sm" ? "2.25rem" : "4.25rem"
+}
+
+/**
+ * A device drawn from its capabilities: keys, touch zones and dials. Every
+ * measure is relative to the size of one key (`--key`), so the device keeps
+ * its proportions at any `keySize` (see `device-geometry.ts`).
+ */
 export function DeviceCanvas(props: CanvasProps) {
   const { model, size = "md", onSelect, focused } = props
-  const { keys, columns, encoders, touchZones } = controlsOf(model)
+  const { keys, encoders, touchZones } = controlsOf(model)
+  const geometry = deviceGeometry(model)
   const container = useRef<HTMLDivElement>(null)
-  const unit = size === "sm" ? 2.25 : 4.25
+  const unit = keyUnit(size, props.keySize)
   // The touch strip and the dials span the key grid, as on the hardware.
-  const width = columns > 0 ? `${columns * unit + (columns - 1) * 0.5}rem` : `${unit * 4}rem`
+  const width = `calc(var(--key) * ${gridWidth(geometry)})`
   const first = keys[0]?.control ?? touchZones[0] ?? encoders[0]
   const stop = focused ?? first
   const isStop = (control: ControlId) => (stop ? sameControl(stop, control) : false)
@@ -185,18 +224,30 @@ export function DeviceCanvas(props: CanvasProps) {
       ?.focus()
   }
 
+  const gap = `calc(var(--key) * ${KEY_GAP})`
   return (
     <div
       ref={container}
-      className="inline-grid gap-3 rounded-2xl border border-device-body-border bg-device-body p-4 shadow-inner"
+      data-slot="device-canvas"
+      data-model={model.id}
+      className="inline-grid shrink-0 rounded-[calc(var(--key)*0.32)] border border-device-body-border bg-device-body shadow-sm"
+      style={
+        {
+          "--key": unit,
+          "--key-radius": `calc(var(--key) * 0.14)`,
+          gap: `calc(var(--key) * ${KEY_GAP * 1.5})`,
+          padding: `calc(var(--key) * ${BODY_PADDING})`,
+        } as CSSProperties
+      }
       role="group"
       aria-label={`${model.name} controls`}
       onKeyDown={onKeyDown}
     >
       {keys.length > 0 && (
         <div
-          className="grid gap-2"
-          style={{ gridTemplateColumns: `repeat(${columns}, ${unit}rem)` }}
+          data-slot="device-keys"
+          className="grid"
+          style={{ gap, gridTemplateColumns: `repeat(${geometry.columns}, var(--key))` }}
         >
           {keys.map(({ control }) => (
             <Control
@@ -211,8 +262,14 @@ export function DeviceCanvas(props: CanvasProps) {
       )}
       {touchZones.length > 0 && (
         <div
-          className="grid gap-1 rounded-lg bg-device-strip p-1"
-          style={{ width, gridTemplateColumns: `repeat(${touchZones.length}, minmax(0, 1fr))` }}
+          data-slot="device-strip"
+          className="grid rounded-[var(--key-radius)] bg-device-strip"
+          style={{
+            width,
+            gap: "calc(var(--key) * 0.1)",
+            padding: "calc(var(--key) * 0.1)",
+            gridTemplateColumns: `repeat(${touchZones.length}, minmax(0, 1fr))`,
+          }}
         >
           {touchZones.map((control) => (
             <Control
@@ -227,11 +284,12 @@ export function DeviceCanvas(props: CanvasProps) {
       )}
       {encoders.length > 0 && (
         <div
-          className="grid justify-items-center gap-2"
-          style={{ width, gridTemplateColumns: `repeat(${encoders.length}, minmax(0, 1fr))` }}
+          data-slot="device-dials"
+          className="grid justify-items-center"
+          style={{ width, gap, gridTemplateColumns: `repeat(${encoders.length}, minmax(0, 1fr))` }}
         >
           {encoders.map((control) => (
-            <div key={controlKey(control)} style={{ width: `${unit * 0.9}rem` }}>
+            <div key={controlKey(control)} style={{ width: `calc(var(--key) * ${DIAL_SIZE})` }}>
               <Control control={control} shape="dial" tabStop={isStop(control)} props={props} />
             </div>
           ))}

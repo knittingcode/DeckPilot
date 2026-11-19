@@ -14,6 +14,12 @@
 //!
 //! The current agent must do exactly the same with the database and must
 //! not rewrite a stored row while doing it.
+//!
+//! The key images (`frames`) are digests of the renderer's pixels. They
+//! were recorded again when keys got the Inter font and their actions'
+//! icons: the faces this agent shows for the database, drawn with the
+//! previous renderer, give exactly the digests of the original fixture
+//! (checked when they were recorded again), so only the drawing changed.
 
 mod support;
 

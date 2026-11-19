@@ -82,10 +82,11 @@ and not retry-safe. In a workflow a node runs at most 10 minutes, so a
 longer `timeoutSeconds` only applies when the action runs from a key.
 
 **Monitor keys.** `system.cpu`, `system.memory`, `system.network` and
-`system.disk` show their value as the key's live state: `CPU 37%` and
-`RAM 62%` with the use as a bar (CPU also with its recent values as a
-chart), `In 1.2M` / `Out 56K` (bytes per second) for the network, and
-`45% free` with the used share as a bar for a disk. The indicator is
+`system.disk` show their value under the key's title as its live state:
+`37%` with the use as a bar (also with its recent values as a chart) for
+CPU, `9.9/16 GiB` used and installed with the used share as a bar for
+memory, `↓ 1.2 MB/s` and `↑ 56 kB/s` received and sent for the network,
+and `55% used` with the used share as a bar for a disk. The indicator is
 green, amber from the warning threshold and red from the critical one
 (`level`: `ok`, `warning`, `critical`); a critical threshold below the
 warning one (above it for free space) is refused when saving. Pressing the

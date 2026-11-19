@@ -1,14 +1,16 @@
 //! IPC server: authenticates clients and forwards requests to the agent.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use deckpilot_core::ActionInstanceId;
 use deckpilot_ipc::framing::{FrameError, read_message, write_message};
 use deckpilot_ipc::plugin_answers;
 use deckpilot_ipc::{
-    AgentEvent, Capability, ClientKind, ClientMessage, ErrorCode, IpcError, MIN_PROTOCOL_VERSION,
-    PROTOCOL_VERSION, Request, Response, ServerMessage, SharedStream, token,
+    AgentEvent, Capability, ClientKind, ClientMessage, ErrorCode, IpcError, KeyStateEntry,
+    MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, Request, Response, ServerMessage, SharedStream, token,
 };
 use interprocess::local_socket::tokio::{Listener, Stream, prelude::*};
 use tokio::io::BufReader;
@@ -59,6 +61,16 @@ pub(crate) fn spawn(
         let _ = tokio::time::timeout(CLOSE_GRACE, drained).await;
         connections.shutdown().await;
     })
+}
+
+/// Identifies connections for `watchKeyStates`.
+static NEXT_VIEWER: AtomicU64 = AtomicU64::new(1);
+
+/// What a connection watches with `watchKeyStates` (protocol 11).
+struct KeyWatch {
+    viewer: u64,
+    actions: BTreeSet<ActionInstanceId>,
+    changes: Option<broadcast::Receiver<Vec<KeyStateEntry>>>,
 }
 
 /// Counts subscribed desktop clients while alive.
@@ -186,6 +198,11 @@ async fn serve(
     // Whether this connection asked for module migration events.
     let mut migration_events = false;
     let mut desktop: Option<DesktopGuard> = None;
+    let mut watch = KeyWatch {
+        viewer: NEXT_VIEWER.fetch_add(1, Ordering::Relaxed),
+        actions: BTreeSet::new(),
+        changes: None,
+    };
     loop {
         tokio::select! {
             message = read_message::<_, serde_json::Value>(&mut reader) => {
@@ -198,6 +215,7 @@ async fn serve(
                             (client, protocol),
                             (&mut events, &mut plugin_events, &mut migration_events),
                             &mut desktop,
+                            &mut watch,
                         )
                         .await
                     }
@@ -240,6 +258,22 @@ async fn serve(
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => plugin_events = None,
             },
+            // Only the watched keys, only to the connection that watches.
+            changes = next_event(&mut watch.changes) => match changes {
+                Ok(changes) => {
+                    let states: Vec<KeyStateEntry> = changes
+                        .into_iter()
+                        .filter(|entry| watch.actions.contains(&entry.action))
+                        .collect();
+                    if !states.is_empty()
+                        && !send(&mut writer, &ServerMessage::KeyStates { states }).await
+                    {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => watch.changes = None,
+            },
             _ = shutdown.changed() => {
                 // Deliver the final notifications before closing.
                 if let Some(events) = events.as_mut() {
@@ -254,6 +288,9 @@ async fn serve(
         }
     }
     drop(desktop);
+    if watch.changes.is_some() {
+        handle.unwatch_key_states(watch.viewer);
+    }
 }
 
 async fn handle_message(
@@ -266,6 +303,7 @@ async fn handle_message(
         &mut bool,
     ),
     desktop: &mut Option<DesktopGuard>,
+    watch: &mut KeyWatch,
 ) -> ServerMessage {
     let id = value.get("id").and_then(serde_json::Value::as_u64);
     let message = match serde_json::from_value::<ClientMessage>(value) {
@@ -310,6 +348,23 @@ async fn handle_message(
         return ServerMessage::Response {
             id,
             response: Response::Ok,
+        };
+    }
+    if let Request::WatchKeyStates { profile, actions } = request {
+        // Subscribed before asking, so no change after the answer is missed.
+        if watch.changes.is_none() {
+            watch.changes = Some(handle.subscribe_key_states());
+        }
+        watch.actions = actions.iter().copied().collect();
+        return match handle
+            .watch_key_states(watch.viewer, profile, actions)
+            .await
+        {
+            Ok(response) => ServerMessage::Response { id, response },
+            Err(error) => ServerMessage::Error {
+                id: Some(id),
+                error,
+            },
         };
     }
     if matches!(request, Request::Subscribe) {

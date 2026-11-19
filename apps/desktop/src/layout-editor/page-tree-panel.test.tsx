@@ -7,6 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 import type { DeviceLayout, DeviceModel, PageTree, ProfileView } from "@/lib/types"
 import { installDomStubs } from "@/test/dom"
+import { closePages, currentPage, goToPage, managePages, pageNames } from "@/test/pages"
 
 import { LayoutEditor } from "./editor"
 
@@ -124,8 +125,8 @@ function renderEditor() {
   return userEvent.setup()
 }
 
+/** The page tree, in the pages panel: open it first with `managePages`. */
 const panel = () => within(screen.getByRole("region", { name: "Page tree" }))
-const tabs = () => screen.getAllByRole("tab").map((t) => t.textContent)
 
 beforeAll(installDomStubs)
 beforeEach(() => {
@@ -142,6 +143,9 @@ afterEach(cleanup)
 describe("page tree panel", () => {
   it("shows the folders of the layout and opens pages from it", async () => {
     const user = renderEditor()
+    // Not in the way above the device: in the pages panel.
+    expect(screen.queryByRole("region", { name: "Page tree" })).not.toBeInTheDocument()
+    await managePages(user)
     const git = await panel().findByRole("button", { name: "Git" })
     // Git is inside Tools, which is inside Home.
     const home = panel().getByRole("button", { name: "Home" }).closest("li") as HTMLElement
@@ -154,8 +158,9 @@ describe("page tree panel", () => {
     expect(panel().queryByRole("button", { name: "Move or copy “Home”" })).not.toBeInTheDocument()
 
     await user.click(git)
-    expect(screen.getByRole("tab", { name: "Git" })).toHaveAttribute("aria-selected", "true")
     expect(panel().getByRole("button", { name: "Git" })).toHaveAttribute("aria-current", "page")
+    await closePages(user)
+    expect(currentPage()).toBe("Git")
   })
 
   it("reorders sibling pages and shows the stored order", async () => {
@@ -165,6 +170,7 @@ describe("page tree panel", () => {
     }
     api.reorderPages.mockResolvedValue(reordered)
     const user = renderEditor()
+    await managePages(user)
     await panel().findByRole("button", { name: "Notes" })
     expect(panel().getByRole("button", { name: "Move “Git” up" })).toBeDisabled()
     expect(panel().getByRole("button", { name: "Move “Notes” down" })).toBeDisabled()
@@ -172,16 +178,19 @@ describe("page tree panel", () => {
     await user.click(panel().getByRole("button", { name: "Move “Notes” up" }))
     expect(api.reorderPages).toHaveBeenCalledWith("p", "main", ["home", "notes", "git", "tools"])
     await waitFor(() => {
-      expect(tabs()).toEqual(["Home", "Notes", "Git", "Tools"])
+      expect(api.pageTree).toHaveBeenLastCalledWith(reordered)
     })
+    await closePages(user)
+    expect(await pageNames(user)).toEqual(["Home", "Notes", "Git", "Tools"])
     // Stored by the command: nothing left to save.
     expect(screen.queryByText("Unsaved")).not.toBeInTheDocument()
   })
 
   it("needs unsaved changes to be saved first", async () => {
     const user = renderEditor()
-    await panel().findByRole("button", { name: "Notes" })
     await user.type(screen.getByRole("textbox", { name: "Layout name" }), " 2")
+    await managePages(user)
+    await panel().findByRole("button", { name: "Notes" })
     expect(panel().getByText(/Save or revert your changes/)).toBeInTheDocument()
     expect(panel().getByRole("button", { name: "Move “Notes” up" })).toBeDisabled()
     expect(panel().getByRole("button", { name: "Move or copy “Tools”" })).toBeDisabled()
@@ -194,6 +203,7 @@ describe("page tree panel", () => {
     }
     api.movePage.mockResolvedValue({ page: "tools", removedKeys: 1, layouts: [after, travel] })
     const user = renderEditor()
+    await managePages(user)
     await user.click(await panel().findByRole("button", { name: "Move or copy “Tools”" }))
     const dialog = await screen.findByRole("dialog", { name: "Move or copy “Tools”" })
     await user.click(within(dialog).getByRole("combobox", { name: "Destination" }))
@@ -204,12 +214,14 @@ describe("page tree panel", () => {
 
     expect(api.movePage).toHaveBeenCalledWith("p", "main", "tools", "travel", null)
     await waitFor(() => {
-      expect(tabs()).toEqual(["Home", "Notes"])
+      expect(toast.success).toHaveBeenCalledWith("“Tools” moved to the home page of “Travel”", {
+        description: "1 key that opened it was removed.",
+      })
     })
-    expect(toast.success).toHaveBeenCalledWith("“Tools” moved to the home page of “Travel”", {
-      description: "1 key that opened it was removed.",
-    })
+    expect(screen.queryByRole("dialog", { name: "Move or copy “Tools”" })).not.toBeInTheDocument()
+    await closePages(user)
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    expect(await pageNames(user)).toEqual(["Home", "Notes"])
   })
 
   it("copies within the layout and opens the copy", async () => {
@@ -220,27 +232,33 @@ describe("page tree panel", () => {
       layouts: [{ ...main, explicitTree: true, pages: [...main.pages, copy] }],
     })
     const user = renderEditor()
+    await managePages(user)
     await user.click(await panel().findByRole("button", { name: "Move or copy “Notes”" }))
-    const dialog = await screen.findByRole("dialog")
+    const dialog = await screen.findByRole("dialog", { name: "Move or copy “Notes”" })
     await user.click(within(dialog).getByRole("combobox", { name: "Destination" }))
     await user.click(screen.getByRole("option", { name: "Inside “Tools”" }))
     await user.click(within(dialog).getByRole("button", { name: "Copy" }))
 
     expect(api.copyPage).toHaveBeenCalledWith("p", "main", "notes", null, "tools")
     await waitFor(() => {
-      expect(screen.getAllByRole("tab", { name: "Notes" })[1]).toHaveAttribute(
-        "aria-selected",
-        "true",
-      )
+      expect(toast.success).toHaveBeenCalledWith("“Notes” copied to “Tools”", undefined)
     })
-    expect(toast.success).toHaveBeenCalledWith("“Notes” copied to “Tools”", undefined)
+    await closePages(user)
+    // The copy is shown: inside Tools, where the first "Notes" is not.
+    expect(currentPage()).toBe("Notes")
+    expect(
+      within(screen.getByRole("navigation", { name: "Page location" }))
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual(["Home", "Tools", "Notes"])
   })
 
   it("says why a page was not moved and keeps the dialog open", async () => {
     api.movePage.mockRejectedValue("the model of “Travel” has no dials")
     const user = renderEditor()
+    await managePages(user)
     await user.click(await panel().findByRole("button", { name: "Move or copy “Notes”" }))
-    const dialog = await screen.findByRole("dialog")
+    const dialog = await screen.findByRole("dialog", { name: "Move or copy “Notes”" })
     await user.click(within(dialog).getByRole("button", { name: "Move" }))
     expect(api.movePage).toHaveBeenCalledWith("p", "main", "notes", null, null)
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
@@ -256,12 +274,16 @@ describe("a folder that closes after use", () => {
     const name = "Close this folder after a key runs"
     const toggle = () => screen.getByRole("switch", { name })
     // The home page has nowhere to return to.
+    await managePages(user)
     expect(screen.queryByRole("switch", { name })).not.toBeInTheDocument()
+    await closePages(user)
 
-    await user.click(screen.getByRole("tab", { name: "Tools" }))
+    await goToPage(user, "Tools")
+    await managePages(user)
     expect(toggle()).toHaveAttribute("aria-checked", "false")
     await user.click(toggle())
     expect(toggle()).toHaveAttribute("aria-checked", "true")
+    await closePages(user)
 
     await user.click(screen.getByRole("button", { name: "Save" }))
     await waitFor(() => {
@@ -274,6 +296,7 @@ describe("a folder that closes after use", () => {
 
     // Undo takes it back, and the page is as it was.
     await user.click(screen.getByRole("button", { name: "Undo" }))
+    await managePages(user)
     expect(toggle()).toHaveAttribute("aria-checked", "false")
   })
 })

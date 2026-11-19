@@ -12,6 +12,7 @@ import type { DeviceLayout, DeviceModel, ProfileView } from "@/lib/types"
 
 import { LayoutEditor } from "./editor"
 import { NEW_FOLDER_DRAG_ID } from "./library-panel"
+import { closePages, currentPage, managePages, pageNames } from "@/test/pages"
 
 // Radix menus and dialogs rely on browser APIs that jsdom does not implement.
 Element.prototype.hasPointerCapture = () => false
@@ -140,10 +141,8 @@ function renderEditor() {
 
 const control = (name: string) => screen.getByRole("button", { name })
 const describes = (name: string) => control(name).getAttribute("title")
-const tabs = () => screen.getAllByRole("tab").map((tab) => tab.textContent)
-const selectedTab = () =>
-  screen.getAllByRole("tab").find((tab) => tab.getAttribute("aria-selected") === "true")
-    ?.textContent
+const tabs = pageNames
+const selectedTab = currentPage
 
 /** Drops the draggable `id` on the control `over` ("key:3"), as dnd-kit does. */
 function drop(id: string, over: string | null) {
@@ -185,7 +184,7 @@ describe("folders in the layout editor", { timeout: 20_000 }, () => {
     drop(NEW_FOLDER_DRAG_ID, "key:4")
     // The key opens a folder that now exists, as a page of its own.
     expect(describes("Key 5")).toBe("Key 5: Press: Open “Folder”")
-    expect(tabs()).toEqual(["Home", "Folder"])
+    expect(await tabs(user)).toEqual(["Home", "Folder"])
     // The editor stays on the page; the new key is selected.
     expect(selectedTab()).toBe("Home")
     expect(control("Key 5")).toHaveAttribute("aria-pressed", "true")
@@ -209,16 +208,16 @@ describe("folders in the layout editor", { timeout: 20_000 }, () => {
     expect(home?.bindings.slice(0, 2)).toEqual(layout.pages[0]?.bindings)
   })
 
-  it("does not put a folder on a key that does something", () => {
-    renderEditor()
+  it("does not put a folder on a key that does something", async () => {
+    const user = renderEditor()
     drop(NEW_FOLDER_DRAG_ID, "key:0")
     expect(describes("Key 1")).toBe("Key 1: Press: Shop")
-    expect(tabs()).toEqual(["Home"])
+    expect(await tabs(user)).toEqual(["Home"])
     expect(toast.error).toHaveBeenCalledWith("Key 1 already does something", expect.anything())
     expect(screen.queryByText("Unsaved")).not.toBeInTheDocument()
     // Dropped beside the keys: nothing happens.
     drop(NEW_FOLDER_DRAG_ID, null)
-    expect(tabs()).toEqual(["Home"])
+    expect(await tabs(user)).toEqual(["Home"])
   })
 
   it("creates a folder from the key menu and undoes it in one step", async () => {
@@ -233,7 +232,7 @@ describe("folders in the layout editor", { timeout: 20_000 }, () => {
     fireEvent.contextMenu(control("Key 3"))
     await user.click(await screen.findByRole("menuitem", { name: /New folder/ }))
     expect(describes("Key 3")).toBe("Key 3: Press: Open “Folder”")
-    expect(tabs()).toEqual(["Home", "Folder"])
+    expect(await tabs(user)).toEqual(["Home", "Folder"])
     // Now the menu offers to open it instead.
     fireEvent.contextMenu(control("Key 3"))
     expect(await screen.findByRole("menuitem", { name: /Open “Folder”/ })).toBeInTheDocument()
@@ -243,11 +242,11 @@ describe("folders in the layout editor", { timeout: 20_000 }, () => {
     // One undo removes the key and the page together; redo brings both back.
     await user.click(screen.getByRole("button", { name: "Undo" }))
     expect(describes("Key 3")).toBe("Key 3")
-    expect(tabs()).toEqual(["Home"])
+    expect(await tabs(user)).toEqual(["Home"])
     expect(screen.queryByText("Unsaved")).not.toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Redo" }))
     expect(describes("Key 3")).toBe("Key 3: Press: Open “Folder”")
-    expect(tabs()).toEqual(["Home", "Folder"])
+    expect(await tabs(user)).toEqual(["Home", "Folder"])
   })
 
   it("enters a folder by double-click, takes an action there and returns", async () => {
@@ -323,7 +322,7 @@ describe("folders in the layout editor", { timeout: 20_000 }, () => {
     drop("library:action:mail", "key:0")
     drop(NEW_FOLDER_DRAG_ID, "key:1")
 
-    await user.click(screen.getByRole("button", { name: "Delete page" }))
+    await user.click(within(await managePages(user)).getByRole("button", { name: "Delete page" }))
     const dialog = await screen.findByRole("alertdialog", { name: "Delete “Folder”?" })
     expect(dialog).toHaveTextContent("2 controls on it are deleted with it.")
     expect(dialog).toHaveTextContent(
@@ -335,17 +334,17 @@ describe("folders in the layout editor", { timeout: 20_000 }, () => {
     // Cancelled: everything is as it was.
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }))
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
-    expect(tabs()).toEqual(["Home", "Folder", "Folder 2"])
+    expect(await tabs(user)).toEqual(["Home", "Folder", "Folder 2"])
     expect(selectedTab()).toBe("Folder")
     expect(describes("Key 1")).toBe("Key 1: Press: Mail")
 
     // Confirmed: the folder goes, the editor shows the page it was on, the
     // key that opened it is empty and the folder inside it is kept.
-    await user.click(screen.getByRole("button", { name: "Delete page" }))
+    await user.click(within(await managePages(user)).getByRole("button", { name: "Delete page" }))
     await user.click(
       within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete page" }),
     )
-    expect(tabs()).toEqual(["Home", "Folder 2"])
+    expect(await tabs(user)).toEqual(["Home", "Folder 2"])
     expect(selectedTab()).toBe("Home")
     expect(describes("Key 5")).toBe("Key 5")
     const saved = await save(user)
@@ -356,12 +355,18 @@ describe("folders in the layout editor", { timeout: 20_000 }, () => {
 
     // And undone: the folder, its keys and the key that opens it are back.
     await user.click(screen.getByRole("button", { name: "Undo" }))
-    expect(tabs()).toEqual(["Home", "Folder", "Folder 2"])
+    expect(await tabs(user)).toEqual(["Home", "Folder", "Folder 2"])
     expect(describes("Key 5")).toBe("Key 5: Press: Open “Folder”")
   })
 
-  it("never offers to delete the home page", () => {
-    renderEditor()
-    expect(screen.queryByRole("button", { name: "Delete page" })).not.toBeInTheDocument()
+  it("never offers to delete the home page", async () => {
+    const user = renderEditor()
+    const pages = await managePages(user)
+    expect(within(pages).getByRole("region", { name: "This page" })).toHaveTextContent(
+      "is the home page",
+    )
+    expect(within(pages).queryByRole("button", { name: "Delete page" })).not.toBeInTheDocument()
+    await closePages(user)
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
   })
 })

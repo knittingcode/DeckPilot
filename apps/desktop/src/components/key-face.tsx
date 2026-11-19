@@ -4,12 +4,14 @@ import { ActionIcon } from "@/components/action-icon"
 import type { KeyFace } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+// Faces drawn until the device's own image of the key arrives: neutral LCD
+// tones from the device tokens, the key's icon first and its title under it.
 const STYLE: Record<KeyFace["style"], string> = {
-  empty: "bg-neutral-950 text-neutral-500",
-  action: "bg-neutral-800 text-neutral-50",
-  workflow: "bg-slate-700 text-neutral-50",
-  folder: "bg-indigo-900 text-neutral-50",
-  back: "bg-neutral-700 text-neutral-50",
+  empty: "bg-transparent",
+  action: "bg-device-face text-device-key-foreground",
+  workflow: "bg-device-face text-device-key-foreground",
+  folder: "bg-device-face-folder text-device-key-foreground",
+  back: "bg-device-face text-device-key-foreground",
   notice: "bg-amber-950 text-amber-100",
 }
 
@@ -35,10 +37,15 @@ export function FaceTile({
         : style === "workflow"
           ? ListOrdered
           : null
+  // Sized from the key (`--key` of the device canvas), with a floor for
+  // the smallest previews.
+  const glyph = "size-[max(14px,calc(var(--key,4rem)*0.34))] shrink-0 opacity-90"
   return (
     <div
+      data-slot="key-face"
+      data-face={style}
       className={cn(
-        "flex size-full flex-col items-center justify-center gap-0.5 overflow-hidden rounded-md p-1 text-center",
+        "flex size-full flex-col items-center justify-center gap-[calc(var(--key,4rem)*0.05)] overflow-hidden p-[calc(var(--key,4rem)*0.08)] text-center",
         STYLE[style],
         face?.highlighted && "ring-2 ring-sky-400 ring-inset",
         className,
@@ -47,21 +54,25 @@ export function FaceTile({
       {style !== "empty" &&
         !compact &&
         (Glyph ? (
-          <Glyph className="size-4 shrink-0 opacity-80" aria-hidden />
+          <Glyph className={glyph} aria-hidden />
         ) : style === "action" ? (
-          <ActionIcon name={icon} className="size-4 shrink-0 opacity-80" />
+          <ActionIcon name={icon} className={glyph} />
         ) : null)}
       {face?.title && (
         <span
           className={cn(
-            "text-[10px] leading-tight font-medium break-words",
-            compact ? "w-full truncate" : "line-clamp-2",
+            "max-w-full text-[length:max(9px,calc(var(--key,4rem)*0.13))] leading-tight font-medium break-words",
+            compact ? "w-full truncate" : "line-clamp-2 text-device-key-muted",
           )}
         >
           {face.title}
         </span>
       )}
-      {face?.detail && <span className="text-[9px] leading-none text-sky-300">{face.detail}</span>}
+      {face?.detail && (
+        <span className="text-[length:max(8px,calc(var(--key,4rem)*0.11))] leading-none text-sky-300">
+          {face.detail}
+        </span>
+      )}
     </div>
   )
 }

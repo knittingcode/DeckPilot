@@ -103,7 +103,7 @@ fn shrink(image: RgbaImage, max: u32) -> RgbaImage {
             scaled.min(max)
         }
     };
-    image::imageops::resize(&image, size(width), size(height), FilterType::Triangle)
+    image::imageops::resize(&image, size(width), size(height), FilterType::CatmullRom)
 }
 
 /// Encodes `image` as a stored icon PNG: scaled down until it fits
@@ -193,14 +193,14 @@ pub fn scale(image: &RgbaImage, width: u32, height: u32, fit: IconFit) -> RgbaIm
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let size = |side: u32, ratio: f64| ((f64::from(side) * ratio).round().max(1.0)) as u32;
     match fit {
-        IconFit::Fill => image::imageops::resize(image, width, height, FilterType::Triangle),
+        IconFit::Fill => image::imageops::resize(image, width, height, FilterType::CatmullRom),
         IconFit::Fit => {
             let ratio = ratio_x.min(ratio_y);
             let (w, h) = (
                 size(source_w, ratio).min(width),
                 size(source_h, ratio).min(height),
             );
-            let scaled = image::imageops::resize(image, w, h, FilterType::Triangle);
+            let scaled = image::imageops::resize(image, w, h, FilterType::CatmullRom);
             let mut out = RgbaImage::new(width, height);
             image::imageops::overlay(
                 &mut out,
@@ -216,7 +216,7 @@ pub fn scale(image: &RgbaImage, width: u32, height: u32, fit: IconFit) -> RgbaIm
                 size(source_w, ratio).max(width),
                 size(source_h, ratio).max(height),
             );
-            let scaled = image::imageops::resize(image, w, h, FilterType::Triangle);
+            let scaled = image::imageops::resize(image, w, h, FilterType::CatmullRom);
             image::imageops::crop_imm(&scaled, (w - width) / 2, (h - height) / 2, width, height)
                 .to_image()
         }

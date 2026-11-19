@@ -482,10 +482,10 @@ back does not draw its image again.
 | `docker.status` | green when the engine answers, red (`Unavailable`) otherwise | 30 s |
 | `docker.containers` | `N running`; green when any runs, grey otherwise | 30 s |
 | `docker.compose-status`, `-up`, `-down`, `-restart` | `running/total up`; green all, amber some, grey none; up and down keys also toggle (on when all run) | 30 s |
-| `system.cpu` | `CPU n%`, the use as a bar and its recent values as a chart; green, amber from the warning threshold, red from the critical one | 2 s |
-| `system.memory` | `RAM n%` and the use as a bar; thresholds as CPU | 2 s |
-| `system.network` | `In <rate>` as the label and `Out <rate>` as detail (bytes per second, e.g. `1.2M`) | 2 s |
-| `system.disk` | `n% free` and the used share as a bar; amber and red at or below the free-space thresholds | 30 s |
+| `system.cpu` | `n%` under the title, the use as a bar and its recent values as a chart; green, amber from the warning threshold, red from the critical one | 2 s |
+| `system.memory` | used and installed GiB under the title (`12.4/32 GiB`) and the used share as a bar; thresholds as CPU | 2 s |
+| `system.network` | received and sent per second under the title, one line each (`↓ 2.1 MB/s`, `↑ 340 kB/s`) | 2 s |
+| `system.disk` | `n% used` under the title and the used share as a bar; amber and red at or below the free-space thresholds | 30 s |
 
 Each reads with the module's existing read-only command (`git status`
 without optional locks; `docker version`, `docker ps`, `docker compose

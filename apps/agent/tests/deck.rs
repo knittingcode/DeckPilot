@@ -184,15 +184,19 @@ fn action_id(profile: &Profile, name: &str) -> ActionInstanceId {
     profile.actions.iter().find(|a| a.name == name).unwrap().id
 }
 
-/// The frame of an action key with `title`, as the agent draws it.
+/// The frame of a page indicator key with `title`, as the agent draws it
+/// (with the indicator type's icon).
 fn titled(title: &str) -> deckpilot_device::Frame {
+    let icon = support::registry()
+        .definition(&deck::page_indicator_id())
+        .and_then(|definition| definition.node.icon.clone());
     let spec = models::stream_deck_mk2()
         .capabilities
         .keys
         .and_then(|keys| keys.image)
         .unwrap();
     deckpilot_agent::render::render_with(
-        &KeyFace::new(FaceStyle::Action, title),
+        &KeyFace::new(FaceStyle::Action, title).with_symbol(icon),
         spec.width,
         spec.height,
         &deckpilot_agent::render::Icons::default(),

@@ -3173,7 +3173,10 @@ async fn running_workflows_mark_and_redraw_only_their_keys() {
     let mut client = agent.client().await;
     client.request(Request::ReloadConfiguration).await.unwrap();
 
-    let idle = key_image(&KeyFace::new(FaceStyle::Workflow, "Wait"));
+    let idle = key_image(
+        &KeyFace::new(FaceStyle::Workflow, "Wait")
+            .with_symbol(Some(deckpilot_core::device_runtime::symbols::WORKFLOW)),
+    );
     assert!(agent.mock.wait_for(&agent.device, TIMEOUT, |frames, _| {
         frames.get(&key) == Some(&idle)
     }));
@@ -3265,6 +3268,11 @@ async fn module_states_are_shown_and_not_refreshed_more_often_than_allowed() {
             &ActionParameters::new(),
         )
         .unwrap();
+    // The key shows the type's icon.
+    let git_icon = registry()
+        .definition(&status.action_type)
+        .and_then(|definition| definition.node.icon.clone());
+    assert!(git_icon.is_some());
     let key = ControlId::Key { index: 6 };
     profile.layouts[0].pages[0]
         .bindings
@@ -3282,11 +3290,13 @@ async fn module_states_are_shown_and_not_refreshed_more_often_than_allowed() {
 
     // The key shows the branch and a clean work tree once Git answered.
     let ready = key_image(
-        &KeyFace::new(FaceStyle::Action, "Repo").with_state(
-            &ButtonState::new()
-                .with_detail("main")
-                .with_indicator(Indicator::Ok),
-        ),
+        &KeyFace::new(FaceStyle::Action, "Repo")
+            .with_symbol(git_icon.as_deref())
+            .with_state(
+                &ButtonState::new()
+                    .with_detail("main")
+                    .with_indicator(Indicator::Ok),
+            ),
     );
     assert!(agent.mock.wait_for(&agent.device, TIMEOUT, |frames, _| {
         frames.get(&key) == Some(&ready)
@@ -3406,8 +3416,15 @@ async fn folders_go_back_to_their_parent_with_an_automatic_back_key() {
     client.request(Request::ReloadConfiguration).await.unwrap();
 
     let key = |index| ControlId::Key { index };
-    let folder_face = key_image(&KeyFace::new(FaceStyle::Folder, "Folder"));
-    let back = key_image(&KeyFace::new(FaceStyle::Back, "Back"));
+    let symbol = |name: &str| Some(name.to_owned());
+    let folder_face = key_image(
+        &KeyFace::new(FaceStyle::Folder, "Folder")
+            .with_symbol(symbol(deckpilot_core::device_runtime::symbols::FOLDER)),
+    );
+    let back = key_image(
+        &KeyFace::new(FaceStyle::Back, "Back")
+            .with_symbol(symbol(deckpilot_core::device_runtime::symbols::BACK)),
+    );
     assert!(agent.mock.wait_for(&agent.device, TIMEOUT, |frames, _| {
         frames.get(&key(5)) == Some(&folder_face)
     }));
@@ -3805,4 +3822,70 @@ async fn shutdown_reason(client: &mut AgentClient) -> Option<Option<ShutdownReas
         }
     }
     None
+}
+
+/// The app's preview watches the live states of the keys it shows
+/// (`watchKeyStates`): the agent reads them with the same providers as for
+/// the device, also for keys that no device shows, and sends changes on the
+/// watching connection only.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn previews_watch_live_key_states() {
+    use deckpilot_core::StateSnapshot;
+    use deckpilot_modules::system::actions;
+
+    let agent = setup().await;
+    assert!(agent.frames_shown());
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let memory = registry()
+        .create_instance(
+            "Memory",
+            actions::id(actions::MEMORY),
+            &ActionParameters::new(),
+        )
+        .unwrap();
+    let (memory_id, plain) = (memory.id, profile.actions[0].id);
+    // On no page: no device shows it.
+    profile.actions.push(memory);
+    agent.store().save_profile(&profile).unwrap();
+    let mut client = agent.client().await;
+    client.request(Request::ReloadConfiguration).await.unwrap();
+    assert!(client.supports(deckpilot_ipc::Capability::KeyStates));
+
+    let (live, states) = within(
+        "watching",
+        TIMEOUT,
+        client.watch_key_states(agent.work.id, vec![memory_id, plain]),
+    )
+    .await
+    .unwrap();
+    assert!(live);
+    // Only keys with a live state; the memory key is being read or read.
+    assert_eq!(
+        states.iter().map(|s| s.action).collect::<Vec<_>>(),
+        [memory_id]
+    );
+    let ready = |snapshot: &StateSnapshot| match snapshot {
+        StateSnapshot::Ready { state } => state.detail.clone(),
+        _ => None,
+    };
+    let mut detail = ready(&states[0].snapshot);
+    while detail.is_none() {
+        let changed = within("a key state", TIMEOUT, client.next_key_states())
+            .await
+            .unwrap();
+        assert!(changed.iter().all(|s| s.action == memory_id), "{changed:?}");
+        detail = changed.iter().find_map(|s| ready(&s.snapshot));
+    }
+    // The measured value, as the device would show it.
+    assert!(detail.unwrap().ends_with(" GiB"));
+
+    // Another profile has no live states while it is not active.
+    let (live, states) = client
+        .watch_key_states(deckpilot_core::ProfileId::new(), vec![memory_id])
+        .await
+        .unwrap();
+    assert!(!live);
+    assert_eq!(states, Vec::new());
+    drop(client);
+    agent.shutdown().await;
 }

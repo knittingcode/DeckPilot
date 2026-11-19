@@ -12,7 +12,7 @@ page says what happens then and how it is tested.
 | ----- | ----------------- | ------------ | --------------- |
 | Tag `v0.5.0-2` (signed draft test build, never published) | 0.5.0-2 | 4 | 5 |
 | Releases 0.6.0, 0.7.0, 0.8.0 and 0.8.1 | 0.6.0, 0.7.0, 0.8.0, 0.8.1 | 10 | 9 |
-| Current main | see `Cargo.toml` | 10 | 9 |
+| Current main | see `Cargo.toml` | 11 | 9 |
 
 DeckPilot 0.5.0 was never published. Its two draft prereleases (0.5.0-1
 and 0.5.0-2) have since been deleted; only the tag `v0.5.0-2` remains, as
@@ -30,7 +30,8 @@ this page means that build.
   protocol (`Capability::of_protocol`): `workflows` and `prepareForUpdate`
   (2), `moduleNamespaces` (3), `encryptedDatabase` (4),
   `backgroundExecutions` (5), `notifications` (6), `variables` (7),
-  `workSession` (8), `variableRegistry` (9). Agents from protocol 6
+  `workSession` (8), `variableRegistry` (9), `plugins` (10), `keyStates`
+  (11). Agents from protocol 6
   also list them in `welcome`; the client never credits an agent with more
   than its protocol has.
 - **No unsupported requests.** Every request has the protocol that
