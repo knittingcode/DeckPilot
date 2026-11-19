@@ -533,6 +533,18 @@ tag; that push starts the release workflow.
    the release's own `prerelease.json` otherwise) announces the version and
    points only to verified assets, and the stable channel never announces a
    pre-release.
+5. **Website** (automatic, stable releases only): once *Publish and
+   verify* has succeeded, the *Rebuild the website* job (`website`) starts
+   the website workflow on `main` (`gh workflow run website.yml --ref main`),
+   so the download page offers the new version within minutes. A release
+   published with the workflow token raises no `release` event for other
+   workflows, so the website workflow would otherwise wait for its daily
+   run. The job has only `actions: write`, checks out nothing, uses no
+   environment and no secret; the deployment runs from `main`, the only
+   branch the `github-pages` environment accepts. Pre-releases, and runs
+   whose publication or verification failed, do not start it. If it fails,
+   the release is unaffected: run `gh workflow run website.yml --ref main`
+   (or wait for the daily run at 04:23 UTC).
 
 Nothing is published unless the release is authorized (a protected `v*`
 tag, or a reviewer's approval in the reviewer model); a partial or
