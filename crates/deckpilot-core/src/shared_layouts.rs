@@ -71,6 +71,31 @@ impl DeviceLayout {
             .collect()
     }
 
+    /// An independent copy named `name`: a new layout id and new page ids,
+    /// with the links between its pages (folders, page keys, parents) and
+    /// its home page following the copies. Its keys run the same Action
+    /// Library actions, show the same icons and start the same workflows
+    /// as the original's; navigation keys (*Switch layout*) keep pointing
+    /// at the layouts they named, also when that is the original.
+    #[must_use]
+    pub fn duplicated(&self, name: &str) -> DeviceLayout {
+        let mut copy = self.clone();
+        let pages: std::collections::HashMap<PageId, PageId> = copy
+            .pages
+            .iter()
+            .map(|page| (page.id, PageId::new()))
+            .collect();
+        crate::profile::remap_layout(
+            &mut copy,
+            LayoutId::new(),
+            &pages,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
+        name.trim().clone_into(&mut copy.name);
+        copy
+    }
+
     /// What a device needs to show and run this layout: every control it
     /// binds, with the triggers bound on it. Derived from the bindings, so
     /// it is always up to date.

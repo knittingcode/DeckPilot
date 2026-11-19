@@ -535,7 +535,7 @@ impl Profile {
     }
 }
 
-fn remap_layout(
+pub(crate) fn remap_layout(
     layout: &mut DeviceLayout,
     id: LayoutId,
     pages: &HashMap<PageId, PageId>,

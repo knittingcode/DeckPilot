@@ -82,6 +82,9 @@ const MIGRATIONS: &[&str] = &[
     crate::variables::SCHEMA,
     // Work sessions. Additive: new, empty tables only.
     crate::work_sessions::SCHEMA,
+    // Shared layouts: layouts, actions and icons move out of the profile
+    // documents into tables of their own (`layouts::migrate`).
+    crate::layouts::SCHEMA,
 ];
 
 /// Runs `step` again while SQLite reports the database busy, for up to
@@ -162,6 +165,15 @@ pub struct ConfigChanges {
         deckpilot_core::variables::ScopeKey,
         deckpilot_core::variables::VariableValue,
     )>,
+    /// Layouts used by no profile, stored after the profiles, with the
+    /// actions and icons they use. A layout some profile uses is left as
+    /// it is.
+    pub unassigned_layouts: Vec<deckpilot_core::DeviceLayout>,
+    pub unassigned_actions: Vec<deckpilot_core::ActionInstance>,
+    pub unassigned_icons: Vec<deckpilot_core::Icon>,
+    /// Afterwards, delete the layouts no profile uses, except
+    /// `unassigned_layouts` (an import that replaces everything).
+    pub delete_unused_layouts: bool,
 }
 
 impl SqliteStore {
@@ -223,11 +235,15 @@ impl SqliteStore {
     /// agent and the configuration app write to the same database; a
     /// deferred transaction that reads before it writes cannot wait for the
     /// other's lock and fails with "database is locked" instead.
-    fn write_transaction(&self) -> Result<rusqlite::Transaction<'_>> {
+    pub(crate) fn write_transaction(&self) -> Result<rusqlite::Transaction<'_>> {
         Ok(rusqlite::Transaction::new_unchecked(
             &self.connection,
             rusqlite::TransactionBehavior::Immediate,
         )?)
+    }
+
+    pub(crate) fn connection(&self) -> &Connection {
+        &self.connection
     }
 
     /// The raw connection, for tests that need to hold locks or inspect the
@@ -298,6 +314,7 @@ impl SqliteStore {
                 3 => crate::legacy::migrate(&tx)?,
                 4 => crate::project_actions::migrate(&tx)?,
                 8 => tx.execute_batch(crate::provenance::SCHEMA)?,
+                10 => crate::layouts::migrate(&tx)?,
                 _ => {}
             }
             failpoint(Failpoint::Migration(version + 1))?;
@@ -593,6 +610,18 @@ impl SqliteStore {
         for profile in &changes.save_profiles {
             write_profile(&tx, profile)?;
         }
+        SqliteStore::save_unassigned_layouts(
+            &tx,
+            &changes.unassigned_layouts,
+            &changes.unassigned_actions,
+            &changes.unassigned_icons,
+        )?;
+        if changes.delete_unused_layouts {
+            let keep: Vec<deckpilot_core::LayoutId> =
+                changes.unassigned_layouts.iter().map(|l| l.id).collect();
+            SqliteStore::delete_unused_layouts(&tx, &keep)?;
+        }
+        crate::layouts::collect_garbage(&tx)?;
         for (id, settings) in &changes.module_states {
             tx.execute(
                 "INSERT INTO modules (id, enabled, config) VALUES (?1, ?2, ?3)
@@ -1228,11 +1257,27 @@ fn prune_backups(dir: &Path) {
 
 /// Writes a profile and its projects inside the caller's transaction.
 fn write_profile(tx: &Connection, profile: &Profile) -> Result<()> {
-    // Projects and the default project live in their own tables.
+    write_profile_at(tx, profile, now())
+}
+
+/// Writes `profile` with `updated_at` (seconds) inside the caller's
+/// transaction: the document, its projects, and its layouts, actions and
+/// icons in the shared tables (`layouts::decompose`).
+pub(crate) fn write_profile_at(tx: &Connection, profile: &Profile, updated_at: i64) -> Result<()> {
+    // Projects and the default project live in their own tables, layouts,
+    // actions and icons in the shared ones.
     let mut document = serde_json::to_value(profile)?;
     if let Some(fields) = document.as_object_mut() {
-        fields.remove("projects");
-        fields.remove("defaultProject");
+        for field in [
+            "projects",
+            "defaultProject",
+            "layouts",
+            "activeLayouts",
+            "actions",
+            "icons",
+        ] {
+            fields.remove(field);
+        }
     }
     tx.execute(
         "INSERT INTO profiles (id, name, document_version, document, updated_at)
@@ -1247,12 +1292,86 @@ fn write_profile(tx: &Connection, profile: &Profile) -> Result<()> {
             profile.name,
             DOCUMENT_VERSION,
             document.to_string(),
-            now()
+            updated_at
         ],
     )?;
     SqliteStore::save_projects(tx, profile)?;
+    crate::layouts::decompose(tx, profile)?;
     crate::provenance::prune(tx, profile)?;
     Ok(())
+}
+
+/// Loads a profile inside the caller's connection or transaction: its
+/// document, projects, default project, and (from document version 6 on)
+/// its layouts, actions and icons from the shared tables.
+pub(crate) fn load_profile_in(connection: &Connection, id: ProfileId) -> Result<Option<Profile>> {
+    let row: Option<(u32, String)> = connection
+        .query_row(
+            "SELECT document_version, document FROM profiles WHERE id = ?1",
+            [id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((version, document)) = row else {
+        return Ok(None);
+    };
+    let mut profile: Profile = decode(version, &document)?;
+    profile.projects = projects_of(connection, id)?;
+    profile.default_project = default_project_of(connection, id)?;
+    if version >= SHARED_LAYOUTS_DOCUMENT_VERSION {
+        crate::layouts::compose(connection, &mut profile)?;
+    }
+    Ok(Some(profile))
+}
+
+/// The first document version without layouts, actions and icons (they
+/// are in the shared tables).
+const SHARED_LAYOUTS_DOCUMENT_VERSION: u32 = 6;
+
+/// The projects of `profile`, in order.
+pub(crate) fn projects_of(connection: &Connection, profile: ProfileId) -> Result<Vec<Project>> {
+    let mut statement = connection.prepare(
+        "SELECT id, key, name, resources FROM projects WHERE profile_id = ?1
+         ORDER BY position, id",
+    )?;
+    let rows = statement.query_map([profile.to_string()], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+    let mut projects = Vec::new();
+    for row in rows {
+        let (id, key, name, resources) = row?;
+        projects.push(Project {
+            id: parse_id(&id)?,
+            key: ProjectKey::new(key).map_err(|error| {
+                StorageError::Document(serde::de::Error::custom(error.to_string()))
+            })?,
+            name,
+            resources: serde_json::from_str(&resources)?,
+        });
+    }
+    Ok(projects)
+}
+
+/// The default project of `profile`.
+pub(crate) fn default_project_of(
+    connection: &Connection,
+    profile: ProfileId,
+) -> Result<Option<ProjectId>> {
+    connection
+        .query_row(
+            "SELECT project_id FROM default_projects WHERE profile_id = ?1",
+            [profile.to_string()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .map(|value| parse_id(&value))
+        .transpose()
+        .map_err(Into::into)
 }
 
 pub(crate) fn check_integrity(connection: &Connection) -> Result<()> {
@@ -1408,7 +1527,7 @@ pub(crate) fn now() -> i64 {
         .unwrap_or_default()
 }
 
-fn encode<T: Serialize>(value: &T) -> Result<String> {
+pub(crate) fn encode<T: Serialize>(value: &T) -> Result<String> {
     Ok(serde_json::to_string(value)?)
 }
 
@@ -1427,34 +1546,6 @@ impl SqliteStore {
             [id.to_string()],
             |row| row.get(0),
         )?)
-    }
-
-    fn load_projects(&self, profile: ProfileId) -> Result<Vec<Project>> {
-        let mut statement = self.connection.prepare(
-            "SELECT id, key, name, resources FROM projects WHERE profile_id = ?1
-             ORDER BY position, id",
-        )?;
-        let rows = statement.query_map([profile.to_string()], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        })?;
-        let mut projects = Vec::new();
-        for row in rows {
-            let (id, key, name, resources) = row?;
-            projects.push(Project {
-                id: parse_id(&id)?,
-                key: ProjectKey::new(key).map_err(|error| {
-                    StorageError::Document(serde::de::Error::custom(error.to_string()))
-                })?,
-                name,
-                resources: serde_json::from_str(&resources)?,
-            });
-        }
-        Ok(projects)
     }
 
     /// Writes the projects of `profile` to the `projects` table inside the
@@ -1529,7 +1620,7 @@ impl SqliteStore {
     }
 }
 
-fn decode<T: DeserializeOwned>(version: u32, document: &str) -> Result<T> {
+pub(crate) fn decode<T: DeserializeOwned>(version: u32, document: &str) -> Result<T> {
     if !(MIN_DOCUMENT_VERSION..=DOCUMENT_VERSION).contains(&version) {
         return Err(StorageError::UnsupportedDocument(version));
     }
@@ -1562,30 +1653,7 @@ impl ConfigStore for SqliteStore {
     }
 
     fn load_profile(&self, id: ProfileId) -> Result<Option<Profile>> {
-        let row: Option<(u32, String)> = self
-            .connection
-            .query_row(
-                "SELECT document_version, document FROM profiles WHERE id = ?1",
-                [id.to_string()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        let Some((version, document)) = row else {
-            return Ok(None);
-        };
-        let mut profile: Profile = decode(version, &document)?;
-        profile.projects = self.load_projects(id)?;
-        profile.default_project = self
-            .connection
-            .query_row(
-                "SELECT project_id FROM default_projects WHERE profile_id = ?1",
-                [id.to_string()],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?
-            .map(|value| parse_id(&value))
-            .transpose()?;
-        Ok(Some(profile))
+        load_profile_in(&self.connection, id)
     }
 
     fn save_profile(&self, profile: &Profile) -> Result<()> {
@@ -1609,6 +1677,9 @@ impl ConfigStore for SqliteStore {
             "DELETE FROM settings WHERE key = ?1 AND value = ?2",
             params![ACTIVE_PROFILE, id.to_string()],
         )?;
+        // The profile's layouts stay (they are resources of their own);
+        // actions and icons nothing uses any more go.
+        crate::layouts::collect_garbage(&tx)?;
         tx.commit()?;
         Ok(deleted)
     }
@@ -2082,9 +2153,10 @@ mod tests {
             .unwrap()
             .collect::<rusqlite::Result<_>>()
             .unwrap();
-        // Migration 4 is the last one that rewrites documents; schema 8
-        // leaves them at version 4, which decodes unchanged.
-        assert!(versions.iter().all(|v| *v == 4), "{versions:?}");
+        // Migration 10 rewrites the profile documents (version 6: layouts,
+        // actions and icons in their own tables); the machine configuration
+        // stays at version 4, which decodes unchanged.
+        assert_eq!(versions, [6, 4]);
         drop(store);
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -2673,13 +2745,27 @@ mod tests {
         let encryption = Encryption::Key(key.clone());
         let profile = sample_profile("Work");
         {
-            // A database as the previous release left it: schema 4.
+            // A database as the previous release left it: schema 4, with
+            // the layouts, actions and icons in the profile document.
             let store = SqliteStore::open(&path, &encryption).unwrap();
             store.save_profile(&profile).unwrap();
+            let mut document = serde_json::to_value(&profile).unwrap();
+            document.as_object_mut().unwrap().remove("projects");
+            store
+                .connection
+                .execute(
+                    "UPDATE profiles SET document_version = 4, document = ?1",
+                    [document.to_string()],
+                )
+                .unwrap();
             store
                 .connection
                 .execute_batch(
-                    "DROP TABLE migration_history; DROP TABLE module_schemas;
+                    "DROP TABLE device_layouts; DROP TABLE layout_icons; DROP TABLE profile_icons;
+                     DROP TABLE library_icons; DROP TABLE layout_actions;
+                     DROP TABLE profile_actions; DROP TABLE library_actions;
+                     DROP TABLE profile_layouts; DROP TABLE layouts;
+                     DROP TABLE migration_history; DROP TABLE module_schemas;
                      DROP TABLE workflow_executions; DROP TABLE credentials;
                      DROP TABLE shared_variable_values; DROP TABLE shared_variables;
                      DROP TABLE provenance;
