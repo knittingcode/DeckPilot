@@ -34,7 +34,11 @@ Commands:
         Releases a slot (default: $CARGO_TARGET_DIR) held by <pid> (default:
         $PPID) or by a process that is gone.
   status
-        Lists the slots, their owners and sizes.
+        Lists the slots, their owners, sizes and idle time.
+  prune [--max-age <days>] [--max-size <size>] [--dry-run]
+        Empties free slots that have been idle for <days> (default 7) or
+        are larger than <size> (default 30G; M or G). A slot in use is
+        never touched: each one is locked while it is emptied.
 
 Options:
   --wait <s>   Wait up to <s> seconds for a free slot (default: 0 = fail at
@@ -43,6 +47,15 @@ Options:
 Environment:
   DECKPILOT_TARGET_POOL   pool directory (default ~/.cache/deckpilot/target-pool)
   DECKPILOT_TARGET_SLOTS  number of slots (default 3)
+  DECKPILOT_TARGET_SLOT_MAX_AGE_DAYS  prune: idle days (default 7; 0 = off)
+  DECKPILOT_TARGET_SLOT_MAX_SIZE      prune: size limit (default 30G; 0 = off)
+  DECKPILOT_MIN_FREE_GB   acquire warns below this much free disk space
+                          (default 25) and then also applies the size limit
+  DECKPILOT_TARGET_SLOT_AUTOPRUNE     0 disables pruning on acquire
+
+On every acquisition the other free slots that have been idle longer than
+the age limit are emptied; when the disk is low, those over the size limit
+too, and a warning names the commands that free more space.
 
 Exit codes: 0 ok, 1 error, 2 usage, 3 no free slot within --wait.
 A slot that the same worktree used last is preferred, so its incremental
@@ -60,6 +73,10 @@ usage_error() { echo "target-slot: $*" >&2; echo "Try --help." >&2; exit 2; }
 pool="${DECKPILOT_TARGET_POOL:-$HOME/.cache/deckpilot/target-pool}"
 slots="${DECKPILOT_TARGET_SLOTS:-3}"
 case "$slots" in '' | *[!0-9]* | 0) usage_error "DECKPILOT_TARGET_SLOTS must be a positive number" ;; esac
+max_age_days="${DECKPILOT_TARGET_SLOT_MAX_AGE_DAYS:-7}"
+max_size="${DECKPILOT_TARGET_SLOT_MAX_SIZE:-30G}"
+min_free_gb="${DECKPILOT_MIN_FREE_GB:-25}"
+autoprune="${DECKPILOT_TARGET_SLOT_AUTOPRUNE:-1}"
 
 # Start time of a process, to tell a live owner from a reused PID, as ps
 # prints it. On Linux this is not stable: procps adds the start in ticks to
@@ -297,6 +314,81 @@ scrub_slot() { # <slot dir> <worktree>
   [ -z "$left" ] || { echo "target-slot: could not remove: $left" >&2; return 1; }
 }
 
+# A size such as 30G or 500M, in KiB (0 = no limit).
+size_kb() { # <size>
+  case "$1" in
+    0) echo 0 ;;
+    *[0-9]G | *[0-9]g) v=${1%?}; case "$v" in '' | *[!0-9]*) return 1 ;; esac; echo $((v * 1048576)) ;;
+    *[0-9]M | *[0-9]m) v=${1%?}; case "$v" in '' | *[!0-9]*) return 1 ;; esac; echo $((v * 1024)) ;;
+    *[!0-9]* | '') return 1 ;;
+    *) echo $(($1 * 1048576)) ;;
+  esac
+}
+
+# When slot <dir> was last used: acquisitions and releases touch
+# .deckpilot-slot-used; slots of older copies of this script only have
+# .deckpilot-slot-user (written when the slot changed worktree).
+last_use_file() { # <dir>
+  for f in "$1/.deckpilot-slot-used" "$1/.deckpilot-slot-user"; do
+    [ ! -e "$f" ] || { echo "$f"; return; }
+  done
+  echo "$1"
+}
+
+# Free space of the pool's file system, in KiB.
+free_kb() { df -Pk "$pool" 2> /dev/null | awk 'NR == 2 { print $4 }'; }
+
+# Empties the free slots that are idle for <days> or larger than <kb>
+# (0 = that limit is off), except slot <skip>. Each one is locked while it
+# is emptied, so a slot in use, or taken meanwhile, is kept.
+prune_slots() { # <days> <kb> <dry run 0|1> <skip slot number or "">
+  pn=1
+  while [ "$pn" -le "$slots" ]; do
+    pdir="$pool/slot-$pn"
+    if [ "$pn" != "$4" ] && [ -d "$pdir" ] && [ -n "$(ls -A "$pdir" 2> /dev/null)" ]; then
+      reason=""
+      idle=$(age_of "$(last_use_file "$pdir")")
+      if [ "$1" -gt 0 ] && [ "$idle" -ge $(($1 * 86400)) ]; then
+        reason="idle for $((idle / 86400)) days"
+      fi
+      if [ -z "$reason" ] && [ "$2" -gt 0 ]; then
+        kb=$( (du -sk "$pdir" 2> /dev/null || true) | awk 'NR == 1 { print $1 }')
+        [ "${kb:-0}" -le "$2" ] || reason="$((kb / 1024)) MiB, over the limit"
+      fi
+      if [ -n "$reason" ]; then
+        if [ "$3" = 1 ]; then
+          echo "target-slot: would empty slot-$pn ($reason)" >&2
+        elif lock_held "$pn"; then
+          echo "target-slot: slot-$pn is in use; kept" >&2
+        elif try_slot "$pn" "$$"; then
+          find "$pdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          drop_dir "$pool/slot-$pn.lock"
+          echo "target-slot: emptied slot-$pn ($reason)" >&2
+        else
+          echo "target-slot: slot-$pn was taken meanwhile; kept" >&2
+        fi
+      fi
+    fi
+    pn=$((pn + 1))
+  done
+}
+
+# After an acquisition: warn when the disk is low, and empty other idle
+# slots (and, when low, oversized ones).
+after_acquire() { # <slot number>
+  low=0
+  fk=$(free_kb)
+  if [ -n "$fk" ] && [ "$min_free_gb" -gt 0 ] && [ "$fk" -lt $((min_free_gb * 1048576)) ]; then
+    low=1
+    echo "target-slot: warning: only $((fk / 1048576)) GiB free on the disk of $pool (below $min_free_gb GiB)." >&2
+    echo "target-slot: free space with: tools/dev/target-slot.sh prune; tools/dev/worktree-maintenance.sh report" >&2
+  fi
+  [ "$autoprune" != 0 ] || return 0
+  limit=0
+  if [ "$low" = 1 ]; then limit=$(size_kb "$max_size" 2> /dev/null || echo 0); fi
+  prune_slots "$max_age_days" "$limit" 0 "$1" || true
+}
+
 acquire() { # <owner> <wait seconds>
   [ -n "$(start_of "$1")" ] || die "owner process $1 is not running"
   mkdir -p "$pool"
@@ -326,7 +418,10 @@ acquire() { # <owner> <wait seconds>
           fi
           printf '%s\n' "$key" > "$pool/slot-$n/.deckpilot-slot-user"
         fi
-        echo "$pool/slot-$n"
+        : > "$pool/slot-$n/.deckpilot-slot-used"
+        chosen=$n
+        after_acquire "$chosen"
+        echo "$pool/slot-$chosen"
         return 0
       fi
     done
@@ -347,6 +442,7 @@ release() { # <owner> <slot path>
   opid=""
   [ ! -f "$lock/owner" ] || read -r opid _ < "$lock/owner" || true
   if [ "$opid" = "$1" ] || ! lock_held "$n"; then
+    [ ! -d "$slot" ] || : > "$slot/.deckpilot-slot-used"
     drop_dir "$lock"
   else
     die "slot-$n is held by process $opid, not $1"
@@ -357,6 +453,7 @@ cmd="${1:-}"
 [ -n "$cmd" ] || { usage >&2; exit 2; }
 shift
 wait_s=0
+dry_run=0
 owner="$PPID"
 slot_arg=""
 while [ "$#" -gt 0 ]; do
@@ -368,6 +465,12 @@ while [ "$#" -gt 0 ]; do
     --owner) [ "$#" -ge 2 ] || usage_error "--owner needs a pid"
       case "$2" in '' | *[!0-9]*) usage_error "--owner needs a pid" ;; esac
       owner="$2"; shift ;;
+    --max-age) [ "$#" -ge 2 ] || usage_error "--max-age needs days"
+      case "$2" in '' | *[!0-9]*) usage_error "--max-age needs days" ;; esac
+      max_age_days="$2"; shift ;;
+    --max-size) [ "$#" -ge 2 ] || usage_error "--max-size needs a size"
+      max_size="$2"; shift ;;
+    --dry-run) dry_run=1 ;;
     --) shift; break ;;
     -*) usage_error "unknown option: $1" ;;
     *) [ "$cmd" = release ] && [ -z "$slot_arg" ] || usage_error "unexpected argument: $1"
@@ -409,9 +512,16 @@ case "$cmd" in
       fi
       size=$( (du -sh "$dir" 2> /dev/null || true) | awk 'NR == 1 { print $1 }')
       user=$(cat "$dir/.deckpilot-slot-user" 2> /dev/null || echo "-")
-      printf 'slot-%s  %-28s  %6s  last used by %s\n' "$n" "$state" "${size:-0}" "$user"
+      idle="-"
+      [ ! -d "$dir" ] || idle="$(($(age_of "$(last_use_file "$dir")") / 86400))d"
+      printf 'slot-%s  %-28s  %6s  idle %-4s  last used by %s\n' "$n" "$state" "${size:-0}" "$idle" "$user"
       n=$((n + 1))
     done
+    ;;
+  prune)
+    case "$max_age_days" in '' | *[!0-9]*) usage_error "the age limit must be a number of days" ;; esac
+    kb=$(size_kb "$max_size") || usage_error "not a size: $max_size (use e.g. 30G or 500M)"
+    prune_slots "$max_age_days" "$kb" "$dry_run" ""
     ;;
   *) usage_error "unknown command: $cmd" ;;
 esac

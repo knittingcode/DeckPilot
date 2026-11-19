@@ -21,7 +21,7 @@
 # gui: tauri-driver (and WebKitWebDriver, Linux) drives the installed app
 #   through tools/release-smoke/gui.mjs against the production Marketplace.
 # ui: macOS; the installed app driven from outside through the
-#   Accessibility API (tools/release-smoke/macos-ui.swift).
+#   Accessibility API (tools/release-smoke/macos-ui/Sources/macos-ui/main.swift).
 #
 # The agent is found by its process name, deckpilot-agent (also inside an
 # AppImage, where `<AppImage> --agent` execs the bundled agent).
@@ -248,7 +248,7 @@ inner_gui() {
 }
 
 # macOS: the app started as usual, then driven from outside through the
-# Accessibility API (tools/release-smoke/macos-ui.swift, built by the
+# Accessibility API (tools/release-smoke/macos-ui/Sources/macos-ui/main.swift, built by the
 # workflow as $SMOKE_AX_DRIVER).
 inner_ui() {
   local bundle="${exe%/Contents/MacOS/*}"
