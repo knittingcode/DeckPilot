@@ -3806,3 +3806,69 @@ async fn shutdown_reason(client: &mut AgentClient) -> Option<Option<ShutdownReas
     }
     None
 }
+
+/// The app's preview watches the live states of the keys it shows
+/// (`watchKeyStates`): the agent reads them with the same providers as for
+/// the device, also for keys that no device shows, and sends changes on the
+/// watching connection only.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn previews_watch_live_key_states() {
+    use deckpilot_core::StateSnapshot;
+    use deckpilot_modules::system::actions;
+
+    let agent = setup().await;
+    assert!(agent.frames_shown());
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let memory = registry()
+        .create_instance(
+            "Memory",
+            actions::id(actions::MEMORY),
+            &ActionParameters::new(),
+        )
+        .unwrap();
+    let (memory_id, plain) = (memory.id, profile.actions[0].id);
+    // On no page: no device shows it.
+    profile.actions.push(memory);
+    agent.store().save_profile(&profile).unwrap();
+    let mut client = agent.client().await;
+    client.request(Request::ReloadConfiguration).await.unwrap();
+    assert!(client.supports(deckpilot_ipc::Capability::KeyStates));
+
+    let (live, states) = within(
+        "watching",
+        TIMEOUT,
+        client.watch_key_states(agent.work.id, vec![memory_id, plain]),
+    )
+    .await
+    .unwrap();
+    assert!(live);
+    // Only keys with a live state; the memory key is being read or read.
+    assert_eq!(
+        states.iter().map(|s| s.action).collect::<Vec<_>>(),
+        [memory_id]
+    );
+    let ready = |snapshot: &StateSnapshot| match snapshot {
+        StateSnapshot::Ready { state } => state.detail.clone(),
+        _ => None,
+    };
+    let mut detail = ready(&states[0].snapshot);
+    while detail.is_none() {
+        let changed = within("a key state", TIMEOUT, client.next_key_states())
+            .await
+            .unwrap();
+        assert!(changed.iter().all(|s| s.action == memory_id), "{changed:?}");
+        detail = changed.iter().find_map(|s| ready(&s.snapshot));
+    }
+    // The measured value, as the device would show it.
+    assert!(detail.unwrap().ends_with(" GiB"));
+
+    // Another profile has no live states while it is not active.
+    let (live, states) = client
+        .watch_key_states(deckpilot_core::ProfileId::new(), vec![memory_id])
+        .await
+        .unwrap();
+    assert!(!live);
+    assert!(states.is_empty());
+    drop(client);
+    agent.shutdown().await;
+}

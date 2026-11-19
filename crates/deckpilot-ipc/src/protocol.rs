@@ -78,6 +78,14 @@ use crate::work_session::{MAX_WORK_SESSION_LIST, WorkSessionSettings, WorkSessio
 /// plugin requests only when built with plugins and with plugins enabled.
 /// Nothing older clients receive changes.
 ///
+/// Version 11: live key states for previews (capability `keyStates`). A
+/// client names the actions it shows (`watchKeyStates`); the agent answers
+/// with what their keys show now and, on that connection only, sends
+/// `keyStates` messages when one changes. The states are the ones the
+/// device's keys show (one provider call serves both), read only while a
+/// device or a watching client shows the key, and the watch ends with the
+/// connection. Nothing older clients receive changes.
+///
 /// Without a new version: the status carries the agent's distribution
 /// record ([`AgentStatus::distribution`]), an optional field that older
 /// clients ignore and older agents leave out. Plugin answers that need not
@@ -87,10 +95,13 @@ use crate::work_session::{MAX_WORK_SESSION_LIST, WorkSessionSettings, WorkSessio
 /// [`plugins::feature::PAGED_ANSWERS`]; an answer too large for a client
 /// that does not use them is shortened or refused with
 /// [`plugins::reason::ANSWER_TOO_LARGE`] ([`crate::plugin_answers`]).
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 
 /// Most references one `previewReferences` may ask about.
 pub const MAX_PREVIEW_ITEMS: usize = 200;
+
+/// Most actions one `watchKeyStates` may name.
+pub const MAX_WATCHED_KEYS: usize = 128;
 
 /// Most executions returned by one `listExecutions`.
 pub const MAX_EXECUTION_LIST: u32 = 200;
@@ -222,10 +233,14 @@ pub enum Capability {
     /// them; whether this agent can use plugins is `getPluginRuntime`.
     /// Protocol 10.
     Plugins,
+    /// Live key states for previews: `watchKeyStates` and `keyStates`
+    /// messages. Without it the app's previews show no live values.
+    /// Protocol 11.
+    KeyStates,
 }
 
 impl Capability {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Workflows,
         Self::PrepareForUpdate,
         Self::ModuleNamespaces,
@@ -236,6 +251,7 @@ impl Capability {
         Self::WorkSession,
         Self::VariableRegistry,
         Self::Plugins,
+        Self::KeyStates,
     ];
 
     /// The protocol that introduced the capability.
@@ -250,6 +266,7 @@ impl Capability {
             Self::WorkSession => 8,
             Self::VariableRegistry => 9,
             Self::Plugins => 10,
+            Self::KeyStates => 11,
         }
     }
 
@@ -628,6 +645,14 @@ pub enum Request {
     RetryModuleMigration {
         module: String,
     },
+    /// Live states of the keys of these actions of `profile` while this
+    /// connection is open, replacing what it watched before (none: stop).
+    /// Answered with [`Response::KeyStates`]; changes follow as
+    /// [`ServerMessage::KeyStates`]. Since protocol 11.
+    WatchKeyStates {
+        profile: ProfileId,
+        actions: Vec<ActionInstanceId>,
+    },
     /// Consents to the exact origin an origin setting holds (G2): requests
     /// to it, and the secrets of the credential slots bound to it.
     /// `origin` must be what the setting holds now
@@ -672,6 +697,9 @@ impl Request {
             } if *limit == 0 || *limit > MAX_EXECUTION_LIST => {
                 Err(format!("limit must be between 1 and {MAX_EXECUTION_LIST}"))
             }
+            Self::WatchKeyStates { actions, .. } if actions.len() > MAX_WATCHED_KEYS => Err(
+                format!("at most {MAX_WATCHED_KEYS} keys can be watched at once"),
+            ),
             Self::PreviewReferences { items, .. } if items.len() > MAX_PREVIEW_ITEMS => Err(
                 format!("at most {MAX_PREVIEW_ITEMS} references can be previewed at once"),
             ),
@@ -821,6 +849,20 @@ pub enum ServerMessage {
     PluginEvent {
         event: plugins::PluginEvent,
     },
+    /// Live states of watched keys that changed, after `watchKeyStates`
+    /// on this connection. Since protocol 11.
+    KeyStates {
+        states: Vec<KeyStateEntry>,
+    },
+}
+
+/// What the key of a watched action shows now (see
+/// [`Request::WatchKeyStates`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyStateEntry {
+    pub action: ActionInstanceId,
+    pub snapshot: deckpilot_core::StateSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -897,6 +939,14 @@ pub enum Response {
     /// Since protocol 8.
     WorkSessionSettings {
         settings: Box<WorkSessionSettings>,
+    },
+    /// Answer to `watchKeyStates`. `live`: the profile is the active one,
+    /// whose keys have live states; `states`: the watched actions whose
+    /// keys have one, as they are now (others show no live state). Since
+    /// protocol 11.
+    KeyStates {
+        live: bool,
+        states: Vec<KeyStateEntry>,
     },
     /// Answer to `getPluginRuntime`. Since protocol 10.
     PluginRuntime {
@@ -1258,6 +1308,7 @@ impl Request {
             | Self::DeletePluginCredential { .. }
             | Self::GrantPluginUserOrigin { .. }
             | Self::RevokePluginUserOrigin { .. } => 10,
+            Self::WatchKeyStates { .. } => 11,
             Self::RunWorkflow { .. } | Self::PrepareForUpdate => 2,
             Self::GetStatus
             | Self::ListDevices
@@ -1993,6 +2044,55 @@ mod tests {
     }
 
     #[test]
+    fn key_states_need_protocol_11() {
+        assert!(!Capability::of_protocol(10).contains(&Capability::KeyStates));
+        assert!(Capability::of_protocol(11).contains(&Capability::KeyStates));
+        assert_eq!(
+            serde_json::to_value(Capability::KeyStates).unwrap(),
+            "keyStates"
+        );
+        let profile = ProfileId::new();
+        let action = ActionInstanceId::new();
+        let watch = Request::WatchKeyStates {
+            profile,
+            actions: vec![action],
+        };
+        assert_eq!(watch.since_protocol(), 11);
+        assert_eq!(watch.name(), "watchKeyStates");
+        assert!(watch.validate().is_ok());
+        let too_many = Request::WatchKeyStates {
+            profile,
+            actions: (0..=MAX_WATCHED_KEYS)
+                .map(|_| ActionInstanceId::new())
+                .collect(),
+        };
+        assert!(too_many.validate().is_err());
+        // The answer and the changes as they travel.
+        let entry = KeyStateEntry {
+            action,
+            snapshot: deckpilot_core::StateSnapshot::Ready {
+                state: deckpilot_core::ButtonState::new().with_detail("23%"),
+            },
+        };
+        let answer = serde_json::to_value(Response::KeyStates {
+            live: true,
+            states: vec![entry.clone()],
+        })
+        .unwrap();
+        assert_eq!(answer["type"], "keyStates");
+        assert_eq!(answer["states"][0]["snapshot"]["type"], "ready");
+        assert_eq!(answer["states"][0]["snapshot"]["state"]["detail"], "23%");
+        let message = ServerMessage::KeyStates {
+            states: vec![entry],
+        };
+        let text = serde_json::to_string(&message).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ServerMessage>(&text).unwrap(),
+            message
+        );
+    }
+
+    #[test]
     fn the_variable_registry_needs_protocol_9() {
         use deckpilot_core::variables::{
             CatalogEntry, Deprecation, ReferenceAvailability, ReferencePreview, ReferenceStatus,
@@ -2004,7 +2104,7 @@ mod tests {
             serde_json::to_value(Capability::VariableRegistry).unwrap(),
             "variableRegistry"
         );
-        assert_eq!(PROTOCOL_VERSION, 10);
+        assert_eq!(PROTOCOL_VERSION, 11);
         let projects = deckpilot_core::ModuleId::new("projects").unwrap();
         let legacy = CatalogEntry {
             reference: VariableRef::System(SystemVariable::ProjectCurrentKey),

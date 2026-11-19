@@ -1113,7 +1113,7 @@ pub fn page_faces(
 
 /// The binding a control's face shows: its press binding, else its
 /// click binding, else the first.
-fn shown_binding(page: &crate::LayoutPage, control: ControlId) -> Option<&ControlBinding> {
+pub fn shown_binding(page: &crate::LayoutPage, control: ControlId) -> Option<&ControlBinding> {
     page.bindings
         .iter()
         .filter(|binding| binding.control == control)

@@ -2520,6 +2520,29 @@ fn icons_are_imported_shown_previewed_and_deleted() {
     let plain = h.ok("preview_layout", args(Value::Null));
     assert!(plain[0].get("image").is_none());
 
+    // With the live states the agent reported, the key shows its state as
+    // the device does; stale states are marked; other keys are unchanged.
+    let live = |connected: bool, snapshot: Value| {
+        json!({ "profileId": profile_id, "layout": saved, "pageId": page, "projectId": null,
+            "render": true, "live": { "connected": connected, "states": [
+                { "action": action["id"], "snapshot": snapshot }
+            ] } })
+    };
+    let ready = json!({ "type": "ready", "state": { "detail": "23%", "indicator": "warning" } });
+    let current = h.ok("preview_layout", live(true, ready.clone()));
+    assert_eq!(current[0]["face"]["detail"], "23%");
+    assert_eq!(current[0]["face"]["indicator"], "warning");
+    assert_ne!(current[0]["image"], faces[0]["image"]);
+    assert_eq!(current[1]["image"], faces[1]["image"]);
+    let stale = h.ok("preview_layout", live(false, ready));
+    assert_eq!(stale[0]["face"]["detail"], "23%");
+    assert_eq!(stale[0]["face"]["indicator"], "unknown");
+    let unknown = h.ok("preview_layout", live(false, json!({ "type": "loading" })));
+    assert_eq!(unknown[0]["face"]["detail"], "\u{2014}");
+    let loading = h.ok("preview_layout", live(true, json!({ "type": "loading" })));
+    assert_eq!(loading[0]["face"]["indicator"], "loading");
+    assert!(loading[0]["face"].get("detail").is_none());
+
     // An icon in use stays.
     assert!(
         h.call(
