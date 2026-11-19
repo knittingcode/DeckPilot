@@ -56,6 +56,7 @@ let platform = ProcessInfo.processInfo.environment["SMOKE_PLATFORM"] ?? "macos"
 let pluginName = "Memory"
 let pluginVersion = "0.1.0"
 let profileName = "Release smoke"
+let layoutName = "Release smoke layout"
 let wait: TimeInterval = 30
 let long: TimeInterval = 120
 var shots = 0
@@ -556,7 +557,14 @@ let axSteps: [(String, () throws -> String)] = [
     try press(create!)
     let settings = try settingsWindow()
     try press(try button(settings, "New profile"))
-    let field = try find(settings, "the profile's Name field") { role($0) == kAXTextFieldRole as String && name($0) == "Name" || role($0) == kAXTextFieldRole as String && string($0, kAXTitleAttribute) == "Name" }
+    // WebKit names a labelled input by its label (AXTitle, or the
+    // AXTitleUIElement's text); the dialog focuses the field on open.
+    let field = try until("the profile's Name field") { () -> AXUIElement? in
+      let fields = all(settings).filter { role($0) == kAXTextFieldRole as String }
+      if let f = fields.first(where: { name($0) == "Name" }) { return f }
+      if let f = fields.first(where: { e in (attr(e, "AXTitleUIElement")).map { name($0 as! AXUIElement) } == "Name" }) { return f }
+      return fields.first { (attr($0, kAXFocusedAttribute) as? Bool) == true }
+    }
     AXUIElementSetAttributeValue(field, kAXFocusedAttribute as CFString, kCFBooleanTrue)
     AXUIElementSetAttributeValue(field, kAXValueAttribute as CFString, profileName as CFString)
     pause(0.5)
@@ -584,15 +592,40 @@ let axSteps: [(String, () throws -> String)] = [
     }
     let selector = try find(mainWindow, "the device selector", long) { isButton($0) && (name($0).hasPrefix("Device:") || name($0) == "Choose a device") && enabled($0) }
     _ = try click(running, selector)
+    // The page's menu (in the web area), not the app's menu bar, whose
+    // Apple menu items are AXMenuItems of the app too (run 44541282680
+    // pressed "About This Mac").
     let models = try until("the device menu") { () -> [AXUIElement]? in
-      let items = all(app).filter { role($0) == kAXMenuItemRole as String && enabled($0) && !name($0).isEmpty }
+      let items = all(mainWindow).filter { role($0) == kAXMenuItemRole as String && enabled($0) && !name($0).isEmpty }
       return items.isEmpty ? nil : items
     }
     let model = models[0]
     let modelName = name(model)
     let menuShot = screenshot("device-menu")
     try press(model)
-    let canvas = try find(mainWindow, "the device canvas", long) { name($0).hasSuffix(" controls") && !isButton($0) }
+    // A new profile has no layout for the model: the editor offers "New
+    // layout" (layout-designer.tsx); create one as a user would.
+    var layout = "a layout was there"
+    let isCanvas: (AXUIElement) -> Bool = { name($0).hasSuffix(" controls") && !isButton($0) }
+    let ready = try until("the device canvas or 'New layout'", long) { () -> String? in
+      if first(mainWindow, isCanvas) != nil { return "canvas" }
+      return first(mainWindow, { name($0).hasPrefix("No layout for ") || string($0, kAXValueAttribute).hasPrefix("No layout for ") }) != nil ? "empty" : nil
+    }
+    if ready == "empty" {
+      try press(try button(mainWindow, "New layout"))
+      _ = try find(mainWindow, "the dialog 'New layout for …'") { name($0).hasPrefix("New layout for ") }
+      let field = try until("the layout's Name field") { () -> AXUIElement? in
+        let fields = all(mainWindow).filter { role($0) == kAXTextFieldRole as String }
+        return fields.first { (attr($0, kAXFocusedAttribute) as? Bool) == true } ?? fields.first { name($0) == "Name" }
+      }
+      NSRunningApplication(processIdentifier: desktop)?.activate()
+      AXUIElementSetAttributeValue(field, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+      type(layoutName)
+      pause(0.5)
+      try press(try button(mainWindow, "Create"))
+      layout = "created layout '\(layoutName)' with New layout › Create"
+    }
+    let canvas = try find(mainWindow, "the device canvas", long, isCanvas)
     let library = try find(mainWindow, "the Action Library") { name($0) == "Action Library" && !isButton($0) }
     _ = try find(mainWindow, "the inspector") { name($0).hasPrefix("Select a key, dial or touch zone") }
     let key = try find(mainWindow, "'Key 1'") { name($0) == "Key 1" && role($0) != kAXStaticTextRole as String }
@@ -600,7 +633,7 @@ let axSteps: [(String, () throws -> String)] = [
     _ = try until("the inspector of Key 1") { first(mainWindow, { name($0).hasPrefix("Select a key, dial or touch zone") }) == nil ? true : nil }
     let device = try find(mainWindow, "the device selector") { isButton($0) && name($0).hasPrefix("Device:") }
     mainFrame = frame(mainWindow)
-    return "profile selector '\(name(profile))'; device menu: \(models.map(name).joined(separator: " | ")); chose '\(modelName)' -> '\(name(device))'; canvas '\(name(canvas))'; library '\(name(library))' (\(role(library)) \(subrole(library))); Key 1 selected (\(how)), the inspector shows it; \(menuShot); \(screenshot("editor"))"
+    return "profile selector '\(name(profile))'; device menu: \(models.map(name).joined(separator: " | ")); chose '\(modelName)' -> '\(name(device))'; \(layout); canvas '\(name(canvas))'; library '\(name(library))' (\(role(library)) \(subrole(library))); Key 1 selected (\(how)), the inspector shows it; \(menuShot); \(screenshot("editor"))"
   }),
   ("closing the main window leaves the Dock, the app and agent keep running", {
     let before = "policy \(policy(desktop)), lsappinfo \(lsType(desktop)), Dock: \(dockItems()?.contains("DeckPilot") == true ? "DeckPilot" : "no DeckPilot")"

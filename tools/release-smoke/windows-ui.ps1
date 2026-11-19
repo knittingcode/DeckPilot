@@ -72,6 +72,7 @@ $script:UiShots = 0
 $script:PluginName = 'Memory'
 $script:PluginVersion = '0.1.0'
 $script:ProfileName = 'Release smoke'
+$script:LayoutName = 'Release smoke layout'
 
 function Ui-Prop($Property, $Value) { [System.Windows.Automation.PropertyCondition]::new($Property, $Value) }
 
@@ -132,7 +133,25 @@ function Ui-Invoke($e) {
   if ($p) { $p.Toggle(); return 'Toggle' }
   $p = Ui-Pattern $e ([System.Windows.Automation.SelectionItemPattern]::Pattern)
   if ($p) { $p.Select(); return 'SelectionItem' }
-  throw "'$(Ui-Name $e)' ($(Ui-Type $e)) supports neither Invoke, Toggle nor SelectionItem"
+  # Chromium gives a button that opens a popup (aria-haspopup, e.g. a Radix
+  # alert dialog's trigger) ExpandCollapse instead of Invoke (run
+  # 44541282680): those triggers react to a click, so they get a real one.
+  if (Ui-Pattern $e ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)) {
+    return Ui-Click (Ui-TopLevelOf $e) $e
+  }
+  throw "'$(Ui-Name $e)' ($(Ui-Type $e)) supports neither Invoke, Toggle, SelectionItem nor ExpandCollapse"
+}
+
+# The top-level window an element belongs to.
+function Ui-TopLevelOf($e) {
+  $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+  $root = $script:AE::RootElement
+  $current = $e
+  while ($true) {
+    $parent = $walker.GetParent($current)
+    if (-not $parent -or $parent -eq $root) { return $current }
+    $current = $parent
+  }
 }
 
 function Ui-Focus($Window) {
@@ -487,6 +506,26 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
       $model = $models | Select-Object -First 1
       $menuShot = Ui-Shot 'device-menu'
       [void](Ui-Invoke $model)
+      # A new profile has no layout for the model: the editor offers "New
+      # layout" (layout-designer.tsx); create one as a user would.
+      $layout = 'a layout was there'
+      $ready = Ui-Until "the device canvas or 'New layout'" {
+        if (Ui-All $main { (Ui-Name $_) -like '* controls' -and (Ui-Type $_) -ne 'Button' } | Select-Object -First 1) { return 'canvas' }
+        if (Ui-All $main { (Ui-Name $_) -like 'No layout for *' } | Select-Object -First 1) { return 'empty' }
+      } $script:UiLong
+      if ($ready -eq 'empty') {
+        [void](Ui-Invoke (Ui-Button $main 'New layout'))
+        [void](Ui-Find $main "the dialog 'New layout for ...'" { (Ui-Name $_) -like 'New layout for *' })
+        $field = Ui-Find $main "the layout's Name field" { (Ui-Type $_) -eq 'Edit' -and (Ui-Name $_) -eq 'Name' }
+        # Typed, so that the page's input handlers see it.
+        Ui-Focus $main
+        $field.SetFocus()
+        [System.Windows.Forms.SendKeys]::SendWait('^a')
+        [System.Windows.Forms.SendKeys]::SendWait($script:LayoutName)
+        Start-Sleep -Milliseconds 500
+        [void](Ui-Invoke (Ui-Button $main 'Create'))
+        $layout = "created layout '$($script:LayoutName)' with New layout > Create"
+      }
       $canvas = Ui-Find $main 'the device canvas' { (Ui-Name $_) -like '* controls' -and (Ui-Type $_) -ne 'Button' } $script:UiLong
       $library = Ui-Find $main 'the Action Library' { (Ui-Name $_) -eq 'Action Library' -and (Ui-Type $_) -ne 'Button' }
       [void](Ui-Find $main 'the inspector' { (Ui-Name $_) -like 'Select a key, dial or touch zone*' })
@@ -495,7 +534,7 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
       [void](Ui-Until "the inspector of Key 1" { -not (Ui-All $main { (Ui-Name $_) -like 'Select a key, dial or touch zone*' } | Select-Object -First 1) })
       $device = Ui-Find $main 'the device selector' { (Ui-Type $_) -eq 'Button' -and (Ui-Name $_) -like 'Device:*' }
       $state.editorRect = Ui-Rect $main
-      "profile selector '$(Ui-Name $profile)'; device menu: $(($models | ForEach-Object { Ui-Name $_ }) -join ' | '); chose '$(Ui-Name $model)' -> '$(Ui-Name $device)'; canvas '$(Ui-Name $canvas)'; library '$(Ui-Name $library)' ($(Ui-Type $library)); Key 1 selected ($how), the inspector shows it; $menuShot; $(Ui-Shot 'editor')"
+      "profile selector '$(Ui-Name $profile)'; device menu: $(($models | ForEach-Object { Ui-Name $_ }) -join ' | '); chose '$(Ui-Name $model)' -> '$(Ui-Name $device)'; $layout; canvas '$(Ui-Name $canvas)'; library '$(Ui-Name $library)' ($(Ui-Type $library)); Key 1 selected ($how), the inspector shows it; $menuShot; $(Ui-Shot 'editor')"
     }
     'closing the main window' = {
       $main = $state.main
