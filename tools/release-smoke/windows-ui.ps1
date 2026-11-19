@@ -504,6 +504,8 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
       [void](Ui-Click $main $device)
       $models = Ui-Until 'the device menu' { @(Ui-All $main { (Ui-Type $_) -eq 'MenuItem' -and $_.Current.IsEnabled }) }
       $model = $models | Select-Object -First 1
+      $modelNames = @($models | ForEach-Object { Ui-Name $_ })
+      $modelName = Ui-Name $model
       $menuShot = Ui-Shot 'device-menu'
       [void](Ui-Invoke $model)
       # A new profile has no layout for the model: the editor offers "New
@@ -534,7 +536,7 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
       [void](Ui-Until "the inspector of Key 1" { -not (Ui-All $main { (Ui-Name $_) -like 'Select a key, dial or touch zone*' } | Select-Object -First 1) })
       $device = Ui-Find $main 'the device selector' { (Ui-Type $_) -eq 'Button' -and (Ui-Name $_) -like 'Device:*' }
       $state.editorRect = Ui-Rect $main
-      "profile selector '$(Ui-Name $profile)'; device menu: $(($models | ForEach-Object { Ui-Name $_ }) -join ' | '); chose '$(Ui-Name $model)' -> '$(Ui-Name $device)'; $layout; canvas '$(Ui-Name $canvas)'; library '$(Ui-Name $library)' ($(Ui-Type $library)); Key 1 selected ($how), the inspector shows it; $menuShot; $(Ui-Shot 'editor')"
+      "profile selector '$(Ui-Name $profile)'; device menu: $($modelNames -join ' | '); chose '$modelName' -> '$(Ui-Name $device)'; $layout; canvas '$(Ui-Name $canvas)'; library '$(Ui-Name $library)' ($(Ui-Type $library)); Key 1 selected ($how), the inspector shows it; $menuShot; $(Ui-Shot 'editor')"
     }
     'closing the main window' = {
       $main = $state.main

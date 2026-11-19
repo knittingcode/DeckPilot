@@ -601,6 +601,7 @@ let axSteps: [(String, () throws -> String)] = [
     }
     let model = models[0]
     let modelName = name(model)
+    let modelNames = models.map(name)
     let menuShot = screenshot("device-menu")
     try press(model)
     // A new profile has no layout for the model: the editor offers "New
@@ -633,7 +634,7 @@ let axSteps: [(String, () throws -> String)] = [
     _ = try until("the inspector of Key 1") { first(mainWindow, { name($0).hasPrefix("Select a key, dial or touch zone") }) == nil ? true : nil }
     let device = try find(mainWindow, "the device selector") { isButton($0) && name($0).hasPrefix("Device:") }
     mainFrame = frame(mainWindow)
-    return "profile selector '\(name(profile))'; device menu: \(models.map(name).joined(separator: " | ")); chose '\(modelName)' -> '\(name(device))'; \(layout); canvas '\(name(canvas))'; library '\(name(library))' (\(role(library)) \(subrole(library))); Key 1 selected (\(how)), the inspector shows it; \(menuShot); \(screenshot("editor"))"
+    return "profile selector '\(name(profile))'; device menu: \(modelNames.joined(separator: " | ")); chose '\(modelName)' -> '\(name(device))'; \(layout); canvas '\(name(canvas))'; library '\(name(library))' (\(role(library)) \(subrole(library))); Key 1 selected (\(how)), the inspector shows it; \(menuShot); \(screenshot("editor"))"
   }),
   ("closing the main window leaves the Dock, the app and agent keep running", {
     let before = "policy \(policy(desktop)), lsappinfo \(lsType(desktop)), Dock: \(dockItems()?.contains("DeckPilot") == true ? "DeckPilot" : "no DeckPilot")"
