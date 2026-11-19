@@ -26,6 +26,19 @@ released either. 0.6.0 is the first version intended for publication.
   longer navigate. The rail, the device and profile selectors, the
   Marketplace, the settings and plugin entries lead to every view; the
   rail's Device Editor returns to the editor from anywhere.
+- Settings and the app's pages use a quieter desktop layout: section
+  headings, setting rows with the control on the right, hairline separators
+  and inline status instead of cards, shadows and large padding. Controls
+  move under their label in narrow windows.
+- Settings › Profiles lists profiles in a compact table (name, last
+  modified, status, actions) with Make active and a menu for rename,
+  duplicate and delete; the profile being edited shows its description and
+  counts as a short details list.
+- The Dashboard, Action Library, Workflows, Projects, Work Session,
+  Variables and the plugin Marketplace (catalog, plugin details, installed
+  plugins, updates) follow the same layout.
+- The settings sidebar is more compact and starts with its search; each
+  settings page shows its title and description at the top.
 - Scrollbars are thin and quiet everywhere: a 6-pixel thumb on a
   transparent track that darkens while the pointer is over the scrolling
   area and more while it is dragged. High-contrast modes use the system's
