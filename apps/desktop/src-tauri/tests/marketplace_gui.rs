@@ -74,8 +74,8 @@ const EDITOR: &str =
 /// The library beside the editor, or (narrow windows) its overlay toggle.
 const LIBRARY: &str = "//aside[@aria-label='Action Library'] | //*[@data-slot='device-editor']//button[normalize-space(.)='Library' and @aria-expanded]";
 
-/// The identifier of the settings window (`src-tauri/src/windows.rs`).
-const SETTINGS_WINDOW: &str = "app.settings";
+/// The settings view of the main window: its sidebar of sections.
+const SETTINGS_VIEW: &str = "//*[@data-slot='sidebar' and @aria-label='Settings']";
 
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
@@ -308,31 +308,18 @@ impl Gui {
         }
     }
 
-    /// Opens the settings window from the toolbar and switches to it.
-    /// Returns the main window's handle.
-    fn settings_window(&mut self) -> String {
-        let main = self.wd().current_window().unwrap();
+    /// Opens the settings from the toolbar: a view of the main window, so
+    /// no other window appears and the session stays where it is.
+    fn settings(&mut self) {
+        let windows = self.wd().windows().unwrap_or_default().len();
         self.click(SETTINGS);
-        let handle = wait_until(LONG, "the settings window", || {
-            self.wd()
-                .windows()
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|handle| *handle != main)
-                .find(|handle| {
-                    self.wd().switch_to(handle).is_ok()
-                        && self
-                            .wd()
-                            .execute("return document.documentElement.dataset.window || ''", &[])
-                            .ok()
-                            .and_then(|id| id.as_str().map(str::to_owned))
-                            .as_deref()
-                            == Some(SETTINGS_WINDOW)
-                })
-        });
-        self.wd().switch_to(&handle).unwrap();
-        self.wait(&button("Back to DeckPilot"));
-        main
+        self.wait(SETTINGS_VIEW);
+        self.wait("//header[@aria-label='Toolbar']//button[starts-with(@aria-label,'Settings') and @aria-pressed='true']");
+        assert_eq!(
+            self.wd().windows().unwrap_or_default().len(),
+            windows,
+            "the settings open no window of their own"
+        );
     }
 
     fn installed_tab(&mut self) {
@@ -415,21 +402,14 @@ impl Driver for Gui {
     }
 
     fn restart(&mut self, fx: &mut Fixture) -> Vec<Via> {
-        let stopped_via = if PROMPT_UNREACHABLE {
-            // A second WebView2 window does not load under msedgedriver
-            // (see `launch_unlocked`): the settings window's command.
-            self.ok("stop_agent", json!({}));
-            Via::AppIpc
-        } else {
-            // Toolbar › Settings (its own window) › Background Agent ›
-            // Stop agent.
-            self.settings_window();
-            self.wait(&button("Appearance"));
-            self.screenshot("11-settings-window");
-            self.click(&button("Background Agent"));
-            self.click(&button("Stop agent"));
-            Via::Ui
-        };
+        // Toolbar › Settings (a view of the main window, so it is driven
+        // on every platform) › Background Agent › Stop agent.
+        self.settings();
+        self.wait(&button("Appearance"));
+        self.screenshot("11-settings");
+        self.click(&button("Background Agent"));
+        self.click(&button("Stop agent"));
+        let stopped_via = Via::Ui;
         fx.wait_for_agent(false);
         self.screenshot("12-agent-stopped");
         // Close the app and start it again: it starts the agent again,

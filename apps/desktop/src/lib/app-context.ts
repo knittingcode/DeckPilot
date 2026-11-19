@@ -24,7 +24,7 @@ export interface AppContextValue {
   navigate: (page: PageId) => void
   /** Opens (or focuses) the settings window, at `page` or where it was left. */
   openSettings: (page?: SettingsPageId) => void
-  /** Leaves the settings: in the settings window, back to the main window. */
+  /** Leaves the settings for the workspace page that was open before. */
   closeSettings: () => void
   /** Browser-style history of the main window. */
   history: {

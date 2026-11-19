@@ -1,9 +1,8 @@
 /**
  * Where the main window is: a workspace page (the device editor, dashboard,
- * module pages). Settings pages are locations too (`settings:<page>`), but
- * they open in the settings window; the main window keeps only workspace
- * pages in its history (see `useNavigation`). The settings-mode functions
- * below remain for page references from other windows and older versions.
+ * marketplace, module and plugin pages) or a settings page
+ * (`settings:<page>`). The settings are a view of the main window, in the
+ * same history as the workspace pages.
  *
  * Navigation keeps a browser-style history with back and forward. The model
  * is pure so that it can be tested without React.
@@ -86,15 +85,22 @@ export function forward(state: NavigationState): NavigationState {
   return canGoForward(state) ? withWorkspace({ ...state, index: state.index + 1 }) : state
 }
 
-/** Opens settings; without a page, the settings page that was open last. */
-export function openSettings(state: NavigationState, page?: SettingsPageId): NavigationState {
+/**
+ * Opens settings; without a page, the settings page that was open last in
+ * this history, else `remembered` (the one open last in an earlier session).
+ */
+export function openSettings(
+  state: NavigationState,
+  page?: SettingsPageId,
+  remembered: SettingsPageId = DEFAULT_SETTINGS_PAGE,
+): NavigationState {
   const target =
     page ??
     state.entries
       .slice(0, state.index + 1)
       .reverse()
       .find((entry) => entry.mode === "settings")?.page ??
-    DEFAULT_SETTINGS_PAGE
+    remembered
   return push(state, { mode: "settings", page: target })
 }
 

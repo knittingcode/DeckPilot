@@ -368,8 +368,6 @@ export function isAuthenticationRequired(error: unknown): boolean {
 export const CONFIGURATION_CHANGED_EVENT = "deckpilot://configuration-changed"
 /** Asks the main window to show a page (payload: the page id). */
 export const NAVIGATE_EVENT = "deckpilot://navigate"
-/** Asks an open workspace window (the settings) for a page (payload: the page id). */
-export const WORKSPACE_PAGE_EVENT = "deckpilot://workspace-page"
 
 /** Sent to every window when the configuration was locked or unlocked. */
 export const SECURITY_CHANGED_EVENT = "deckpilot://security-changed"

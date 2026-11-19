@@ -7,15 +7,18 @@ import {
   browserStorage,
   canGoBack,
   canGoForward,
+  closeSettings,
   current,
   forward,
   initialNavigation,
   loadNavigation,
   locationOf,
+  openSettings,
   push,
   sanitize,
   saveNavigation,
 } from "@/lib/navigation"
+import { rememberSettingsPage, rememberedSettingsPage } from "@/settings/remembered-page"
 
 export const IS_MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent)
 
@@ -27,17 +30,14 @@ export const SHORTCUTS = IS_MAC
 /**
  * The navigation of the main window: history, persistence across launches,
  * keyboard shortcuts and the back and forward mouse buttons. `exists` tells
- * which workspace pages are valid; others are removed from the history, for
+ * which locations are valid; others are removed from the history, for
  * example after a module was disabled.
  *
- * The settings are a window of their own: locations in them (`settings:…`,
- * and pages that moved there such as `profiles`) go to `openSettings`
- * instead of the history.
+ * The settings are a view of the main window: their pages are locations in
+ * the same history as the workspace pages. Opening the settings without a
+ * page returns to the settings page shown last, also across launches.
  */
-export function useNavigation(
-  exists: ((location: Location) => boolean) | null,
-  openSettings: (page?: string) => void,
-) {
+export function useNavigation(exists: ((location: Location) => boolean) | null) {
   const [stored, setStored] = useState<NavigationState>(
     () => loadNavigation(browserStorage()) ?? initialNavigation(),
   )
@@ -45,15 +45,15 @@ export function useNavigation(
   // Locations that stopped existing are dropped when the state is used,
   // and before every change.
   const existsRef = useRef(exists)
-  const settingsRef = useRef(openSettings)
   useEffect(() => {
     existsRef.current = exists
-    settingsRef.current = openSettings
-  }, [exists, openSettings])
+  }, [exists])
   const valid = useMemo(() => (exists ? sanitize(stored, exists) : stored), [stored, exists])
 
   useEffect(() => {
     saveNavigation(browserStorage(), valid)
+    const location = current(valid)
+    if (location.mode === "settings") rememberSettingsPage(browserStorage(), location.page)
   }, [valid])
 
   const actions = useMemo(() => {
@@ -64,10 +64,6 @@ export function useNavigation(
       })
     }
     const go = (location: Location) => {
-      if (location.mode === "settings") {
-        settingsRef.current(location.page)
-        return
-      }
       setState((previous) => push(previous, location))
     }
     return {
@@ -77,7 +73,11 @@ export function useNavigation(
       },
       go,
       openSettings: (page?: string) => {
-        settingsRef.current(page)
+        const remembered = rememberedSettingsPage(browserStorage())
+        setState((previous) => openSettings(previous, page, remembered))
+      },
+      closeSettings: () => {
+        setState(closeSettings)
       },
       back: () => {
         setState(back)
@@ -137,6 +137,8 @@ export function useNavigation(
   return useMemo(
     () => ({
       location: current(valid),
+      /** The workspace page settings return to (and that stays mounted under them). */
+      workspace: valid.workspace,
       canGoBack: canGoBack(valid),
       canGoForward: canGoForward(valid),
       ...actions,

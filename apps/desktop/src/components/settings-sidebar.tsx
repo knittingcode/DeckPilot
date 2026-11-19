@@ -1,4 +1,3 @@
-import { ArrowLeft } from "lucide-react"
 import { useState } from "react"
 
 import {
@@ -18,32 +17,23 @@ import { useAppContext } from "@/lib/app-context"
 import { groupedSettings, searchSettings, settingsPages } from "@/settings/registry"
 
 /**
- * Navigation of the settings window. "Back to DeckPilot" brings the main
- * window to the front.
+ * Navigation of the settings, a view of the main window: the categories and
+ * their search, beside the main window's rail. It is part of the view's
+ * layout (not a fixed sidebar), so it never covers the rail; the main
+ * window's toolbar provides back, forward and the way out.
  */
 export function SettingsSidebar({ current }: { current: string }) {
-  const { modules, updates, openSettings, closeSettings } = useAppContext()
+  const { modules, updates, openSettings } = useAppContext()
   const [query, setQuery] = useState("")
   const groups = groupedSettings(searchSettings(settingsPages(modules), query))
   return (
-    <Sidebar collapsible="icon" aria-label="Settings">
+    <Sidebar collapsible="none" aria-label="Settings" className="h-full shrink-0 border-r">
       <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton tooltip="Back to DeckPilot" onClick={closeSettings}>
-              <ArrowLeft />
-              <span>Back to DeckPilot</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-        <h2 className="px-2 pt-1 text-lg font-semibold group-data-[collapsible=icon]:hidden">
-          Settings
-        </h2>
+        <h2 className="px-2 pt-1 text-lg font-semibold">Settings</h2>
         <SidebarInput
           type="search"
           placeholder="Search settings"
           aria-label="Search settings"
-          className="group-data-[collapsible=icon]:hidden"
           value={query}
           onChange={(e) => {
             setQuery(e.target.value)
@@ -63,7 +53,7 @@ export function SettingsSidebar({ current }: { current: string }) {
                   <SidebarMenuItem key={page.id}>
                     <SidebarMenuButton
                       isActive={current === page.id}
-                      tooltip={page.title}
+                      aria-current={current === page.id ? "page" : undefined}
                       onClick={() => {
                         openSettings(page.id)
                       }}

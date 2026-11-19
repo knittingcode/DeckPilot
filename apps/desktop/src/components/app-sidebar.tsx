@@ -49,7 +49,8 @@ export function AppSidebar({
   current,
   onNavigate,
 }: {
-  current: PageId
+  /** The workspace page on screen; none while the settings are. */
+  current: PageId | null
   onNavigate: (page: PageId) => void
 }) {
   const { modules } = useAppContext()

@@ -206,21 +206,24 @@ Native windows besides the main window come from one catalog
 (`src-tauri/src/windows.rs`) and are opened by identifier only — by the app,
 or by the agent over IPC: the prompts that open the configuration
 (`security.*`), export and import (`portability.*`), update progress
-(`updates.progress`), the agent log (`app.logs`), the workflow summary, the
-settings (`app.settings`) and windows declared by enabled modules. Prompts
-render through the shared `ModalShell` and are sized to their content by the
-window manager (no per-window dimensions). The settings are a *workspace
-window*: a default size, resizable, never sized to content, opened at a page
-(`open_window` with `page`, a validated page reference; an open settings
-window gets `deckpilot://workspace-page` instead). The catalog decides
-whether a window may open while the configuration is locked. Only the export
-and import windows may use file dialogs.
+(`updates.progress`), the agent log (`app.logs`), the workflow summary and
+windows declared by enabled modules. Prompts render through the shared
+`ModalShell` and are sized to their content by the window manager (no
+per-window dimensions). The catalog decides whether a window may open while
+the configuration is locked. Only the export and import windows may use file
+dialogs.
+
+The settings are not a window: they are a view of the main window (see
+below). A request for the former settings window (`app.settings`, from the
+agent or an older frontend) shows the main window at the settings instead
+(`deckpilot://navigate` with `settings:<page>`, the page a validated page
+reference), and still needs the open configuration; no window is created.
 
 Windows keep their own copy of the app's state (profiles, modules, the
 profile being edited, the theme) and announce their changes to each other
-with app events (`lib/window-sync.ts`): a module enabled or a profile created
-in the settings window shows in the main window at once, and a theme chosen
-there applies everywhere. The main window refuses another window's choice of
+with app events (`lib/window-sync.ts`): a profile created in another window
+shows in the main window at once, and a theme chosen anywhere applies
+everywhere. The main window refuses another window's choice of
 the profile to edit while the device editor has unsaved changes.
 
 ### Main window shell
@@ -236,6 +239,21 @@ catalog's models without a device ("not connected"); device, profile and
 layout of the editor are one shell-level selection
 (`shell/editor-selection.tsx`) that refuses to switch over unsaved layout
 changes.
+
+The view is a workspace page or the settings. Both are locations of one
+browser-style history (`lib/navigation.ts`, `hooks/use-navigation.ts`):
+back and forward (toolbar, ⌘[ ⌘] or Alt+← Alt+→, mouse buttons) move across
+the device editor, the Marketplace, plugin views and settings sections
+alike. The toolbar's gear (or ⌘, / Ctrl+,) opens the settings at the section
+shown last (remembered across launches, `deckpilot.settings.page`), and is
+pressed while they are on screen; a section can be opened directly
+(`settings:security`). The settings sidebar (`SettingsSidebar`: sections and
+their search) sits beside the rail as part of the view, and the section
+fills the rest; the toolbar remains the only navigation. While the settings
+are on screen the workspace page under them stays mounted but hidden, so
+the device editor returns exactly as it was (page, key, inspector, unsaved
+changes, scroll position); its toolbar contributions wait in a separate
+store and its window-wide editing shortcuts are off (`ViewActiveContext`).
 
 The device editor (`layout-editor/editor.tsx`) has the device and its pages
 in the centre, the key inspector below it and the Action Library at the
@@ -267,9 +285,8 @@ Sizes are tokens in `index.css` (`--titlebar-height`, `--titlebar-control`,
 `--titlebar-icon`, …). The navigation region (traffic-light safe area,
 sidebar toggle, back, forward) has a fixed width, so it never moves when the
 sidebar collapses; a separate element continues the expanded sidebar's
-background and divider. The settings window has the same toolbar (without
-selectors) under its native titlebar; native dialog windows (`ModalShell`)
-have no app titlebar.
+background and divider. Native dialog windows (`ModalShell`) have no app
+titlebar.
 
 ### Status bar
 

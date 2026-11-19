@@ -160,12 +160,6 @@
     height: auto;
     min-height: 100%;
   }
-  /* Workspace windows (the settings) fill the window the user sizes. */
-  html[data-window][data-window-kind="workspace"],
-  html[data-window][data-window-kind="workspace"] body,
-  html[data-window][data-window-kind="workspace"] #root {
-    height: 100%;
-  }
   body {
     @apply bg-background text-foreground antialiased select-none;
   }

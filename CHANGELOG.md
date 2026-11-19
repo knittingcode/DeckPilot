@@ -15,6 +15,15 @@ released either. 0.6.0 is the first version intended for publication.
 
 ## [Unreleased]
 
+### Changed
+
+- Settings open inside the main window instead of a window of their own.
+  The toolbar's back and forward buttons now move between the device
+  editor, the Marketplace, plugin views and settings sections in one
+  history, and the gear is highlighted while the settings are shown.
+  Settings reopen at the section shown last. The device editor keeps its
+  page, key, inspector and unsaved changes while the settings are open.
+
 ## [0.8.1] - 2026-11-19
 
 ### Security

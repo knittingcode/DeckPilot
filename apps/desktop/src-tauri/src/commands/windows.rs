@@ -15,19 +15,24 @@ impl From<windows::WindowError> for CommandError {
     }
 }
 
-/// Opens (or focuses) the window `id` if the catalog allows it now; a
-/// workspace window (the settings) at `page`.
+/// Opens (or focuses) the window `id` if the catalog allows it now. The
+/// settings (`app.settings`) are a view of the main window: that is shown
+/// at `page` instead, and no window is created.
 pub fn open_by_id<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
     id: &str,
     page: Option<&str>,
 ) -> CommandResult<()> {
+    if id == windows::SETTINGS {
+        windows::open_settings(app, state.is_unlocked(), page)?;
+        return Ok(());
+    }
     let spec = {
         let modules = state.modules();
         windows::resolve(id, &modules, state.is_unlocked())?
     };
-    windows::open(app, &spec, page)?;
+    windows::open(app, &spec)?;
     Ok(())
 }
 

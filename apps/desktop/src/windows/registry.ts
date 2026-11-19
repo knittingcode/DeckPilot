@@ -31,20 +31,6 @@ const CORE_WINDOWS: Record<string, View> = {
     import("./update-window").then((m) => ({ default: m.UpdateWindow })),
   ),
   "app.logs": lazy(() => import("./logs-window").then((m) => ({ default: m.LogsWindow }))),
-  "app.settings": lazy(() =>
-    import("@/settings/settings-window").then((m) => ({ default: m.SettingsWindow })),
-  ),
-}
-
-/**
- * Windows that are workspaces rather than prompts: they fill the window
- * the user sizes and are never sized to their content (`workspace` in
- * `src-tauri/src/windows.rs`).
- */
-const WORKSPACE_WINDOWS = new Set(["app.settings"])
-
-export function isWorkspaceWindow(id: string) {
-  return WORKSPACE_WINDOWS.has(id)
 }
 
 /** The view for a window identifier: the application's or a module's. */

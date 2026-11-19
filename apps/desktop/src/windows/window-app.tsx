@@ -9,14 +9,13 @@ import { failureMessage } from "@/lib/failure"
 import type { WindowSpec } from "@/lib/types"
 import { coalescedReporter, naturalSize } from "@/lib/window-fit"
 
-import { isWorkspaceWindow, windowView } from "./registry"
+import { windowView } from "./registry"
 import { WindowContext, type WindowContextValue } from "./window-context"
 
 /**
  * Root of a native window other than the main window. It renders the view
  * registered for the window's identifier and keeps the native window sized
- * to the content (see `src-tauri/src/windows.rs`); workspace windows (the
- * settings) fill the window instead.
+ * to the content (see `src-tauri/src/windows.rs`).
  */
 export function WindowApp({ id }: { id: string }) {
   const [spec, setSpec] = useState<WindowSpec | null>(null)
@@ -33,26 +32,6 @@ export function WindowApp({ id }: { id: string }) {
     )
   }, [id])
   const View = windowView(id)
-  if (isWorkspaceWindow(id)) {
-    return (
-      <ThemeProvider>
-        <TooltipProvider>
-          {error || !View ? (
-            <div className="p-6">
-              <ErrorNotice error={error ?? `unknown window ${id}`} />
-            </div>
-          ) : spec ? (
-            <Hosted spec={spec} View={View} />
-          ) : (
-            <div className="p-6">
-              <Loading />
-            </div>
-          )}
-          <Toaster position="bottom-right" />
-        </TooltipProvider>
-      </ThemeProvider>
-    )
-  }
   return (
     <ThemeProvider>
       <TooltipProvider>
