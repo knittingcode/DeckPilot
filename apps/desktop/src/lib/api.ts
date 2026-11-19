@@ -77,7 +77,9 @@ export interface ProjectInput {
 
 /** Typed wrappers around the backend commands. */
 export const api = {
-  openWindow: (id: string) => invoke<null>("open_window", { id }),
+  /** Opens or focuses a window; a workspace window (the settings) at `page`. */
+  openWindow: (id: string, page?: string) =>
+    invoke<null>("open_window", page === undefined ? { id } : { id, page }),
   currentWindow: () => invoke<WindowSpec | null>("current_window"),
   fitWindow: (width: number, height: number, viewportWidth: number, viewportHeight: number) =>
     invoke<[number, number]>("fit_window", { width, height, viewportWidth, viewportHeight }),
@@ -268,9 +270,16 @@ export const api = {
 
   createLayout: (profileId: string, modelId: string, name: string, generate: boolean) =>
     invoke<DeviceLayout>("create_layout", { profileId, modelId, name, generate }),
-  /** Resolves once the agent has read the layout, so its keys work right away. */
+  /**
+   * Resolves once the agent has read the layout, so its keys work right away.
+   * `incompatible`: stored bindings kept although their action cannot run
+   * from their control (new ones are refused).
+   */
   saveLayout: (profileId: string, layout: DeviceLayout) =>
-    invoke<Saved<DeviceLayout>>("save_layout", { profileId, layout }),
+    invoke<Saved<DeviceLayout & { incompatible?: string[] }>>("save_layout", {
+      profileId,
+      layout,
+    }),
   duplicateLayout: (profileId: string, layoutId: string, name: string) =>
     invoke<string>("duplicate_layout", { profileId, layoutId, name }),
   deleteLayout: (profileId: string, layoutId: string) =>
@@ -359,6 +368,8 @@ export function isAuthenticationRequired(error: unknown): boolean {
 export const CONFIGURATION_CHANGED_EVENT = "deckpilot://configuration-changed"
 /** Asks the main window to show a page (payload: the page id). */
 export const NAVIGATE_EVENT = "deckpilot://navigate"
+/** Asks an open workspace window (the settings) for a page (payload: the page id). */
+export const WORKSPACE_PAGE_EVENT = "deckpilot://workspace-page"
 
 /** Sent to every window when the configuration was locked or unlocked. */
 export const SECURITY_CHANGED_EVENT = "deckpilot://security-changed"

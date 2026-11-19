@@ -15,6 +15,125 @@ released either. 0.6.0 is the first version intended for publication.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-18
+
+### Added
+
+- System monitor keys. The System module has four new read-only actions,
+  CPU usage, Memory usage, Network throughput and Disk space, whose keys
+  show the value live: `CPU 37%` with a chart of the recent values,
+  `RAM 62%`, the bytes per second received and sent (of one network
+  interface, or of all but loopback added up), and the free space of the
+  volume a folder is on. A status mark turns amber or red at thresholds
+  you choose (CPU and memory 70% and 90% by default, disk 20% and 10%
+  free). Pressing the key reports the value, which later workflow nodes
+  can use. The values are read only while such a key is shown, at most
+  every 2 seconds (disk: every 30 seconds), once for all keys.
+- Actions declare which controls they work on: keys, dials (encoders) or
+  touch zones, and which inputs of each (press, click, long press, a turn
+  either way, a tap…). Every built-in action does: one-shot actions work on
+  keys; Next page, Previous page, Brightness and the project switching
+  actions also work on a dial, once per turn or press. Actions of plugins
+  work on keys, as before. See `docs/device-controls.md`.
+- Plugin API 1.3: a plugin's manifest can declare which controls and
+  inputs each of its actions works on (`controls`, for example a dial's
+  turns), and up to four toolbar entries (`navigation`) that open views
+  DeckPilot draws itself: the plugin's variables, its actions or its
+  settings (`views`). A manifest using them needs `"pluginApi": "^1.3"`.
+  Without `controls` a plugin action still works on keys only, and
+  `device.requires` grants no dial. The Rust plugin SDK has
+  `Action::controls(..)`. See `docs/marketplace/sdk/manifest.md`.
+- Toolbar icons of plugins are checked when a package is built and
+  installed: PNG or WebP up to 256 KiB and 512×512 pixels, or SVG up to
+  64 KiB without scripts, event handlers, external, `data:` or
+  `javascript:` links, style imports or entities. The agent re-checks and
+  sanitizes them each time it serves one, and the app shows them only as
+  images, with its own icon when there is none to show.
+- The Device Editor explains which actions fit the selected control. In
+  the Action Library, actions that cannot run from it stay visible but
+  disabled, with the reason ("Requires a dial. The selected Stream Deck
+  MK.2 key supports press actions only."), and **Compatible only** hides
+  them. Dropping such an action on a control is refused, shown on the
+  control and announced; the inspector offers each trigger only the
+  actions that can run from it, says why a saved binding is kept but not
+  run, and a refused save names the trigger as the editor does.
+- Toolbar entries of enabled plugins, left of the notifications: each
+  opens a view DeckPilot draws, the plugin's live variables, its actions
+  in the Action Library or its settings. Their icons are shown only as
+  images (DeckPilot's own icon when there is none), more than fit are
+  under *More plugin views*, the order can be changed from an entry's
+  context menu and is kept on this computer, and they go away when the
+  plugin is disabled or uninstalled.
+
+### Changed
+
+- A key, dial or touch zone bound to an action that cannot run from it (a
+  dial turn bound to a key-only action, for example) no longer runs it.
+  The binding is kept as it is, shows as unavailable, and the app's status
+  bar says why the first time it is used. Saving a layout refuses a new
+  binding like that with the reason; bindings already saved stay and are
+  listed, so every existing profile can still be saved. Imports keep them
+  and warn. Nothing is removed or converted, and a binding works again as
+  soon as a compatible action is installed. Key bindings are not affected:
+  every built-in action still works on every key gesture.
+- macOS: closing DeckPilot's window (the close button or ⌘W) now keeps the
+  app running in the background and takes its icon out of the Dock, like
+  Docker Desktop. The tray's *Open DeckPilot*, or opening DeckPilot from
+  Finder, Spotlight or the Dock, brings the window and the Dock icon back
+  at once, still unlocked. ⌘Q (Quit DeckPilot UI) and the tray's Quit work
+  as before.
+- A new main window. DeckPilot opens with the Device Editor. The toolbar
+  at the top chooses the device (connected devices first, the other
+  models as "Not connected") and the profile to edit, and has
+  notifications, the Marketplace and the settings at the right; the
+  Dashboard, the Action Library, Workflows and module pages are in a slim
+  navigation rail at the left.
+- In the Device Editor, the Action Library is a sidebar at the right that
+  can be resized and collapsed (an overlay in narrow windows), and the
+  key inspector is below the device. The device follows the light or
+  dark theme.
+- The settings open in a window of their own, at the page asked for, and
+  now include Profiles. A theme chosen there applies to every window.
+- The Marketplace opens from the toolbar as a view of the main window;
+  installed plugins are also managed in Settings › Extensions › Plugins.
+- Notifications are in the toolbar, with the number of unread ones,
+  instead of the status bar.
+
+### Fixed
+
+- Opening the plugin database no longer takes its write lock when its
+  schema is already current, and waits for another process's lock while it
+  checks the key. Before, the agent and anything else opening it at the
+  same time could wait on one another until one failed with "database is
+  locked", and a busy database could be reported as a wrong key.
+- Linux: the `.deb` and `.rpm` packages now depend on the AppIndicator
+  library the background agent's tray icon uses
+  (`libayatana-appindicator3-1` on Debian and Ubuntu; the `.rpm` requires
+  `libayatana-appindicator3.so.1`, on Fedora from
+  `libayatana-appindicator-gtk3`). Where it was not installed,
+  for example on a fresh Ubuntu 24.04, the agent of 0.7.0 stopped right
+  after starting ("Failed to load ayatana-appindicator3"), and the app
+  showed that the background agent was not running. Installing
+  `libayatana-appindicator3-1` by hand works around it in 0.7.0.
+- macOS: the background agent no longer shows a DeckPilot icon in the Dock
+  for a moment when it starts, or for the whole life of a second agent
+  process that stops because one is already running.
+- A plugin update whose module the plugin host refuses (for example one
+  that does not implement the actions its manifest declares) is no longer
+  installed: the update fails and the installed version keeps running.
+  Before, the update was applied and every action of the plugin failed
+  until it was rolled back by hand.
+- Linux: the AppImage's background agent could not start on newer
+  systems such as Ubuntu 24.04: the AppImage did not include the
+  AppIndicator library, and the system's copy cannot be loaded next to the
+  older GLib the AppImage carries ("undefined symbol:
+  g_once_init_leave_pointer"). The AppImage now includes the library and
+  the libraries it needs.
+- The background agent keeps running without a tray icon when the tray
+  cannot be created, for example when the AppIndicator library is
+  missing, instead of stopping. The app can still be opened from the
+  application menu.
+
 ### Security
 
 - Plugin requests are refused for every address the plugin broker refuses,

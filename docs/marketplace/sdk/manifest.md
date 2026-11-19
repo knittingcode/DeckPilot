@@ -64,7 +64,41 @@ At most 64 actions (`MAX_ACTIONS`). Each:
 | `node` | no | Workflow node contract: `version` (≥ 1), `icon` (`[a-z0-9-]{1,64}`), `outputs` (≤ 32), `timeoutMs` (1,000-600,000, default 30,000: the invocation's wall-clock limit), `retrySafe`, `idempotent`, `effect` (`readOnly`, `opens`, `modifies`; a warning when `modifies` is `retrySafe`). `cancellable` is accepted; the agent treats every plugin action as cancellable. There is no `changesContext` |
 | `requiresProject`, `deprecated`, `replacedBy` | no | `replacedBy` names another action of this plugin and needs `deprecated: true` |
 | `state` | no | Key state refresh (`onEvents` or `every` with `intervalSeconds` 1-86,400; needs `effect: readOnly`). From plugin API 1.2 the agent asks the action's state handler for keys shown on a device ([actions.md](actions.md#key-state)), never more often than every 5 s; it needs the `device` permission with `state: true`. An agent below 1.2 accepts it and asks nothing |
-| `device` | no | `{ "requires": [...] }`. Accepted, not used |
+| `device` | no | `{ "requires": [...] }`. Accepted, not used: it never makes an action bindable to a dial or a touch strip (use `controls`) |
+| `controls` | no | Plugin API 1.3: the controls and inputs the action can be bound to; see [Controls](#controls). Without it: keys only |
+
+### Controls
+
+`controls` (plugin API 1.3, needs `"engines": { "pluginApi": "^1.3" }`)
+says, per control kind, which inputs the action can be bound to. The same
+shape as `ActionControls` in `deckpilot-core`
+([device-controls.md](../../device-controls.md)):
+
+```json
+"controls": { "key": ["press", "click", "long-press"],
+              "encoder": ["rotate-clockwise", "rotate-counter-clockwise"] }
+```
+
+| Kind | Inputs it may list |
+| --- | --- |
+| `key` | `press`, `release`, `click`, `double-click`, `long-press` |
+| `encoder` | `rotate-clockwise`, `rotate-counter-clockwise`, `press`, `release`, `click`, `double-click`, `long-press` (the last five only on encoders that can be pressed) |
+| `touchZone` | `tap`, `long-touch`, `swipe` |
+
+- At least one kind; each kind lists 1-8 inputs (`MAX_INPUTS_PER_KIND`),
+  each once, and only inputs a control of the kind can produce (no
+  rotation on a key, no tap on an encoder). A kind that is absent is not
+  supported: the editors do not offer the action there, saving such a
+  binding is refused, and the agent does not run one that was stored.
+- Without `controls` the action works on **keys only**, with `press`,
+  `release`, `click`, `double-click` and `long-press`: the default of every
+  manifest before 1.3. `device.requires` (even `["dials"]`) adds no kind;
+  declare `controls` for encoders and touch zones.
+- An encoder action runs once per rotation event the device reports,
+  whatever its number of detents: nothing passes the amount on.
+- In the SDK: `Action::controls(Controls::new().key([..]).encoder([..]))`
+  ([actions.md](actions.md#controls)); `manifest_mismatches` compares it
+  with the manifest.
 
 ### Outputs (`node.outputs[]`)
 
@@ -130,12 +164,60 @@ user stores (`setPluginCredential`); the plugin only ever names it
 shared code (`SHARED_ERROR_CODES`). See
 [errors-and-versions.md](errors-and-versions.md#error-codes).
 
+## `contributes.navigation` and `contributes.views`
+
+Plugin API 1.3 (needs `"engines": { "pluginApi": "^1.3" }`): up to four
+entries in the app's toolbar, each opening a view the app renders itself.
+The plugin ships no HTML, URL or code for them.
+
+```json
+"navigation": [{ "id": "dashboard", "label": "GitHub",
+                 "icon": { "light": "assets/nav.svg", "dark": "assets/nav-dark.svg" },
+                 "view": "dashboard" }],
+"views": [{ "id": "dashboard", "kind": "variables" }]
+```
+
+| Field | Rule |
+| --- | --- |
+| `navigation` | ≤ 4 entries (`MAX_NAVIGATION_ENTRIES`), ids unique |
+| `navigation[].id` | `[a-z][a-z0-9]*(-[a-z0-9]+)*`, 1-32 characters |
+| `navigation[].label` | 1-24 characters, no leading or trailing spaces, no control characters |
+| `navigation[].icon` | One path for both themes, or `{ "light": ..., "dark": ... }` with at least one of them (a theme without its own file shows the other's). See the icon rules below |
+| `navigation[].view` | The `id` of one of `views` |
+| `views` | ≤ 8 views, ids unique |
+| `views[].id` | As `navigation[].id` |
+| `views[].kind` | `variables` (the plugin's variables, live), `actions` (the Action Library filtered to the plugin's actions) or `settings` (the plugin's configuration page) |
+
+**Icons.** A path relative to the package root under `assets/`, ending in
+`.png`, `.webp` or `.svg` (lowercase): no absolute path, no scheme or
+URL, no `..`, no backslash. The file is part of the package (and so of its
+integrity record) and is checked when the package is built and when it is
+installed:
+
+- PNG and WebP: at most 256 KiB and 512×512 pixels (read from the file's
+  header), and the content must be the format the extension names.
+- SVG: at most 64 KiB, UTF-8, well-formed, an `<svg>` document. Refused:
+  `<script>`, `<foreignObject>`, event handler attributes (`on…`), `href`
+  or `xlink:href` other than to an id in the same file (`#id`: no external
+  file, `data:` or `javascript:`, also on `<use>`), `<style>` with `url(`
+  or `@import`, `url(…)` other than `url(#id)` in attributes, CSS escapes,
+  DOCTYPEs, entity declarations and references other than the five XML
+  ones, processing instructions (such as `xml-stylesheet`). Elements and
+  attributes outside the allow-list (editor metadata, `<image>`, `<a>`,
+  animations) are left out.
+
+The agent checks the file against the integrity record and sanitizes an
+SVG again every time it serves one; the app renders icons only through
+`<img>` from a `data:` URL, and shows its own fallback icon when there is
+none to show. Entries are shown only for installed and enabled plugins and
+disappear when the plugin is uninstalled.
+
 ## Compatibility: `engines` and `platforms`
 
 | Field | Rule | Checked |
 | --- | --- | --- |
 | `engines.deckpilot` | One comparator or a lower and an upper bound separated by one space: `>=`, `>`, `<=`, `<`, `=` (or none, meaning `=`) followed by `MAJOR.MINOR.PATCH` without leading zeros or pre-release, e.g. `">=0.5.0 <1.0.0"`; ≤ 64 characters; must be satisfiable (`VersionRange`). Matching uses semver precedence **including DeckPilot pre-releases**: `0.6.0-alpha.3` satisfies `>=0.5.0 <1.0.0`, and `0.8.0-beta.1` does not satisfy `>=0.8.0` | By the registry client before install (`incompatible`) and by the agent (`HostEnvironment.app_version` = the agent's version) |
-| `engines.pluginApi` | `^MAJOR.MINOR`: same major, at least this minor (`ApiRequirement`). The agent provides **1.2** (`PLUGIN_API` in `apps/agent/src/plugins/service.rs`), so `^1.0`, `^1.1` and `^1.2` install; declare `^1.1` only when the plugin cannot work without the time or random bytes, and `^1.2` only when it is useless without key state ([errors-and-versions.md](errors-and-versions.md#versions)) | Same |
+| `engines.pluginApi` | `^MAJOR.MINOR`: same major, at least this minor (`ApiRequirement`). The agent provides **1.3** (`PLUGIN_API` in `apps/agent/src/plugins/service.rs`), so `^1.0` to `^1.3` install; declare `^1.1` only when the plugin cannot work without the time or random bytes, and `^1.2` only when it is useless without key state ([errors-and-versions.md](errors-and-versions.md#versions)). A manifest with `controls`, `navigation` or `views` must declare `^1.3` (the validator refuses a lower level); agents up to 1.2 refuse such a manifest anyway, as they do not know the fields. DeckPilot 0.8.0 is the first release whose agent provides 1.3 (0.6.0 and 0.7.0 provide 1.2), so a plugin declaring `^1.3` should also declare `engines.deckpilot` `">=0.8.0"` | Same |
 | `engines.sdk` | Informational semver of the SDK used (`deckpilot_plugin_sdk::SDK_VERSION`, 0.1.0) | `testing::manifest_mismatches` only |
 | `platforms` | Omitted means macOS, Windows and Linux | Same; a mismatch is `Incompatibility::Platform` |
 
@@ -155,7 +237,8 @@ them together:
   unknown.
 - **Unit test.** `deckpilot_plugin_sdk::testing::manifest_mismatches(&plugin(), &manifest)`
   lists every difference in id, version, `engines.pluginApi`,
-  `engines.sdk`, action ids and order, and per parameter `required`, kind,
+  `engines.sdk`, action ids and order, action `controls`, and per
+  parameter `required`, kind,
   bounds, options and default. Both examples assert it is empty.
 
 ## Example

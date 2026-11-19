@@ -52,7 +52,8 @@ describe("navigation", () => {
 
     // A new page discards the forward history.
     state = back(back(state))
-    expect(current(state)).toEqual(workspace("dashboard"))
+    // The device editor is where the main window starts.
+    expect(current(state)).toEqual(workspace("designer"))
     expect(canGoBack(state)).toBe(false)
     state = push(state, workspace("profiles"))
     expect(canGoForward(state)).toBe(false)
@@ -99,7 +100,7 @@ describe("navigation", () => {
       state,
       (location) => !location.page.includes("projects") && location.page !== "unknown",
     )
-    expect(cleaned.entries).toEqual([workspace("dashboard"), workspace("actions")])
+    expect(cleaned.entries).toEqual([workspace("designer"), workspace("actions")])
     expect(current(cleaned)).toEqual(workspace("actions"))
 
     // The open page itself disappeared: the nearest earlier page is shown.
@@ -123,6 +124,8 @@ describe("navigation", () => {
     // The Device Models page moved into Settings › Devices.
     expect(locationOf("models")).toEqual(settings("devices"))
     expect(locationOf("designer")).toEqual(workspace("designer"))
+    // Profiles are managed in the settings window.
+    expect(locationOf("profiles")).toEqual(settings("profiles"))
   })
 
   it("persists the history across launches", () => {
@@ -179,5 +182,23 @@ describe("navigation", () => {
     const state = loadNavigation(storage)
     expect(state && current(state)).toEqual(settings("devices"))
     expect(state?.workspace).toBe("designer")
+  })
+
+  it("moves the Profiles page from a stored workspace page to the settings", () => {
+    const storage = memoryStorage()
+    storage.setItem(
+      "deckpilot.navigation",
+      JSON.stringify({
+        entries: [workspace("actions"), workspace("profiles")],
+        index: 1,
+        workspace: "profiles",
+      }),
+    )
+    const state = loadNavigation(storage)
+    expect(state && current(state)).toEqual(settings("profiles"))
+    // The main window keeps only workspace pages: without settings
+    // locations the history ends at the Action Library.
+    const main = state && sanitize(state, (location) => location.mode === "workspace")
+    expect(main && current(main)).toEqual(workspace("actions"))
   })
 })

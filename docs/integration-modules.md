@@ -34,8 +34,8 @@ Common to all of them:
 
 ## System (`system`)
 
-Opens applications, web pages, files and folders, runs commands and checks
-whether programs are running.
+Opens applications, web pages, files and folders, runs commands, checks
+whether programs are running and shows CPU, memory, network and disk use.
 
 Capabilities: machine resources, open applications/files/pages, run
 programs, see running programs.
@@ -51,6 +51,10 @@ is machine-specific: never exported, and an import cannot turn it on.
 | `system.open-directory` | opens | `location` (folder resource), `path` (optional relative subfolder) | `path` |
 | `system.run-command` | modifies | `program` (resource), `arguments` (one per line), `workingDirectory` (optional folder resource; home folder otherwise), `timeoutSeconds` (1–3600, 60), `failOnNonZero` (on) | `exitCode`, `stdout`*, `stderr`*, `outputTruncated`, `durationMs` |
 | `system.process-status` | read-only | `name` (program name; case and `.exe` ignored) | `running`, `count`, `pids` |
+| `system.cpu` | read-only | `warningPercent` (0–100, 70), `criticalPercent` (0–100, 90) | `usagePercent`, `level` |
+| `system.memory` | read-only | `warningPercent` (70), `criticalPercent` (90) | `usedPercent`, `usedBytes`, `totalBytes`, `level` |
+| `system.network` | read-only | `interface` (optional name, case ignored; all but loopback, added up, when empty) | `receivedPerSecond`, `transmittedPerSecond` (bytes/s), `interfaces` |
+| `system.disk` | read-only | `location` (optional folder resource; the home folder otherwise), `warningPercent` (% free, 20), `criticalPercent` (% free, 10) | `freePercent`, `freeBytes`, `totalBytes`, `mountPoint`, `level` |
 
 \* sensitive: available to later nodes, not kept.
 
@@ -77,9 +81,30 @@ spaces, quoted or expanded. Output is kept up to 64 KiB per stream
 and not retry-safe. In a workflow a node runs at most 10 minutes, so a
 longer `timeoutSeconds` only applies when the action runs from a key.
 
+**Monitor keys.** `system.cpu`, `system.memory`, `system.network` and
+`system.disk` show their value as the key's live state: `CPU 37%` and
+`RAM 62%` with the use as a bar (CPU also with its recent values as a
+chart), `In 1.2M` / `Out 56K` (bytes per second) for the network, and
+`45% free` with the used share as a bar for a disk. The indicator is
+green, amber from the warning threshold and red from the critical one
+(`level`: `ok`, `warning`, `critical`); a critical threshold below the
+warning one (above it for free space) is refused when saving. Pressing the
+key reports the value as the message and outputs, e.g. `memory 62% used
+(9.9 of 16.0 GiB)`. One sampler per module (`src/monitor.rs`) reads the
+values with `sysinfo` for every key: a value is read at most every 1.5 s
+and shared, keys refresh every 2 s (disk: 30 s), and nothing is read while
+no such key is shown. CPU use and throughput are differences between two
+readings; the first one, and one after a pause of more than 10 s, takes a
+second reading about 250 ms later, so a value is never an average over the
+pause (that wait is cancellable). The disk is the mounted volume with the
+longest mount point containing the folder. These actions need no
+capability (a folder resource needs machine resources); they read only
+totals, never per-process data.
+
 Error codes: `invalid-url`, `invalid-path`, `invalid-arguments`,
 `not-found`, `commands-disabled`, `exit-nonzero`, `unsupported-target`,
-`open-failed`, and the shared codes.
+`open-failed`, `unavailable` (the computer does not report the value), and
+the shared codes.
 
 Opening cannot detect whether the opened program then shows what was
 asked (a launcher reports only that it started); a launcher still running

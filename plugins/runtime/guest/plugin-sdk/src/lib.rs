@@ -86,12 +86,13 @@
 //! | --- | --- | --- |
 //! | [`SDK_VERSION`] | this crate's semver | breaking Rust API changes bump the major (the minor while 0.x) |
 //! | [`API_LEVEL`] | 1.0 | plugin API level (design §6.5) a plugin needs by default |
-//! | [`LATEST_API_LEVEL`] | 1.2 | highest plugin API level this SDK implements |
+//! | [`LATEST_API_LEVEL`] | 1.3 | highest plugin API level this SDK implements |
 //! | [`ABI_VERSION`] | 1 | guest ABI; checked at compile time |
 #![deny(unsafe_code)]
 
 mod args;
 mod context;
+mod controls;
 mod definition;
 mod output;
 pub mod testing;
@@ -102,6 +103,7 @@ pub use context::{
     Now, Request, Response, RunCause, RunContext, RunSummary, RunTrigger, SecretHandle, Settings,
     StorageUsage,
 };
+pub use controls::{Control, Controls, Input, MAX_INPUTS_PER_CONTROL};
 pub use definition::{Action, DefinitionError, Handler, Param, Plugin, StateHandler};
 pub use output::{ActionResult, IntoValue, Output, PluginError, codes};
 
@@ -151,17 +153,22 @@ pub const API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 0 };
 
 /// The highest plugin API level this SDK implements: 1.1 adds
 /// [`Context::now`] and [`Context::random_bytes`], 1.2 key state
-/// ([`Action::state`]).
-pub const LATEST_API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 2 };
+/// ([`Action::state`]), 1.3 the controls an action declares
+/// ([`Action::controls`]).
+pub const LATEST_API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 3 };
+
+/// The plugin API level that introduced [`Action::controls`]: a plugin
+/// declaring controls needs it.
+pub const CONTROLS_API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 3 };
 
 /// Everything a plugin usually needs.
 pub mod prelude {
     pub use crate::{
         Accent, Action, ActionOutcome, ActionResult, Args, AuthScheme, CapabilityError,
-        CapabilityErrorKind, Context, Glyph, HttpMethod, Indicator, KeyState, LogLevel,
-        NetworkErrorKind, NotifyDelivery, NotifySeverity, Now, Output, Param, Plugin, PluginError,
-        Request, Response, RunCause, RunContext, RunTrigger, SecretHandle, Settings, StateOutcome,
-        StorageUsage, codes,
+        CapabilityErrorKind, Context, Control, Controls, Glyph, HttpMethod, Indicator, Input,
+        KeyState, LogLevel, NetworkErrorKind, NotifyDelivery, NotifySeverity, Now, Output, Param,
+        Plugin, PluginError, Request, Response, RunCause, RunContext, RunTrigger, SecretHandle,
+        Settings, StateOutcome, StorageUsage, codes,
     };
 }
 

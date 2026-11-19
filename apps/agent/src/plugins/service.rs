@@ -67,9 +67,11 @@ const DECIDED_BY: &str = "user";
 /// action's declaration (refused by the agent, before the host).
 const INVALID_PARAMETERS: &str = "invalid-parameters";
 /// The plugin API level this agent provides: 1.1 adds `time.now` and
-/// `random.bytes`, 1.2 key state (`docs/marketplace/plugin-key-state.md`).
-/// A plugin whose manifest asks for a higher minor is `incompatible`.
-const PLUGIN_API: ApiLevel = ApiLevel::new(1, 2);
+/// `random.bytes`, 1.2 key state (`docs/marketplace/plugin-key-state.md`),
+/// 1.3 the manifest's action `controls`, `navigation` and `views`
+/// (`docs/device-controls.md` §4). A plugin whose manifest asks for a
+/// higher minor is `incompatible`.
+const PLUGIN_API: ApiLevel = ApiLevel::new(1, 3);
 /// Longest any invocation may take, whatever the manifest says.
 const MAX_INVOCATION: Duration = Duration::from_secs(600);
 /// Where the registry's verified state is kept (outside `plugins/`,
@@ -787,14 +789,21 @@ impl PluginService {
     }
 
     /// `getPluginIcon`: the chunk of the icon at `offset`.
-    fn icon_chunk(&self, id: &PluginId, offset: u64) -> Result<Response, IpcError> {
+    fn icon_chunk(
+        &self,
+        id: &PluginId,
+        offset: u64,
+        navigation: Option<&ipc::NavigationIconRef>,
+    ) -> Result<Response, IpcError> {
         let record = self.record(id)?;
         let icon = record.active().and_then(|v| {
-            convert::icon_chunk(
-                &self.manager.layout().resolve(&v.install_dir),
-                &record,
-                offset,
-            )
+            let dir = self.manager.layout().resolve(&v.install_dir);
+            match navigation {
+                None => convert::icon_chunk(&dir, &record, offset),
+                Some(navigation) => {
+                    convert::navigation_icon_chunk(&dir, &record, navigation, offset)
+                }
+            }
         });
         Ok(Response::PluginIcon {
             plugin: id.to_string(),
@@ -1238,9 +1247,11 @@ impl PluginService {
             Request::GetPluginActions { plugin, from } => {
                 self.actions_page(&plugin_id(&plugin)?, from)
             }
-            Request::GetPluginIcon { plugin, offset } => {
-                self.icon_chunk(&plugin_id(&plugin)?, offset)
-            }
+            Request::GetPluginIcon {
+                plugin,
+                offset,
+                navigation,
+            } => self.icon_chunk(&plugin_id(&plugin)?, offset, navigation.as_ref()),
             Request::ListAvailablePlugins { refresh } => self.available(refresh),
             Request::InstallPlugin { source, consent } => self.install(&source, &consent),
             Request::EnablePlugin { plugin, consent } => {
@@ -1640,6 +1651,7 @@ impl PluginService {
             self.progress(id.as_str(), PluginOperation::Update, PluginStage::Verifying);
             let verified = verify_package(&bytes, &expected, &Limits::default())
                 .map_err(|e| package_error(&e))?;
+            self.trial_load(id, &verified)?;
             self.progress(
                 id.as_str(),
                 PluginOperation::Update,
@@ -1692,6 +1704,70 @@ impl PluginService {
             plugin: id.to_string(),
             outcome,
         })
+    }
+
+    /// Loads the module of an update in a host of its own, as the next
+    /// invocation would, before anything is installed: an update whose
+    /// module the host refuses (actions other than the manifest's, a
+    /// failing `dp_init`, a broken descriptor) is refused, so the running
+    /// version stays active instead of being replaced by one that cannot
+    /// run. Problems of this computer rather than of the module (no host
+    /// sandbox, a host that cannot start) do not block the update: they
+    /// would refuse the running version alike.
+    fn trial_load(
+        &self,
+        id: &PluginId,
+        verified: &deckpilot_plugin_package::VerifiedPackage,
+    ) -> Result<(), IpcError> {
+        if platform_gate().is_err() {
+            return Ok(());
+        }
+        let Some(module) = verified.files().get(deckpilot_plugin_package::ARTIFACT) else {
+            return Ok(());
+        };
+        let Ok(broker_id) = deckpilot_plugin_broker::PluginId::new(id.as_str()) else {
+            return Ok(());
+        };
+        let actions = verified
+            .manifest()
+            .contributes
+            .actions()
+            .iter()
+            .map(|a| a.id.clone());
+        let config = host_config(&self.host, Arc::from(module.as_slice()), actions);
+        let mut supervisor = Supervisor::new(
+            config,
+            self.broker.clone(),
+            broker_id,
+            RestartPolicy::default(),
+            Arc::new(SystemClock::default()),
+        );
+        let started = supervisor.start();
+        supervisor.shutdown();
+        match started {
+            Ok(()) => Ok(()),
+            Err(SupervisorError::Host(
+                e @ (HostError::ActionMismatch { .. }
+                | HostError::LoadFailed { .. }
+                | HostError::Protocol { .. }
+                | HostError::ModuleTooLarge),
+            )) => {
+                let version = &verified.manifest().version;
+                warn!(plugin = %id, %version, error = %e, "update refused: the host refused its module");
+                Err(error(
+                    ErrorCode::Failed,
+                    reason::BROKEN,
+                    format!(
+                        "{id} {version} was not installed: the plugin host refused its module \
+                         ({e}); the installed version stays"
+                    ),
+                ))
+            }
+            Err(e) => {
+                warn!(plugin = %id, error = %e, "the update's module could not be tried");
+                Ok(())
+            }
+        }
     }
 
     fn approve(&mut self, id: &PluginId, consent: &[String]) -> Result<Response, IpcError> {

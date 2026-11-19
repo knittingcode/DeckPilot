@@ -156,6 +156,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         work_session::save_work_session_settings,
         plugins::get_plugin_runtime,
         plugins::list_plugins,
+        plugins::list_plugin_navigation,
+        plugins::get_plugin_navigation_icon,
         plugins::get_plugin,
         plugins::list_available_plugins,
         plugins::install_plugin,

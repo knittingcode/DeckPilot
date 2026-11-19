@@ -143,7 +143,8 @@ feature (run step 1 again afterwards).
 
 ## 4. Walk through
 
-Settings › Extensions › Plugins.
+The toolbar's Marketplace (also Settings › Extensions › Plugins, which
+opens at the installed plugins).
 
 1. **Runtime notice.** With everything above, none. Check the variants:
    stop the agent (Settings › Background Agent › Stop agent: *agent not

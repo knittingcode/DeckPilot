@@ -19,10 +19,12 @@ import type {
   AvailablePlugins,
   KnownPlugin,
   ModuleMigration,
+  NavigationIconTheme,
   PluginActionOutcome,
   PluginCredentialSlot,
   PluginDetails,
   PluginEvent,
+  PluginNavigationItem,
   PluginRetention,
   PluginRuntimeStatus,
   PluginSettings,
@@ -33,7 +35,12 @@ import type {
 
 export type {
   KnownPlugin,
+  NavigationIconTheme,
   PluginCredentialSlot,
+  PluginNavigationEntry,
+  PluginNavigationItem,
+  PluginView,
+  PluginViewKind,
   PluginRetention,
   PluginSettingField,
   PluginSettings,
@@ -54,6 +61,29 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 /** `listKnownPlugins`. */
 export function listKnownPlugins(): Promise<KnownPlugin[]> {
   return call<KnownPlugin[]>("list_known_plugins")
+}
+
+/**
+ * The toolbar entries of the installed and enabled plugins (plugin API
+ * 1.3); empty with an agent that has none to list. Refused like
+ * `listPlugins` when the agent answers no plugin request.
+ */
+export function listPluginNavigation(): Promise<PluginNavigationItem[]> {
+  return call<PluginNavigationItem[]>("list_plugin_navigation")
+}
+
+/**
+ * A navigation entry's icon as a `data:` URL (`image/png`, `image/webp`
+ * or a sanitized `image/svg+xml`) to render through `<img>` only; `null`
+ * on any failure, when the app shows its fallback icon. Never rejects
+ * for a missing or unsafe icon.
+ */
+export function getPluginNavigationIcon(
+  plugin: string,
+  entry: string,
+  theme: NavigationIconTheme,
+): Promise<string | null> {
+  return call<string | null>("get_plugin_navigation_icon", { plugin, entry, theme })
 }
 
 /** `uninstallPlugin` with `keep`. */
@@ -97,6 +127,8 @@ export function createTauriPluginClient(): PluginClient {
   return {
     getRuntime: () => call<PluginRuntimeStatus>("get_plugin_runtime"),
     listPlugins: () => call<PluginSummary[]>("list_plugins"),
+    listNavigation: listPluginNavigation,
+    getNavigationIcon: getPluginNavigationIcon,
     getPlugin: (plugin) => call<PluginDetails>("get_plugin", { plugin }),
     listAvailablePlugins: (refresh = false) =>
       call<AvailablePlugins>("list_available_plugins", { refresh }),

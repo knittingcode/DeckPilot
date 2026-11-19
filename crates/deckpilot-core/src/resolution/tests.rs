@@ -71,6 +71,7 @@ impl Probe {
             ],
             requires_project: false,
             deprecated: false,
+            controls: None,
             node: crate::graph::NodeSpec::default(),
         })
     }

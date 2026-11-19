@@ -423,7 +423,8 @@ async fn subscribe<R: Runtime>(app: &AppHandle<R>, paths: &AgentPaths) -> Result
             AgentEvent::OpenWindow { window } => {
                 // Only an identifier arrives; the catalog decides.
                 if let Some(state) = app.try_state::<crate::state::AppState>()
-                    && let Err(error) = crate::commands::windows::open_by_id(app, &state, &window)
+                    && let Err(error) =
+                        crate::commands::windows::open_by_id(app, &state, &window, None)
                 {
                     eprintln!("the agent asked for window `{window}`: {error}");
                 }
@@ -550,7 +551,7 @@ async fn unlock_if_needed<R: Runtime>(
 /// runs): the main window when unlocked, otherwise the password prompt. A
 /// process started for one window only creates its main window on macOS,
 /// so the request is never lost and no second app is started.
-fn show_window<R: Runtime>(app: &AppHandle<R>) {
+pub(crate) fn show_window<R: Runtime>(app: &AppHandle<R>) {
     use crate::lifecycle::{MACOS, ShowTarget, show_target};
     let state = app.try_state::<crate::state::AppState>();
     let unlocked = state.as_ref().is_none_or(|state| state.is_unlocked());
@@ -559,7 +560,7 @@ fn show_window<R: Runtime>(app: &AppHandle<R>) {
         ShowTarget::Prompt => {
             if let Some(state) = state {
                 let id = crate::commands::security::prompt_window(&state);
-                if let Err(error) = crate::commands::windows::open_by_id(app, &state, id) {
+                if let Err(error) = crate::commands::windows::open_by_id(app, &state, id, None) {
                     eprintln!("cannot open the password prompt: {error}");
                 }
             }

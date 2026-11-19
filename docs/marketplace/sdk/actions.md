@@ -236,6 +236,41 @@ The configuration app's layout preview runs no providers (for built-in
 modules either), so it shows the static face; devices, physical and
 simulated, show the state.
 
+## Controls
+
+From plugin API 1.3 an action declares which controls of a device it can
+be bound to: per control kind (`key`, `encoder`, `touchZone`), the inputs
+it reacts to. Without a declaration the agent offers it on **keys only**
+(press, release, click, double click, long press), never on dials or
+touch zones; the manifest's `device.requires` grants nothing on its own.
+
+```rust
+Plugin::new("acme.pager", "1.0.0")
+    .requires_api(ApiLevel { major: 1, minor: 3 })
+    .action(Action::new("next", next).controls(
+        Controls::new()
+            .key([Input::Press, Input::Click])
+            .encoder([Input::RotateClockwise, Input::RotateCounterClockwise]),
+    ))
+```
+
+- **Rules** (`Plugin::validate`, the same as the manifest validator's): at
+  least one kind, no kind without inputs, only inputs the kind has (no
+  rotation on a key, no tap on a dial), at most 8 inputs per kind. Keys:
+  `press`, `release`, `click`, `double-click`, `long-press`; encoders:
+  `rotate-clockwise`, `rotate-counter-clockwise` and, for pressable dials,
+  the key inputs; touch zones: `tap`, `long-touch`, `swipe`.
+- **API level**: declaring controls needs `requires_api` 1.3;
+  `Plugin::validate` refuses them below it. Agents below plugin API 1.3
+  refuse a manifest with `controls`.
+- **Manifest**: the action entry declares the same `controls`
+  ([manifest.md](manifest.md#controls)); `Controls::to_json()` gives the
+  manifest form and `manifest_mismatches` compares the two (per kind, as
+  sets). The controls are not part of the module's descriptor.
+- An action runs once per event: a dial's rotation arrives as one
+  `rotate-clockwise` or `rotate-counter-clockwise` per event, without the
+  number of detents.
+
 ## A complete handler
 
 From `plugins/examples/developer-tools/src/lib.rs`:

@@ -1,5 +1,6 @@
 //! The `system` feature module: opens applications, web pages, files and
-//! folders, runs commands and reports whether programs are running.
+//! folders, runs commands, reports whether programs are running and shows
+//! CPU, memory, network and disk use on keys ([`monitor`]).
 //!
 //! Everything machine-specific comes from logical resources bound on this
 //! computer: an action refers to `application` or `repository`, never to a
@@ -21,12 +22,15 @@
 //! Error codes are listed in [`codes`].
 
 pub mod actions;
+pub mod monitor;
 pub mod support;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use deckpilot_core::launch::{Launcher, SystemLauncher};
+
+use crate::monitor::Sampler;
 use deckpilot_core::{
     ActionHandler, ActionParameters, Capability, FeatureModule, ModuleId, ModuleManifest,
     ParameterKind, ParameterSpec, ParameterValue, Portability, SettingScope,
@@ -50,6 +54,9 @@ pub mod codes {
     pub const COMMANDS_DISABLED: &str = "commands-disabled";
     /// The command finished with a non-zero exit code.
     pub const EXIT_NONZERO: &str = "exit-nonzero";
+    /// This computer does not report the value (CPU use, memory, disk
+    /// space).
+    pub const UNAVAILABLE: &str = "unavailable";
 }
 
 /// # Panics
@@ -63,6 +70,8 @@ pub fn module_id() -> ModuleId {
 pub struct SystemModule {
     manifest: ModuleManifest,
     launcher: Arc<dyn Launcher>,
+    /// Shared by the monitor actions of every configuration.
+    sampler: Arc<Sampler>,
 }
 
 impl SystemModule {
@@ -78,8 +87,9 @@ impl SystemModule {
                 id: module_id(),
                 version: env!("CARGO_PKG_VERSION").into(),
                 name: "System".into(),
-                description: "Opens applications, web pages, files and folders, runs commands \
-                              and checks whether programs are running."
+                description: "Opens applications, web pages, files and folders, runs commands, \
+                              checks whether programs are running and shows CPU, memory, network \
+                              and disk use."
                     .into(),
                 platforms: Vec::new(),
                 pages: Vec::new(),
@@ -115,6 +125,7 @@ impl SystemModule {
                 variables: Vec::new(),
             },
             launcher,
+            sampler: Arc::new(Sampler::new()),
         }
     }
 }
@@ -132,6 +143,6 @@ impl FeatureModule for SystemModule {
 
     fn action_handlers(&self, config: &ActionParameters) -> Vec<Box<dyn ActionHandler>> {
         let allow_commands = config.boolean(ALLOW_COMMANDS).unwrap_or(false);
-        actions::handlers(&self.launcher, allow_commands)
+        actions::handlers(&self.launcher, &self.sampler, allow_commands)
     }
 }

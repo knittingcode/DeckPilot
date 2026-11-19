@@ -286,7 +286,13 @@ impl Registry {
 
     /// Adds `version` of the sample and signs a new index and timestamp.
     pub fn publish(&self, version: &str) {
-        let manifest = manifest(version);
+        self.publish_manifest(&manifest(version));
+    }
+
+    /// Adds the sample with `manifest` (its version included) and signs a
+    /// new index and timestamp.
+    pub fn publish_manifest(&self, manifest: &Value) {
+        let version = manifest["version"].as_str().expect("a version");
         let src = self.keys.join("src").join(version);
         std::fs::create_dir_all(src.join("assets")).unwrap();
         std::fs::write(
@@ -341,6 +347,11 @@ impl Registry {
             "--builder",
             "1.0.0",
         ]);
+        self.sign();
+    }
+
+    /// Builds and signs a new index and timestamp, and checks the site.
+    pub fn sign(&self) {
         self.run(&["build-index", "--source-commit", &"a".repeat(40)]);
         self.run(&["sign-index", "--key", &self.key("index.key")]);
         self.run(&["timestamp", "--key", &self.key("timestamp.key")]);
@@ -407,6 +418,9 @@ pub struct Fixture {
     /// Agents this test started itself (the command-layer driver).
     agents: Vec<Child>,
     spawned: u32,
+    /// More variables for the next agent [`Self::spawn_agent`] starts
+    /// only (e.g. a test failpoint).
+    pub next_agent_env: Vec<(&'static str, OsString)>,
 }
 
 impl std::fmt::Debug for Fixture {
@@ -601,6 +615,7 @@ impl Fixture {
                 .unwrap(),
             agents: Vec::new(),
             spawned: 0,
+            next_agent_env: Vec::new(),
         }
     }
 
@@ -659,6 +674,7 @@ impl Fixture {
         command
             .args(Self::AGENT_ARGS.split_whitespace())
             .envs(self.agent_env())
+            .envs(std::mem::take(&mut self.next_agent_env))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(log);
@@ -943,6 +959,9 @@ impl Drop for Fixture {
         self.stop_agent();
     }
 }
+
+#[path = "marketplace_lifecycle.rs"]
+pub mod lifecycle;
 
 pub fn hello() -> PluginId {
     PluginId::parse(HELLO).unwrap()

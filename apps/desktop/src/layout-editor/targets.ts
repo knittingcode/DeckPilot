@@ -13,6 +13,13 @@ export interface TargetOption {
    * or not installed). Controls that already use it keep it.
    */
   unavailable?: string
+  /** For an action: its type, so compatibility can be checked. */
+  actionType?: string
+  /**
+   * Why it cannot go on the control at hand (docs/device-controls.md): the
+   * action does not work on that kind of control or with any of its inputs.
+   */
+  incompatible?: string
 }
 
 export interface TargetGroup {
@@ -70,6 +77,7 @@ export function targetGroups(
         return {
           ...option({ type: "action", action: a.id }, a.name, "action"),
           icon: a.icon,
+          actionType: a.actionType,
           ...(why ? { unavailable: why } : {}),
         }
       }),
@@ -91,6 +99,24 @@ export function targetGroups(
     },
   ]
   return groups.filter((g) => g.options.length > 0)
+}
+
+/**
+ * The groups with `incompatible` set on each option `why` explains.
+ * Options without an action type (workflows, pages, Back) go on any
+ * control.
+ */
+export function markIncompatible(
+  groups: TargetGroup[],
+  why: (actionType: string) => string | null,
+): TargetGroup[] {
+  return groups.map((group) => ({
+    ...group,
+    options: group.options.map((option) => {
+      const reason = option.actionType ? why(option.actionType) : null
+      return reason ? { ...option, incompatible: reason } : option
+    }),
+  }))
 }
 
 /** Why the option of `value` cannot be placed now, if it cannot. */

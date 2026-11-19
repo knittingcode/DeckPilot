@@ -13,10 +13,14 @@ import { useState, type ReactNode } from "react"
 import { ActionIcon } from "@/components/action-icon"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
+import type { ActionType } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 import { catalogDragId, filterCatalog, type CatalogEntry, type CatalogGroup } from "./catalog"
 import type { DragSource } from "./editing"
+import { loadCompatibleOnly, saveCompatibleOnly } from "./library-sidebar"
 import type { TargetGroup, TargetOption } from "./targets"
 
 function OptionIcon({ option }: { option: TargetOption }) {
@@ -34,9 +38,19 @@ function LibraryEntry({ option }: { option: TargetOption }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `library:${option.value}`,
     data: source,
-    // Plugin actions that cannot run now cannot be newly placed.
-    disabled: option.unavailable !== undefined,
+    // Plugin actions that cannot run now cannot be newly placed, nor
+    // actions that cannot run from the selected control.
+    disabled: option.unavailable !== undefined || option.incompatible !== undefined,
   })
+  if (option.incompatible !== undefined && option.unavailable === undefined) {
+    return (
+      <IncompatibleEntry
+        label={option.label}
+        reason={option.incompatible}
+        icon={<OptionIcon option={option} />}
+      />
+    )
+  }
   if (option.unavailable !== undefined) {
     return (
       <li
@@ -66,6 +80,37 @@ function LibraryEntry({ option }: { option: TargetOption }) {
       <span className="min-w-0 flex-1 truncate" title={option.label}>
         {option.label}
       </span>
+    </li>
+  )
+}
+
+/**
+ * An entry that cannot go on the selected control: shown, not draggable,
+ * with the reason (docs/device-controls.md).
+ */
+function IncompatibleEntry({
+  label,
+  reason,
+  icon,
+}: {
+  label: string
+  reason: string
+  icon: ReactNode
+}) {
+  return (
+    <li
+      className="grid min-w-0 gap-0.5 rounded-md border border-dashed px-2 py-1.5 text-sm text-muted-foreground"
+      aria-label={`${label}: not for the selected control. ${reason}`}
+      aria-disabled
+      data-compatibility="incompatible"
+    >
+      <span className="flex min-w-0 items-center gap-2 opacity-70">
+        {icon}
+        <span className="min-w-0 flex-1 truncate" title={label}>
+          {label}
+        </span>
+      </span>
+      <span className="text-xs">{reason}</span>
     </li>
   )
 }
@@ -130,12 +175,22 @@ function NewMultiActionEntry() {
  * An action type: dropped on a control, an action of it with its default
  * settings is created (or the one that exists is reused) and bound.
  */
-function CatalogItem({ entry }: { entry: CatalogEntry }) {
+function CatalogItem({ entry, incompatible }: { entry: CatalogEntry; incompatible?: string }) {
   const source: DragSource = { type: "actionType", actionType: entry.type.id }
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: catalogDragId(entry.type.id),
     data: source,
+    disabled: incompatible !== undefined,
   })
+  if (incompatible !== undefined) {
+    return (
+      <IncompatibleEntry
+        label={entry.type.name}
+        reason={incompatible}
+        icon={<ActionIcon name={entry.type.node?.icon} className="size-4 shrink-0" />}
+      />
+    )
+  }
   return (
     <li
       ref={setNodeRef}
@@ -199,24 +254,58 @@ export function LibraryPanel({
   groups,
   catalog = [],
   multiAction = false,
+  variant = "card",
+  compatibility,
 }: {
   groups: TargetGroup[]
   /** Action types that can be placed directly; see `catalogGroups`. */
   catalog?: CatalogGroup[]
   /** Offers "Multi Action", which puts a new step workflow on a key. */
   multiAction?: boolean
+  /**
+   * `card`: a card of its own. `plain`: the content only, for a container
+   * that has the title and scrolls (the editor's library sidebar).
+   */
+  variant?: "card" | "plain"
+  /**
+   * The control the library is for (docs/device-controls.md): entries that
+   * cannot go on it are disabled with the reason (`incompatible` of the
+   * groups' options, `catalog` for action types), and "Compatible only"
+   * hides them.
+   */
+  compatibility?: {
+    /** The selected control, e.g. "Key 3"; `null` when none is. */
+    control: string | null
+    catalog: (type: ActionType) => string | null
+  }
 }) {
   const [query, setQuery] = useState("")
+  const [compatibleOnly, setCompatibleOnlyState] = useState(loadCompatibleOnly)
+  const setCompatibleOnly = (on: boolean) => {
+    setCompatibleOnlyState(on)
+    saveCompatibleOnly(on)
+  }
+  const hiding = Boolean(compatibility?.control) && compatibleOnly
+  const whyNot = (type: ActionType) =>
+    compatibility?.control ? (compatibility.catalog(type) ?? undefined) : undefined
   const [closed, setClosed] = useState<Set<string>>(new Set())
   const needle = query.trim().toLowerCase()
   const searching = needle !== ""
   const shown = groups
     .map((group) => ({
       ...group,
-      options: group.options.filter((o) => matches(`${o.label} ${group.label}`, needle)),
+      options: group.options.filter(
+        (o) =>
+          matches(`${o.label} ${group.label}`, needle) && !(hiding && o.incompatible !== undefined),
+      ),
     }))
     .filter((group) => group.options.length > 0 || (group.label === "Navigation" && !searching))
   const types = filterCatalog(catalog, query)
+    .map((group) => ({
+      ...group,
+      entries: hiding ? group.entries.filter((e) => whyNot(e.type) === undefined) : group.entries,
+    }))
+    .filter((group) => group.entries.length > 0)
   const folder = !searching || matches("new folder folders navigation", needle)
   const multi =
     multiAction && (!searching || matches("new multi action sequence steps workflow", needle))
@@ -233,101 +322,131 @@ export function LibraryPanel({
   }
   const nothing = searching && shown.length === 0 && types.length === 0 && !folder && !multi
 
+  const hint = "Drag onto a control, or select a control and choose in the inspector."
+  const content = (
+    <>
+      <Input
+        type="search"
+        className="h-8"
+        placeholder="Search the library"
+        aria-label="Search the library"
+        value={query}
+        onChange={(event) => {
+          setQuery(event.target.value)
+        }}
+      />
+      {compatibility && (
+        <div className="grid gap-1">
+          <div className="flex items-center gap-2">
+            <Switch
+              id="library-compatible-only"
+              size="sm"
+              checked={compatibleOnly}
+              onCheckedChange={setCompatibleOnly}
+            />
+            <Label htmlFor="library-compatible-only" className="text-xs font-normal">
+              Compatible only
+            </Label>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {compatibility.control
+              ? `Showing what fits ${compatibility.control}.`
+              : "Select a control to see what fits it."}
+          </p>
+        </div>
+      )}
+      <div className={cn("grid gap-3", variant === "card" && "max-h-[28rem] overflow-y-auto")}>
+        {!hasItems && !searching && catalog.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            No actions or workflows yet. Create them in the Action Library.
+          </p>
+        )}
+        {nothing && <p className="text-sm text-muted-foreground">Nothing matches.</p>}
+        {shown
+          .filter((group) => group.label !== "Navigation")
+          .map((group) => (
+            <Section
+              key={group.label}
+              label={group.label}
+              count={group.options.length}
+              open={isOpen(group.label)}
+              onToggle={() => {
+                toggle(group.label)
+              }}
+            >
+              {group.options.map((option) => (
+                <LibraryEntry key={option.value} option={option} />
+              ))}
+            </Section>
+          ))}
+        {(folder || shown.some((group) => group.label === "Navigation")) && (
+          <Section
+            label="Navigation"
+            count={
+              (shown.find((group) => group.label === "Navigation")?.options.length ?? 0) +
+              (folder ? 1 : 0)
+            }
+            open={isOpen("Navigation")}
+            onToggle={() => {
+              toggle("Navigation")
+            }}
+          >
+            {folder && <NewFolderEntry />}
+            {shown
+              .find((group) => group.label === "Navigation")
+              ?.options.map((option) => (
+                <LibraryEntry key={option.value} option={option} />
+              ))}
+          </Section>
+        )}
+        {multi && (
+          <Section
+            label="New: Sequence"
+            count={1}
+            open={isOpen("New: Sequence")}
+            onToggle={() => {
+              toggle("New: Sequence")
+            }}
+          >
+            <NewMultiActionEntry />
+          </Section>
+        )}
+        {types.map((group) => {
+          const id = `New: ${group.label}`
+          return (
+            <Section
+              key={id}
+              label={id}
+              count={group.entries.length}
+              open={isOpen(id)}
+              onToggle={() => {
+                toggle(id)
+              }}
+            >
+              {group.entries.map((entry) => (
+                <CatalogItem key={entry.type.id} entry={entry} incompatible={whyNot(entry.type)} />
+              ))}
+            </Section>
+          )
+        })}
+      </div>
+    </>
+  )
+  if (variant === "plain") {
+    return (
+      <div className="grid gap-3">
+        <p className="text-xs text-muted-foreground">{hint}</p>
+        {content}
+      </div>
+    )
+  }
   return (
-    <Card className="h-fit xl:row-span-2 2xl:row-span-1">
+    <Card className="h-fit">
       <CardHeader>
         <CardTitle className="text-sm">Library</CardTitle>
-        <CardDescription>
-          Drag onto a control, or select a control and choose in the inspector.
-        </CardDescription>
+        <CardDescription>{hint}</CardDescription>
       </CardHeader>
-      <CardContent className="grid gap-3">
-        <Input
-          type="search"
-          className="h-8"
-          placeholder="Search the library"
-          aria-label="Search the library"
-          value={query}
-          onChange={(event) => {
-            setQuery(event.target.value)
-          }}
-        />
-        <div className="grid max-h-[28rem] gap-3 overflow-y-auto">
-          {!hasItems && !searching && catalog.length === 0 && (
-            <p className="text-sm text-muted-foreground">
-              No actions or workflows yet. Create them in the Action Library.
-            </p>
-          )}
-          {nothing && <p className="text-sm text-muted-foreground">Nothing matches.</p>}
-          {shown
-            .filter((group) => group.label !== "Navigation")
-            .map((group) => (
-              <Section
-                key={group.label}
-                label={group.label}
-                count={group.options.length}
-                open={isOpen(group.label)}
-                onToggle={() => {
-                  toggle(group.label)
-                }}
-              >
-                {group.options.map((option) => (
-                  <LibraryEntry key={option.value} option={option} />
-                ))}
-              </Section>
-            ))}
-          {(folder || shown.some((group) => group.label === "Navigation")) && (
-            <Section
-              label="Navigation"
-              count={
-                (shown.find((group) => group.label === "Navigation")?.options.length ?? 0) +
-                (folder ? 1 : 0)
-              }
-              open={isOpen("Navigation")}
-              onToggle={() => {
-                toggle("Navigation")
-              }}
-            >
-              {folder && <NewFolderEntry />}
-              {shown
-                .find((group) => group.label === "Navigation")
-                ?.options.map((option) => (
-                  <LibraryEntry key={option.value} option={option} />
-                ))}
-            </Section>
-          )}
-          {multi && (
-            <Section
-              label="New: Sequence"
-              count={1}
-              open={isOpen("New: Sequence")}
-              onToggle={() => {
-                toggle("New: Sequence")
-              }}
-            >
-              <NewMultiActionEntry />
-            </Section>
-          )}
-          {types.map((group) => {
-            const id = `New: ${group.label}`
-            return (
-              <Section
-                key={id}
-                label={id}
-                count={group.entries.length}
-                open={isOpen(id)}
-                onToggle={() => {
-                  toggle(id)
-                }}
-              >
-                {group.entries.map((entry) => (
-                  <CatalogItem key={entry.type.id} entry={entry} />
-                ))}
-              </Section>
-            )
-          })}
-        </div>
-      </CardContent>
+      <CardContent className="grid gap-3">{content}</CardContent>
     </Card>
   )
 }

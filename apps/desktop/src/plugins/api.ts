@@ -11,11 +11,13 @@ import type {
   AvailablePlugins,
   KnownPlugin,
   ModuleMigration,
+  NavigationIconTheme,
   PluginActionOutcome,
   PluginCredentialSlot,
   PluginDetails,
   PluginEvent,
   PluginInstallSource,
+  PluginNavigationItem,
   PluginRetention,
   PluginRuntimeStatus,
   PluginSettings,
@@ -107,6 +109,20 @@ export interface PluginClient {
   ): Promise<ModuleMigration>
   /** `retryModuleMigration`: a failed migration runs again; a declined one asks again. */
   retryModuleMigration(module: string): Promise<ModuleMigration>
+  /**
+   * `list_plugin_navigation`: the toolbar entries of installed, enabled
+   * plugins (plugin API 1.3); empty with an agent that has none.
+   */
+  listNavigation(): Promise<PluginNavigationItem[]>
+  /**
+   * `get_plugin_navigation_icon`: an entry's icon as a `data:` URL for
+   * `<img>` only; `null` when there is none to show.
+   */
+  getNavigationIcon(
+    plugin: string,
+    entry: string,
+    theme: NavigationIconTheme,
+  ): Promise<string | null>
   /** A `.dpplugin` chosen in a native dialog; `null` when cancelled. */
   pickPackage(): Promise<string | null>
   /** Plugin events while subscribed; returns the unsubscribe function. */

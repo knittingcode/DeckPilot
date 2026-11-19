@@ -20,11 +20,11 @@ export interface AppContextValue {
   setAgent: (agent: AgentConnection) => void
   updates: UpdateState | null
   setUpdates: (state: UpdateState) => void
-  /** Opens a workspace page; leaves the settings if they are open. */
+  /** Opens a workspace page; settings pages open in the settings window. */
   navigate: (page: PageId) => void
-  /** Opens the settings, at `page` or where they were left. */
+  /** Opens (or focuses) the settings window, at `page` or where it was left. */
   openSettings: (page?: SettingsPageId) => void
-  /** Returns from the settings to the workspace page open before. */
+  /** Leaves the settings: in the settings window, back to the main window. */
   closeSettings: () => void
   /** Browser-style history of the main window. */
   history: {
@@ -45,7 +45,9 @@ export interface AppContextValue {
 }
 
 /** Pages of the core application. */
-export type CorePageId = "dashboard" | "actions" | "workflows" | "profiles" | "designer"
+/** Pages of the core application; `profiles` opens Settings › Profiles. */
+export type CorePageId =
+  "dashboard" | "actions" | "workflows" | "profiles" | "designer" | "marketplace"
 
 /** A core page or a page contributed by a module (`module/page`). */
 export type PageId = CorePageId | ModulePageId

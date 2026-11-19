@@ -445,7 +445,12 @@ never counts, and no key is ever taken from the network.
   sha256 are the pinned ones (`verify_package` then checks everything
   again), so a partial or corrupt download is refused and nothing is
   written; the store stages only verified bytes. An update whose download
-  fails leaves the installed version active and running. A tampered
+  fails leaves the installed version active and running. Before an update
+  is staged or applied, its module is loaded once in a host of its own
+  (`trial_load`, on platforms that run plugins): a module the host refuses
+  (actions other than the manifest's, a failing `dp_init`, a broken
+  descriptor) fails the update with `broken` and nothing is installed;
+  a host that cannot start or lacks a full sandbox does not block it. A tampered
   package is `invalidPackage`, an unreachable or refused one
   `registryUnavailable`.
 - **Offline cache.** The crate's `FileTrustStore` (trust state, index
@@ -570,7 +575,7 @@ older clients ignore.
 | `listPluginsPaged` | — | `plugins`, each summary without `actions` and with `actionCount` (feature `pagedAnswers`, [below](#answers-of-any-size)) |
 | `getPluginPaged` | `plugin` | `plugin` without actions (in the summary and the manifest) and icon (feature `pagedAnswers`) |
 | `getPluginActions` | `plugin`, `from?` (index, default 0) | `pluginActions { plugin, version, total, actions: [{action, manifest?, tooLarge?}], next? }` (feature `pagedAnswers`) |
-| `getPluginIcon` | `plugin`, `offset?` (default 0) | `pluginIcon { plugin, icon?: {mediaType, size, sha256, offset, data, next?} }` (feature `pagedAnswers`) |
+| `getPluginIcon` | `plugin`, `offset?` (default 0), `navigation?: { entry, theme: light \| dark }` | `pluginIcon { plugin, icon?: {mediaType, size, sha256, offset, data, next?} }` (feature `pagedAnswers`). With `navigation` (feature `navigation`, plugin API 1.3): the icon of that navigation entry for the theme (else the other theme's), `image/png`, `image/webp` or a sanitized `image/svg+xml` whose `size` and `sha256` are those of the bytes sent; none when the entry, the file or its integrity check is missing or the file is unsafe. `PluginSummary.navigation` lists the entries (`id`, `label`, `view { id, kind }`) |
 | `listAvailablePlugins` | `refresh` | `availablePlugins { registry, plugins: [AvailablePlugin] }` (versions newest first, permissions, `withdrawn`, `incompatible`, `deckpilot`, `platforms`, `publishedAt`; per plugin `description`, `categories`, `publisherInfo`, `license`, `homepage`, `sourceRepository`, `deprecated`) |
 | `installPlugin` | `source: {type: "registry", plugin, version?} \| {type: "file", path}`, `consent: [key]` | `plugin` (state `disabled`) |
 | `enablePlugin` | `plugin`, `consent: [key]` | `plugin` (grants `consent` first; all declared permissions must be granted) |
