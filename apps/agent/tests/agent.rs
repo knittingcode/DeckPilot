@@ -3885,7 +3885,7 @@ async fn previews_watch_live_key_states() {
         .await
         .unwrap();
     assert!(!live);
-    assert!(states.is_empty());
+    assert_eq!(states, Vec::new());
     drop(client);
     agent.shutdown().await;
 }
