@@ -12,10 +12,16 @@
 # - Every day, and when started by hand: the same from main, so the download
 #   page (built from the published releases, website/src/lib/releases.ts)
 #   cannot stay behind a release for more than a day.
-# - A published release: starts the workflow again on main (`refresh`), so
-#   the deployment still comes from main and the github-pages environment
-#   can keep allowing main only. A release published with the workflow
-#   token (release.yml) raises no event, so the daily run is what covers it.
+# - After a stable release: release.yml's `website` job, once the release
+#   is published and verified, starts this workflow on main
+#   (`gh workflow run website.yml --ref main`, workflow_dispatch). It has to:
+#   a release published with the workflow token raises no `release` event
+#   for other workflows. Pre-releases do not start it.
+# - A release published some other way (by hand, as a person): the
+#   `release` event starts the workflow again on main (`refresh`).
+# Either way the deployment comes from main, so the github-pages
+# environment can keep allowing main only; the daily run and a manual run
+# remain the fallback when neither fires.
 #
 # Not a required check: pull requests that do not touch the website do not
 # start this workflow.

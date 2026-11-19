@@ -46,7 +46,15 @@ Fails unless:
   * the protected environment is `production-release`: `publish` runs in
     it, behind `publish-gate`; besides it only the jobs that need the
     signing secrets (prepare, build) do, and every job that references a
-    signing secret (APPLE_*, TAURI_SIGNING_*) runs in it.
+    signing secret (APPLE_*, TAURI_SIGNING_*) runs in it;
+  * a job `website` starts the website workflow on main after a stable
+    release only: it needs `publish` directly (so it runs only after the
+    release was published and verified), its `if:` is exactly the gate's
+    `prerelease == 'false'` (no status function), its permissions are
+    exactly actions: write, it uses no environment, no secret and no
+    action (nothing is checked out), and its one command is
+    `gh workflow run website.yml --ref main` (the github-pages environment
+    deploys main only). No other job may have actions: write.
 """
 
 import pathlib
@@ -79,6 +87,11 @@ STATUS_OVERRIDE = re.compile(r"\b(always|failure|cancelled)\s*\(")
 # Jobs that may write to the repository: the draft and its assets (stage
 # A), and publication (stage B).
 WRITERS = {"draft", "build", "manifest", "verify", PUBLISHER}
+# After a stable release: the website rebuild (a release published with the
+# workflow token raises no `release` event for other workflows).
+WEBSITE = "website"
+WEBSITE_IF = "needs.validate-tag.outputs.prerelease=='false'"
+WEBSITE_RUN = re.compile(r"^gh workflow run website\.yml --ref main$")
 
 
 def needs_of(job):
@@ -225,6 +238,8 @@ def check(path):
             if level == "write" and scope == "contents" and name not in WRITERS:
                 problems.append(f"job {name} may not have contents: write")
 
+    problems.extend(check_website(jobs))
+
     for name, job in jobs.items():
         if name == GATE:
             continue
@@ -233,6 +248,39 @@ def check(path):
                 problems.append(f"{name} needs unknown job {dependency}")
         if not reaches_gate(name, set()):
             problems.append(f"job {name} does not depend on {GATE} through needs")
+    return problems
+
+
+def check_website(jobs):
+    """The website rebuild after a stable release, and nothing more."""
+    problems = []
+    for name, job in jobs.items():
+        if name != WEBSITE and (job.get("permissions") or {}).get("actions") == "write":
+            problems.append(f"job {name} may not have actions: write (only {WEBSITE} starts a workflow)")
+    job = jobs.get(WEBSITE)
+    if job is None:
+        return problems + [f"no job {WEBSITE} (the website rebuild after a stable release)"]
+    if PUBLISHER not in needs_of(job):
+        problems.append(f"{WEBSITE} must need {PUBLISHER} directly")
+    condition = re.sub(r"\s+", "", str(job.get("if", "")))
+    condition = re.sub(r"^\$\{\{(.*)\}\}$", r"\1", condition)
+    if condition != WEBSITE_IF:
+        problems.append(
+            f"{WEBSITE} must run for stable releases only, after a successful publication: "
+            f"if: needs.validate-tag.outputs.prerelease == 'false', not {job.get('if')!r}"
+        )
+    if job.get("permissions") != {"actions": "write"}:
+        problems.append(f"{WEBSITE} must have exactly the permissions actions: write, not {job.get('permissions')!r}")
+    if "environment" in job:
+        problems.append(f"{WEBSITE} may not use an environment")
+    if re.search(r"secrets\.(?!GITHUB_TOKEN)", yaml.safe_dump(job)):
+        problems.append(f"{WEBSITE} may not read secrets")
+    steps = job.get("steps") or []
+    if any("uses" in step for step in steps):
+        problems.append(f"{WEBSITE} may not use actions: it checks out and runs nothing of the repository")
+    commands = [line.strip() for step in steps for line in str(step.get("run", "")).splitlines() if line.strip()]
+    if len(commands) != 1 or not WEBSITE_RUN.match(commands[0]):
+        problems.append(f"{WEBSITE} must run only `gh workflow run website.yml --ref main`, not {commands!r}")
     return problems
 
 
