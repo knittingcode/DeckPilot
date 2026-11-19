@@ -6,6 +6,7 @@
 #   windows.ps1 uninstall-nsis <label>
 #   windows.ps1 launch        <label>              first launch with an isolated profile
 #   windows.ps1 gui           <label>              tauri-driver + msedgedriver, gui.mjs
+#   windows.ps1 ui            <label>              UI Automation from outside, windows-ui.ps1
 #
 # install-* write the installation directory to $env:SMOKE_WORK\<label>.dir
 # and to GITHUB_ENV as SMOKE_INSTALL_DIR. Results go to
@@ -296,6 +297,33 @@ switch ($Command) {
     New-Item -ItemType Directory -Force -Path (Join-Path $out "$Label-gui-agent-logs") | Out-Null
     Copy-Item -Recurse -Force -Path (Join-Path $envs.DECKPILOT_DATA_DIR 'logs\*') -Destination (Join-Path $out "$Label-gui-agent-logs") -ErrorAction SilentlyContinue
     foreach ($target in @(DeckPilot-Credentials | Where-Object { $before -notcontains $_ })) { cmdkey "/delete:$target" | Out-Null }
+  }
+  'ui' {
+    # External UI Automation (windows-ui.ps1); the release build unchanged.
+    $dir = Get-Content $dirFile -ErrorAction Stop
+    $exe = Join-Path $dir 'deckpilot-desktop.exe'
+    $p = New-Profile "$Label-ui"
+    $envs = Profile-Env $p
+    $before = @(DeckPilot-Credentials)
+    $realBefore = @(Real-ProfileState)
+    $since = Get-Date
+    . (Join-Path $PSScriptRoot 'windows-ui.ps1')
+    try {
+      Invoke-UiFlow -Exe $exe -Envs $envs
+    } catch {
+      Record "${Label}: UIA flow" 'error' "the UI Automation driver failed: $_"
+    }
+    [void](Stop-DeckPilot)
+    New-Item -ItemType Directory -Force -Path (Join-Path $out "$Label-ui-agent-logs") | Out-Null
+    Copy-Item -Recurse -Force -Path (Join-Path $envs.DECKPILOT_DATA_DIR 'logs\*') -Destination (Join-Path $out "$Label-ui-agent-logs") -ErrorAction SilentlyContinue
+    foreach ($target in @(DeckPilot-Credentials | Where-Object { $before -notcontains $_ })) { cmdkey "/delete:$target" | Out-Null }
+    $realAfter = @(Real-ProfileState | Where-Object { $realBefore -notcontains $_ })
+    $leaks = @(Real-ProfileLeaks $since)
+    if ($realAfter.Count -eq 0 -and $leaks.Count -eq 0) {
+      Record "${Label}: UIA run left the real profile untouched" 'pass' 'no new *deckpilot* entry in the real %APPDATA%, %LOCALAPPDATA% or %USERPROFILE%'
+    } else {
+      Record "${Label}: UIA run left the real profile untouched" 'fail' "created in the real profile: $((@($realAfter) + @($leaks) | Select-Object -Unique) -join ', ')"
+    }
   }
   default { Write-Error "unknown command $Command"; exit 2 }
 }
