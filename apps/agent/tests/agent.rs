@@ -3173,7 +3173,10 @@ async fn running_workflows_mark_and_redraw_only_their_keys() {
     let mut client = agent.client().await;
     client.request(Request::ReloadConfiguration).await.unwrap();
 
-    let idle = key_image(&KeyFace::new(FaceStyle::Workflow, "Wait"));
+    let idle = key_image(
+        &KeyFace::new(FaceStyle::Workflow, "Wait")
+            .with_symbol(Some(deckpilot_core::device_runtime::symbols::WORKFLOW)),
+    );
     assert!(agent.mock.wait_for(&agent.device, TIMEOUT, |frames, _| {
         frames.get(&key) == Some(&idle)
     }));
@@ -3265,6 +3268,11 @@ async fn module_states_are_shown_and_not_refreshed_more_often_than_allowed() {
             &ActionParameters::new(),
         )
         .unwrap();
+    // The key shows the type's icon.
+    let git_icon = registry()
+        .definition(&status.action_type)
+        .and_then(|definition| definition.node.icon.clone());
+    assert!(git_icon.is_some());
     let key = ControlId::Key { index: 6 };
     profile.layouts[0].pages[0]
         .bindings
@@ -3282,11 +3290,13 @@ async fn module_states_are_shown_and_not_refreshed_more_often_than_allowed() {
 
     // The key shows the branch and a clean work tree once Git answered.
     let ready = key_image(
-        &KeyFace::new(FaceStyle::Action, "Repo").with_state(
-            &ButtonState::new()
-                .with_detail("main")
-                .with_indicator(Indicator::Ok),
-        ),
+        &KeyFace::new(FaceStyle::Action, "Repo")
+            .with_symbol(git_icon.as_deref())
+            .with_state(
+                &ButtonState::new()
+                    .with_detail("main")
+                    .with_indicator(Indicator::Ok),
+            ),
     );
     assert!(agent.mock.wait_for(&agent.device, TIMEOUT, |frames, _| {
         frames.get(&key) == Some(&ready)
@@ -3406,8 +3416,15 @@ async fn folders_go_back_to_their_parent_with_an_automatic_back_key() {
     client.request(Request::ReloadConfiguration).await.unwrap();
 
     let key = |index| ControlId::Key { index };
-    let folder_face = key_image(&KeyFace::new(FaceStyle::Folder, "Folder"));
-    let back = key_image(&KeyFace::new(FaceStyle::Back, "Back"));
+    let symbol = |name: &str| Some(name.to_owned());
+    let folder_face = key_image(
+        &KeyFace::new(FaceStyle::Folder, "Folder")
+            .with_symbol(symbol(deckpilot_core::device_runtime::symbols::FOLDER)),
+    );
+    let back = key_image(
+        &KeyFace::new(FaceStyle::Back, "Back")
+            .with_symbol(symbol(deckpilot_core::device_runtime::symbols::BACK)),
+    );
     assert!(agent.mock.wait_for(&agent.device, TIMEOUT, |frames, _| {
         frames.get(&key(5)) == Some(&folder_face)
     }));
