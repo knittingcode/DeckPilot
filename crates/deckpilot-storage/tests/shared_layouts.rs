@@ -121,7 +121,7 @@ fn layouts_are_created_on_their_own_and_shared_by_profiles() {
     store.create_shared_layout(&teams, None).unwrap();
     let stored = store.shared_layout(teams.id).unwrap().unwrap();
     assert_eq!(stored.layout, teams);
-    assert!(stored.profiles.is_empty());
+    assert_eq!(stored.profiles.len(), 0);
 
     // Main in both profiles: one record, the same actions and icons, the
     // Home profile's own workflows (none).
@@ -131,7 +131,7 @@ fn layouts_are_created_on_their_own_and_shared_by_profiles() {
     assert_eq!(home_loaded.layouts, vec![main.clone()]);
     assert_eq!(names(&home_loaded), ["Hello"]);
     assert_eq!(home_loaded.icons.len(), 1);
-    assert!(home_loaded.workflows.is_empty());
+    assert_eq!(home_loaded.workflows.len(), 0);
     let users = store.layout_users(main.id).unwrap();
     assert_eq!(users.len(), 2);
     assert_eq!(store.shared_layouts().unwrap().len(), 2);
@@ -157,13 +157,14 @@ fn layouts_are_created_on_their_own_and_shared_by_profiles() {
     assert_eq!(names(&work_loaded), ["Hello there", "Private"]);
     // Projects, workflows and defaults stay each profile's own.
     assert_eq!(work_loaded.workflows.len(), 1);
-    assert!(
+    assert_eq!(
         store
             .load_profile(home.id)
             .unwrap()
             .unwrap()
             .workflows
-            .is_empty()
+            .len(),
+        0
     );
 }
 
@@ -185,10 +186,10 @@ fn removing_a_layout_from_a_profile_keeps_it_and_what_the_profile_needs() {
 
     store.unassign_layout(home.id, main.id).unwrap();
     let home = store.load_profile(home.id).unwrap().unwrap();
-    assert!(home.layouts.is_empty());
+    assert_eq!(home.layouts.len(), 0);
     // Hello stays (Greet uses it); the icon only Main showed goes.
     assert_eq!(names(&home), ["Hello"]);
-    assert!(home.icons.is_empty());
+    assert_eq!(home.icons.len(), 0);
     // The layout is untouched and still Work's.
     assert_eq!(store.layout_users(main.id).unwrap().len(), 1);
     assert_eq!(store.load_profile(work.id).unwrap().unwrap(), work);
@@ -199,7 +200,7 @@ fn removing_a_layout_from_a_profile_keeps_it_and_what_the_profile_needs() {
     store.assign_layout(other.id, main.id).unwrap();
     store.unassign_layout(other.id, main.id).unwrap();
     let other = store.load_profile(other.id).unwrap().unwrap();
-    assert!(other.actions.is_empty() && other.icons.is_empty());
+    assert_eq!((other.actions.len(), other.icons.len()), (0, 0));
     // Removing the layout through the profile document is the same.
     let mut work_without = work.clone();
     work_without.layouts.clear();
@@ -239,13 +240,16 @@ fn deleting_a_shared_layout_needs_the_profiles_confirmed() {
     // The profiles stay; Work's default falls back to its other layout.
     let work_loaded = store.load_profile(work.id).unwrap().unwrap();
     assert_eq!(work_loaded.layouts, vec![second.clone()]);
-    assert!(work_loaded.active_layouts.is_empty());
+    assert_eq!(work_loaded.active_layouts.len(), 0);
     assert_eq!(work_loaded.layout_for(&mk2()).unwrap().id, second.id);
     // Work keeps its own action; Hello and the icon went with the layout.
     assert_eq!(names(&work_loaded), ["Private"]);
-    assert!(work_loaded.icons.is_empty());
+    assert_eq!(work_loaded.icons.len(), 0);
     let home_loaded = store.load_profile(home.id).unwrap().unwrap();
-    assert!(home_loaded.layouts.is_empty() && home_loaded.actions.is_empty());
+    assert_eq!(
+        (home_loaded.layouts.len(), home_loaded.actions.len()),
+        (0, 0)
+    );
     assert!(matches!(
         store.delete_shared_layout(main.id, &[]),
         Err(StorageError::UnknownLayout)
@@ -322,7 +326,7 @@ fn order_defaults_and_the_layouts_devices_switched_to() {
     );
     // A new default for the model: devices show it.
     store.set_default_layout(work.id, teams.id).unwrap();
-    assert!(store.device_layouts().unwrap().is_empty());
+    assert_eq!(store.device_layouts().unwrap().len(), 0);
     assert_eq!(
         store
             .load_profile(work.id)
@@ -338,7 +342,7 @@ fn order_defaults_and_the_layouts_devices_switched_to() {
         .save_device_layouts(&[(work.id, deck.clone(), main.id)])
         .unwrap();
     store.unassign_layout(work.id, main.id).unwrap();
-    assert!(store.device_layouts().unwrap().is_empty());
+    assert_eq!(store.device_layouts().unwrap().len(), 0);
     // Deleting the profile keeps its layouts.
     store.delete_profile(work.id).unwrap();
     assert_eq!(store.shared_layouts().unwrap().len(), 3);
@@ -594,5 +598,45 @@ fn identifiers_two_profiles_shared_before_get_new_ones_in_the_later_profile() {
     assert!(
         notes.iter().filter(|n| n.schema_version == 10).count() >= 3,
         "{notes:?}"
+    );
+}
+
+#[test]
+fn actions_that_a_layouts_actions_name_come_with_it() {
+    // A switch on key 0 whose states run Picked, which no key runs itself.
+    let store = SqliteStore::open_in_memory().unwrap();
+    let picked = action("Picked");
+    let mut switch = action("Switch");
+    switch.parameters = ActionParameters::new().with(
+        "states",
+        ParameterValue::Text(format!("action:{} | One", picked.id)),
+    );
+    let mut layout = DeviceLayout::new("Main", mk2());
+    bind(&mut layout, 0, BindingTarget::action(switch.id));
+    let mut work = Profile::new("Work");
+    work.actions = vec![picked.clone(), switch.clone()];
+    work.layouts.push(layout.clone());
+    store.save_profile(&work).unwrap();
+    assert_eq!(store.load_profile(work.id).unwrap().unwrap(), work);
+
+    let home = Profile::new("Home");
+    store.save_profile(&home).unwrap();
+    store.assign_layout(home.id, layout.id).unwrap();
+    assert_eq!(
+        names(&store.load_profile(home.id).unwrap().unwrap()),
+        ["Switch", "Picked"]
+    );
+    // Deleting Picked in Work (nothing binds it) deletes it: the switch's
+    // state then names an action that is gone, as before.
+    let mut without = store.load_profile(work.id).unwrap().unwrap();
+    without.actions.retain(|a| a.id != picked.id);
+    store.save_profile(&without).unwrap();
+    assert_eq!(
+        names(&store.load_profile(work.id).unwrap().unwrap()),
+        ["Switch"]
+    );
+    assert_eq!(
+        names(&store.load_profile(home.id).unwrap().unwrap()),
+        ["Switch"]
     );
 }

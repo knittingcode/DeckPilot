@@ -301,6 +301,7 @@ pub(crate) fn compose(connection: &Connection, profile: &mut Profile) -> Result<
 ///   not the profile's before) goes with that layout;
 /// - everything else is the profile's own, and so are the layouts'
 ///   actions that the profile's own actions and workflows name.
+#[allow(clippy::too_many_lines)] // One pass over the shared parts, in order.
 pub(crate) fn decompose(tx: &Connection, profile: &Profile) -> Result<()> {
     let key = profile.id.to_string();
     let old_members = id_set(
@@ -398,7 +399,7 @@ pub(crate) fn decompose(tx: &Connection, profile: &Profile) -> Result<()> {
 
     // Layouts and their references.
     for layout in &profile.layouts {
-        upsert_layout(tx, layout, stamp)?;
+        upsert_layout(tx, layout, Some(&profile.actions), stamp)?;
     }
 
     // Assignments, in order, with the defaults.
@@ -515,9 +516,17 @@ fn upsert_icon(tx: &Connection, icon: &Icon, stamp: i64) -> Result<()> {
 }
 
 /// Writes `layout`'s record (its model never changes) and the actions and
-/// icons it uses. References to actions or icons that have no record are
-/// not stored (the layout reports them as problems).
-pub(crate) fn upsert_layout(tx: &Connection, layout: &DeviceLayout, stamp: i64) -> Result<()> {
+/// icons it uses: the actions its keys run and those these name (a Multi
+/// Action Switch's states), found among `actions` (a profile's, when the
+/// layout is saved with it) or else the whole library. References to
+/// actions or icons that have no record are not stored (the layout
+/// reports them as problems).
+pub(crate) fn upsert_layout(
+    tx: &Connection,
+    layout: &DeviceLayout,
+    actions: Option<&[ActionInstance]>,
+    stamp: i64,
+) -> Result<()> {
     let id = layout.id.to_string();
     let stored_model: Option<String> = tx
         .query_row("SELECT model FROM layouts WHERE id = ?1", [&id], |row| {
@@ -552,7 +561,14 @@ pub(crate) fn upsert_layout(tx: &Connection, layout: &DeviceLayout, stamp: i64) 
         ],
     )?;
     tx.execute("DELETE FROM layout_actions WHERE layout_id = ?1", [&id])?;
-    for action in layout.bound_actions() {
+    let library_actions;
+    let candidates = if let Some(actions) = actions {
+        actions
+    } else {
+        library_actions = library(tx)?;
+        &library_actions
+    };
+    for action in action_closure(layout.bound_actions(), candidates) {
         tx.execute(
             "INSERT OR IGNORE INTO layout_actions (layout_id, action_id)
              SELECT ?1, id FROM library_actions WHERE id = ?2",
@@ -636,7 +652,7 @@ pub(crate) fn migrate(tx: &Connection) -> Result<()> {
                     .unwrap_or_default()
                     .to_owned();
                 let fresh = |seen: &HashSet<String>, own: &HashSet<String>| {
-                    (0..)
+                    (0..u32::MAX)
                         .map(|attempt| derived_id(&id, &old, attempt))
                         .find(|candidate| !seen.contains(candidate) && !own.contains(candidate))
                         .expect("a free identifier exists")
@@ -774,7 +790,7 @@ impl SqliteStore {
         if layout_row(&tx, &layout.id.to_string())?.is_some() {
             return Err(StorageError::Invalid("the layout exists already".into()));
         }
-        upsert_layout(&tx, layout, now())?;
+        upsert_layout(&tx, layout, None, now())?;
         if let Some(profile) = assign_to {
             assign(&tx, profile, layout)?;
         }
@@ -793,7 +809,7 @@ impl SqliteStore {
         let tx = self.write_transaction()?;
         let mut layout = layout_row(&tx, &id.to_string())?.ok_or(StorageError::UnknownLayout)?;
         name.clone_into(&mut layout.name);
-        upsert_layout(&tx, &layout, now())?;
+        upsert_layout(&tx, &layout, None, now())?;
         tx.commit()?;
         Ok(())
     }
@@ -816,7 +832,7 @@ impl SqliteStore {
         let tx = self.write_transaction()?;
         let original = layout_row(&tx, &id.to_string())?.ok_or(StorageError::UnknownLayout)?;
         let copy = original.duplicated(name);
-        upsert_layout(&tx, &copy, now())?;
+        upsert_layout(&tx, &copy, None, now())?;
         if let Some(profile) = assign_to {
             assign(&tx, profile, &copy)?;
         }
@@ -1040,7 +1056,7 @@ impl SqliteStore {
                 |row| row.get(0),
             )?;
             if !used {
-                upsert_layout(tx, layout, stamp)?;
+                upsert_layout(tx, layout, None, stamp)?;
             }
         }
         collect_garbage(tx)

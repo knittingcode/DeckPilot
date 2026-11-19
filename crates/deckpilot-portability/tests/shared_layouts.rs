@@ -114,13 +114,14 @@ fn an_export_of_everything_round_trips_shared_and_unused_layouts() {
     // Main is one layout of both profiles again; Spare is there, unused.
     assert_eq!(target.layout_users(main.id).unwrap().len(), 2);
     assert_eq!(target.shared_layouts().unwrap().len(), 2);
-    assert!(
+    assert_eq!(
         target
             .shared_layout(spare.id)
             .unwrap()
             .unwrap()
             .profiles
-            .is_empty()
+            .len(),
+        0
     );
 
     // Replacing everything again also removes local layouts no profile

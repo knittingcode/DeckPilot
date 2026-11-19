@@ -450,7 +450,7 @@ fn assert_shared_layouts_hold_the_documents(
     }
     assert!(layouts > 0, "{fixture:?} has no layouts");
     assert_eq!(store.shared_layouts().unwrap().len(), layouts);
-    assert!(store.device_layouts().unwrap().is_empty());
+    assert_eq!(store.device_layouts().unwrap().len(), 0);
     // Nothing needed a new identifier.
     assert!(
         store

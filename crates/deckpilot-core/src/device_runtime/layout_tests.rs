@@ -204,7 +204,7 @@ fn switching_to_the_shown_layout_and_rapid_presses_add_nothing() {
     connect(&mut runtime, &deck);
     let result = press(&mut runtime, &deck, 0);
     assert_eq!(result.message, "layout Main is shown");
-    assert!(runtime.layout_history(&deck).is_empty());
+    assert_eq!(runtime.layout_history(&deck).len(), 0);
     for _ in 0..10 {
         press(&mut runtime, &deck, 1);
     }
@@ -261,7 +261,7 @@ fn unassigned_deleted_and_incompatible_targets_are_refused() {
     let result = press(&mut runtime, &deck, 1);
     assert_eq!(result.code.as_deref(), Some(LAYOUT_UNAVAILABLE));
     assert_eq!(shown(&runtime, &deck), "Main");
-    assert!(runtime.layout_history(&deck).is_empty());
+    assert_eq!(runtime.layout_history(&deck).len(), 0);
 
     // A Stream Deck + layout on an MK.2.
     let plus = DeviceLayout::new("Dials", DeviceModelId::new(models::STREAM_DECK_PLUS_ID));
@@ -281,7 +281,7 @@ fn unassigned_deleted_and_incompatible_targets_are_refused() {
         result.message
     );
     assert_eq!(shown(&runtime, &deck), "Main");
-    assert!(!runtime.profile().unwrap().name.is_empty());
+    assert_ne!(runtime.profile().unwrap().name.len(), 0);
 }
 
 #[test]
@@ -305,7 +305,7 @@ fn a_layout_that_goes_away_is_forgotten_and_back_skips_it() {
     // home page; nothing refers to Meeting any more.
     assert_eq!(shown(&runtime, &deck), "Main");
     assert_eq!(runtime.current_page(&deck), Some(set.layouts[0].home_page));
-    assert!(runtime.device_layouts().is_empty());
+    assert_eq!(runtime.device_layouts().len(), 0);
 }
 
 #[test]
@@ -328,7 +328,7 @@ fn devices_and_profiles_keep_their_own_layouts_and_histories() {
     // Home: both start on Main; A goes Main → Media.
     runtime.set_profile(Some(home.clone()), None);
     assert_eq!(shown(&runtime, &a), "Main");
-    assert!(runtime.layout_history(&a).is_empty());
+    assert_eq!(runtime.layout_history(&a).len(), 0);
     press(&mut runtime, &a, 2);
     assert_eq!(shown(&runtime, &a), "Media");
 
@@ -368,7 +368,7 @@ fn a_restart_restores_the_layouts_but_not_the_history() {
     connect(&mut restarted, &device("B"));
     assert_eq!(shown(&restarted, &deck), "Teams");
     assert_eq!(shown(&restarted, &device("B")), "Main");
-    assert!(restarted.layout_history(&deck).is_empty());
+    assert_eq!(restarted.layout_history(&deck).len(), 0);
     assert_eq!(restarted.device_layouts().len(), 1);
     let result = press(&mut restarted, &deck, 14);
     assert_eq!(result.message, "there is no previous layout");
@@ -390,7 +390,7 @@ fn faces_and_status_follow_the_layout_the_device_shows() {
     }
     // The model's layout is still Main for devices that did not switch.
     assert_eq!(runtime.layout_for(&mk2()).unwrap().name, "Main");
-    assert!(!runtime.faces(&deck).is_empty());
+    assert_ne!(runtime.faces(&deck).len(), 0);
 }
 
 #[test]

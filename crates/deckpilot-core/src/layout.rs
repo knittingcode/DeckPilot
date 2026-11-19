@@ -1477,7 +1477,7 @@ mod tests {
                 crate::ParameterValue::Project(crate::ProjectId::new()),
             ),
         )];
-        assert!(layout.validate(&catalog(), &profile).is_empty());
+        assert_eq!(layout.validate(&catalog(), &profile), []);
         assert!(matches!(
             crate::shared_layouts::availability(&layout, &profile)[..],
             [crate::Unavailable::Project { .. }]

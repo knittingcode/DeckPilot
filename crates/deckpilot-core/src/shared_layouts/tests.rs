@@ -142,7 +142,7 @@ fn workflows_and_projects_of_another_profile_are_unavailable_not_used() {
         },
     );
     layout_binding(&mut layout, key(1), BindingTarget::action(select.id));
-    assert!(availability(&layout, &work).is_empty());
+    assert_eq!(availability(&layout, &work).len(), 0);
 
     let mut home = with_projects("Home", &["HOUSE"]);
     home.actions.push(select);
@@ -173,7 +173,7 @@ fn history_goes_forward_and_back_in_order() {
     assert_eq!((entry.layout, entry.pages), (main, vec![page]));
     // Empty: Back has nowhere to go.
     assert!(history.back(|_| true).is_none());
-    assert!(history.is_empty());
+    assert_eq!(history.len(), 0);
 }
 
 #[test]
@@ -183,12 +183,12 @@ fn switching_to_the_shown_layout_or_back_into_history_never_duplicates() {
     };
     let mut history = LayoutHistory::default();
     assert!(!history.switch(Some((main, vec![])), main, HistoryMode::Push));
-    assert!(history.is_empty());
+    assert_eq!(history.len(), 0);
     history.switch(Some((main, vec![])), teams, HistoryMode::Push);
     history.switch(Some((teams, vec![])), meeting, HistoryMode::Push);
     // Meeting → Main unwinds: Main is not in the history twice.
     assert!(history.switch(Some((meeting, vec![])), main, HistoryMode::Push));
-    assert!(history.is_empty());
+    assert_eq!(history.len(), 0);
     history.switch(Some((main, vec![])), teams, HistoryMode::Push);
     history.switch(Some((teams, vec![])), meeting, HistoryMode::Push);
     // Meeting → Teams unwinds to Teams; Back then goes to Main.
@@ -211,10 +211,10 @@ fn history_modes_and_bounds() {
     };
     let mut history = LayoutHistory::default();
     history.switch(Some((a, vec![])), b, HistoryMode::Replace);
-    assert!(history.is_empty());
+    assert_eq!(history.len(), 0);
     history.switch(Some((b, vec![])), c, HistoryMode::Push);
     history.switch(Some((c, vec![])), a, HistoryMode::Clear);
-    assert!(history.is_empty());
+    assert_eq!(history.len(), 0);
     assert_eq!(HistoryMode::parse("replace"), Some(HistoryMode::Replace));
     assert_eq!(HistoryMode::parse("other"), None);
 }
@@ -231,5 +231,5 @@ fn back_skips_layouts_that_are_gone() {
     assert_eq!(history.back(|layout| layout != b).unwrap().layout, a);
     history.switch(Some((a, vec![])), b, HistoryMode::Push);
     history.retain(|layout| layout != a);
-    assert!(history.is_empty());
+    assert_eq!(history.len(), 0);
 }

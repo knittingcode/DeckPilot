@@ -585,20 +585,20 @@ impl SharedIds {
     fn decide(
         &mut self,
         kind: deckpilot_storage::ItemKind,
-        id: String,
-        content: serde_json::Value,
+        id: &str,
+        content: &serde_json::Value,
         store: &SqliteStore,
         removed: &BTreeSet<ProfileId>,
         replace_all: bool,
     ) -> Result<(), PortabilityError> {
-        if self.kept.contains(&id) || self.renamed.contains_key(&id) {
+        if self.kept.contains(id) || self.renamed.contains_key(id) {
             return Ok(());
         }
-        let keep = match store.stored_item(kind, &id)? {
+        let keep = match store.stored_item(kind, id)? {
             None => true,
             Some(local) => {
                 let same = serde_json::from_str::<serde_json::Value>(&local)
-                    .is_ok_and(|local| local == content);
+                    .is_ok_and(|local| local == *content);
                 same || replace_all
                     || (kind == deckpilot_storage::ItemKind::Layout
                         && id.parse().is_ok_and(|layout| {
@@ -610,10 +610,10 @@ impl SharedIds {
             }
         };
         if keep {
-            self.kept.insert(id);
+            self.kept.insert(id.to_owned());
         } else {
             self.renamed
-                .insert(id, deckpilot_core::LayoutId::new().to_string());
+                .insert(id.to_owned(), deckpilot_core::LayoutId::new().to_string());
         }
         Ok(())
     }
@@ -634,7 +634,7 @@ impl SharedIds {
 
     fn resolve_profile(
         &mut self,
-        profile: Profile,
+        profile: &Profile,
         store: &SqliteStore,
         removed: &BTreeSet<ProfileId>,
         replace_all: bool,
@@ -644,8 +644,8 @@ impl SharedIds {
             let content = serde_json::to_value(layout)?;
             self.decide(
                 ItemKind::Layout,
-                layout.id.to_string(),
-                content,
+                &layout.id.to_string(),
+                &content,
                 store,
                 removed,
                 replace_all,
@@ -655,8 +655,8 @@ impl SharedIds {
             let content = serde_json::to_value(action)?;
             self.decide(
                 ItemKind::Action,
-                action.id.to_string(),
-                content,
+                &action.id.to_string(),
+                &content,
                 store,
                 removed,
                 replace_all,
@@ -666,14 +666,14 @@ impl SharedIds {
             let content = serde_json::to_value(icon)?;
             self.decide(
                 ItemKind::Icon,
-                icon.id.to_string(),
-                content,
+                &icon.id.to_string(),
+                &content,
                 store,
                 removed,
                 replace_all,
             )?;
         }
-        self.apply(&profile)
+        self.apply(profile)
     }
 
     fn resolve(
@@ -688,8 +688,8 @@ impl SharedIds {
             let content = serde_json::to_value(layout)?;
             self.decide(
                 ItemKind::Layout,
-                layout.id.to_string(),
-                content,
+                &layout.id.to_string(),
+                &content,
                 store,
                 removed,
                 replace_all,
@@ -699,8 +699,8 @@ impl SharedIds {
             let content = serde_json::to_value(action)?;
             self.decide(
                 ItemKind::Action,
-                action.id.to_string(),
-                content,
+                &action.id.to_string(),
+                &content,
                 store,
                 removed,
                 replace_all,
@@ -710,8 +710,8 @@ impl SharedIds {
             let content = serde_json::to_value(icon)?;
             self.decide(
                 ItemKind::Icon,
-                icon.id.to_string(),
-                content,
+                &icon.id.to_string(),
+                &content,
                 store,
                 removed,
                 replace_all,
@@ -802,6 +802,7 @@ fn removed_profiles(
 }
 
 /// Turns the user's choices into one set of changes. Nothing is written.
+#[allow(clippy::too_many_lines)] // The steps of one import, in order.
 pub fn plan(
     payload: &Payload,
     options: &ImportOptions,
@@ -884,7 +885,7 @@ pub fn plan(
         // Layouts, actions and icons are shared records: one that exists
         // here with other content is never overwritten for profiles that
         // stay; the imported one gets a new id.
-        let imported = shared.resolve_profile(imported, store, &removed, replace_all)?;
+        let imported = shared.resolve_profile(&imported, store, &removed, replace_all)?;
         names.insert(imported.name.to_lowercase());
         remaining_projects.extend(imported.projects.iter().map(|p| p.id));
         moved_profiles.insert(profile.id, imported.id);
@@ -901,22 +902,15 @@ pub fn plan(
             summary.removed.push((entry.id, entry.name.clone()));
         }
     }
-    // The layouts of no profile in the export (an export of everything).
-    // Replacing everything also removes the local layouts no profile uses.
-    if !payload.library.is_empty() {
-        let mut library = shared.resolve(&payload.library, store, &removed, replace_all)?;
-        for icon in &mut library.icons {
-            *icon = deckpilot_render::icons::sanitize(icon)
-                .map_err(|e| PortabilityError::Invalid(format!("icon “{}”: {e}", icon.name)))?;
-        }
-        summary
-            .layouts
-            .extend(library.layouts.iter().map(|l| l.name.clone()));
-        changes.unassigned_layouts = library.layouts;
-        changes.unassigned_actions = library.actions;
-        changes.unassigned_icons = library.icons;
-    }
-    changes.delete_unused_layouts = replace_all;
+    plan_library(
+        payload,
+        store,
+        &mut shared,
+        &removed,
+        replace_all,
+        &mut changes,
+        &mut summary,
+    )?;
 
     if options.module_settings {
         changes.module_states = plan_modules(payload, modules, &mut summary);
@@ -938,6 +932,35 @@ pub fn plan(
         summary.settings.push("updates".into());
     }
     Ok((changes, summary))
+}
+
+/// The layouts of no profile in the export (an export of everything).
+/// Replacing everything also removes the local layouts no profile uses.
+fn plan_library(
+    payload: &Payload,
+    store: &SqliteStore,
+    shared: &mut SharedIds,
+    removed: &BTreeSet<ProfileId>,
+    replace_all: bool,
+    changes: &mut ConfigChanges,
+    summary: &mut ImportSummary,
+) -> Result<(), PortabilityError> {
+    changes.delete_unused_layouts = replace_all;
+    if payload.library.is_empty() {
+        return Ok(());
+    }
+    let mut library = shared.resolve(&payload.library, store, removed, replace_all)?;
+    for icon in &mut library.icons {
+        *icon = deckpilot_render::icons::sanitize(icon)
+            .map_err(|e| PortabilityError::Invalid(format!("icon “{}”: {e}", icon.name)))?;
+    }
+    summary
+        .layouts
+        .extend(library.layouts.iter().map(|l| l.name.clone()));
+    changes.unassigned_layouts = library.layouts;
+    changes.unassigned_actions = library.actions;
+    changes.unassigned_icons = library.icons;
+    Ok(())
 }
 
 /// Where exported profiles and projects were imported to.
