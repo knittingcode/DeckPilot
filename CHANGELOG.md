@@ -15,6 +15,40 @@ released either. 0.6.0 is the first version intended for publication.
 
 ## [Unreleased]
 
+### Changed
+
+- The encrypted storage now uses SQLCipher 4.20 (through rusqlite 0.42),
+  previously 4.19. The file format and key derivation settings are
+  unchanged, so existing databases open as before. The compatibility test
+  opens a database written by 0.8.0 with the new build, and a database
+  written by the new build with 0.8.0.
+
+### Fixed
+
+- Windows: the settings window, and any other window opened from the app
+  (export, import, logs), was created but never shown, so Settings could not
+  be opened and no profile could be created. Opening a window no longer
+  blocks the thread the window needs.
+
+## [0.8.1] - 2026-11-19
+
+### Security
+
+- The plugin sandbox uses Wasmtime 50.0.2 (was 50.0.1), which fixes the
+  Wasmtime advisories of 2026-11-16 (RUSTSEC-2026-0566 to 0573). One of
+  them applies to DeckPilot's sandbox, which is built without Wasmtime's
+  `gc` feature: a plugin module using a function subtype check could make
+  its plugin host process abort (RUSTSEC-2026-0570). Each plugin runs in
+  its own sandboxed host process, so the abort stopped only that plugin,
+  never the agent or other plugins.
+
+### Fixed
+
+- `deckpilot-registry package` checks each file path the manifest names
+  before reading it, so a path such as `assets/../../icon.svg` is refused
+  without reading anything outside the plugin directory. Such a package was
+  already refused; only the read happened first.
+
 ## [0.8.0] - 2026-11-18
 
 ### Added

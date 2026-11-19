@@ -31,8 +31,13 @@ pub fn open_by_id<R: Runtime>(
     Ok(())
 }
 
+/// Async on purpose: a synchronous command runs on the main thread, and
+/// creating a webview window there deadlocks on Windows (`WebView2` needs the
+/// event loop the command is blocking). The window is then created but
+/// never shown, which is what happened to the settings window on Windows
+/// in 0.8.0 and 0.8.1.
 #[tauri::command]
-pub fn open_window<R: Runtime>(
+pub async fn open_window<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
     id: String,

@@ -105,6 +105,12 @@ jobs:
       # Installs the toolchain pinned in rust-toolchain.toml.
       - name: Install Rust toolchain
         run: rustup toolchain install && rustc --version && cargo clippy --version
+      # rust-cache hashes every installed toolchain into its key; without
+      # this, a runner whose image preinstalls a newer stable misses main's
+      # cache (tools/ci/rust-pinned-toolchain.sh).
+      - name: Only the pinned Rust toolchain
+        shell: bash
+        run: tools/ci/rust-pinned-toolchain.sh
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # One cache per OS for the workspace, saved on main by this job;
@@ -161,6 +167,12 @@ jobs:
       # Installs the toolchain pinned in rust-toolchain.toml.
       - name: Install Rust toolchain
         run: rustup toolchain install && rustc --version && cargo clippy --version
+      # rust-cache hashes every installed toolchain into its key; without
+      # this, a runner whose image preinstalls a newer stable misses main's
+      # cache (tools/ci/rust-pinned-toolchain.sh).
+      - name: Only the pinned Rust toolchain
+        shell: bash
+        run: tools/ci/rust-pinned-toolchain.sh
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Restores the Rust job's cache for this OS; saves none of its own
@@ -189,6 +201,12 @@ jobs:
           persist-credentials: false
       - name: Install Rust toolchain
         run: rustup toolchain install && rustc --version
+      # rust-cache hashes every installed toolchain into its key; without
+      # this, a runner whose image preinstalls a newer stable misses main's
+      # cache (tools/ci/rust-pinned-toolchain.sh).
+      - name: Only the pinned Rust toolchain
+        shell: bash
+        run: tools/ci/rust-pinned-toolchain.sh
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Restores the Rust job's cache for this OS; saves none of its own
@@ -255,6 +273,12 @@ jobs:
         run: tools/ci/install-linux-deps.sh
       - name: Install Rust toolchain
         run: rustup toolchain install
+      # rust-cache hashes every installed toolchain into its key; without
+      # this, a runner whose image preinstalls a newer stable misses main's
+      # cache (tools/ci/rust-pinned-toolchain.sh).
+      - name: Only the pinned Rust toolchain
+        shell: bash
+        run: tools/ci/rust-pinned-toolchain.sh
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Restores the Rust job's cache for this OS; saves none of its own

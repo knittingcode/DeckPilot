@@ -1008,6 +1008,23 @@ fn package_builds_from_a_plugin_directory() {
     .unwrap();
     let error = fx.fails(&args(&plugin).iter().map(String::as_str).collect::<Vec<_>>());
     assert!(error.contains("artifact-contract.md"), "{error}");
+
+    // A manifest path leaving the plugin directory is refused by the path
+    // rules before anything is read: `outside.png` is a directory, so a
+    // read would fail with an I/O error instead of the path rule.
+    std::fs::create_dir_all(fx.keys.path().join("outside.png")).unwrap();
+    let mut manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
+    let icons = manifest["assets"]["keyIcons"].as_object_mut().unwrap();
+    let first = icons.keys().next().unwrap().clone();
+    icons.insert(first, "../outside.png".into());
+    std::fs::write(
+        plugin.join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    let error = fx.fails(&args(&plugin).iter().map(String::as_str).collect::<Vec<_>>());
+    assert!(error.contains("`../outside.png`"), "{error}");
+    assert!(!error.contains("os error"), "{error}");
 }
 
 #[test]

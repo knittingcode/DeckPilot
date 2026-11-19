@@ -45,7 +45,7 @@ members = [
 exclude = ["plugins/runtime", "plugins/examples"]
 
 [workspace.package]
-version = "0.8.0"
+version = "0.8.1"
 edition = "2024"
 rust-version = "1.90"
 license = "Apache-2.0"
@@ -107,7 +107,7 @@ elgato-streamdeck = { version = "0.14", default-features = false }
 flate2 = "1"
 font8x8 = { version = "0.3", default-features = false }
 getrandom = "0.4"
-hkdf = "0.12"
+hkdf = "0.13"
 hidapi = "2.6"
 image = { version = "0.25", default-features = false }
 minisign-verify = "0.3"
@@ -122,10 +122,10 @@ tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "ansi"] }
 tao = "0.37"
 tray-icon = "0.26"
-rusqlite = { version = "0.41", features = ["bundled"] }
+rusqlite = { version = "0.42", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 tar = { version = "0.4", default-features = false }
 tempfile = "3"
 sysinfo = { version = "0.38", default-features = false, features = ["disk", "network", "system"] }
