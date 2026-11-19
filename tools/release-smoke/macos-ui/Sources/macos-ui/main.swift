@@ -1,7 +1,8 @@
 // Drives the INSTALLED, notarized release app from outside through the
 // macOS Accessibility API (AXUIElement), the layer VoiceOver uses:
 //
-//   swiftc -O -o macos-ui tools/release-smoke/macos-ui.swift
+//   swift build -c release --package-path tools/release-smoke/macos-ui
+//   (or: swiftc -O -o macos-ui tools/release-smoke/macos-ui/Sources/macos-ui/main.swift)
 //   macos-ui --probe --label <label> --out <dir>
 //   macos-ui --label <label> --out <dir> --app <DeckPilot.app> --pid <deckpilot-desktop pid>
 //
