@@ -344,12 +344,13 @@ const steps = [
         await switchTo(mainHandle)
         if (await visible(button("Back to DeckPilot")))
           throw new Error("the settings view has a 'Back to DeckPilot' button")
-        pressed = await execute(
-          "return arguments[0].getAttribute('aria-pressed')",
-          [{ [ELEMENT]: await wait(SETTINGS) }],
-        )
+        pressed = await execute("return arguments[0].getAttribute('aria-pressed')", [
+          { [ELEMENT]: await wait(SETTINGS) },
+        ])
         if (pressed !== "true")
-          throw new Error(`the Settings button is not pressed in the settings (aria-pressed ${pressed})`)
+          throw new Error(
+            `the Settings button is not pressed in the settings (aria-pressed ${pressed})`,
+          )
       } else {
         await wait(button("Back to DeckPilot"))
       }
@@ -365,14 +366,19 @@ const steps = [
         // (Memory's details) waited under them and comes back as it was.
         await click(MARKETPLACE)
         await until("the settings view to close", async () => !(await visible(SETTINGS_VIEW)), WAIT)
-        const status = await until(`the Marketplace as it was: Installed ${VERSION}`, async () => {
-          const t = await text("//section[@aria-label='Install status']")
-          return t.includes(`Installed ${VERSION}`) ? t : null
-        }, WAIT)
+        const status = await until(
+          `the Marketplace as it was: Installed ${VERSION}`,
+          async () => {
+            const t = await text("//section[@aria-label='Install status']")
+            return t.includes(`Installed ${VERSION}`) ? t : null
+          },
+          WAIT,
+        )
         const after = await execute("return arguments[0].getAttribute('aria-pressed')", [
           { [ELEMENT]: await wait(SETTINGS) },
         ])
-        if (after === "true") throw new Error("the Settings button stays pressed after leaving the settings")
+        if (after === "true")
+          throw new Error("the Settings button stays pressed after leaving the settings")
         back = `the toolbar's Marketplace left them: the Marketplace is back as it was (install status '${status.trim()}'), Settings aria-pressed ${after}`
       } else {
         await click(button("Back to DeckPilot"))
