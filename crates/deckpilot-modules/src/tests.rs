@@ -38,6 +38,7 @@ fn add_action(
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // One line per built-in action type.
 fn builtin_modules_register_with_namespaced_action_types() {
     let registry = builtin(Os::Linux);
     let modules = registry.modules();
@@ -77,6 +78,8 @@ fn builtin_modules_register_with_namespaced_action_types() {
             "deck.brightness",
             "deck.random",
             "deck.multi-switch",
+            "deck.switch-layout",
+            "deck.previous-layout",
             "docker.status",
             "docker.containers",
             "docker.compose-status",

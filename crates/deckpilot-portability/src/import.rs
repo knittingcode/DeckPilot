@@ -104,7 +104,67 @@ pub fn validate(
         }
     }
     validate_variables(payload)?;
+    validate_library(payload, catalog, &mut warnings)?;
     Ok(warnings)
+}
+
+/// Checks the layouts of no profile ([`Payload::library`]) like a
+/// profile's: limits, unique ids, icons, and that every key runs an
+/// exported action and shows an exported icon.
+fn validate_library(
+    payload: &Payload,
+    catalog: &ModelCatalog,
+    warnings: &mut Vec<String>,
+) -> Result<(), PortabilityError> {
+    let library = &payload.library;
+    if library.is_empty() {
+        return Ok(());
+    }
+    let invalid = |message: String| Err(PortabilityError::Invalid(message));
+    let items = library.layouts.len()
+        + library.actions.len()
+        + library
+            .layouts
+            .iter()
+            .map(|l| l.pages.iter().map(|p| p.bindings.len() + 1).sum::<usize>())
+            .sum::<usize>();
+    if items > MAX_ITEMS_PER_PROFILE || library.icons.len() > deckpilot_core::MAX_ICONS * 4 {
+        return invalid("the layouts of no profile are too large".into());
+    }
+    let unique = |ids: Vec<String>| ids.len() == ids.iter().collect::<HashSet<_>>().len();
+    if !unique(library.layouts.iter().map(|l| l.id.to_string()).collect())
+        || !unique(library.actions.iter().map(|a| a.id.to_string()).collect())
+        || !unique(library.icons.iter().map(|i| i.id.to_string()).collect())
+    {
+        return invalid("the layouts of no profile have duplicate identifiers".into());
+    }
+    for icon in &library.icons {
+        if let Err(error) = deckpilot_render::icons::sanitize(icon) {
+            return invalid(format!("icon “{}”: {error}", icon.name));
+        }
+    }
+    // The layouts with what they use, as a profile would hold them.
+    let mut holder = Profile::new("Layouts");
+    holder.actions.clone_from(&library.actions);
+    holder.icons.clone_from(&library.icons);
+    for layout in &library.layouts {
+        if layout.name.chars().count() > MAX_NAME_CHARS {
+            return invalid("a layout name is too long".into());
+        }
+        for issue in layout.validate(catalog, &holder) {
+            match issue {
+                LayoutIssue::UnknownModel(_)
+                | LayoutIssue::UnknownControl { .. }
+                | LayoutIssue::UnsupportedTrigger { .. }
+                | LayoutIssue::DuplicateBinding { .. }
+                | LayoutIssue::IncompatibleAction { .. } => {
+                    warnings.push(format!("layout {}: {issue}", layout.name));
+                }
+                other => return invalid(format!("layout `{}`: {other}", layout.name)),
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Warnings for the bindings of `payload` whose action cannot run from the
@@ -272,6 +332,8 @@ pub struct ImportPreview {
     /// Portable application settings in the export.
     pub settings: AppSettings,
     pub variables: VariablesPreview,
+    /// Names of the layouts in the export that no exported profile uses.
+    pub unassigned_layouts: Vec<String>,
 }
 
 /// The shared variables an import brings.
@@ -392,6 +454,12 @@ pub fn preview(
         local_profiles: local.into_iter().map(|p| (p.id, p.name)).collect(),
         settings: payload.settings.clone(),
         variables: variables_preview(payload, store)?,
+        unassigned_layouts: payload
+            .library
+            .layouts
+            .iter()
+            .map(|l| l.name.clone())
+            .collect(),
     })
 }
 
@@ -495,6 +563,162 @@ pub struct ImportSummary {
     pub variable_values: usize,
     /// Values that were not imported, and why.
     pub skipped_values: Vec<String>,
+    /// Layouts of no profile that were imported.
+    pub layouts: Vec<String>,
+}
+
+/// How the layouts, actions and icons of an import relate to the shared
+/// records here, decided once per identifier for the whole import, so a
+/// layout two imported profiles share stays shared.
+#[derive(Debug, Default)]
+struct SharedIds {
+    /// Identifiers that get a new one, old → new.
+    renamed: BTreeMap<String, String>,
+    /// Identifiers decided to be kept.
+    kept: BTreeSet<String>,
+}
+
+impl SharedIds {
+    /// Whether the item `id` of `kind` with `content` can keep its id: no
+    /// record has it, the record holds the same, or it is only used by
+    /// profiles the import removes.
+    fn decide(
+        &mut self,
+        kind: deckpilot_storage::ItemKind,
+        id: &str,
+        content: &serde_json::Value,
+        store: &SqliteStore,
+        removed: &BTreeSet<ProfileId>,
+        replace_all: bool,
+    ) -> Result<(), PortabilityError> {
+        if self.kept.contains(id) || self.renamed.contains_key(id) {
+            return Ok(());
+        }
+        let keep = match store.stored_item(kind, id)? {
+            None => true,
+            Some(local) => {
+                let same = serde_json::from_str::<serde_json::Value>(&local)
+                    .is_ok_and(|local| local == *content);
+                same || replace_all
+                    || (kind == deckpilot_storage::ItemKind::Layout
+                        && id.parse().is_ok_and(|layout| {
+                            store.layout_users(layout).is_ok_and(|users| {
+                                !users.is_empty()
+                                    && users.iter().all(|u| removed.contains(&u.profile_id))
+                            })
+                        }))
+            }
+        };
+        if keep {
+            self.kept.insert(id.to_owned());
+        } else {
+            self.renamed
+                .insert(id.to_owned(), deckpilot_core::LayoutId::new().to_string());
+        }
+        Ok(())
+    }
+
+    /// `value` with the renamed identifiers replaced everywhere (bindings,
+    /// workflow steps, default layouts, *Switch layout* targets, a Multi
+    /// Action Switch's states).
+    fn apply<T: serde::Serialize + serde::de::DeserializeOwned>(
+        &self,
+        value: &T,
+    ) -> Result<T, PortabilityError> {
+        let mut text = serde_json::to_string(value)?;
+        for (old, new) in &self.renamed {
+            text = text.replace(old.as_str(), new);
+        }
+        Ok(serde_json::from_str(&text)?)
+    }
+
+    fn resolve_profile(
+        &mut self,
+        profile: &Profile,
+        store: &SqliteStore,
+        removed: &BTreeSet<ProfileId>,
+        replace_all: bool,
+    ) -> Result<Profile, PortabilityError> {
+        use deckpilot_storage::ItemKind;
+        for layout in &profile.layouts {
+            let content = serde_json::to_value(layout)?;
+            self.decide(
+                ItemKind::Layout,
+                &layout.id.to_string(),
+                &content,
+                store,
+                removed,
+                replace_all,
+            )?;
+        }
+        for action in &profile.actions {
+            let content = serde_json::to_value(action)?;
+            self.decide(
+                ItemKind::Action,
+                &action.id.to_string(),
+                &content,
+                store,
+                removed,
+                replace_all,
+            )?;
+        }
+        for icon in &profile.icons {
+            let content = serde_json::to_value(icon)?;
+            self.decide(
+                ItemKind::Icon,
+                &icon.id.to_string(),
+                &content,
+                store,
+                removed,
+                replace_all,
+            )?;
+        }
+        self.apply(profile)
+    }
+
+    fn resolve(
+        &mut self,
+        library: &crate::LibraryExport,
+        store: &SqliteStore,
+        removed: &BTreeSet<ProfileId>,
+        replace_all: bool,
+    ) -> Result<crate::LibraryExport, PortabilityError> {
+        use deckpilot_storage::ItemKind;
+        for layout in &library.layouts {
+            let content = serde_json::to_value(layout)?;
+            self.decide(
+                ItemKind::Layout,
+                &layout.id.to_string(),
+                &content,
+                store,
+                removed,
+                replace_all,
+            )?;
+        }
+        for action in &library.actions {
+            let content = serde_json::to_value(action)?;
+            self.decide(
+                ItemKind::Action,
+                &action.id.to_string(),
+                &content,
+                store,
+                removed,
+                replace_all,
+            )?;
+        }
+        for icon in &library.icons {
+            let content = serde_json::to_value(icon)?;
+            self.decide(
+                ItemKind::Icon,
+                &icon.id.to_string(),
+                &content,
+                store,
+                removed,
+                replace_all,
+            )?;
+        }
+        self.apply(library)
+    }
 }
 
 fn unique_name(name: &str, taken: &BTreeSet<String>) -> String {
@@ -578,6 +802,7 @@ fn removed_profiles(
 }
 
 /// Turns the user's choices into one set of changes. Nothing is written.
+#[allow(clippy::too_many_lines)] // The steps of one import, in order.
 pub fn plan(
     payload: &Payload,
     options: &ImportOptions,
@@ -616,6 +841,8 @@ pub fn plan(
     let mut moved_projects: BTreeMap<ProjectId, (ProfileId, ProjectId)> = BTreeMap::new();
     let mut remaining_projects: HashSet<ProjectId> = HashSet::new();
     let mut names: BTreeSet<String> = BTreeSet::new();
+    let replace_all = options.mode == ImportMode::Replace;
+    let mut shared = SharedIds::default();
     for summary_entry in &local {
         if removed.contains(&summary_entry.id) {
             continue;
@@ -655,6 +882,10 @@ pub fn plan(
             *icon = deckpilot_render::icons::sanitize(icon)
                 .map_err(|e| PortabilityError::Invalid(format!("icon “{}”: {e}", icon.name)))?;
         }
+        // Layouts, actions and icons are shared records: one that exists
+        // here with other content is never overwritten for profiles that
+        // stay; the imported one gets a new id.
+        let imported = shared.resolve_profile(&imported, store, &removed, replace_all)?;
         names.insert(imported.name.to_lowercase());
         remaining_projects.extend(imported.projects.iter().map(|p| p.id));
         moved_profiles.insert(profile.id, imported.id);
@@ -671,6 +902,15 @@ pub fn plan(
             summary.removed.push((entry.id, entry.name.clone()));
         }
     }
+    plan_library(
+        payload,
+        store,
+        &mut shared,
+        &removed,
+        replace_all,
+        &mut changes,
+        &mut summary,
+    )?;
 
     if options.module_settings {
         changes.module_states = plan_modules(payload, modules, &mut summary);
@@ -692,6 +932,35 @@ pub fn plan(
         summary.settings.push("updates".into());
     }
     Ok((changes, summary))
+}
+
+/// The layouts of no profile in the export (an export of everything).
+/// Replacing everything also removes the local layouts no profile uses.
+fn plan_library(
+    payload: &Payload,
+    store: &SqliteStore,
+    shared: &mut SharedIds,
+    removed: &BTreeSet<ProfileId>,
+    replace_all: bool,
+    changes: &mut ConfigChanges,
+    summary: &mut ImportSummary,
+) -> Result<(), PortabilityError> {
+    changes.delete_unused_layouts = replace_all;
+    if payload.library.is_empty() {
+        return Ok(());
+    }
+    let mut library = shared.resolve(&payload.library, store, removed, replace_all)?;
+    for icon in &mut library.icons {
+        *icon = deckpilot_render::icons::sanitize(icon)
+            .map_err(|e| PortabilityError::Invalid(format!("icon “{}”: {e}", icon.name)))?;
+    }
+    summary
+        .layouts
+        .extend(library.layouts.iter().map(|l| l.name.clone()));
+    changes.unassigned_layouts = library.layouts;
+    changes.unassigned_actions = library.actions;
+    changes.unassigned_icons = library.icons;
+    Ok(())
 }
 
 /// Where exported profiles and projects were imported to.

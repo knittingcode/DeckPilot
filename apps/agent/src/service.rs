@@ -1315,6 +1315,9 @@ impl Agent {
             }
             other => self.runtime.set_profile(other, project),
         }
+        // The layouts devices switched to, as saved: the app may have
+        // changed a default, removed or deleted a layout meanwhile.
+        self.restore_device_layouts();
         stages.done("engine");
         self.log_unavailable_bindings();
         self.reload_icons();
@@ -1343,6 +1346,7 @@ impl Agent {
             }
         }
         self.persist_pages();
+        self.persist_device_layouts();
         // Something happened: live states may refresh once their
         // interval allows.
         self.states.invalidate();
@@ -1751,7 +1755,7 @@ impl Agent {
                 let model = self.runtime.catalog().get(&status.device.model);
                 let page = self.runtime.current_page(&status.device).and_then(|page| {
                     self.runtime
-                        .layout_for(&status.device.model)
+                        .layout_of(&status.device)
                         .and_then(|layout| layout.page(page))
                         .map(|page| page.name.clone())
                 });
@@ -1759,10 +1763,13 @@ impl Agent {
                     descriptor: self.device_descriptor(&status.device),
                     model_name: model
                         .map_or_else(|| status.device.model.to_string(), |m| m.name.clone()),
-                    layout: self.runtime.layout_status(&status.device.model),
+                    // The layout this device shows (it may have switched
+                    // to another layout of the profile).
+                    layout: self.runtime.device_layout_status(&status.device),
                     state: status.state,
                     page,
                     source: self.options.backend.source(&status.device).into(),
+                    previous_layout: self.runtime.layout_history(&status.device).last().copied(),
                     id: status.device,
                 }
             })

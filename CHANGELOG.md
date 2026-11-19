@@ -63,12 +63,35 @@ released either. 0.6.0 is the first version intended for publication.
 - System monitor keys show their value under the title: `23%`,
   `12.4/32 GiB`, `↓ 2.1 MB/s` / `↑ 340 kB/s`, `68% used`.
 
+- The configuration database is upgraded to schema 10 (an encrypted
+  backup is made first). DeckPilot 0.8.1 and earlier cannot open the
+  upgraded database; to go back, restore the `deckpilot-schema9-…` backup.
+  Exports of selected profiles remain readable by earlier releases; a full
+  export that includes layouts no profile uses requires this version.
+
 ### Added
 
 - The editor's preview shows live values (e.g. CPU usage) as the device
   does, read by the agent; it says when values are stale or unavailable.
   IPC protocol 11 (`watchKeyStates`); older agents and apps keep working
   without it.
+
+- Shared layouts. Layouts are now resources of their own: one layout can
+  be used by several profiles, and editing it changes it everywhere it is
+  used, while each profile keeps its own projects, variables, workflows,
+  layout order, default layout per device and page state. A new Layouts
+  page in the navigation rail lists every layout with the profiles that use
+  it and the devices it fits; layouts can be created, renamed, duplicated
+  (an independent copy), assigned to or removed from profiles, and deleted
+  after confirming the profiles that use them. Removing a layout from a
+  profile never deletes it. Settings › Profiles lists each profile's
+  layouts, and the device editor can open, add and switch between shared
+  layouts.
+- Switch layout and Back to previous layout (Navigation actions) move one
+  device between the active profile's layouts without changing the
+  profile; each device remembers its layout across restarts, and the way
+  back is kept per device and profile. Switch layout keys are titled with
+  the layout they show, and Back shows when there is nothing to go back to.
 
 ### Fixed
 

@@ -19,6 +19,11 @@
 //! - **Profiles.** *Switch profile* activates one profile, or the next or
 //!   previous one in the order profiles are listed. The agent has one
 //!   active profile: every device follows.
+//! - **Layouts.** *Switch layout* shows another layout of the active
+//!   profile on the device whose key was pressed, and *Back to previous
+//!   layout* returns to the one before; the profile stays. Distinct from
+//!   *Next page*/*Previous page* (pages of one layout), folders and their
+//!   Back key (a page inside a layout) and *Switch profile*.
 //!
 //! - **Random action.** Runs one of several saved actions or workflows,
 //!   picked at random (see [`random`]).
@@ -36,9 +41,9 @@ use std::collections::BTreeMap;
 use deckpilot_core::graph::{ActionEffect, NodeSpec, OutputSpec, ValueKind};
 use deckpilot_core::{
     ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, Capability,
-    DeckRequest, ExecutionContext, FeatureModule, KeyFace, ModuleId, ModuleManifest,
-    ParameterError, ParameterKind, ParameterSpec, ParameterValue, Portability, ProfileId,
-    ProfileTarget, Project,
+    DeckRequest, ExecutionContext, FeatureModule, HistoryMode, KeyFace, LayoutId, LayoutNavigation,
+    ModuleId, ModuleManifest, PageId, ParameterError, ParameterKind, ParameterSpec, ParameterValue,
+    Portability, ProfileId, ProfileTarget, Project,
 };
 
 pub const MODULE_ID: &str = "deck";
@@ -49,6 +54,24 @@ pub const SWITCH_PROFILE: &str = "deck.switch-profile";
 pub const BRIGHTNESS: &str = "deck.brightness";
 pub const RANDOM: &str = "deck.random";
 pub const MULTI_SWITCH: &str = "deck.multi-switch";
+/// *Switch layout*: shows another layout of the active profile on the
+/// device whose key was pressed.
+pub const SWITCH_LAYOUT: &str = "deck.switch-layout";
+/// *Back to previous layout*: shows the layout the device showed before.
+pub const PREVIOUS_LAYOUT: &str = "deck.previous-layout";
+
+/// Parameter of *Switch layout*: the layout's id (never its name).
+pub const LAYOUT: &str = "layout";
+/// Parameter of *Switch layout*: the id of the page to show; the home page
+/// when empty.
+pub const PAGE: &str = "page";
+/// Parameter of *Switch layout*: what Back does afterwards ([`HISTORIES`]).
+pub const HISTORY: &str = "history";
+pub const HISTORY_PUSH: &str = "push";
+pub const HISTORY_REPLACE: &str = "replace";
+pub const HISTORY_CLEAR: &str = "clear";
+/// The values of [`HISTORY`].
+pub const HISTORIES: [&str; 3] = [HISTORY_PUSH, HISTORY_REPLACE, HISTORY_CLEAR];
 
 pub mod random;
 pub mod switch;
@@ -93,6 +116,14 @@ pub mod codes {
     pub const PROFILE_NOT_FOUND: &str = "profile-not-found";
     /// There is no other profile to switch to. Reported by the agent.
     pub const NO_OTHER_PROFILE: &str = "no-other-profile";
+    /// *Switch layout* has no layout, or not a layout id.
+    pub const LAYOUT_MISSING: &str = "layout-missing";
+    /// The layout to switch to is not assigned to the active profile (or
+    /// is gone). Reported by the device runtime.
+    pub const LAYOUT_UNAVAILABLE: &str = deckpilot_core::device_runtime::LAYOUT_UNAVAILABLE;
+    /// The layout is made for another device model. Reported by the device
+    /// runtime.
+    pub const LAYOUT_INCOMPATIBLE: &str = deckpilot_core::device_runtime::LAYOUT_INCOMPATIBLE;
 }
 
 /// # Panics
@@ -149,6 +180,14 @@ pub fn multi_switch_id() -> ActionTypeId {
     type_id(MULTI_SWITCH)
 }
 
+pub fn switch_layout_id() -> ActionTypeId {
+    type_id(SWITCH_LAYOUT)
+}
+
+pub fn previous_layout_id() -> ActionTypeId {
+    type_id(PREVIOUS_LAYOUT)
+}
+
 #[derive(Debug)]
 pub struct DeckModule {
     manifest: ModuleManifest,
@@ -161,9 +200,10 @@ impl DeckModule {
                 id: module_id(),
                 version: env!("CARGO_PKG_VERSION").into(),
                 name: "Deck".into(),
-                description: "Moves between the pages of a layout, shows the page a device is \
+                description:
+                    "Moves between the pages and layouts of a device, shows the page a device is \
                               on and switches profiles from a key."
-                    .into(),
+                        .into(),
                 platforms: Vec::new(),
                 pages: Vec::new(),
                 // Reading the profile: the candidates of a Random Action.
@@ -204,6 +244,8 @@ impl FeatureModule for DeckModule {
             Box::new(Brightness::new()),
             Box::new(random::RandomAction::new()),
             Box::new(switch::MultiSwitch::new()),
+            Box::new(SwitchLayout::new()),
+            Box::new(PreviousLayout::new()),
         ]
     }
 }
@@ -508,6 +550,218 @@ impl ActionHandler for SwitchProfile {
     }
 }
 
+/// `deck.switch-layout` (*Switch layout*): shows another layout of the
+/// active profile on the device whose key was pressed, without changing
+/// the profile, its projects or variables. The layout is named by its id;
+/// the device runtime checks that it is assigned to the active profile and
+/// made for the device's model, and keeps the way back (see
+/// `deckpilot_core::LayoutHistory`). Keys only, pressed: not on encoders
+/// or touch strips, which have no interaction mapped to it.
+#[derive(Debug)]
+pub struct SwitchLayout(ActionType);
+
+impl SwitchLayout {
+    pub fn new() -> Self {
+        Self(ActionType {
+            id: switch_layout_id(),
+            name: "Switch layout".into(),
+            description: "Shows another layout of the active profile on this device. The \
+                          profile, its projects and variables stay as they are; Back to \
+                          previous layout returns."
+                .into(),
+            category: "Navigation".into(),
+            parameters: vec![
+                ParameterSpec {
+                    key: LAYOUT.into(),
+                    label: "Layout".into(),
+                    description: Some(
+                        "A layout assigned to the profile and made for this device.".into(),
+                    ),
+                    kind: ParameterKind::Text {
+                        multiline: false,
+                        max_length: Some(36),
+                    },
+                    required: true,
+                    default: None,
+                },
+                ParameterSpec {
+                    key: PAGE.into(),
+                    label: "Page".into(),
+                    description: Some(
+                        "The page to show; its home page when empty or no longer there.".into(),
+                    ),
+                    kind: ParameterKind::Text {
+                        multiline: false,
+                        max_length: Some(36),
+                    },
+                    required: false,
+                    default: None,
+                },
+                ParameterSpec {
+                    key: HISTORY.into(),
+                    label: "Back".into(),
+                    description: Some(
+                        "push: Back to previous layout returns to the layout left. replace: \
+                         Back skips it. clear: Back has nowhere to go afterwards."
+                            .into(),
+                    ),
+                    kind: ParameterKind::Choice {
+                        options: HISTORIES.iter().map(|&h| h.to_owned()).collect(),
+                    },
+                    required: true,
+                    default: Some(ParameterValue::Choice(HISTORY_PUSH.into())),
+                },
+            ],
+            requires_project: false,
+            deprecated: false,
+            controls: Some(deckpilot_core::ActionControls::keys()),
+            node: NodeSpec {
+                icon: Some("app-window".into()),
+                outputs: vec![
+                    output("layoutId", "Layout id"),
+                    output("layoutName", "Layout"),
+                ],
+                timeout_ms: 5_000,
+                retry_safe: true,
+                idempotent: true,
+                effect: ActionEffect::ReadOnly,
+                ..NodeSpec::default()
+            },
+        })
+    }
+
+    /// The request `parameters` ask for, or what is wrong with them.
+    fn request(parameters: &ActionParameters) -> Result<DeckRequest, (String, String)> {
+        let layout = parameters.text(LAYOUT).unwrap_or_default().trim();
+        if layout.is_empty() {
+            return Err((LAYOUT.into(), "choose the layout to switch to".into()));
+        }
+        let layout = layout.parse::<LayoutId>().map_err(|_| {
+            (
+                LAYOUT.to_owned(),
+                "the layout is not a layout id".to_owned(),
+            )
+        })?;
+        let page = match parameters.text(PAGE).unwrap_or_default().trim() {
+            "" => None,
+            page => Some(
+                page.parse::<PageId>()
+                    .map_err(|_| (PAGE.to_owned(), "the page is not a page id".to_owned()))?,
+            ),
+        };
+        let history = parameters
+            .text(HISTORY)
+            .and_then(HistoryMode::parse)
+            .unwrap_or_default();
+        Ok(DeckRequest::SwitchLayout {
+            layout,
+            page,
+            history,
+        })
+    }
+}
+
+impl Default for SwitchLayout {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ActionHandler for SwitchLayout {
+    fn definition(&self) -> &ActionType {
+        &self.0
+    }
+
+    fn layout_navigation(&self, parameters: &ActionParameters) -> Option<LayoutNavigation> {
+        match Self::request(parameters) {
+            Ok(DeckRequest::SwitchLayout { layout, .. }) => {
+                Some(LayoutNavigation::SwitchTo(layout))
+            }
+            _ => None,
+        }
+    }
+
+    fn validate(&self, parameters: &ActionParameters) -> Vec<ParameterError> {
+        match Self::request(parameters) {
+            Ok(_) => Vec::new(),
+            Err((key, reason)) => vec![ParameterError::Invalid { key, reason }],
+        }
+    }
+
+    fn execute(
+        &self,
+        parameters: &ActionParameters,
+        context: &ExecutionContext<'_>,
+    ) -> ActionResult {
+        if let Err(denied) = context.permit(Capability::DeckControl) {
+            return denied.into();
+        }
+        match Self::request(parameters) {
+            Ok(request) => ActionResult::success("switch layout").with_request(request),
+            Err((_, reason)) => ActionResult::error(codes::LAYOUT_MISSING, reason),
+        }
+    }
+}
+
+/// `deck.previous-layout` (*Back to previous layout*): shows the layout the
+/// device showed before the current one in this profile, at the page it
+/// showed. With nothing to go back to it does nothing. Not the Back key of
+/// a folder, which returns to the folder's page within one layout.
+#[derive(Debug)]
+pub struct PreviousLayout(ActionType);
+
+impl PreviousLayout {
+    pub fn new() -> Self {
+        Self(ActionType {
+            id: previous_layout_id(),
+            name: "Back to previous layout".into(),
+            description: "Shows the layout this device showed before the current one, in this \
+                          profile. Does nothing when there is none. (A folder's Back key \
+                          returns to a page instead.)"
+                .into(),
+            category: "Navigation".into(),
+            parameters: Vec::new(),
+            requires_project: false,
+            deprecated: false,
+            controls: Some(deckpilot_core::ActionControls::keys()),
+            node: view_node(
+                "arrow-left",
+                vec![
+                    output("layoutId", "Layout id"),
+                    output("layoutName", "Layout"),
+                ],
+            ),
+        })
+    }
+}
+
+impl Default for PreviousLayout {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ActionHandler for PreviousLayout {
+    fn definition(&self) -> &ActionType {
+        &self.0
+    }
+
+    fn layout_navigation(&self, _parameters: &ActionParameters) -> Option<LayoutNavigation> {
+        Some(LayoutNavigation::Back)
+    }
+
+    fn execute(
+        &self,
+        _parameters: &ActionParameters,
+        context: &ExecutionContext<'_>,
+    ) -> ActionResult {
+        if let Err(denied) = context.permit(Capability::DeckControl) {
+            return denied.into();
+        }
+        ActionResult::success("previous layout").with_request(DeckRequest::PreviousLayout)
+    }
+}
+
 /// `deck.brightness`: sets the display brightness of the devices, or makes
 /// them brighter or dimmer by a step. It is the setting of the app's
 /// Devices page; devices without a brightness are left alone.
@@ -658,7 +912,9 @@ mod tests {
                 SWITCH_PROFILE,
                 BRIGHTNESS,
                 RANDOM,
-                MULTI_SWITCH
+                MULTI_SWITCH,
+                SWITCH_LAYOUT,
+                PREVIOUS_LAYOUT
             ]
         );
         assert!(ids.iter().all(|id| id.starts_with("deck.")));
@@ -688,6 +944,58 @@ mod tests {
     }
 
     #[test]
+    fn layout_actions_ask_the_runtime_by_layout_id() {
+        let layout = deckpilot_core::LayoutId::new();
+        let page = deckpilot_core::PageId::new();
+        let switch = run(
+            &SwitchLayout::new(),
+            &ActionParameters::new()
+                .with(LAYOUT, ParameterValue::Text(layout.to_string()))
+                .with(PAGE, ParameterValue::Text(page.to_string()))
+                .with(HISTORY, ParameterValue::Choice(HISTORY_REPLACE.into())),
+            &granted(),
+        );
+        assert_eq!(
+            switch.deck_request(),
+            Some(DeckRequest::SwitchLayout {
+                layout,
+                page: Some(page),
+                history: HistoryMode::Replace,
+            })
+        );
+        // The defaults: the home page, and Back returns.
+        let plain = run(
+            &SwitchLayout::new(),
+            &ActionParameters::new().with(LAYOUT, ParameterValue::Text(layout.to_string())),
+            &granted(),
+        );
+        assert_eq!(
+            plain.deck_request(),
+            Some(DeckRequest::SwitchLayout {
+                layout,
+                page: None,
+                history: HistoryMode::Push,
+            })
+        );
+        // A name is not an id.
+        let named = ActionParameters::new().with(LAYOUT, ParameterValue::Text("Main".into()));
+        assert_eq!(SwitchLayout::new().validate(&named).len(), 1);
+        let back = run(&PreviousLayout::new(), &ActionParameters::new(), &granted());
+        assert_eq!(back.deck_request(), Some(DeckRequest::PreviousLayout));
+        // Keys only: not dials or touch strips.
+        for handler in [
+            &SwitchLayout::new() as &dyn ActionHandler,
+            &PreviousLayout::new(),
+        ] {
+            assert_eq!(
+                handler.definition().controls,
+                Some(deckpilot_core::ActionControls::keys())
+            );
+            assert_eq!(handler.definition().category, "Navigation");
+        }
+    }
+
+    #[test]
     fn nothing_is_asked_without_the_capability() {
         let nothing = BTreeSet::new();
         for handler in DeckModule::new().action_handlers(&ActionParameters::new()) {
@@ -705,6 +1013,11 @@ mod tests {
                         "action:{}",
                         deckpilot_core::ActionInstanceId::new()
                     )),
+                )
+            } else if handler.definition().id.as_str() == SWITCH_LAYOUT {
+                ActionParameters::new().with(
+                    LAYOUT,
+                    ParameterValue::Text(deckpilot_core::LayoutId::new().to_string()),
                 )
             } else {
                 ActionParameters::new()

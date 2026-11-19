@@ -12,9 +12,17 @@
 #
 # Prints one line per case and exits non-zero if any case fails. Nothing is
 # published and nothing outside <work dir> and the old worktree is written.
+#
+# OLD_PROTOCOL is the protocol of <old tag>'s agent (default 4, that of
+# v0.5.0-2). With OLD_BIN and NEW_BIN set (directories holding deckpilot-agent and
+# deckpilot-dev of <old tag> and of this commit, built beforehand, e.g. in
+# slots of tools/dev/target-slot.sh), nothing is built and no worktree is
+# created; <old tag> then only names the old version in the output.
 set -euo pipefail
 
 OLD_TAG=${1:-v0.5.0-2}
+# The protocol the old agent speaks (4: 0.5.0-2; 10: 0.6.0 to 0.8.1).
+OLD_PROTOCOL=${OLD_PROTOCOL:-4}
 WORK=${2:-$(mktemp -d "${TMPDIR:-/tmp}/deckpilot-compat.XXXXXX")}
 ROOT=$(git rev-parse --show-toplevel)
 OLD_TREE=${OLD_TREE:-"$WORK/old-tree"}
@@ -39,6 +47,9 @@ result() {
   [ "$2" = ok ] || failures=$((failures + 1))
 }
 
+if [ -n "${OLD_BIN:-}" ] && [ -n "${NEW_BIN:-}" ]; then
+  log "using prebuilt binaries: $OLD_BIN and $NEW_BIN"
+else
 if [ ! -f "$OLD_TREE/Cargo.toml" ]; then
   # A build cache may already have restored the old tree's target folder;
   # it is kept aside while the worktree is created.
@@ -58,6 +69,7 @@ log "building this commit"
 (cd "$ROOT" && cargo build --locked -q -p deckpilot-agent -p deckpilot-dev)
 OLD_BIN="$OLD_TREE/target/debug"
 NEW_BIN="$ROOT/target/debug"
+fi
 OLD_VERSION=$("$OLD_BIN/deckpilot-agent" --version | awk '{print $NF}')
 NEW_VERSION=$("$NEW_BIN/deckpilot-agent" --version | awk '{print $NF}')
 
@@ -103,7 +115,7 @@ case "$status" in
   *) result "$OLD_VERSION client  -> $OLD_VERSION agent" FAIL "$status" ;;
 esac
 if (cd "$ROOT" && DECKPILOT_COMPAT_DATA_DIR="$old_data" \
-  DECKPILOT_COMPAT_AGENT_VERSION="$OLD_VERSION" DECKPILOT_COMPAT_AGENT_PROTOCOL=4 \
+  DECKPILOT_COMPAT_AGENT_VERSION="$OLD_VERSION" DECKPILOT_COMPAT_AGENT_PROTOCOL="$OLD_PROTOCOL" \
   cargo test --locked -q -p deckpilot-ipc --test real_agent -- --nocapture \
   >"$WORK/new-client-old-agent.log" 2>&1); then
   result "$NEW_VERSION client -> $OLD_VERSION agent (negotiated)" ok \

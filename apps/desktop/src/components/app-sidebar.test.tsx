@@ -26,7 +26,7 @@ describe("main navigation", () => {
     )
     await user.click(screen.getByRole("button", { name: "Device Editor" }))
     expect(onNavigate).toHaveBeenCalledWith("designer")
-    for (const name of ["Action Library", "Workflows"]) {
+    for (const name of ["Layouts", "Action Library", "Workflows"]) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument()
     }
   })

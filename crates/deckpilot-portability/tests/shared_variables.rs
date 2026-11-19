@@ -12,7 +12,9 @@ use deckpilot_core::{CredentialId, ModuleId, Os, Profile, Project, ProjectKey, S
 use deckpilot_device::ModelCatalog;
 use deckpilot_portability::import::{ConflictResolution, validate};
 use deckpilot_portability::payload::{self, ExportOptions, ExportedValue, Payload};
-use deckpilot_portability::{ImportOptions, ImportSummary, PAYLOAD_VERSION, plan, preview};
+use deckpilot_portability::{
+    ImportOptions, ImportSummary, PAYLOAD_VERSION_WITHOUT_LIBRARY, plan, preview,
+};
 use deckpilot_storage::crypto::{KdfParams, Password};
 use deckpilot_storage::{ConfigStore, SqliteStore, VariableOrigin};
 
@@ -193,7 +195,8 @@ fn sensitive_values_secrets_and_other_profiles_never_leave() {
     let (store, work, _) = populated();
     for options in [WITH_SETTINGS, PROFILES_ONLY] {
         let payload = export(&store, Some(&[work.id]), options);
-        assert_eq!(payload.version, PAYLOAD_VERSION);
+        // Without layouts of no profile: readable by releases up to 0.8.1.
+        assert_eq!(payload.version, PAYLOAD_VERSION_WITHOUT_LIBRARY);
         let plain = serde_json::to_vec(&payload).unwrap();
         let sealed = payload::seal(
             &payload,

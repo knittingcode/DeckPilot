@@ -75,8 +75,8 @@ Library and the workflow builder no longer offer it for new ones.
 
 ### Deck actions
 
-The `deck` module's actions act on the deck itself: the pages a device
-shows and the active profile. A handler cannot reach the device runtime or
+The `deck` module's actions act on the deck itself: the pages and layouts
+a device shows and the active profile. A handler cannot reach the device runtime or
 the agent, so each action *asks*, as the project actions do with
 `ContextEffect`: its result carries a `DeckRequest`
 (`crates/deckpilot-core/src/execution.rs`), which the registry lets
@@ -85,6 +85,7 @@ through only for a module with the capability `DeckControl`.
 | Request | Applied by | Effect |
 | ------- | ---------- | ------ |
 | `NextPage`, `PreviousPage` | the device runtime (`Runtime::dispatch`) | moves the device whose key ran the action |
+| `SwitchLayout`, `PreviousLayout` | the device runtime | shows another layout of the active profile on that device, or the one before ([Switching layouts](data-model.md#switching-layouts)) |
 | `SwitchProfile` | the agent (`apps/agent/src/service/deck.rs`) | activates a profile through the path of `setActiveProfile` |
 | `Brightness` | the agent | changes the brightness setting through the path of `setBrightness` |
 

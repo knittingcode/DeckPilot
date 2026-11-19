@@ -1,7 +1,8 @@
 //! Upgrades of real databases checked row by row — 0.5.0-2
 //! (`tests/fixtures/v0.5.0-2`, schema 5), 0.6.0 (`tests/fixtures/v0.6.0`,
-//! schema 7) and `main` before schema 9 (`tests/fixtures/schema8`) — and
-//! upgrades that fail or are killed half-way.
+//! schema 7), `main` before schema 9 (`tests/fixtures/schema8`) and 0.8.1
+//! (`tests/fixtures/v0.8.1`, schema 9) — and upgrades that fail or are
+//! killed half-way.
 //!
 //! These are unit tests because failures are injected at points inside the
 //! upgrade ([`Failpoint`]), which only test builds have. A killed process is
@@ -24,12 +25,16 @@ struct Fixture {
     dir: &'static str,
     /// Its schema version.
     version: u32,
+    /// Rows were added to the seed so that every table of its schema has
+    /// some (the 0.8.1 fixture is the plain seed).
+    complete: bool,
 }
 
 /// `deckpilot-dev validation seed` of 0.5.0-2.
 const V0_5_0: Fixture = Fixture {
     dir: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/v0.5.0-2"),
     version: 5,
+    complete: true,
 };
 /// `deckpilot-dev validation seed` of 0.6.0 (`main` before schema 8), plus a
 /// workflow run, a credential, an active project and launches, so that
@@ -37,6 +42,7 @@ const V0_5_0: Fixture = Fixture {
 const V0_6_0: Fixture = Fixture {
     dir: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/v0.6.0"),
     version: 7,
+    complete: true,
 };
 /// The 0.6.0 fixture upgraded by `main` before schema 9 (shared variables
 /// and provenance, #97), plus shared variables with global, profile and
@@ -45,10 +51,32 @@ const V0_6_0: Fixture = Fixture {
 const SCHEMA_8: Fixture = Fixture {
     dir: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/schema8"),
     version: 8,
+    complete: true,
 };
-const FIXTURES: [Fixture; 3] = [V0_5_0, V0_6_0, SCHEMA_8];
+/// `deckpilot-dev validation seed` of the 0.8.1 release (schema 9, the
+/// schema of every release from 0.6.0 to 0.8.1), its machine paths replaced
+/// with neutral ones.
+const V0_8_1: Fixture = Fixture {
+    dir: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/v0.8.1"),
+    version: 9,
+    complete: false,
+};
+const FIXTURES: [Fixture; 4] = [V0_5_0, V0_6_0, SCHEMA_8, V0_8_1];
 /// The schema this build upgrades to.
-const CURRENT: u32 = 9;
+const CURRENT: u32 = 10;
+/// The tables schema 10 adds (shared layouts). `device_layouts` starts
+/// empty; the others hold what the profile documents held.
+const SCHEMA_10_TABLES: [&str; 9] = [
+    "device_layouts",
+    "layout_actions",
+    "layout_icons",
+    "layouts",
+    "library_actions",
+    "library_icons",
+    "profile_actions",
+    "profile_icons",
+    "profile_layouts",
+];
 /// The tables schema 9 adds, all empty after the upgrade.
 const SCHEMA_9_TABLES: [&str; 5] = [
     "work_session_reviews",
@@ -259,7 +287,7 @@ fn every_row_is_kept(fixture: Fixture) {
         "settings",
         "migration_history",
     ];
-    if fixture.version >= 7 {
+    if fixture.version >= 7 && fixture.complete {
         filled.extend([
             "active_projects",
             "app_launches",
@@ -268,12 +296,16 @@ fn every_row_is_kept(fixture: Fixture) {
         ]);
     }
     if fixture.version >= 8 {
-        filled.extend(["shared_variables", "shared_variable_values", "provenance"]);
+        filled.push("provenance");
+        if fixture.complete {
+            filled.extend(["shared_variables", "shared_variable_values"]);
+        }
     }
     for table in filled {
         assert!(!original.tables[table].1.is_empty(), "{table} is empty");
     }
 
+    let documents = profile_documents(&raw(&copy.database(), &copy.key));
     let store = copy.open().unwrap();
     let upgraded = dump(store.connection_for_tests());
     assert_eq!(upgraded.version, CURRENT);
@@ -284,17 +316,25 @@ fn every_row_is_kept(fixture: Fixture) {
             // One row more: this upgrade.
             assert_eq!(new_rows.len(), rows.len() + 1);
             assert!(rows.iter().all(|row| new_rows.contains(row)));
+        } else if table == "profiles" {
+            // Migration 10 rewrites the documents (checked below); the
+            // rows keep their id, name and time.
+            assert_eq!(new_rows.len(), rows.len());
         } else {
             assert_eq!(new_rows, rows, "rows of {table} changed");
         }
     }
+    assert_shared_layouts_hold_the_documents(&store, &documents, fixture);
     let added: BTreeSet<&str> = upgraded
         .tables
         .keys()
         .filter(|table| !original.tables.contains_key(*table))
         .map(String::as_str)
         .collect();
-    let mut expected = BTreeSet::from(SCHEMA_9_TABLES);
+    let mut expected = BTreeSet::from(SCHEMA_10_TABLES);
+    if fixture.version < 9 {
+        expected.extend(SCHEMA_9_TABLES);
+    }
     if fixture.version < 8 {
         expected.extend(["provenance", "shared_variable_values", "shared_variables"]);
     }
@@ -306,9 +346,22 @@ fn every_row_is_kept(fixture: Fixture) {
     }
     assert_eq!(added, expected, "{fixture:?}");
     // The new tables start empty: no provenance is invented for existing
-    // (seeded) data, no variable and no work session is created.
-    for table in &expected {
+    // (seeded) data, no variable and no work session is created, and no
+    // device has switched layouts. The shared layout tables hold what the
+    // documents held (checked above).
+    for table in expected
+        .iter()
+        .filter(|table| !SCHEMA_10_TABLES.contains(table) || **table == "device_layouts")
+    {
         assert!(upgraded.tables[*table].1.is_empty(), "{table}");
+    }
+    for table in [
+        "layouts",
+        "profile_layouts",
+        "library_actions",
+        "profile_actions",
+    ] {
+        assert!(!upgraded.tables[table].1.is_empty(), "{table} is empty");
     }
     drop(store);
 
@@ -321,6 +374,91 @@ fn every_row_is_kept(fixture: Fixture) {
         );
     }
     assert_eq!(copy.backup_files().len(), 1);
+}
+
+/// The profile documents of `connection` as stored: id, document version,
+/// name, time and document.
+fn profile_documents(
+    connection: &Connection,
+) -> Vec<(String, u32, String, i64, serde_json::Value)> {
+    connection
+        .prepare(
+            "SELECT id, document_version, name, updated_at, document FROM profiles ORDER BY id",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                serde_json::from_str(&row.get::<_, String>(4)?).unwrap(),
+            ))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+}
+
+/// Migration 10 kept every profile exactly: loading it gives what its
+/// document held (layouts, their order, pages, folders and bindings, the
+/// active layouts, actions and icons in their order), each layout is
+/// assigned to its one profile, and the documents are version 6 without
+/// those fields.
+fn assert_shared_layouts_hold_the_documents(
+    store: &SqliteStore,
+    documents: &[(String, u32, String, i64, serde_json::Value)],
+    fixture: Fixture,
+) {
+    use crate::ConfigStore;
+    let after = profile_documents(store.connection_for_tests());
+    assert_eq!(after.len(), documents.len());
+    let mut layouts = 0;
+    for (
+        (id, version, name, updated_at, document),
+        (new_id, new_version, new_name, new_time, new_document),
+    ) in documents.iter().zip(&after)
+    {
+        assert_eq!((id, name, updated_at), (new_id, new_name, new_time));
+        assert!(*version <= 5, "{fixture:?}");
+        assert_eq!(*new_version, 6);
+        for field in ["layouts", "activeLayouts", "actions", "icons"] {
+            assert!(
+                new_document.get(field).is_none(),
+                "{field} is still in the document"
+            );
+        }
+        // What the old document said, as this build reads it.
+        let mut expected: deckpilot_core::Profile =
+            serde_json::from_value(document.clone()).unwrap();
+        let loaded = store.load_profile(id.parse().unwrap()).unwrap().unwrap();
+        expected.projects.clone_from(&loaded.projects);
+        expected.default_project = loaded.default_project;
+        // An active layout that does not exist, or is for another model,
+        // had no effect and is not kept.
+        let kept = expected.layouts.clone();
+        expected
+            .active_layouts
+            .retain(|model, layout| kept.iter().any(|l| l.id == *layout && &l.model == model));
+        assert_eq!(loaded, expected, "{fixture:?}: profile {name}");
+        layouts += expected.layouts.len();
+        for layout in &expected.layouts {
+            let users = store.layout_users(layout.id).unwrap();
+            assert_eq!(users.len(), 1, "{fixture:?}: {}", layout.name);
+            assert_eq!(users[0].profile_id.to_string(), *id);
+        }
+    }
+    assert!(layouts > 0, "{fixture:?} has no layouts");
+    assert_eq!(store.shared_layouts().unwrap().len(), layouts);
+    assert_eq!(store.device_layouts().unwrap().len(), 0);
+    // Nothing needed a new identifier.
+    assert!(
+        store
+            .migration_notes()
+            .unwrap()
+            .iter()
+            .all(|n| n.schema_version != 10)
+    );
 }
 
 #[test]
@@ -563,20 +701,18 @@ fn bindings_of_released_versions_stay_raw_and_unchanged() {
 
     for fixture in FIXTURES {
         let copy = copy(fixture);
+        let documents = profile_documents(&raw(&copy.database(), &copy.key));
         let store = copy.open().unwrap();
         let mut bindings = 0;
         let mut presses = 0;
         for summary in store.list_profiles().unwrap() {
             let profile = store.load_profile(summary.id).unwrap().unwrap();
-            let stored: String = store
-                .connection_for_tests()
-                .query_row(
-                    "SELECT document FROM profiles WHERE id = ?1",
-                    [summary.id.to_string()],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            let stored: serde_json::Value = serde_json::from_str(&stored).unwrap();
+            // As the released version stored it, before the upgrade.
+            let stored = &documents
+                .iter()
+                .find(|(id, ..)| *id == summary.id.to_string())
+                .unwrap()
+                .4;
             assert_eq!(
                 serde_json::to_value(&profile.layouts).unwrap(),
                 stored["layouts"],

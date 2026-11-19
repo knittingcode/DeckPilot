@@ -35,8 +35,8 @@ export function dragLook(
     case "actionType": {
       const type = context.types.get(source.actionType)
       return {
-        label: type?.name ?? "Action",
-        icon: <ActionIcon name={type?.node?.icon} className={ICON} />,
+        label: source.preset?.name ?? type?.name ?? "Action",
+        icon: <ActionIcon name={source.preset?.icon ?? type?.node?.icon} className={ICON} />,
       }
     }
     case "newFolder":

@@ -156,16 +156,34 @@ pub fn duplicate_layout(
     })
 }
 
+/// Deletes a layout of this profile. A layout other profiles use too is
+/// not deleted: it is removed in the Layouts page, which names them, or
+/// removed from this profile only.
 #[tauri::command]
 pub fn delete_layout(
     state: State<'_, AppState>,
     profile_id: ProfileId,
     layout_id: LayoutId,
 ) -> CommandResult<()> {
-    modify_profile(&state, profile_id, |profile| {
-        profile.delete_layout(layout_id)?;
-        Ok(())
-    })
+    let store = state.store()?;
+    let users = store.layout_users(layout_id)?;
+    if !users.iter().any(|user| user.profile_id == profile_id) {
+        return Err(deckpilot_core::ProfileIssue::NotFound("layout").into());
+    }
+    let others: Vec<String> = users
+        .iter()
+        .filter(|user| user.profile_id != profile_id)
+        .map(|user| format!("“{}”", user.profile_name))
+        .collect();
+    if !others.is_empty() {
+        return Err(CommandError::Invalid(format!(
+            "the layout is also used by {}; delete it in Layouts, or remove it from this profile",
+            others.join(", ")
+        )));
+    }
+    store.delete_shared_layout(layout_id, &[profile_id])?;
+    crate::agent::notify_reload(&state.paths);
+    Ok(())
 }
 
 /// Makes a layout the one used for its device model.

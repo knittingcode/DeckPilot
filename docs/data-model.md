@@ -16,14 +16,18 @@ are random UUIDs. Textual identifiers are validated:
 ```
 Profile
 ├── id, name, description
-├── actions:   ActionInstance[]
+├── actions:   ActionInstance[] (its own and those of its layouts; shared records, see below)
 ├── workflows: Workflow[]
 ├── projects:  Project[]        (stored in the `projects` table; order = cycle order)
 ├── defaultProject             (stored in `default_projects`)
-├── layouts:   DeviceLayout[]   (any number per device model)
-├── activeLayouts              (the layout used for each model)
-└── icons:     Icon[]           (images for key icons; omitted when empty)
+├── layouts:   DeviceLayout[]   (the layouts it uses, in its order; shared records)
+├── activeLayouts              (its default layout for each model)
+└── icons:     Icon[]           (images for key icons; omitted when empty; shared records)
 ```
+
+Since schema 10, layouts, action instances and icons are resources of their
+own that profiles refer to; the `Profile` value keeps its shape (see
+[Shared layouts](#shared-layouts)).
 
 `Profile::validate` reports duplicate project keys, a default project or
 project parameters that do not belong to the profile, workflow steps that
@@ -180,7 +184,9 @@ bound to the machine on that key, and `finish` is only a `click`
 (`InvalidStateful`). A stateful key references no action, workflow or
 project, and travels with its layout on export and import unchanged.
 
-A profile uses its first layout for a model. `DeviceLayout::generate` creates
+A profile uses its default layout for a model (`activeLayouts`), else its
+first layout for the model; a device that switched layouts shows that one
+(see [Switching layouts](#switching-layouts)). `DeviceLayout::generate` creates
 one from the profile's actions and workflows using only the model's
 capabilities: items fill the keys in order; when they do not fit, the last key
 opens a next page (“More”) and the first key of following pages goes back.
@@ -427,7 +433,228 @@ App commands (Tauri):
 | `preview_layout` | as before, plus optional `render` and `live` (`{ connected, states: KeyStateEntry[] }`) | `ControlFace[]`; with `render: true` each also has `image`, the key as the device shows it (PNG `data:` URL at the model's image size); with `live` keys show their reported state (stale ones, `connected: false`, with a grey mark; unknown values as `—`) |
 | `watch_key_states` | `profileId`, `actions` (none: stop) | the watch's number; `key-states` events (`snapshot`, `changed`, `disconnected`, `unsupported`) carry it |
 
-## Storage schema (version 9)
+## Shared layouts
+
+A **layout** (pages, folders, controls and what each control runs) is a
+resource of its own, stored once with a stable id (never found by name). A
+**profile** (projects, variables, workflows) *uses* any number of layouts,
+and a layout may be used by any number of profiles. A **device** (its model's
+controls) shows one layout of the active profile. Each profile keeps its
+own order of layouts, its own default layout per device model and its own
+page state; editing a shared layout, from any profile, edits the one
+record, visible in every profile that uses it. Nothing is ever cloned
+silently: *Duplicate layout* is the only way to an independent copy.
+
+### Who owns the actions keys run
+
+Today's model binds keys to action *instances* (`BindingTarget::Action
+{ action }`), which used to live in a profile. For a layout shared by
+profiles the decision is:
+
+- **Action instances are shared records** (`library_actions`), like
+  layouts. A layout's bindings name them by id; a profile sees the actions
+  it has of its own (*its library*) plus those of the layouts it uses
+  (`layout_actions`: what the layout's keys run, and the actions those name,
+  e.g. a Multi Action Switch's states). So a shared layout behaves the same
+  in every profile, with one record per action, and editing an action
+  edits it for every profile whose layouts run it.
+- **Profile context is resolved when an action runs**, never stored in the
+  action: the active project and its resources, project roles, variables
+  (`{{ profile.… }}`, project and profile values), the profile's name in
+  labels. A key of a shared layout runs with the context of the profile
+  that is active.
+- **Workflows and projects stay the profile's.** A binding that starts a
+  workflow, or an action or override that names a specific project (a
+  *Select project* of SHOP), works in the profiles that have it and is
+  *unavailable* in the others (`shared_layouts::availability`): the key
+  says “Not in this profile”, nothing runs, and another profile's workflow
+  or project is never used. This is not an error of the layout (the
+  profile that has the workflow may be the one that uses the layout), so
+  validation no longer refuses it (`DanglingTarget` is not reported for
+  workflows; foreign project overrides are not `InvalidOverrides`).
+- **Icons** shown by keys are shared records too (`library_icons`), with
+  the same rules as actions; the limit of 64 icons applies to what a
+  profile sees, and assigning a layout that would exceed it is refused.
+
+Rejected alternatives:
+
+- *Actions stay in the profile and a shared layout resolves action ids in
+  the running profile.* Another profile never has the same instance id, so
+  every key of a shared layout would be unavailable there; making it work
+  needs copies of the instances in every profile, which diverge — the
+  silent cloning the owner ruled out.
+- *Layouts carry their bindings' action definitions inline.* An action used
+  by two layouts, or by a layout and a workflow step, would need two copies
+  (or one layout to own an action another one runs); editing one would not
+  change the other, and the Action Library would lose actions keys run.
+- *A single database-wide Action Library for every profile.* Every profile
+  would see every other profile's actions, including those naming its
+  projects; the per-profile library and its safety checks
+  ([Deleting actions safely](#deleting-actions-safely)) would no longer
+  hold. The chosen model is that library, scoped: a profile sees its own
+  actions and those of the layouts it chose to use, nothing else.
+- *Workflows as shared records too.* Workflows carry triggers, execution
+  history and work session settings that belong to a profile; sharing
+  them would make a schedule of one profile fire in another. Possible
+  later; not needed for shared layouts.
+
+### Rules
+
+- **Creating** a layout: in a profile (the device editor, as before) or on
+  its own (Layouts page), used by no profile until it is assigned.
+- **Assigning** appends it to the profile's layouts; the profile then sees
+  the actions and icons it uses. Refused for a model this build does not
+  know (the layout is kept unchanged and not used) and when the profile
+  would show more than 64 icons.
+- **Removing it from a profile** (`unassign_layout`, or a profile saved
+  without it) never deletes the layout. What the profile had only through
+  the layout goes with it, except actions its own workflows and actions
+  name, which become its own. A default it was falls back to the profile's
+  first layout for the model; devices that showed it show that.
+- **Deleting** a layout (`delete_shared_layout`) lists the profiles that use
+  it first; the deletion must name exactly those (the user's
+  confirmation), else nothing changes (`LayoutInUse` names the profiles
+  that use it now). The profiles stay. The device editor's *Delete layout*
+  deletes a layout only this profile uses and refuses one others use too.
+  Deleting a profile keeps its layouts (they stay in the Layouts page,
+  used by no profile).
+- **Duplicating** (`DeviceLayout::duplicated`) gives a new layout id and new
+  page ids; links between its pages, its folders and its home page follow
+  the copies. Its keys run the same Action Library actions (as five keys
+  run one action), show the same icons and start the same workflows.
+  *Switch layout* keys keep the layout they name, also when that is the
+  original: links to other layouts are never rewritten. Duplicating a
+  profile copies everything, its layouts too, with new ids (as before).
+- **Device compatibility.** A layout is made for one model and only ever
+  used on it (`ModelFit::Native`): a Stream Deck MK.2 layout never runs on a
+  Stream Deck +, even where the + has the keys, because their images and
+  the controls around them differ. For every other model the app explains
+  the fit (`shared_layouts::compatibility`): it has every control and
+  input the layout binds (*fits*: duplicate it for that model), or which
+  controls are missing. What a layout needs is derived from its bindings
+  (`DeviceLayout::requirements`), never stored. Bindings that do not fit
+  are kept, as before ([Device controls](device-controls.md)).
+- **Runtime resolution** (agent): device → active profile → the layout the
+  device switched to in that profile, while it is still assigned and made
+  for the model, else the profile's default for the model, else its first
+  layout for the model → page → binding (`Runtime::layout_of`). Only the
+  active profile runs; a layout two profiles share is one set of bindings
+  and actions, so nothing runs or subscribes twice.
+
+### Switching layouts
+
+The `deck` module's *Switch layout* (`deck.switch-layout`) and *Back to
+previous layout* (`deck.previous-layout`) move one device between the
+layouts of the active profile (see [Deck actions](modules.md#deck-actions)).
+They are distinct from *Switch profile* (every device, another profile),
+*Next page*/*Previous page* (pages of one layout), folders and their Back
+key (a page inside a layout), and from the app's own navigation. Keys
+only, pressed; not on dials or touch strips, which have no interaction
+mapped to them.
+
+- *Switch layout* names the layout by id (`layout`), optionally a page
+  (`page`, the home page when empty or gone) and what Back does afterwards
+  (`history`: `push`, the default, remembers the layout left; `replace`
+  does not; `clear` forgets the whole way back). The layout must be
+  assigned to the active profile (`layout-unavailable`) and made for the
+  device's model (`layout-incompatible`); otherwise nothing changes and the
+  key reports why. The profile, its projects and variables never change.
+- The **way back** (`LayoutHistory`) is kept per profile and device, so two
+  profiles sharing Main go their own ways (Work: Main → Teams, Home: Main →
+  Media) and two devices too. Main → Teams → Meeting, Back, Back is Main. A
+  switch to the layout shown adds nothing (at most it shows the page). A
+  switch to a layout that is in the history *unwinds* to it (Meeting →
+  Main after Main → Teams → Meeting leaves the history empty), so a layout
+  is never in it twice and nothing loops. At most 16 entries; the oldest
+  go first. Each entry keeps the pages the device showed, so Back returns
+  to the same page (the home page if it is gone).
+- *Back to previous layout* with an empty history does nothing and says so
+  (“there is no previous layout”); it never falls back to another layout.
+  Its key shows that it cannot go back (“No previous layout”) while the
+  device has nothing to go back to; the app sees the layout Back would
+  return to in the device's status (`DeviceInfo.previousLayout`, an
+  optional field).
+- A *Switch layout* key without a label of its own is titled with the
+  layout it shows, so it follows a rename; one whose layout the profile
+  does not use says “Not in this profile”. Back shows the back arrow
+  (its type's icon). Labels and icons of the binding win, as for any key.
+  Action handlers declare this with `ActionHandler::layout_navigation`.
+  Entries for layouts that were removed from the profile, deleted or are
+  for another model are dropped, on a reload and when Back passes them.
+- **Persistence and lifecycle.** The layout each device switched to, per
+  profile, is runtime state of this computer in `device_layouts` (never
+  exported): saved by the agent when it changes, read after every start and
+  reload, so a device comes back on its layout after a restart of the agent
+  and follows the app (a new default for the model, or the layout removed
+  or deleted, sends the device to the profile's layout for the model). Its
+  foreign key to the profile's assignment means an invalid entry cannot be
+  stored. The way back lives in memory for the session: empty after the
+  agent starts. The app reads which layout a device shows from the agent's
+  status (`DeviceInfo.layout`, per device).
+
+### Storage (schema 10)
+
+| Table | Content |
+| ----- | ------- |
+| `layouts` | id, name, model, document (`DeviceLayout`, item document version 1), created and updated time; `(id, model)` unique |
+| `profile_layouts` | profile (cascade), layout, model, position, `is_default`; composite foreign key to `layouts (id, model)`; at most one default per profile and model (partial unique index) |
+| `library_actions`, `library_icons` | one record per action instance and icon (item document version 1) |
+| `profile_actions`, `profile_icons` | what a profile shows, in its order, with `own` (its library) or not (through a layout) |
+| `layout_actions`, `layout_icons` | what a layout's keys run (and the actions those name) and show |
+| `device_layouts` | profile, device, layout: the layout a device switched to; references `profile_layouts`, so it goes with the assignment |
+
+Profile documents are written in document version 6 without `layouts`,
+`activeLayouts`, `actions` and `icons`; `SqliteStore::load_profile` fills
+them (`layouts::compose`) and `save_profile` stores them
+(`layouts::decompose`), so the configuration app, the agent, imports and
+the device editor work with `Profile` as before. Actions and icons that no
+profile has and no layout uses are removed; layouts only by deletion.
+
+**Migration 10** moves every profile's layouts, actions and icons out of
+its document into these tables, each layout assigned to the one profile
+that had it, in its order, with its active layouts as defaults. Nothing
+becomes shared. Profiles are processed in id order; an id that an earlier
+profile already used (documents copied by hand) gets a new one derived from
+the profile and the old id (UUID v5) in the later profile, every reference
+in that profile's document and its provenance follows, and a note is
+recorded in `migration_notes`. The same id twice inside one profile: the
+first item keeps it with every reference, the later one gets a derived id.
+An active layout that does not exist (it had no effect) is not kept. Each
+profile's `updated_at` stays. As every upgrade, it is preceded by the
+verified encrypted backup and runs in one transaction.
+
+### Export and import
+
+An export still carries every selected profile with its layouts in its
+order, its defaults, actions and icons inline, so its shape is the one
+releases up to 0.8.1 read (payload version 2). A layout two exported
+profiles use is in both with the same id and is one shared layout again
+after the import. An export of everything also carries the layouts no
+profile uses with their actions and icons (`library`, payload version 3,
+which earlier releases refuse instead of losing them).
+
+An import never overwrites a layout, action or icon that stays in use here
+with other content: the imported one gets a new id, and every reference of
+the import follows (bindings, defaults, *Switch layout* targets, switch
+states). An identical record is reused (so re-importing a profile that
+shares an unchanged layout shares it again), and one only profiles the
+import replaces use is replaced. Replacing everything also removes the
+local layouts no profile uses that the export does not have.
+
+### App commands (Tauri)
+
+| Command | Arguments | Result |
+| ------- | --------- | ------ |
+| `list_shared_layouts` | — | every layout: id, name, model, model name, pages, bindings, users (`profileId`, `profileName`, `position`, `isDefault`), fit per model |
+| `create_shared_layout` | `modelId`, `name`, `assignTo?` | the layout |
+| `rename_shared_layout` | `layoutId`, `name` | — |
+| `duplicate_shared_layout` | `layoutId`, `name`, `assignTo?` | the copy |
+| `delete_shared_layout` | `layoutId`, `confirmedProfiles` | — (refused if the profiles that use it differ) |
+| `assign_layout`, `unassign_layout`, `set_default_layout` | `profileId`, `layoutId` | — |
+| `reorder_profile_layouts` | `profileId`, `order` (every assigned layout once) | — |
+| `profile_layouts` | `profileId` | the profile's layouts in order, with `isDefault` and the keys that cannot run in it |
+
+## Storage schema (version 10)
 
 Migrations run in a transaction each; a failed migration leaves the database
 unchanged.
@@ -455,6 +682,11 @@ unchanged.
   `work_sessions`, `work_session_intervals`, `work_session_reviews` and
   `work_session_transitions` (see [Work sessions](#work-sessions)). It is
   additive: the new tables start empty and nothing else changes.
+- **Migration 10** moves layouts, action instances and icons into shared
+  tables (`layouts`, `profile_layouts`, `library_actions`,
+  `profile_actions`, `layout_actions`, `library_icons`, `profile_icons`,
+  `layout_icons`) and adds `device_layouts`; profile documents are rewritten
+  in document version 6. See [Shared layouts](#shared-layouts).
 
 Since version 0.4 the database is encrypted with SQLCipher; see
 [security.md](security.md). Every upgrade of an existing database is
@@ -471,7 +703,7 @@ again. Restoring the named backup returns to the previous state.
 
 | Table              | Purpose                                              |
 | ------------------ | ---------------------------------------------------- |
-| `profiles`         | One row per profile; JSON document (format 3) + version |
+| `profiles`         | One row per profile; JSON document (format 6: without projects, layouts, actions, icons) + version |
 | `projects`         | Projects: `profile_id` (cascade), `key`, `name`, `position`, `resources` |
 | `default_projects` | Default project per profile                          |
 | `active_projects`  | Active project per profile (runtime state)           |
@@ -492,6 +724,10 @@ again. Restoring the named backup returns to the previous state.
 | `work_session_intervals` | Counted stretches of time of a session |
 | `work_session_reviews` | Gaps of uncertain time flagged for review, and how they were resolved |
 | `work_session_transitions` | Audit log of every state change of a session |
+| `layouts`, `profile_layouts` | Shared layouts and which profiles use them, in order, with each profile's default per model |
+| `library_actions`, `profile_actions`, `layout_actions` | Action instances, what each profile shows (and has of its own), what each layout uses |
+| `library_icons`, `profile_icons`, `layout_icons` | Key icons, the same way |
+| `device_layouts` | The layout a device switched to, per profile (runtime state of this computer) |
 
 Constraints keep projects inside their profile:
 
@@ -679,7 +915,8 @@ unchanged.
 ## Deleting actions safely
 
 An action is deleted only when nothing uses it. `SqliteStore::
-action_references` lists every use in the profile: layout bindings (layout,
+action_references` lists every use in the profile (including the layouts it
+shares with other profiles): layout bindings (layout,
 page, control, trigger), steps of step-list workflows, action nodes of graph
 workflows, and — as indirect uses — the triggers of each workflow that runs
 the action. `delete_action` refuses with `ActionInUse` and that list while
@@ -723,10 +960,14 @@ Triggers are never changed here; they follow their workflow.
   variables and everything else changed after the upgrade are lost. A
   build at schema 8 refuses schema 9 the same way; going back means
   restoring the `deckpilot-schema8-…` backup, which loses the work
-  sessions recorded since.
-- Profile documents are written in document version 5 from schema 8 on.
-  Version 4 documents (and older) are read unchanged and are not rewritten
-  by the upgrade.
+  sessions recorded since. Releases 0.6.0 to 0.8.1 (schema 9) refuse
+  schema 10 the same way and change nothing; going back means restoring
+  the `deckpilot-schema9-…` backup, which loses everything changed since
+  (layouts created or shared, the layouts devices switched to).
+- Profile documents are written in document version 6 from schema 10 on
+  (layouts, actions and icons in their own tables); a build that reads at
+  most version 5 refuses such a document. Migration 10 rewrites every
+  profile document; documents of versions 1 to 5 decode unchanged.
 - A wrong key or password never reinitializes, upgrades or backs up the
   database; the file stays byte-identical.
 - A newer schema is refused before anything is written to the file — the
@@ -739,7 +980,7 @@ Triggers are never changed here; they follow their workflow.
 
 Tested with a real database created by the 0.5.0-2 tools
 (`crates/deckpilot-storage/tests/upgrade_from_0_5_0.rs`, fixture in
-`tests/fixtures/v0.5.0-2/`): the upgrade from schema 5 to 9 keeps profiles,
+`tests/fixtures/v0.5.0-2/`): the upgrade from schema 5 to 10 keeps profiles,
 projects and their resources, actions, step workflows, layouts, the active
 profile and default project, machine bindings and settings; it is preceded
 by an encrypted backup that can be restored; reopening does not upgrade or
@@ -752,10 +993,12 @@ and left byte-identical, without side files or backups. The real
 `tools/compat/matrix.sh` ([Compatibility](compatibility.md)).
 The storage unit tests in `src/upgrade_tests.rs` compare the same fixture row
 by row: every row and table definition of schema 5 is unchanged after the
-upgrade, which only adds `workflow_executions`, `credentials`,
+upgrade except the profile documents (rewritten by migration 10, checked
+item by item), which adds `workflow_executions`, `credentials`,
 `shared_variables`, `shared_variable_values`, `provenance` and the five
-Work Session tables (all empty) and one `migration_history` row, and opening the upgraded database again
-changes nothing. They also make the upgrade fail at injected points (after
+Work Session tables (all empty), the shared layout tables (holding what the
+documents held; `device_layouts` empty) and one `migration_history` row,
+and opening the upgraded database again changes nothing. They also make the upgrade fail at injected points (after
 migrations 6, 7, 8 and 9, just before the commit, and while the backup is
 written) and kill a child process at the same points with the transaction
 open: in every case the database is still the schema 5 fixture row for row,
@@ -763,7 +1006,7 @@ the backup made before the upgrade is complete and holds that state, an
 unverified backup copy is never left under a backup's name (it is written as
 `….db.partial` and renamed once verified), and the next start upgrades
 normally. A failed integrity check after the commit (injected) leaves the
-database at schema 9 marked `unverified` and refused, row for row
+database at schema 10 marked `unverified` and refused, row for row
 unchanged by each refused start, with the backup intact; it is accepted and
 marked `ok` once a check passes, and restoring the named backup returns to
 the fixture row for row. A process killed between the commit and the check
@@ -796,6 +1039,19 @@ refusal, the one-active-session constraint, the idempotent final stop (also
 from two connections at once), approval lifetime and boot, stale and old
 sessions' results, gaps, exclusion and re-inclusion, retention, and a
 restart in each persisted state followed by its recovery transition.
+
+A fourth fixture comes from the 0.8.1 release (`tests/fixtures/v0.8.1/`,
+schema 9: `deckpilot-dev validation seed` of the tag, its machine paths
+replaced with neutral ones). The row-by-row tests run on all four: every
+row of every other table is kept, the profile rows keep id, name and time,
+and every profile loads exactly as its old document said — layouts in
+order, pages, folders, bindings, active layouts, actions and icons — with
+each layout assigned to its one profile and no device layout stored.
+`tests/shared_layouts.rs` checks the 0.8.1 upgrade through the API, that
+the `deckpilot-schema9-…` backup restores the 0.8.1 state, ids two
+profiles shared (copied documents) and the store operations of shared
+layouts; `deckpilot-portability`'s `tests/shared_layouts.rs` the export and
+import.
 
 Upgrades from schemas 1 to 4 are covered by the storage unit tests
 (`migrates_a_version_one_database_without_losing_data`,

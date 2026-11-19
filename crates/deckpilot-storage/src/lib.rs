@@ -24,6 +24,7 @@ pub mod crypto;
 mod engine;
 pub mod executions;
 pub mod gestures;
+pub mod layouts;
 mod legacy;
 pub mod policy;
 mod project_actions;
@@ -43,6 +44,7 @@ use deckpilot_core::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub use layouts::{ItemKind, LayoutAssignment, StoredLayout};
 pub use sqlite::{
     ConfigChanges, DatabaseKey, Encryption, MigrationRecord, SqliteStore, backup_dir,
 };
@@ -60,8 +62,11 @@ pub use variables::{SharedVariables, StoredValue, StoredVariable, VariableOrigin
 /// `longPress` triggers, page `gestures` timings, binding `overrides`,
 /// `stateful` targets);
 /// version 4 documents decode unchanged, and a DeckPilot that reads at most
-/// version 4 refuses them.
-pub const DOCUMENT_VERSION: u32 = 5;
+/// version 4 refuses them. Version 6 (schema 10) no longer contains
+/// layouts, active layouts, actions and icons: they are stored in the
+/// shared tables (`layouts`), and a DeckPilot that reads at most version 5
+/// refuses such a document instead of seeing a profile without them.
+pub const DOCUMENT_VERSION: u32 = 6;
 
 /// A change a schema migration made to user data beyond a plain format
 /// upgrade, for example a project that needed a new id.
@@ -105,6 +110,12 @@ pub enum StorageError {
     InvalidKey,
     #[error("profile does not exist")]
     UnknownProfile,
+    #[error("layout does not exist")]
+    UnknownLayout,
+    /// The layout is used by these profiles, which the deletion did not
+    /// name (they changed since it was confirmed); nothing was deleted.
+    #[error("the profiles that use the layout changed (now: {}); confirm again", if .0.is_empty() { "none".to_owned() } else { .0.iter().map(|(_, name)| format!("“{name}”")).collect::<Vec<_>>().join(", ") })]
+    LayoutInUse(Vec<(ProfileId, String)>),
     #[error("file system error: {0}")]
     Io(#[source] std::io::Error),
     #[error("the database failed its integrity check: {0}")]

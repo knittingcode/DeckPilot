@@ -983,6 +983,11 @@ export interface DeviceInfo {
   source: string
   /** Absent from older agents. */
   descriptor?: DeviceDescriptor
+  /**
+   * The layout *Back to previous layout* returns this device to, in the
+   * active profile; absent when there is none (and from older agents).
+   */
+  previousLayout?: string
 }
 
 export interface ProfileInfo {
@@ -1716,4 +1721,63 @@ export interface SharedVariable {
   definition: VariableDefinition
   values: SharedVariableValue[]
   references: VariableReference[]
+}
+
+/**
+ * How a shared layout fits a device model: made for it, fits it, misses
+ * controls it binds (and how many triggers on them), or the model is not in
+ * the catalog.
+ */
+export type ModelFit =
+  | { type: "native" }
+  | { type: "fits" }
+  | { type: "missing"; controls: ControlId[]; triggers: number }
+  | { type: "unknownModel" }
+
+export interface LayoutCompatibility {
+  model: string
+  modelName: string
+  fit: ModelFit
+  /** The fit in words, for a tooltip. */
+  explanation: string
+}
+
+/** A profile a shared layout is assigned to. */
+export interface LayoutAssignment {
+  profileId: string
+  profileName: string
+  /** Position in the profile's order of layouts. */
+  position: number
+  /** The profile's default layout for the layout's model. */
+  isDefault: boolean
+}
+
+/**
+ * A layout stored once and assigned to any number of profiles; each
+ * profile keeps its own order and default layout per device model.
+ */
+export interface SharedLayoutSummary {
+  id: string
+  name: string
+  model: string
+  /** `null`: the model is not in the catalog. */
+  modelName: string | null
+  pages: number
+  bindings: number
+  /** Seconds since the epoch. */
+  updatedAt: number
+  /** The profiles that use it. */
+  profiles: LayoutAssignment[]
+  /** Its own model first. */
+  compatibility: LayoutCompatibility[]
+}
+
+/** A layout assigned to a profile, in the profile's order. */
+export interface ProfileLayoutEntry {
+  layout: SharedLayoutSummary
+  position: number
+  /** The default (active) layout of the profile for `layout.model`. */
+  isDefault: boolean
+  /** Keys that cannot run in this profile (a workflow or project of another profile), in words. */
+  unavailable: string[]
 }

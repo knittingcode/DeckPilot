@@ -472,11 +472,23 @@ impl Profile {
         {
             issues.push(ProfileIssue::ForeignDefaultProject);
         }
+        // Actions that keys of the profile's layouts run may come from a
+        // layout shared with other profiles; a project they name that is
+        // not this profile's is unavailable here, not an error
+        // (`shared_layouts::availability`).
+        let from_layouts: std::collections::BTreeSet<ActionInstanceId> =
+            crate::shared_layouts::action_closure(
+                self.layouts.iter().flat_map(DeviceLayout::bound_actions),
+                &self.actions,
+            )
+            .into_iter()
+            .collect();
         for action in &self.actions {
-            if action
-                .parameters
-                .projects()
-                .any(|id| self.project(id).is_none())
+            if !from_layouts.contains(&action.id)
+                && action
+                    .parameters
+                    .projects()
+                    .any(|id| self.project(id).is_none())
             {
                 issues.push(ProfileIssue::ForeignProject(action.name.clone()));
             }
@@ -523,7 +535,7 @@ impl Profile {
     }
 }
 
-fn remap_layout(
+pub(crate) fn remap_layout(
     layout: &mut DeviceLayout,
     id: LayoutId,
     pages: &HashMap<PageId, PageId>,

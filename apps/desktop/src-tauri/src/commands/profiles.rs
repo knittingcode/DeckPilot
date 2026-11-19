@@ -51,10 +51,38 @@ pub fn get_profile(
         .iter()
         .map(ToString::to_string)
         .collect();
+    // Uses in layouts other profiles use (shared actions): changing such
+    // an action changes those keys too, so they count.
+    let others: Vec<deckpilot_core::DeviceLayout> = store
+        .shared_layouts()?
+        .into_iter()
+        .map(|stored| stored.layout)
+        .filter(|layout| profile.layout(layout.id).is_none())
+        .collect();
     let action_usages = profile
         .actions
         .iter()
-        .map(|a| (a.id, profile.action_usages(a.id)))
+        .map(|a| {
+            let mut usages = profile.action_usages(a.id);
+            for layout in &others {
+                for page in &layout.pages {
+                    for binding in page
+                        .bindings
+                        .iter()
+                        .filter(|b| b.target.action_id() == Some(a.id))
+                    {
+                        usages.push(Usage::LayoutBinding {
+                            layout: layout.id,
+                            layout_name: layout.name.clone(),
+                            page: page.id,
+                            page_name: page.name.clone(),
+                            control: binding.control,
+                        });
+                    }
+                }
+            }
+            (a.id, usages)
+        })
         .collect();
     let workflow_usages = profile
         .workflows

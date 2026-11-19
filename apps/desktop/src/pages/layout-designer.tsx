@@ -16,24 +16,21 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { useAsync } from "@/hooks/use-async"
 import { useTitlebar } from "@/hooks/use-titlebar"
 import { LayoutEditor } from "@/layout-editor/editor"
+import { DeviceLayoutHint, LayoutChooser, SharedLayoutNote } from "@/layout-editor/layout-chooser"
 import { api } from "@/lib/api"
 import { toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
 import { useFocusTarget } from "@/lib/focus"
-import type { DeviceLayout, DeviceModel, Platform } from "@/lib/types"
+import { shownLayout } from "@/lib/layout-navigation"
+import type { DeviceLayout, DeviceModel, Platform, SharedLayoutSummary } from "@/lib/types"
 import { LEVELS, PLATFORM_LABELS, currentPlatform, verificationOn } from "@/lib/verification"
 import { useEditorSelection } from "@/shell/editor-selection-context"
+import { selectedDevice } from "@/shell/device-options"
+import { useOpenLayout } from "@/shell/open-layout"
 
 export function LayoutDesignerPage() {
   useTitlebar({
@@ -55,6 +52,8 @@ function Designer({ profileId }: { profileId: string }) {
   const { revision, agent } = useAppContext()
   const selection = useEditorSelection()
   const view = useAsync(() => api.getProfile(profileId), `${profileId}:${revision}`)
+  const shared = useAsync(() => api.listSharedLayouts(), `shared-layouts:${revision}`)
+  const { open: openLayout, dialog: openDialog } = useOpenLayout()
   const models = selection.models
   // Opened from another page (e.g. the references of an action): that layout.
   const focus = useFocusTarget("layout")
@@ -121,6 +120,21 @@ function Designer({ profileId }: { profileId: string }) {
     layouts.find((l) => l.id === selection.layoutId) ??
     layouts.find((l) => l.id === activeForModel) ??
     layouts[0]
+  const sharedLayouts =
+    shared.state.status === "ready" ? shared.state.data.filter((l) => l.model === model.id) : null
+  // The device the editor is for, and the layout it shows (of the active profile).
+  const device = selectedDevice(agent?.status?.devices ?? [], model.id, selection.device)
+  const shownId = shownLayout(device)
+  const shownName =
+    device && "name" in device.layout
+      ? device.layout.name
+      : (sharedLayouts?.find((l) => l.id === shownId)?.name ?? null)
+  const openShown = () => {
+    if (!shownId) return
+    const known = sharedLayouts?.find((l) => l.id === shownId)
+    if (known) openLayout(known)
+    else if (layouts.some((l) => l.id === shownId)) selection.selectLayout(shownId)
+  }
 
   const header = (
     <>
@@ -131,15 +145,36 @@ function Designer({ profileId }: { profileId: string }) {
           layouts={layouts}
           current={layout ?? null}
           activeForModel={activeForModel}
+          shared={sharedLayouts}
           onSelect={(id) => {
             selection.selectLayout(id)
+          }}
+          onUse={(used) => {
+            if (!selection.guard()) return
+            api.assignLayout(profileId, used.id).then(
+              () => {
+                toast.success(`${used.name} is used in this profile`)
+                showLayout(used.id, model.id)
+                view.reload()
+                shared.reload()
+              },
+              (e: unknown) => {
+                toastFailure(`“${used.name}” was not added to this profile`, e)
+              },
+            )
           }}
           onChanged={(id) => {
             if (id) showLayout(id, model.id)
             view.reload()
+            shared.reload()
           }}
         />
       </div>
+      <SharedLayoutNote layout={sharedLayouts?.find((l) => l.id === layout?.id)} />
+      {shownId && layout && shownId !== layout.id && (
+        <DeviceLayoutHint name={shownName ?? "another layout"} onOpen={openShown} />
+      )}
+      {openDialog}
       <VerificationNotice model={model} />
     </>
   )
@@ -152,6 +187,7 @@ function Designer({ profileId }: { profileId: string }) {
       model={model}
       saved={layout}
       header={header}
+      device={device}
       onDirtyChange={setDirty}
       onSaved={() => {
         setDirty(false)
@@ -178,7 +214,9 @@ function LayoutToolbar({
   layouts,
   current,
   activeForModel,
+  shared,
   onSelect,
+  onUse,
   onChanged,
 }: {
   profileId: string
@@ -186,12 +224,21 @@ function LayoutToolbar({
   layouts: DeviceLayout[]
   current: DeviceLayout | null
   activeForModel: string | null
+  /** The model's shared layouts; `null` while unknown. */
+  shared: SharedLayoutSummary[] | null
   onSelect: (id: string) => void
+  onUse: (layout: SharedLayoutSummary) => void
   onChanged: (id?: string) => void
 }) {
   const { refresh } = useAppContext()
+  const users = current ? (shared?.find((l) => l.id === current.id)?.profiles.length ?? 1) : 0
   const [creating, setCreating] = useState(false)
-  const run = (operation: () => Promise<string | undefined>, message: string, failed: string) => {
+  const run = (
+    operation: () => Promise<string | undefined>,
+    message: string,
+    failed: string,
+    next?: string,
+  ) => {
     operation().then(
       (id) => {
         toast.success(message)
@@ -199,27 +246,26 @@ function LayoutToolbar({
         refresh()
       },
       (e: unknown) => {
-        toastFailure(failed, e)
+        toastFailure(failed, e, next)
       },
     )
   }
   return (
     <>
       <div className="grid gap-2">
-        <Label htmlFor="designer-layout">Layout</Label>
-        <Select value={current?.id ?? ""} onValueChange={onSelect} disabled={layouts.length === 0}>
-          <SelectTrigger id="designer-layout" className="w-52">
-            <SelectValue placeholder="No layouts" />
-          </SelectTrigger>
-          <SelectContent>
-            {layouts.map((l) => (
-              <SelectItem key={l.id} value={l.id}>
-                {l.name}
-                {l.id === activeForModel ? " ★" : ""}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <span className="text-sm leading-none font-medium" aria-hidden>
+          Layout
+        </span>
+        <LayoutChooser
+          profileId={profileId}
+          modelName={model.name}
+          layouts={layouts}
+          current={current}
+          defaultLayout={activeForModel}
+          shared={shared}
+          onSelect={onSelect}
+          onUse={onUse}
+        />
       </div>
       <div className="flex flex-wrap gap-2">
         <Button
@@ -247,19 +293,20 @@ function LayoutToolbar({
             <Button
               variant="outline"
               disabled={current.id === activeForModel}
-              title="Use this layout for the model"
+              title={`The profile's layout for ${model.name}: devices of the model show it`}
               onClick={() => {
                 run(
                   async () => {
                     await api.activateLayout(profileId, current.id)
                     return current.id
                   },
-                  "Layout activated",
-                  `“${current.name}” was not made active`,
+                  `${current.name} is used for ${model.name}`,
+                  `“${current.name}” was not made the default`,
                 )
               }}
             >
-              <Star /> {current.id === activeForModel ? "Active" : "Make active"}
+              <Star />{" "}
+              {current.id === activeForModel ? "Default for this model" : "Use for this model"}
             </Button>
             <ConfirmDialog
               trigger={
@@ -268,7 +315,11 @@ function LayoutToolbar({
                 </Button>
               }
               title={`Delete “${current.name}”?`}
-              description="The layout and its pages are removed. Actions and workflows stay in the library."
+              description={
+                users > 1
+                  ? "Other profiles use this layout too, so it cannot be deleted here. Remove it from this profile in Settings › Profiles, or delete it for every profile on the Layouts page."
+                  : "The layout and its pages are removed. Actions and workflows stay in the library."
+              }
               onConfirm={() => {
                 run(
                   async () => {
@@ -277,6 +328,7 @@ function LayoutToolbar({
                   },
                   "Layout deleted",
                   `“${current.name}” was not deleted`,
+                  "A layout other profiles use is deleted on the Layouts page, or removed from this profile in Settings › Profiles",
                 )
               }}
             />

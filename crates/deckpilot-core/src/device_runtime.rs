@@ -29,6 +29,17 @@ use crate::{
 /// without a device, e.g. with "Run" in the app.
 pub const NO_DEVICE: &str = "no-device";
 
+/// *Switch layout*: the layout is not assigned to the active profile (or
+/// no longer exists).
+pub const LAYOUT_UNAVAILABLE: &str = "layout-unavailable";
+
+/// The detail of a *Back to previous layout* key with nowhere to go back
+/// to.
+pub const NO_PREVIOUS_LAYOUT: &str = "No previous layout";
+
+/// *Switch layout*: the layout is made for another device model.
+pub const LAYOUT_INCOMPATIBLE: &str = "layout-incompatible";
+
 /// Whether a profile provides a usable layout for a device model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -200,6 +211,16 @@ pub struct Runtime {
     /// last set ([`RuntimeOutcome::Unavailable`]), so each is reported
     /// once.
     refused: HashSet<(LayoutId, PageId, ControlId, Trigger)>,
+    /// The layout each device shows in a profile, where *Switch layout* or
+    /// *Back to previous layout* chose one (see [`Runtime::layout_of`]).
+    /// Saved by the agent ([`Runtime::device_layouts`]) and restored after
+    /// a restart; entries for layouts that are gone are ignored.
+    device_layouts: BTreeMap<(ProfileId, DeviceId), LayoutId>,
+    /// The way back of each device in each profile: in memory only, empty
+    /// after a restart.
+    histories: BTreeMap<(ProfileId, DeviceId), crate::LayoutHistory>,
+    /// [`Runtime::device_layouts`] changed since it was last taken.
+    device_layouts_changed: bool,
 }
 
 /// Most pages kept in [`Runtime::remembered_pages`]: profiles times
@@ -220,6 +241,9 @@ impl Runtime {
             gesture_defaults: GestureTimings::default(),
             remembered: BTreeMap::new(),
             refused: HashSet::new(),
+            device_layouts: BTreeMap::new(),
+            histories: BTreeMap::new(),
+            device_layouts_changed: false,
         }
     }
 
@@ -232,7 +256,7 @@ impl Runtime {
         if let Some(profile) = self.profile() {
             for (device, stack) in self.navigation.iter().chain(&self.parked) {
                 let key = (profile.id, device.clone());
-                match self.top_level_shown(&device.model, stack) {
+                match self.top_level_shown(device, stack) {
                     Some(page) => pages.insert(key, page),
                     None => pages.remove(&key),
                 };
@@ -258,8 +282,8 @@ impl Runtime {
 
     /// The top-level page of the page on top of `stack`, in the layout
     /// for `model`; `None` for the home page, which needs no remembering.
-    fn top_level_shown(&self, model: &DeviceModelId, stack: &[PageId]) -> Option<PageId> {
-        let layout = self.layout_for(model)?;
+    fn top_level_shown(&self, device: &DeviceId, stack: &[PageId]) -> Option<PageId> {
+        let layout = self.layout_of(device)?;
         let page = *stack.last()?;
         layout.page(page)?;
         Some(layout.top_level_of(page)).filter(|top| *top != layout.home_page)
@@ -275,7 +299,7 @@ impl Runtime {
             .navigation
             .iter()
             .chain(&self.parked)
-            .map(|(device, stack)| (device.clone(), self.top_level_shown(&device.model, stack)))
+            .map(|(device, stack)| (device.clone(), self.top_level_shown(device, stack)))
             .collect();
         for (device, page) in shown {
             let key = (profile, device);
@@ -310,7 +334,7 @@ impl Runtime {
         device: &DeviceId,
         control: ControlId,
     ) -> Option<(BoundGestures, GestureTimings)> {
-        let layout = self.layout_for(&device.model)?;
+        let layout = self.layout_of(device)?;
         let page = layout.page(self.current_page(device)?)?;
         let bound = page.bound_gestures(control);
         bound
@@ -339,7 +363,7 @@ impl Runtime {
             return ignored("no active profile");
         }
         let target = self
-            .layout_for(&device.model)
+            .layout_of(device)
             .zip(self.current_page(device))
             .and_then(|(layout, page)| layout.page(page))
             .and_then(|page| page.gesture_binding(control, gesture))
@@ -364,7 +388,7 @@ impl Runtime {
         device: &DeviceId,
         control: ControlId,
     ) -> Option<&StatefulBinding> {
-        let layout = self.layout_for(&device.model)?;
+        let layout = self.layout_of(device)?;
         let page = layout.page(self.current_page(device)?)?;
         page.bindings
             .iter()
@@ -433,6 +457,7 @@ impl Runtime {
             projects: ActiveProjectContext::restore(&profile, project),
             profile,
         });
+        self.prune_layouts();
         let connected: Vec<DeviceId> = self.devices.connected().cloned().collect();
         for device in connected {
             self.reset_navigation(&device);
@@ -455,12 +480,13 @@ impl Runtime {
             projects: ActiveProjectContext::restore(&profile, project),
             profile,
         });
+        self.prune_layouts();
         let devices: Vec<DeviceId> = self.navigation.keys().cloned().collect();
         for device in devices {
             // A device with no pages (connected before its model had a
             // layout) is not valid once a layout exists: it goes home.
             let stack = &self.navigation[&device];
-            let valid = match self.layout_for(&device.model) {
+            let valid = match self.layout_of(&device) {
                 Some(_) => self.pages_exist(&device, stack),
                 None => stack.is_empty(),
             };
@@ -572,9 +598,113 @@ impl Runtime {
         )
     }
 
-    /// The layout used for devices of `model` (see [`Profile::layout_for`]).
+    /// The layout the active profile uses for devices of `model` that did
+    /// not switch to another one (see [`Profile::layout_for`]).
     pub fn layout_for(&self, model: &DeviceModelId) -> Option<&DeviceLayout> {
         self.profile()?.layout_for(model)
+    }
+
+    /// The layout `device` shows: the one it switched to in the active
+    /// profile, while that is still assigned to the profile and made for
+    /// the device's model; otherwise the profile's layout for the model.
+    /// Resolution: device → profile → that profile's layout → page →
+    /// binding.
+    pub fn layout_of(&self, device: &DeviceId) -> Option<&DeviceLayout> {
+        let profile = self.profile()?;
+        self.device_layouts
+            .get(&(profile.id, device.clone()))
+            .and_then(|id| profile.layout(*id))
+            .filter(|layout| layout.model == device.model)
+            .or_else(|| profile.layout_for(&device.model))
+    }
+
+    /// The layouts devices switched to, per profile, for saving.
+    pub fn device_layouts(&self) -> Vec<(ProfileId, DeviceId, LayoutId)> {
+        self.device_layouts
+            .iter()
+            .map(|((profile, device), layout)| (*profile, device.clone(), *layout))
+            .collect()
+    }
+
+    /// Whether [`Runtime::device_layouts`] changed since the last call.
+    pub fn take_device_layouts_changed(&mut self) -> bool {
+        std::mem::take(&mut self.device_layouts_changed)
+    }
+
+    /// Replaces the layouts devices switched to with saved ones (after a
+    /// start or a reload: the database is the truth). Devices whose layout
+    /// changed show its home page. Entries the active profile does not
+    /// have, or for another model, are dropped.
+    pub fn restore_device_layouts(
+        &mut self,
+        layouts: impl IntoIterator<Item = (ProfileId, DeviceId, LayoutId)>,
+    ) {
+        let before: Vec<(DeviceId, Option<LayoutId>)> = self
+            .navigation
+            .keys()
+            .map(|device| (device.clone(), self.layout_of(device).map(|l| l.id)))
+            .collect();
+        self.device_layouts = layouts
+            .into_iter()
+            .take(MAX_REMEMBERED_PAGES)
+            .filter(|(_, device, _)| self.catalog.get(&device.model).is_some())
+            .map(|(profile, device, layout)| ((profile, device), layout))
+            .collect();
+        self.prune_layouts();
+        for (device, layout) in before {
+            if self.layout_of(&device).map(|l| l.id) != layout {
+                self.reset_navigation(&device);
+            }
+        }
+    }
+
+    /// Forgets switched-to layouts and history entries of the active
+    /// profile that are no longer assigned to it or not made for the
+    /// device's model, so nothing refers to a layout that is gone.
+    fn prune_layouts(&mut self) {
+        let Some(profile) = self.session.as_ref().map(|s| &s.profile) else {
+            return;
+        };
+        let usable = |device: &DeviceId, id: LayoutId| {
+            profile
+                .layout(id)
+                .is_some_and(|layout| layout.model == device.model)
+        };
+        let before = self.device_layouts.len();
+        self.device_layouts
+            .retain(|(owner, device), id| *owner != profile.id || usable(device, *id));
+        if self.device_layouts.len() != before {
+            self.device_layouts_changed = true;
+        }
+        for ((owner, device), history) in &mut self.histories {
+            if *owner == profile.id {
+                history.retain(|id| usable(device, id));
+            }
+        }
+    }
+
+    /// The layouts `device` can go back to in the active profile, oldest
+    /// first.
+    pub fn layout_history(&self, device: &DeviceId) -> Vec<LayoutId> {
+        self.profile()
+            .and_then(|profile| self.histories.get(&(profile.id, device.clone())))
+            .map(crate::LayoutHistory::layouts)
+            .unwrap_or_default()
+    }
+
+    /// The status of the layout `device` shows (see
+    /// [`Runtime::layout_status`]).
+    pub fn device_layout_status(&self, device: &DeviceId) -> LayoutStatus {
+        let Some(profile) = self.profile() else {
+            return LayoutStatus::NoProfile;
+        };
+        if self.catalog.get(&device.model).is_none() {
+            return LayoutStatus::UnknownModel;
+        }
+        match self.layout_of(device) {
+            Some(layout) => self.status_of(layout, profile),
+            None => LayoutStatus::Missing,
+        }
     }
 
     pub fn layout_status(&self, model: &DeviceModelId) -> LayoutStatus {
@@ -587,6 +717,10 @@ impl Runtime {
         let Some(layout) = self.layout_for(model) else {
             return LayoutStatus::Missing;
         };
+        self.status_of(layout, profile)
+    }
+
+    fn status_of(&self, layout: &DeviceLayout, profile: &Profile) -> LayoutStatus {
         let mut issues = layout.validate(&self.catalog, profile);
         issues.extend(layout.check_overrides(self.engine.registry(), profile));
         issues.extend(layout.check_compatibility(&self.catalog, self.engine.registry(), profile));
@@ -613,7 +747,7 @@ impl Runtime {
 
     /// Whether every page of `stack` exists in the layout for `device`.
     fn pages_exist(&self, device: &DeviceId, stack: &[PageId]) -> bool {
-        self.layout_for(&device.model).is_some_and(|layout| {
+        self.layout_of(device).is_some_and(|layout| {
             !stack.is_empty() && stack.iter().all(|page| layout.page(*page).is_some())
         })
     }
@@ -621,7 +755,7 @@ impl Runtime {
     /// Sends `device` to the page it showed last in the active profile, if
     /// that is still a top-level page of its layout, else to the home page.
     fn reset_navigation(&mut self, device: &DeviceId) {
-        let start = self.layout_for(&device.model).map(|layout| {
+        let start = self.layout_of(device).map(|layout| {
             self.profile()
                 .and_then(|profile| self.remembered.get(&(profile.id, device.clone())))
                 .copied()
@@ -638,7 +772,7 @@ impl Runtime {
     fn go_back(&mut self, device: &DeviceId) -> Option<PageId> {
         let current = self.current_page(device);
         let folder = current.and_then(|page| {
-            let layout = self.layout_for(&device.model)?;
+            let layout = self.layout_of(device)?;
             let parent = layout.parent_of(page)?;
             let mut path = layout.ancestors(parent);
             path.reverse();
@@ -662,7 +796,7 @@ impl Runtime {
     /// Whether the page `device` shows is a folder that closes after one of
     /// its keys ran something ([`crate::LayoutPage::auto_return`]).
     fn closes_after_use(&self, device: &DeviceId) -> bool {
-        self.layout_for(&device.model)
+        self.layout_of(device)
             .zip(self.current_page(device))
             .is_some_and(|(layout, page)| {
                 layout.page(page).is_some_and(|p| p.auto_return) && layout.parent_of(page).is_some()
@@ -676,6 +810,20 @@ impl Runtime {
         let (forward, wrap_around) = match result.deck_request() {
             Some(crate::DeckRequest::NextPage { wrap_around }) => (true, wrap_around),
             Some(crate::DeckRequest::PreviousPage { wrap_around }) => (false, wrap_around),
+            Some(crate::DeckRequest::SwitchLayout {
+                layout,
+                page,
+                history,
+            }) => {
+                result.request = None;
+                self.switch_layout(device, layout, page, history, result);
+                return;
+            }
+            Some(crate::DeckRequest::PreviousLayout) => {
+                result.request = None;
+                self.previous_layout(device, result);
+                return;
+            }
             Some(
                 crate::DeckRequest::SwitchProfile { .. }
                 | crate::DeckRequest::Brightness { .. }
@@ -687,7 +835,7 @@ impl Runtime {
         };
         result.request = None;
         let target = self
-            .layout_for(&device.model)
+            .layout_of(device)
             .zip(self.current_page(device))
             .and_then(|(layout, page)| {
                 let target = layout.adjacent_page(page, forward, wrap_around)?;
@@ -708,6 +856,116 @@ impl Runtime {
                 };
             }
         }
+    }
+
+    /// *Switch layout* on `device`: shows `target` of the active profile,
+    /// at `page` (the home page when not given or gone), and records the
+    /// layout left in the device's history per `mode`. Refused, changing
+    /// nothing, when the layout is not assigned to the profile or not made
+    /// for the device's model; the profile never changes.
+    fn switch_layout(
+        &mut self,
+        device: &DeviceId,
+        target: LayoutId,
+        page: Option<PageId>,
+        mode: crate::HistoryMode,
+        result: &mut ActionResult,
+    ) {
+        let Some(profile) = self.profile() else {
+            *result = ActionResult::error(LAYOUT_UNAVAILABLE, "no profile is active");
+            return;
+        };
+        let profile_id = profile.id;
+        let Some(layout) = profile.layout(target) else {
+            *result = ActionResult::error(
+                LAYOUT_UNAVAILABLE,
+                format!("the layout is not assigned to the profile {}", profile.name),
+            );
+            return;
+        };
+        if layout.model != device.model {
+            let model = self
+                .catalog
+                .get(&layout.model)
+                .map_or_else(|| layout.model.to_string(), |m| m.name.clone());
+            *result = ActionResult::error(
+                LAYOUT_INCOMPATIBLE,
+                format!(
+                    "the layout {} is made for the {model}, not for this device",
+                    layout.name
+                ),
+            );
+            return;
+        }
+        let name = layout.name.clone();
+        let stack = page_path(layout, page).unwrap_or_else(|| vec![layout.home_page]);
+        let current = self.layout_of(device).map(|layout| layout.id).zip(Some(
+            self.navigation.get(device).cloned().unwrap_or_default(),
+        ));
+        let key = (profile_id, device.clone());
+        let switched = self
+            .histories
+            .entry(key.clone())
+            .or_default()
+            .switch(current, target, mode);
+        if switched || page.is_some() {
+            self.navigation.insert(device.clone(), stack);
+        }
+        if self.device_layouts.get(&key) != Some(&target) {
+            self.device_layouts.insert(key, target);
+            self.device_layouts_changed = true;
+        }
+        result.message = if switched {
+            format!("layout {name}")
+        } else {
+            format!("layout {name} is shown")
+        };
+        result.data.insert("layoutId".into(), target.to_string());
+        result.data.insert("layoutName".into(), name);
+    }
+
+    /// *Back to previous layout* on `device`: the newest layout of its
+    /// history that is still usable, at the page it showed (the home page
+    /// if that is gone). With an empty history nothing changes and the
+    /// result says so.
+    fn previous_layout(&mut self, device: &DeviceId, result: &mut ActionResult) {
+        let Some(profile) = self.session.as_ref().map(|s| &s.profile) else {
+            *result = ActionResult::error(LAYOUT_UNAVAILABLE, "no profile is active");
+            return;
+        };
+        let key = (profile.id, device.clone());
+        let entry = self.histories.get_mut(&key).and_then(|history| {
+            history.back(|id| {
+                profile
+                    .layout(id)
+                    .is_some_and(|layout| layout.model == device.model)
+            })
+        });
+        let Some(entry) = entry else {
+            "there is no previous layout".clone_into(&mut result.message);
+            return;
+        };
+        let Some(layout) = profile.layout(entry.layout) else {
+            return;
+        };
+        let name = layout.name.clone();
+        let stack = if !entry.pages.is_empty()
+            && entry.pages.iter().all(|page| layout.page(*page).is_some())
+        {
+            entry.pages
+        } else {
+            vec![layout.home_page]
+        };
+        self.navigation.insert(device.clone(), stack);
+        if self.device_layouts.get(&key) != Some(&entry.layout) {
+            self.device_layouts.insert(key, entry.layout);
+            self.device_layouts_changed = true;
+        }
+        result.message = format!("layout {name}");
+        result
+            .data
+            .insert("layoutId".into(), entry.layout.to_string());
+        result.data.insert("layoutName".into(), name);
     }
 
     /// What every display-capable control of a connected device should show.
@@ -741,15 +999,13 @@ impl Runtime {
         let Some(profile) = self.profile() else {
             return notice(self.placeholder.as_deref().unwrap_or("No profile"));
         };
-        let (Some(layout), Some(page)) =
-            (self.layout_for(&device.model), self.current_page(device))
-        else {
+        let (Some(layout), Some(page)) = (self.layout_of(device), self.current_page(device)) else {
             return notice("No layout");
         };
         let Some(page) = layout.page(page) else {
             return notice("No layout");
         };
-        page_faces(
+        let mut faces = page_faces(
             self.engine.registry(),
             layout,
             page.id,
@@ -757,7 +1013,26 @@ impl Runtime {
             self.active_project(),
             &controls,
             Some(&model.capabilities),
-        )
+        );
+        // *Back to previous layout* with nowhere to go back to.
+        if self.layout_history(device).is_empty() {
+            for (control, face) in &mut faces {
+                let back = shown_binding(page, *control)
+                    .and_then(|binding| binding.target.action_id())
+                    .and_then(|action| profile.action(action))
+                    .and_then(|instance| {
+                        self.engine
+                            .registry()
+                            .layout_navigation(&instance.action_type, &instance.parameters)
+                    })
+                    == Some(crate::LayoutNavigation::Back);
+                if back && face.style != FaceStyle::Notice {
+                    face.style = FaceStyle::Notice;
+                    face.detail = Some(NO_PREVIOUS_LAYOUT.into());
+                }
+            }
+        }
+        faces
     }
 
     /// The bindings of the active profile's layouts that cannot run their
@@ -792,7 +1067,7 @@ impl Runtime {
         trigger: Trigger,
     ) -> Option<RuntimeOutcome> {
         let profile = self.profile()?;
-        let layout = self.layout_for(&device.model)?;
+        let layout = self.layout_of(device)?;
         let page = layout.page(self.current_page(device)?)?;
         let binding = page
             .bindings
@@ -821,9 +1096,7 @@ impl Runtime {
     /// one, for decorating faces with live state. Empty without a profile
     /// or layout.
     pub fn shown_targets(&self, device: &DeviceId) -> Vec<(ControlId, BindingTarget)> {
-        let (Some(layout), Some(page)) =
-            (self.layout_for(&device.model), self.current_page(device))
-        else {
+        let (Some(layout), Some(page)) = (self.layout_of(device), self.current_page(device)) else {
             return Vec::new();
         };
         let Some(page) = layout.page(page) else {
@@ -903,7 +1176,7 @@ impl Runtime {
                 // A binding whose action cannot run from this control is
                 // refused, not run.
                 let trigger = self
-                    .layout_for(&device.model)
+                    .layout_of(device)
                     .zip(self.current_page(device))
                     .and_then(|(layout, page)| layout.page(page))
                     .and_then(|page| page.binding_for(*control, *input))
@@ -917,7 +1190,7 @@ impl Runtime {
                     return ignored("unknown device model");
                 };
                 let (Some(layout), Some(page_id)) =
-                    (self.layout_for(&device.model), self.current_page(device))
+                    (self.layout_of(device), self.current_page(device))
                 else {
                     return ignored("no layout for this device model");
                 };
@@ -1052,6 +1325,16 @@ impl Runtime {
     }
 }
 
+/// The page stack that shows `page` of `layout`: its folders, then the
+/// page. `None` when no page is given or it is not in the layout.
+fn page_path(layout: &DeviceLayout, page: Option<PageId>) -> Option<Vec<PageId>> {
+    let page = page.filter(|page| layout.page(*page).is_some())?;
+    let mut path = layout.ancestors(page);
+    path.reverse();
+    path.push(page);
+    Some(path)
+}
+
 /// Faces for `controls` on one page of a layout. Unbound controls are empty.
 /// Used for devices and for previews in the layout designer. With the
 /// model's `capabilities`, a control whose shown binding runs an action
@@ -1164,12 +1447,24 @@ fn face_for(
             let Some(instance) = profile.action(*action) else {
                 return KeyFace::new(FaceStyle::Notice, "Missing");
             };
+            let parameters = instance.parameters.overlay(overrides);
+            // *Switch layout* without a label of its own is titled with
+            // the layout it shows; a layout the profile does not use is
+            // unavailable here.
+            let target = match registry.layout_navigation(&instance.action_type, &parameters) {
+                Some(crate::LayoutNavigation::SwitchTo(id)) => Some(profile.layout(id)),
+                _ => None,
+            };
             let template = binding
                 .label
                 .as_deref()
                 .or(instance.label.as_deref())
+                .or_else(|| target.flatten().map(|layout| layout.name.as_str()))
                 .unwrap_or(&instance.name);
             let label = render_label(template, &profile.name, project);
+            if target == Some(None) {
+                return KeyFace::new(FaceStyle::Notice, label).with_detail("Not in this profile");
+            }
             // The action's own icon, else its type's.
             let symbol = instance.icon.clone().or_else(|| {
                 registry
@@ -1181,7 +1476,7 @@ fn face_for(
                 .decorate_face(
                     &instance.action_type,
                     KeyFace::new(FaceStyle::Action, label.clone()).with_symbol(symbol),
-                    &instance.parameters.overlay(overrides),
+                    &parameters,
                     template,
                     project,
                 )
@@ -1199,7 +1494,12 @@ fn face_for(
                 ),
             )
             .with_symbol(Some(symbols::WORKFLOW)),
-            None => KeyFace::new(FaceStyle::Notice, "Missing"),
+            // A layout shared with a profile that has the workflow.
+            None => KeyFace::new(
+                FaceStyle::Notice,
+                binding.label.clone().unwrap_or_else(|| "Workflow".into()),
+            )
+            .with_detail("Not in this profile"),
         },
         BindingTarget::OpenPage { page } => KeyFace::new(
             FaceStyle::Folder,
@@ -1245,6 +1545,9 @@ mod compat_tests;
 
 #[cfg(test)]
 mod deck_tests;
+
+#[cfg(test)]
+mod layout_tests;
 
 #[cfg(test)]
 mod tests {

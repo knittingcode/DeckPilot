@@ -15,11 +15,17 @@ use deckpilot_update::policy::{PREFERENCES_SETTING, UpdateMode, UpdatePreference
 
 use crate::{PortabilityError, archive};
 
-/// Version of [`Payload`]. Version 2 adds shared variables and may carry
-/// profile documents of document version 5 (references, inline
-/// invocations); a DeckPilot that reads only version 1 refuses it instead
-/// of silently dropping what it does not know.
-pub const PAYLOAD_VERSION: u32 = 2;
+/// Newest version of [`Payload`] this build reads and writes. Version 2
+/// adds shared variables and may carry profile documents of document
+/// version 5 (references, inline invocations); a DeckPilot that reads only
+/// version 1 refuses it instead of silently dropping what it does not
+/// know. Version 3 adds [`Payload::library`], layouts no exported profile
+/// uses; an export without such layouts is written as version 2, which
+/// releases up to 0.8.1 read (profiles carry their layouts, as before).
+pub const PAYLOAD_VERSION: u32 = 3;
+
+/// The version of an export whose [`Payload::library`] is empty.
+pub const PAYLOAD_VERSION_WITHOUT_LIBRARY: u32 = 2;
 
 /// Portable settings of one module, in the module's own export format.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +88,31 @@ pub struct Payload {
     /// Shared variables; absent in exports of earlier builds.
     #[serde(default, skip_serializing_if = "VariablesExport::is_empty")]
     pub variables: VariablesExport,
+    /// Layouts no exported profile uses (an export of everything), with
+    /// the actions and icons they use. Each profile carries the layouts it
+    /// uses, in its order, with its default per model (`activeLayouts`);
+    /// a layout two exported profiles use is in both with the same id and
+    /// is shared again when both are imported. Payload version 3.
+    #[serde(default, skip_serializing_if = "LibraryExport::is_empty")]
+    pub library: LibraryExport,
+}
+
+/// Layouts of no profile in an export ([`Payload::library`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryExport {
+    #[serde(default)]
+    pub layouts: Vec<deckpilot_core::DeviceLayout>,
+    #[serde(default)]
+    pub actions: Vec<deckpilot_core::ActionInstance>,
+    #[serde(default)]
+    pub icons: Vec<deckpilot_core::Icon>,
+}
+
+impl LibraryExport {
+    pub fn is_empty(&self) -> bool {
+        self.layouts.is_empty() && self.actions.is_empty() && self.icons.is_empty()
+    }
 }
 
 /// Shared variables in an export (decision D5): the user's definitions and
@@ -265,9 +296,35 @@ pub fn export(
         }
     }
     let variables = export_variables(store, &selected, options.app_settings)?;
+    // Everything is exported: also the layouts no profile uses.
+    let mut library = LibraryExport::default();
+    if profiles.is_none() {
+        for stored in store.shared_layouts()? {
+            if !stored.profiles.is_empty() {
+                continue;
+            }
+            let (actions, icons) = store.layout_library(&stored.layout)?;
+            for action in actions {
+                if !library.actions.iter().any(|a| a.id == action.id) {
+                    library.actions.push(action);
+                }
+            }
+            for icon in icons {
+                if !library.icons.iter().any(|i| i.id == icon.id) {
+                    library.icons.push(icon);
+                }
+            }
+            library.layouts.push(stored.layout);
+        }
+    }
     Ok(Payload {
         variables,
-        version: PAYLOAD_VERSION,
+        version: if library.is_empty() {
+            PAYLOAD_VERSION_WITHOUT_LIBRARY
+        } else {
+            PAYLOAD_VERSION
+        },
+        library,
         exported_at,
         app_version: app_version.into(),
         profiles: selected,

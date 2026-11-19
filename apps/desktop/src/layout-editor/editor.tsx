@@ -59,12 +59,19 @@ import {
 } from "@/lib/layout-model"
 import { DEFAULT_TIMINGS, readableTriggers } from "@/components/gesture-editor/model"
 import { isStepWorkflow, newMultiAction } from "@/lib/multi-action"
+import {
+  SWITCH_LAYOUT,
+  backUnavailable,
+  layoutSwitchParameters,
+  switchableLayouts,
+} from "@/lib/layout-navigation"
 import { StepEditor } from "@/pages/workflow-steps"
 import type {
   ActionInstance,
   ActionType,
   BindingTarget,
   ControlId,
+  DeviceInfo,
   DeviceLayout,
   DeviceModel,
   GestureTimings,
@@ -75,7 +82,13 @@ import type {
 
 import { effectiveUsage } from "./appearance"
 import { AppearancePanel, type IconState } from "./appearance-panel"
-import { catalogGroups, existingDefault, newAction } from "./catalog"
+import {
+  catalogGroups,
+  existingDefault,
+  existingPreset,
+  newAction,
+  newPresetAction,
+} from "./catalog"
 import { ControlMenu } from "./control-menu"
 import { DeletePageDialog } from "./delete-page-dialog"
 import {
@@ -85,11 +98,12 @@ import {
   orderedControls,
   pageDeletion,
   parseControlKey,
+  type ActionPreset,
   type DragSource,
 } from "./editing"
 import { Inspector } from "./inspector"
 import { LibraryDock } from "./library-dock"
-import { LibraryPanel } from "./library-panel"
+import { LibraryPanel, type PresetEntry } from "./library-panel"
 import { dragLook } from "./drag-look"
 import { DragPreview } from "./drag-preview"
 import { PageNav } from "./page-nav"
@@ -143,6 +157,7 @@ export function LayoutEditor({
   model,
   saved,
   header,
+  device = null,
   onDirtyChange,
   onSaved,
 }: {
@@ -152,6 +167,11 @@ export function LayoutEditor({
   saved: DeviceLayout
   /** Shown above the device, e.g. the layout chooser. */
   header?: ReactNode
+  /**
+   * The connected device the editor is for, as the agent reports it: the
+   * layout it shows and whether Back to previous layout can go back.
+   */
+  device?: DeviceInfo | null
   onDirtyChange: (dirty: boolean) => void
   onSaved: () => void
 }) {
@@ -159,13 +179,34 @@ export function LayoutEditor({
   // Actions created by dropping a type from the catalog, until the
   // reloaded profile has them: they are named, drawn and reused at once.
   const [created, setCreated] = useState<ActionInstance[]>([])
-  const actions = useMemo(
-    () => [
-      ...view.profile.actions,
+  // Actions changed here (a Switch layout key's destination), until the
+  // profile is reloaded: changes made against the profile as it is now.
+  const [changed, setChanged] = useState<{ base: ActionInstance[]; actions: ActionInstance[] }>({
+    base: [],
+    actions: [],
+  })
+  const actions = useMemo(() => {
+    const updates = changed.base === view.profile.actions ? changed.actions : []
+    return [
+      ...view.profile.actions.map((a) => updates.find((c) => c.id === a.id) ?? a),
       ...created.filter((c) => !view.profile.actions.some((a) => a.id === c.id)),
-    ],
-    [view.profile.actions, created],
-  )
+    ]
+  }, [view.profile.actions, created, changed])
+  const remember = (action: ActionInstance) => {
+    if (view.profile.actions.some((a) => a.id === action.id)) {
+      setChanged((current) => ({
+        base: view.profile.actions,
+        actions: [
+          ...(current.base === view.profile.actions ? current.actions : []).filter(
+            (c) => c.id !== action.id,
+          ),
+          action,
+        ],
+      }))
+    } else {
+      setCreated((current) => [...current.filter((c) => c.id !== action.id), action])
+    }
+  }
   const gestureContext = useGestureContext()
   const modules = useActionModules()
   const catalog = useMemo(() => catalogGroups(modules), [modules])
@@ -174,11 +215,30 @@ export function LayoutEditor({
   // the catalog's.
   const typeById = useMemo(() => {
     const map = new Map<string, ActionType>()
+    for (const module of modules) for (const type of module.actionTypes) map.set(type.id, type)
     for (const group of catalog)
       for (const entry of group.entries) map.set(entry.type.id, entry.type)
     for (const type of gestureContext.types) map.set(type.id, type)
     return map
-  }, [catalog, gestureContext.types])
+  }, [modules, catalog, gestureContext.types])
+  // The profile's other layouts for this model, as "Switch to …" entries.
+  const switchType = typeById.get(SWITCH_LAYOUT)
+  const presets = useMemo((): PresetEntry[] => {
+    if (!switchType) return []
+    return switchableLayouts(view.profile.layouts, model.id)
+      .filter((l) => l.id !== saved.id)
+      .map((l) => ({
+        key: `switch-layout:${l.id}`,
+        label: `Switch to ${l.name}`,
+        description: `Shows ${l.name} on this device; Back to previous layout returns here.`,
+        category: switchType.category,
+        type: switchType,
+        preset: {
+          name: l.name,
+          parameters: layoutSwitchParameters({ layout: l.id, page: null, history: "push" }),
+        },
+      }))
+  }, [switchType, view.profile.layouts, model.id, saved.id])
   const typeOfTarget = (target: BindingTarget): ActionType | undefined => {
     if (target.type !== "action") return undefined
     const action = actions.find((a) => a.id === target.action)
@@ -282,7 +342,8 @@ export function LayoutEditor({
   /** What is dragged, as the announcement names it. */
   const draggedName = (dragged: unknown): string => {
     const source = dragged as DragSource | undefined
-    if (source?.type === "actionType") return typeById.get(source.actionType)?.name ?? "The action"
+    if (source?.type === "actionType")
+      return source.preset?.name ?? typeById.get(source.actionType)?.name ?? "The action"
     if (source?.type === "target") {
       return targetLabel(source.target, actions, workflows, draft)
     }
@@ -333,26 +394,36 @@ export function LayoutEditor({
    * default settings, saved to the profile at once (a key can only run a
    * saved action). What it is put on is part of the draft as usual.
    */
-  const actionOfType = async (typeId: string): Promise<BindingTarget | null> => {
-    const type = catalog.flatMap((g) => g.entries).find((e) => e.type.id === typeId)?.type
+  const actionOfType = async (
+    typeId: string,
+    preset?: ActionPreset,
+  ): Promise<BindingTarget | null> => {
+    const type = preset
+      ? typeById.get(typeId)
+      : catalog.flatMap((g) => g.entries).find((e) => e.type.id === typeId)?.type
     if (!type) return null
     try {
-      let action = existingDefault(actions, type)
+      let action = preset ? existingPreset(actions, type, preset) : existingDefault(actions, type)
       if (!action) {
-        action = await api.createAction(profileId, newAction(actions, type))
+        action = await api.createAction(
+          profileId,
+          preset ? newPresetAction(actions, type, preset) : newAction(actions, type),
+        )
         const made = action
         setCreated((current) => [...current, made])
         refresh()
       }
       return { type: "action", action: action.id }
     } catch (e) {
-      toast.error(`“${type.name}” could not be added`, { description: errorMessage(e) })
+      toast.error(`“${preset?.name ?? type.name}” could not be added`, {
+        description: errorMessage(e),
+      })
       return null
     }
   }
 
-  const placeType = async (typeId: string, control: ControlId) => {
-    const target = await actionOfType(typeId)
+  const placeType = async (typeId: string, control: ControlId, preset?: ActionPreset) => {
+    const target = await actionOfType(typeId, preset)
     if (target) commands.drop({ type: "target", target }, control)
   }
 
@@ -387,7 +458,7 @@ export function LayoutEditor({
    */
   const resolveSlotDrop = async (dragged: unknown): Promise<BindingTarget | null> => {
     const source = dragged as DragSource | undefined
-    if (source?.type === "actionType") return actionOfType(source.actionType)
+    if (source?.type === "actionType") return actionOfType(source.actionType, source.preset)
     if (source?.type === "newMultiAction") return multiAction()
     if (source?.type === "target") {
       const opensItself = source.target.type === "openPage" && source.target.page === pageId
@@ -416,6 +487,22 @@ export function LayoutEditor({
   })
 
   const pageBindings = useMemo(() => findPage(draft, pageId)?.bindings ?? [], [draft, pageId])
+  // Back to previous layout keys while the device shows this layout of
+  // this (active) profile with nothing to go back to: unavailable, as there.
+  const noWayBack = useMemo(
+    () =>
+      new Map(
+        [
+          ...backUnavailable(
+            pageBindings,
+            actions,
+            profiles.activeProfileId === profileId ? device : null,
+            draft.id,
+          ),
+        ].map((key) => [key, "No previous layout"]),
+      ),
+    [pageBindings, actions, profiles.activeProfileId, profileId, device, draft.id],
+  )
   const icons = useMemo(() => {
     const map = new Map<string, string | null | undefined>()
     for (const binding of pageBindings) {
@@ -470,7 +557,7 @@ export function LayoutEditor({
       reject(target, source, why)
       return
     }
-    if (source.type === "actionType") void placeType(source.actionType, target)
+    if (source.type === "actionType") void placeType(source.actionType, target, source.preset)
     else if (source.type === "newMultiAction") void placeMultiAction(target)
     else commands.drop(source, target)
   }
@@ -635,6 +722,7 @@ export function LayoutEditor({
                       keySize={unit}
                       images={images}
                       faces={faces}
+                      unavailable={noWayBack}
                       icons={icons}
                       captions={summaries}
                       summaries={summaries}
@@ -760,6 +848,21 @@ export function LayoutEditor({
             resolveDrop={resolveSlotDrop}
             onEditWorkflow={setStepsOf}
             incompatible={incompatibleFor}
+            layoutNavigation={{
+              profileId,
+              modelName: model.name,
+              layouts: switchableLayouts(view.profile.layouts, model.id),
+              defaultLayout:
+                view.profile.activeLayouts?.[model.id] ??
+                switchableLayouts(view.profile.layouts, model.id)[0]?.id ??
+                null,
+              usages: view.actionUsages,
+              device,
+              onActionSaved: (action) => {
+                remember(action)
+                refresh()
+              },
+            }}
             notRun={
               selection.focus
                 ? (incompatible.get(controlKey(selection.focus)) ?? []).map((found) => ({
@@ -790,6 +893,7 @@ export function LayoutEditor({
           <LibraryPanel
             groups={libraryControl ? groupsFor(libraryControl) : groups}
             catalog={catalog}
+            presets={presets}
             multiAction
             variant="plain"
             compatibility={{

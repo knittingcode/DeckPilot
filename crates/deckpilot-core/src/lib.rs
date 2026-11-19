@@ -33,6 +33,7 @@ pub mod registry;
 pub mod resolution;
 pub mod resource;
 pub mod runtime;
+pub mod shared_layouts;
 pub mod stateful;
 pub mod trigger;
 pub mod variables;
@@ -97,11 +98,14 @@ pub use project::{
     ActiveProjectContext, CycleDirection, Project, ProjectContextError, ProjectKey,
     ProjectStepError, ProjectSwitcher,
 };
-pub use registry::{ActionHandler, ActionRegistry, AliasHandler, RegistryError};
+pub use registry::{ActionHandler, ActionRegistry, AliasHandler, LayoutNavigation, RegistryError};
 pub use resource::{
     MachineConfig, MachineResourceBinding, ResolveError, ResourceKey, ResourceKind, ResourceRef,
 };
 pub use runtime::{Engine, EngineError, StepReport, WorkflowReport, declared_outputs};
+pub use shared_layouts::{
+    HistoryMode, LayoutCompatibility, LayoutHistory, LayoutRequirements, ModelFit, Unavailable,
+};
 pub use trigger::{
     EventField, LifecycleEvent, Schedule, Scheduler, TriggerEvent, TriggerKind, TriggerValue,
     WallTime, WorkflowTrigger,

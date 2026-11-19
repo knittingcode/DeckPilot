@@ -24,6 +24,7 @@ pub(crate) mod portability;
 mod profiles;
 pub(crate) mod reload;
 pub(crate) mod security;
+mod shared_layouts;
 mod shared_variables;
 mod system;
 mod variables;
@@ -131,6 +132,16 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         layouts::reorder_pages,
         layouts::move_page,
         layouts::copy_page,
+        shared_layouts::list_shared_layouts,
+        shared_layouts::create_shared_layout,
+        shared_layouts::rename_shared_layout,
+        shared_layouts::duplicate_shared_layout,
+        shared_layouts::delete_shared_layout,
+        shared_layouts::assign_layout,
+        shared_layouts::unassign_layout,
+        shared_layouts::reorder_profile_layouts,
+        shared_layouts::set_default_layout,
+        shared_layouts::profile_layouts,
         icons::list_icons,
         icons::import_icon,
         icons::delete_icon,

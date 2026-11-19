@@ -20,12 +20,15 @@ export function FaceTile({
   face,
   icon,
   compact = false,
+  unavailable = false,
   className,
 }: {
   face: KeyFace | undefined
   icon?: string | null
   /** Text only, for short regions such as touch-strip zones. */
   compact?: boolean
+  /** It cannot do anything now (e.g. Back with nowhere to go): dimmed. */
+  unavailable?: boolean
   className?: string
 }) {
   const style = face?.style ?? "empty"
@@ -44,10 +47,12 @@ export function FaceTile({
     <div
       data-slot="key-face"
       data-face={style}
+      data-unavailable={unavailable || undefined}
       className={cn(
         "flex size-full flex-col items-center justify-center gap-[calc(var(--key,4rem)*0.05)] overflow-hidden p-[calc(var(--key,4rem)*0.08)] text-center",
         STYLE[style],
         face?.highlighted && "ring-2 ring-sky-400 ring-inset",
+        unavailable && "opacity-50",
         className,
       )}
     >

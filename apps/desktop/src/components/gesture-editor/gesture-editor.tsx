@@ -138,6 +138,8 @@ export interface GestureEditorProps {
   incompatible?: (target: BindingTarget, trigger: Trigger) => string | null
   /** Bindings of the control kept although they cannot run, with the reason. */
   notRun?: { trigger: Trigger; reason: string }[]
+  /** The placeholder of a binding's label, e.g. the title it shows without one. */
+  labelPlaceholder?: (binding: ControlBinding) => string | undefined
 }
 
 /** The reason a binding of `trigger` is kept but not run, if it is. */
@@ -462,6 +464,7 @@ function GestureRow({
   onEditWorkflow,
   incompatible,
   notRun,
+  labelPlaceholder,
 }: GestureEditorProps & {
   /** The id of the row's drop target. */
   slot: string
@@ -546,7 +549,7 @@ function GestureRow({
         {binding && (
           <Input
             aria-label={`Label for ${label}`}
-            placeholder="Label (optional)"
+            placeholder={labelPlaceholder?.(binding) ?? "Label (optional)"}
             maxLength={32}
             value={binding.label ?? ""}
             onChange={(e) => {

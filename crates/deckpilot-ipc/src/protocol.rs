@@ -20,8 +20,8 @@ use deckpilot_core::variables::{
 use deckpilot_core::work_session::WorkSessionSnapshot;
 use deckpilot_core::{
     ActionInstanceId, ActionResult, ActionStatus, ContextEffect, CycleDirection, ExecutionId,
-    ExecutionRecord, ExecutionSummary, LayoutStatus, ProfileId, Project, ProjectId, WorkSessionId,
-    WorkflowId, WorkflowReport,
+    ExecutionRecord, ExecutionSummary, LayoutId, LayoutStatus, ProfileId, Project, ProjectId,
+    WorkSessionId, WorkflowId, WorkflowReport,
 };
 use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceDescriptor, DeviceId};
 
@@ -1416,6 +1416,12 @@ pub struct DeviceInfo {
     /// agents and for models the agent does not know.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub descriptor: Option<DeviceDescriptor>,
+    /// The layout *Back to previous layout* returns this device to, in the
+    /// active profile; absent when there is none (and from agents before
+    /// shared layouts, which have no layout navigation). An optional field:
+    /// older clients ignore it, so it needs no new protocol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_layout: Option<LayoutId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2222,6 +2228,36 @@ mod tests {
         assert_eq!(json["descriptor"]["vendorId"], "elgato");
         assert_eq!(json["descriptor"]["driver"]["id"], "elgato-hid");
         assert_eq!(serde_json::from_value::<DeviceInfo>(json).unwrap(), new);
+    }
+
+    #[test]
+    fn the_previous_layout_of_a_device_is_optional() {
+        let json = serde_json::json!({
+            "id": {"model": "elgato.streamdeck.mk2", "serial": "A"},
+            "modelName": "Stream Deck MK.2",
+            "state": "connected",
+            "layout": {"type": "missing"},
+            "page": null,
+            "source": "mock"
+        });
+        // From an agent before shared layouts.
+        let info: DeviceInfo = serde_json::from_value(json).unwrap();
+        assert_eq!(info.previous_layout, None);
+        assert!(
+            serde_json::to_value(&info)
+                .unwrap()
+                .get("previousLayout")
+                .is_none()
+        );
+        let layout = LayoutId::new();
+        let with = DeviceInfo {
+            previous_layout: Some(layout),
+            ..info
+        };
+        assert_eq!(
+            serde_json::to_value(&with).unwrap()["previousLayout"],
+            layout.to_string()
+        );
     }
 
     #[test]

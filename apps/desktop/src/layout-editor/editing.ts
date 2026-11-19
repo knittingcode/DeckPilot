@@ -16,6 +16,7 @@ import {
   setBinding,
 } from "@/lib/layout-model"
 import type {
+  ActionParameters,
   BindingTarget,
   ControlBinding,
   ControlId,
@@ -430,8 +431,19 @@ export type DragSource =
   | { type: "target"; target: BindingTarget }
   | { type: "control"; control: ControlId }
   | { type: "newFolder" }
-  | { type: "actionType"; actionType: string }
+  /**
+   * `preset`: the action to create or reuse, e.g. a Switch layout to one
+   * layout; without it, an action of the type's default settings.
+   */
+  | { type: "actionType"; actionType: string; preset?: ActionPreset }
   | { type: "newMultiAction" }
+
+/** A ready-made action of a library entry: its name and settings. */
+export interface ActionPreset {
+  name: string
+  parameters: ActionParameters
+  icon?: string | null
+}
 
 /**
  * Drops a library entry (assigned to the first free trigger) or a control
