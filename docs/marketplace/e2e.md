@@ -51,7 +51,7 @@ the test). The report is `<artifacts>/<driver>-steps.txt`.
 | 9 | Execute the action | UI (Run in Installed) and agent IPC (key presses on the simulated MK.2) |
 | 10 | Execute it in a workflow | app IPC (`save_workflow`, `start_workflow`) |
 | 11 | Verify the results | app IPC, the canned HTTP log |
-| 12 | Restart the agent and the app | Linux: UI (toolbar › Settings opens the settings window, the test switches to it: Background Agent › Stop agent; the app is closed and started again, which starts the agent). Windows: the settings window's `stop_agent` over app IPC, as a second WebView2 window does not load under msedgedriver; the test then starts and unlocks the agent as in step 1 |
+| 12 | Restart the agent and the app | UI on Linux and Windows: toolbar › Settings opens the settings window, the test switches to it: Background Agent › Stop agent; the app is closed and started again, which starts the agent. On Windows the test then starts and unlocks the agent as in step 1. (Until `open_window` became an async command, the settings window never appeared on Windows; the test used `stop_agent` over app IPC there and blamed msedgedriver.) |
 | 13 | Verify persistence | app IPC, agent IPC, `plugins.db` |
 | 14 | Update to 1.1.0 (adds `notifications`) | UI (Updates › Check for updates › Update, consent dialog) |
 | 15 | Verify state migration (storage, settings, credential, grants) | app IPC, `plugins.db` |

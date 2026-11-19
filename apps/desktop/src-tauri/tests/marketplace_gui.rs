@@ -415,14 +415,11 @@ impl Driver for Gui {
     }
 
     fn restart(&mut self, fx: &mut Fixture) -> Vec<Via> {
-        let stopped_via = if PROMPT_UNREACHABLE {
-            // A second WebView2 window does not load under msedgedriver
-            // (see `launch_unlocked`): the settings window's command.
-            self.ok("stop_agent", json!({}));
-            Via::AppIpc
-        } else {
+        let stopped_via = {
             // Toolbar › Settings (its own window) › Background Agent ›
-            // Stop agent.
+            // Stop agent, on every platform: on Windows this proves that
+            // the window opened from the app now appears (`open_window` is
+            // an async command; a synchronous one left it hidden).
             self.settings_window();
             self.wait(&button("Appearance"));
             self.screenshot("11-settings-window");
