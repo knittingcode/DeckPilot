@@ -148,8 +148,16 @@ function Ui-Texts($Root) {
   return (Ui-All $Root { (Ui-Name $_) -ne '' } | ForEach-Object { Ui-Name $_ })
 }
 
+# The text of an element and its descendants in tree order: Chromium
+# splits text into runs ("Installed " + "0.1.0").
+function Ui-Joined($Root) {
+  $names = @((Ui-Name $Root)) + @(Ui-All $Root { $true } | ForEach-Object { Ui-Name $_ })
+  return (($names | Where-Object { $_ }) -join '') -replace '\s+', ' '
+}
+
 function Ui-HasText($Root, [string]$Text) {
-  return [bool](Ui-All $Root { (Ui-Name $_) -eq $Text } | Select-Object -First 1)
+  if (Ui-All $Root { (Ui-Name $_) -eq $Text } | Select-Object -First 1) { return $true }
+  return (Ui-Joined $Root).Contains($Text)
 }
 
 function Ui-Rect($Window) {
@@ -301,8 +309,11 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
       $boxes = Ui-CheckAll $main
       [void](Ui-Invoke $confirm)
       [void](Ui-Until 'the consent dialog to close' { -not (Ui-All $main { (Ui-Type $_) -eq 'Button' -and (Ui-Name $_) -eq 'Install' } | Select-Object -First 1) })
-      $status = Ui-Until "'Installed $($script:PluginVersion)'" { Ui-All $main { (Ui-Name $_) -like "Installed $($script:PluginVersion)*" } | Select-Object -First 1 } $script:UiLong
-      "$boxes consent box(es) checked; status '$(Ui-Name $status)'; $consentShot; $(Ui-Shot 'installed')"
+      $status = Ui-Until "'Installed $($script:PluginVersion)' in the install status" {
+        $group = Ui-All $main { (Ui-Name $_) -eq 'Install status' } | Select-Object -First 1
+        if ($group) { $t = Ui-Joined $group; if ($t.Contains("Installed $($script:PluginVersion)")) { $t } }
+      } $script:UiLong
+      "$boxes consent box(es) checked; install status '$status'; $consentShot; $(Ui-Shot 'installed')"
     }
     'Settings opens its own window, Plugins lists it' = {
       $main = $state.main
@@ -360,7 +371,7 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
       [void](Ui-Invoke $dialogButton)
       [void](Ui-Until "$($script:PluginName) to leave the installed list" {
         $list = Ui-All $main { (Ui-Name $_) -eq 'Installed plugins' } | Select-Object -First 1
-        $list -and -not (Ui-All $list { (Ui-Name $_) -eq $script:PluginName } | Select-Object -First 1)
+        $list -and -not (Ui-HasText $list $script:PluginName)
       } $script:UiLong)
       "$($script:PluginName) gone from Marketplace > Installed; $confirmShot; $(Ui-Shot 'uninstalled')"
     }

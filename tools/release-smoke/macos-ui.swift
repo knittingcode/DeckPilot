@@ -162,7 +162,13 @@ func find(_ root: AXUIElement, _ what: String, _ timeout: TimeInterval = wait, _
   try until(what, timeout) { first(root, test) }
 }
 
-func isButton(_ e: AXUIElement) -> Bool { role(e) == kAXButtonRole as String }
+/// Something pressable: a button, a toggle button (aria-pressed: AXCheckBox
+/// AXToggle), a menu trigger (aria-haspopup: AXPopUpButton).
+func isButton(_ e: AXUIElement) -> Bool {
+  let r = role(e)
+  return r == kAXButtonRole as String || r == kAXPopUpButtonRole as String || r == kAXMenuButtonRole as String
+    || (r == kAXCheckBoxRole as String && subrole(e) == "AXToggle")
+}
 
 func button(_ root: AXUIElement, _ title: String, _ timeout: TimeInterval = wait) throws -> AXUIElement {
   try find(root, "button '\(title)'", timeout) { isButton($0) && name($0) == title }
@@ -394,7 +400,13 @@ func card(_ w: AXUIElement) -> AXUIElement? {
   first(w) { isButton($0) && (name($0) == pluginName || name($0).hasPrefix("\(pluginName) ") || string($0, kAXDescriptionAttribute).hasPrefix(pluginName)) }
 }
 
-func hasText(_ root: AXUIElement, _ text: String) -> Bool { first(root) { name($0) == text } != nil }
+/// The text of an element and its descendants in tree order: WebKit
+/// splits text into runs ("Installed " + "0.1.0").
+func joined(_ root: AXUIElement) -> String {
+  all(root).map(name).joined().replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+}
+
+func hasText(_ root: AXUIElement, _ text: String) -> Bool { first(root) { name($0) == text } != nil || joined(root).contains(text) }
 
 let axSteps: [(String, () throws -> String)] = [
   ("main window", {
@@ -457,8 +469,12 @@ let axSteps: [(String, () throws -> String)] = [
     let boxes = try checkAll(mainWindow)
     try press(confirm)
     _ = try until("the consent dialog to close") { first(mainWindow) { isButton($0) && name($0) == "Install" } == nil ? true : nil }
-    let status = try find(mainWindow, "'Installed \(pluginVersion)'", long) { name($0).hasPrefix("Installed \(pluginVersion)") }
-    return "\(boxes) consent box(es) checked; status '\(name(status))'; \(consentShot); \(screenshot("installed"))"
+    let status = try until("'Installed \(pluginVersion)' in the install status", long) { () -> String? in
+      guard let group = first(mainWindow, { name($0) == "Install status" }) else { return nil }
+      let t = joined(group)
+      return t.contains("Installed \(pluginVersion)") ? t : nil
+    }
+    return "\(boxes) consent box(es) checked; install status '\(status)'; \(consentShot); \(screenshot("installed"))"
   }),
   ("Settings opens its own window, Plugins lists it", {
     try press(try find(mainWindow, "the Settings button") { isButton($0) && name($0).hasPrefix("Settings") })
