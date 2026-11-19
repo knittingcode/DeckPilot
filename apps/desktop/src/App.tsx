@@ -32,9 +32,23 @@ import { AppContext, type AppContextValue, type CorePageId, type PageId } from "
 import { ThemeProvider } from "@/components/theme-provider"
 import { type Location, browserStorage, locationOf } from "@/lib/navigation"
 import { ExecutionStore } from "@/lib/executions"
+import { removeObsoleteLibraryKeys } from "@/layout-editor/library-sidebar"
 import { TitlebarStore } from "@/lib/titlebar"
 import { cn } from "@/lib/utils"
-import { MODULE_VIEWS, isModulePageAvailable, moduleStatusItems } from "@/modules"
+import {
+  CORE_PAGE_CONTEXTS,
+  type ToolbarContext,
+  corePageContext,
+  showsDevice,
+  showsProfile,
+  toolbarContext,
+} from "@/lib/toolbar-context"
+import {
+  MODULE_VIEWS,
+  isModulePageAvailable,
+  modulePageContext,
+  moduleStatusItems,
+} from "@/modules"
 import { findSettingsPage } from "@/settings/registry"
 import { SettingsView } from "@/settings/settings-view"
 import { resolveEditingProfile, useAppData } from "@/shell/app-data"
@@ -75,9 +89,13 @@ const PAGES: Partial<Record<CorePageId, View>> = {
     : {}),
 }
 
-/** Titles of core pages before they register their own, e.g. while loading. */
+/**
+ * Titles of core pages before they register their own, e.g. while loading.
+ * The device editor has none in the toolbar (its selectors say what is
+ * edited).
+ */
 const PAGE_TITLES: Partial<Record<CorePageId, string>> = {
-  designer: "Device Editor",
+  designer: "",
   dashboard: "Dashboard",
   layouts: "Layouts",
   actions: "Action Library",
@@ -169,6 +187,8 @@ function Studio() {
     } catch {
       // Nothing is read from it any more.
     }
+    // The Action Library has one fixed width now and is always shown.
+    removeObsoleteLibraryKeys()
   }, [])
 
   // Other windows ask for a page: `projects/projects`, `settings:security`.
@@ -237,8 +257,9 @@ function Studio() {
         ? PLUGIN_VIEW
         : undefined
   const ViewComponent = Current ?? DEFAULT_VIEW
+  // Settings pages show their title themselves; the toolbar shows where they are.
   const fallbackTitle = settingsPage
-    ? (findSettingsPage(context.modules, settingsPage)?.title ?? "Settings")
+    ? ""
     : (PAGE_TITLES[page as CorePageId] ??
       context.modules
         .flatMap((m) => m.pages.map((p) => ({ id: `${m.id}/${p.id}`, title: p.title })))
@@ -250,6 +271,25 @@ function Studio() {
   const openEditor = () => {
     context.navigate("designer")
   }
+  // Which selectors the toolbar shows: those of the view on screen. The
+  // selection itself stays in the shell while they are hidden.
+  const openPlugin = pluginView
+    ? plugins.find((p) => navigationKey(p) === `${pluginView.plugin}/${pluginView.entry}`)
+    : undefined
+  const viewContext: ToolbarContext = inSettings
+    ? "none"
+    : !Current
+      ? CORE_PAGE_CONTEXTS.designer
+      : pluginView
+        ? toolbarContext(openPlugin?.view.context)
+        : (corePageContext(page) ?? modulePageContext(page))
+  const selectors =
+    showsDevice(viewContext) || showsProfile(viewContext) ? (
+      <>
+        {showsDevice(viewContext) && <DeviceSelector onChosen={openEditor} />}
+        {showsProfile(viewContext) && <ProfileSelector />}
+      </>
+    ) : undefined
   return (
     <AppContext value={context}>
       <TitlebarContext value={titlebar}>
@@ -267,12 +307,8 @@ function Studio() {
                   store={titlebar}
                   chrome={chrome}
                   fallbackTitle={fallbackTitle}
-                  leading={
-                    <>
-                      <DeviceSelector onChosen={openEditor} />
-                      <ProfileSelector />
-                    </>
-                  }
+                  leading={selectors}
+                  context={viewContext}
                   trailing={
                     <ToolbarEnd
                       plugins={plugins}

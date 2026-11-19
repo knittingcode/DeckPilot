@@ -159,6 +159,75 @@ describe("app titlebar", () => {
     expect(inset.className).toBe("w-(--titlebar-controls-inset) shrink-0")
   })
 
+  it("shows no heading for a page without a title, only its location", () => {
+    const store = new TitlebarStore()
+    render(
+      <TitlebarContext value={store}>
+        <SidebarProvider>
+          <AppTitlebar
+            store={store}
+            chrome={{ overlay: false, controlsInset: 0 }}
+            fallbackTitle=""
+          />
+          <Contribution
+            config={{
+              title: "",
+              breadcrumbs: [{ label: "Settings", onSelect: vi.fn() }, { label: "General" }],
+            }}
+          />
+        </SidebarProvider>
+      </TitlebarContext>,
+    )
+    const toolbar = screen.getByRole("banner", { name: "Toolbar" })
+    expect(within(toolbar).queryByRole("heading")).not.toBeInTheDocument()
+    const location = within(toolbar).getByRole("list", { name: "Location" })
+    // Always shown when it is the heading, with a separator only between crumbs.
+    expect(location).toHaveClass("flex")
+    expect(location).not.toHaveClass("hidden")
+    expect(location.textContent).toBe("Settings/General")
+  })
+
+  it("starts the page's context right after the window controls without selectors", () => {
+    const store = new TitlebarStore()
+    const toolbar = (inset: number, leading?: React.ReactNode) => {
+      render(
+        <TitlebarContext value={store}>
+          <SidebarProvider>
+            <AppTitlebar
+              store={store}
+              chrome={{ overlay: inset > 0, controlsInset: inset }}
+              fallbackTitle="Marketplace"
+              leading={leading}
+              context={leading ? "device+profile" : "none"}
+            />
+          </SidebarProvider>
+        </TitlebarContext>,
+      )
+      return screen.getByRole("banner", { name: "Toolbar" })
+    }
+    // macOS: room for the traffic lights, then the selectors.
+    let bar = toolbar(68, <button type="button">Device</button>)
+    expect(bar.style.getPropertyValue("--titlebar-controls-inset")).toBe("68px")
+    expect(bar.children[1]).toHaveAttribute("data-slot", "titlebar-leading")
+    expect(bar.children[1]).toHaveClass("pl-(--titlebar-padding-x)")
+    cleanup()
+    // macOS without selectors: the heading follows the room directly, with
+    // the same padding the selectors had; nothing shifts the traffic lights.
+    bar = toolbar(68)
+    expect(bar.style.getPropertyValue("--titlebar-controls-inset")).toBe("68px")
+    expect(bar.querySelector("[data-slot=titlebar-leading]")).toBeNull()
+    expect(bar.children[1]).toContainElement(
+      within(bar).getByRole("heading", { name: "Marketplace" }),
+    )
+    expect(bar.children[1]).toHaveClass("px-(--titlebar-padding-x)")
+    cleanup()
+    // Windows and Linux: no room at all (the system draws its own titlebar).
+    bar = toolbar(0)
+    expect(bar.style.getPropertyValue("--titlebar-controls-inset")).toBe("0px")
+    expect(bar).toHaveAttribute("data-context", "none")
+    expect(bar.children[1]).toHaveClass("px-(--titlebar-padding-x)")
+  })
+
   it("shows determinate progress", () => {
     const store = new TitlebarStore()
     render(<Shell store={store} />)
