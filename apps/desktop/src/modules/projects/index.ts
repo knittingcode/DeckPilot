@@ -12,6 +12,8 @@ export const projectsModule: FrontendModule = {
     projects: {
       view: lazy(() => import("./projects-page").then((m) => ({ default: m.ProjectsPage }))),
       icon: FolderKanban,
+      // A profile's projects.
+      context: "profile",
     },
   },
   statusItems: [ActiveProjectStatus],

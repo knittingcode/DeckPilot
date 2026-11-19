@@ -39,10 +39,11 @@ const TONES: Record<TitlebarTone, string> = {
 
 /**
  * The toolbar of the main window: room for the native window controls, then
- * `leading` (the device and profile selectors), the context
- * of the current page — what it registered with `useTitlebar` — and
- * `trailing` (the app's own commands). It knows no page or module itself.
- * On macOS it is the window's titlebar.
+ * `leading` (the device and profile selectors, only for views that work on
+ * them), the context of the current page — what it registered with
+ * `useTitlebar` — and `trailing` (the app's own commands). It knows no page
+ * or module itself. Without `leading` the page's context starts where the
+ * selectors would, with no gap. On macOS it is the window's titlebar.
  */
 export function AppTitlebar({
   store,
@@ -50,15 +51,21 @@ export function AppTitlebar({
   fallbackTitle,
   leading,
   trailing,
+  context,
 }: {
   store: TitlebarStore
   chrome: WindowChrome
-  /** Shown until the page registers its own title, e.g. while it loads. */
+  /**
+   * Shown until the page registers its own title, e.g. while it loads;
+   * empty for pages without a title in the toolbar.
+   */
   fallbackTitle: string
   /** Shown first (after the window controls), before the page's context. */
   leading?: React.ReactNode
   /** Rightmost elements: the app's commands (notifications, settings, …). */
   trailing?: React.ReactNode
+  /** What the view on screen works on (`lib/toolbar-context.ts`), for styling and tests. */
+  context?: string
 }) {
   const config = useTitlebarState(store)
   // The latest callbacks, also when only they changed.
@@ -68,6 +75,7 @@ export function AppTitlebar({
   return (
     <header
       data-slot="titlebar"
+      data-context={context}
       aria-label="Toolbar"
       className="relative flex h-(--titlebar-height) shrink-0 items-stretch border-b bg-background select-none"
       style={{ "--titlebar-controls-inset": `${chrome.controlsInset}px` } as React.CSSProperties}
@@ -124,17 +132,33 @@ export function AppTitlebar({
   )
 }
 
+/**
+ * The page's location and title. Without a title (the device editor, whose
+ * context is the toolbar's selectors; a settings page, which shows its own
+ * title) only the breadcrumbs are shown, and without those nothing: the
+ * space goes to the page's actions.
+ */
 function Heading({ config, fallbackTitle }: { config: TitlebarConfig; fallbackTitle: string }) {
   const title = config.title ?? fallbackTitle
+  const crumbs = config.breadcrumbs ?? []
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-1.5">
-      {config.breadcrumbs && config.breadcrumbs.length > 0 && (
+    <div data-slot="titlebar-heading" className="flex min-w-0 flex-1 items-center gap-1.5">
+      {crumbs.length > 0 && (
         <ol
           aria-label="Location"
-          className="hidden shrink-0 items-center gap-1.5 text-sm leading-5 @lg:flex"
+          className={cn(
+            "shrink-0 items-center gap-1.5 text-sm leading-5",
+            // Without a title the location is the heading: always shown.
+            title ? "hidden @lg:flex" : "flex",
+          )}
         >
-          {config.breadcrumbs.map((crumb) => (
+          {crumbs.map((crumb, index) => (
             <Fragment key={crumb.label}>
+              {index > 0 && (
+                <li aria-hidden className="text-muted-foreground/60">
+                  /
+                </li>
+              )}
               <li>
                 {crumb.onSelect ? (
                   <button
@@ -148,23 +172,27 @@ function Heading({ config, fallbackTitle }: { config: TitlebarConfig; fallbackTi
                   <span className="text-muted-foreground">{crumb.label}</span>
                 )}
               </li>
-              <li aria-hidden className="text-muted-foreground/60">
-                /
-              </li>
             </Fragment>
           ))}
+          {title && (
+            <li aria-hidden className="text-muted-foreground/60">
+              /
+            </li>
+          )}
         </ol>
       )}
-      <div className="min-w-0">
-        <h1 className="truncate text-sm leading-5 font-semibold" title={title}>
-          {title}
-        </h1>
-        {config.subtitle && (
-          <p className="hidden truncate text-xs leading-4 text-muted-foreground @3xl:block">
-            {config.subtitle}
-          </p>
-        )}
-      </div>
+      {title && (
+        <div className="min-w-0">
+          <h1 className="truncate text-sm leading-5 font-semibold" title={title}>
+            {title}
+          </h1>
+          {config.subtitle && (
+            <p className="hidden truncate text-xs leading-4 text-muted-foreground @3xl:block">
+              {config.subtitle}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   )
 }

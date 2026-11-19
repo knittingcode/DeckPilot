@@ -55,6 +55,8 @@ function selection(change: Partial<EditorSelection> = {}): EditorSelection {
     setDirty: vi.fn(),
     guard: vi.fn(() => true),
     isDirty: vi.fn(() => false),
+    place: vi.fn(() => undefined),
+    rememberPlace: vi.fn(),
     ...change,
   }
 }

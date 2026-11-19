@@ -1,5 +1,6 @@
 import { Box, Puzzle, type LucideIcon } from "lucide-react"
 
+import type { ToolbarContext } from "@/lib/toolbar-context"
 import type { ModuleInfo } from "@/lib/types"
 
 import { httpModule } from "./http"
@@ -51,6 +52,13 @@ export const MODULE_VIEWS: Record<string, FrontendModule["pages"][string]["view"
       Object.entries(m.pages).map(([page, { view }]) => [modulePageId(m.id, page), view]),
     ),
   )
+
+/** Which toolbar selectors a module page shows; `none` unless it says. */
+export function modulePageContext(id: string): ToolbarContext {
+  const [moduleId, pageId] = id.split("/")
+  const page = pageId ? frontend(moduleId ?? "")?.pages[pageId] : undefined
+  return page?.context ?? "none"
+}
 
 /** Whether a module page exists and its module is enabled. */
 export function isModulePageAvailable(modules: ModuleInfo[], id: string): boolean {

@@ -85,6 +85,11 @@ pub fn render(face: &KeyFace, width: u32, height: u32) -> Frame {
     render_with(face, width, height, &Icons::default())
 }
 
+/// Largest icon above a title, as a share of the key's shorter side.
+pub(crate) const MARK_WITH_TEXT: f32 = 0.42;
+/// Largest icon on a key without text.
+pub(crate) const MARK_ALONE: f32 = 0.54;
+
 /// The title's em size on a key whose shorter side is `side` pixels.
 fn title_size(size: FontSize, key_side: f32) -> f32 {
     let share = match size {
@@ -184,12 +189,14 @@ fn layout(request: &Request<'_>, width: u32, height: u32) -> Layout {
     } else {
         TitleAlign::Middle
     });
-    let gap = (side * 0.05).max(1.0);
+    let gap = (side * 0.06).max(1.0);
     let smallest_mark = side * 0.3;
+    // The icon leads but does not crowd the key: about two fifths of it
+    // above a title, a little over half on its own.
     let largest_mark = if titles.is_empty() && values.is_empty() {
-        side * 0.62
+        side * MARK_ALONE
     } else {
-        side * 0.46
+        side * MARK_WITH_TEXT
     };
     // A two-line title gives way to the mark first.
     if has_mark && align != TitleAlign::Middle {
@@ -379,7 +386,7 @@ fn draw_state(frame: &mut Frame, face: &KeyFace) {
         fill(frame, 0, y, done, thickness, BLUE);
     }
     if let Some(indicator) = face.indicator {
-        let radius = (w.min(h) / 12).max(2);
+        let radius = (w.min(h) / 16).max(2);
         let margin = radius + (w.min(h) / 16).max(1);
         let center = (w.saturating_sub(margin + 1), margin);
         let color = indicator_color(indicator);

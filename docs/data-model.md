@@ -430,7 +430,7 @@ App commands (Tauri):
 | `list_icons` | `profileId` | `IconInfo[]`: `id`, `name`, `width`, `height`, `bytes`, `dataUrl` (PNG `data:` URL), `usages` |
 | `import_icon` | `profileId`, `name`, `data` (the file as base64) | `IconInfo` |
 | `delete_icon` | `profileId`, `iconId` | — (refused while in use) |
-| `preview_layout` | as before, plus optional `render` and `live` (`{ connected, states: KeyStateEntry[] }`) | `ControlFace[]`; with `render: true` each also has `image`, the key as the device shows it (PNG `data:` URL at the model's image size); with `live` keys show their reported state (stale ones, `connected: false`, with a grey mark; unknown values as `—`) |
+| `preview_layout` | as before, plus optional `render`, `live` (`{ connected, states: KeyStateEntry[] }`) and `keyPixels` (the width a key is shown at in device pixels, clamped to 16-512) | `ControlFace[]`; with `render: true` each also has `image`, the key as the device shows it (PNG `data:` URL at the model's image size, or with `keyPixels` at that width, other displays scaled alike); `projectId: null` uses the profile's active project; with `live` keys show their reported state (stale ones, `connected: false`, with a grey mark; unknown values as `—`) |
 | `watch_key_states` | `profileId`, `actions` (none: stop) | the watch's number; `key-states` events (`snapshot`, `changed`, `disconnected`, `unsupported`) carry it |
 
 ## Shared layouts

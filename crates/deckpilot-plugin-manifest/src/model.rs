@@ -878,6 +878,9 @@ impl ActionControls {
 /// `views`.
 pub const NAVIGATION_API: ApiLevel = ApiLevel::new(1, 3);
 
+/// The plugin API level that introduced `contributes.views[].context`.
+pub const VIEW_CONTEXT_API: ApiLevel = ApiLevel::new(1, 4);
+
 /// Most `contributes.navigation` entries.
 pub const MAX_NAVIGATION_ENTRIES: usize = 4;
 /// Most `contributes.views`.
@@ -963,12 +966,53 @@ pub enum ViewKind {
     Settings,
 }
 
+/// What a view works on (plugin API 1.4), and so which of the app's
+/// toolbar selectors it shows: the device, the profile being edited, both
+/// or neither. It changes only the app's own chrome: the plugin is given
+/// no device or profile data for it, and it grants no permission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ViewContext {
+    /// Neither (the default).
+    #[default]
+    #[serde(rename = "none")]
+    None,
+    #[serde(rename = "device")]
+    Device,
+    #[serde(rename = "profile")]
+    Profile,
+    #[serde(rename = "device+profile")]
+    DeviceProfile,
+}
+
+impl ViewContext {
+    /// The name in manifests and over IPC.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Device => "device",
+            Self::Profile => "profile",
+            Self::DeviceProfile => "device+profile",
+        }
+    }
+}
+
 /// A view a navigation entry opens (plugin API 1.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct View {
     pub id: String,
     pub kind: ViewKind,
+    /// Which toolbar selectors the view shows (plugin API 1.4); `none`
+    /// when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ViewContext>,
+}
+
+impl View {
+    /// [`View::context`], `none` when absent.
+    pub fn context(&self) -> ViewContext {
+        self.context.unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -214,11 +214,19 @@ describe("usePreviewFaces", () => {
     }
     const live: LivePreview = { connected: true, states: [cpu("23%")] }
     const hook = renderHook(
-      ({ current }) => usePreviewFaces("profile-1", layout as never, "home", null, "", current),
+      ({ current }) => usePreviewFaces("profile-1", layout as never, "home", "", current),
       { initialProps: { current: null as LivePreview | null } },
     )
     await waitFor(() => {
-      expect(api.previewLayout).toHaveBeenCalledWith("profile-1", layout, "home", null, true, null)
+      expect(api.previewLayout).toHaveBeenCalledWith(
+        "profile-1",
+        layout,
+        "home",
+        null,
+        true,
+        null,
+        null,
+      )
     })
     hook.rerender({ current: live })
     await waitFor(() => {
@@ -229,6 +237,7 @@ describe("usePreviewFaces", () => {
         null,
         true,
         live,
+        null,
       )
     })
   })

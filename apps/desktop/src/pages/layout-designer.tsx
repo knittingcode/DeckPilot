@@ -18,7 +18,6 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { useAsync } from "@/hooks/use-async"
-import { useTitlebar } from "@/hooks/use-titlebar"
 import { LayoutEditor } from "@/layout-editor/editor"
 import { DeviceLayoutHint, LayoutChooser, SharedLayoutNote } from "@/layout-editor/layout-chooser"
 import { api } from "@/lib/api"
@@ -33,12 +32,11 @@ import { selectedDevice } from "@/shell/device-options"
 import { useOpenLayout } from "@/shell/open-layout"
 
 export function LayoutDesignerPage() {
-  useTitlebar({
-    title: "Device Editor",
-    subtitle: "Assign actions to the controls of the device chosen in the toolbar",
-  })
+  // No title in the toolbar: the device and profile selectors there say
+  // what is edited. The page keeps a heading for assistive technology.
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      <h1 className="sr-only">Device Editor</h1>
       <RequireProfile>{(profileId) => <Designer profileId={profileId} />}</RequireProfile>
     </div>
   )

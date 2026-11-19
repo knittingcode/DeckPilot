@@ -12,7 +12,9 @@ export function SettingsView({ id }: { id: string }) {
   const View = page.view
   return (
     <Page
-      title={page.title}
+      // The page shows its title itself (SettingsHeader); the toolbar shows
+      // only where it is, so the title is not there twice.
+      title=""
       breadcrumbs={[
         {
           label: "Settings",

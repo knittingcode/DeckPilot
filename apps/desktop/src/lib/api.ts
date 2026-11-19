@@ -329,6 +329,12 @@ export const api = {
     render?: boolean,
     /** Live key states the agent reported (`watchKeyStates`). */
     live?: LivePreview | null,
+    /**
+     * With `render`: the width a key is shown at in device pixels (CSS
+     * pixels times the display's pixel ratio); the images are drawn at that
+     * size. Without it, at the device's own size.
+     */
+    keyPixels?: number | null,
   ) =>
     invoke<ControlFace[]>("preview_layout", {
       profileId,
@@ -337,6 +343,7 @@ export const api = {
       projectId,
       render,
       live: live ?? null,
+      keyPixels: keyPixels ?? null,
     }),
   /**
    * Watches the agent's live states of these actions' keys, replacing the

@@ -266,9 +266,10 @@ fn symbols_are_drawn_above_the_title_and_values_below_it() {
         ..appearance()
     }));
     let (left, top, right, bottom) = ink_box(&render(&bare, 72, 72), bg).unwrap();
-    // Larger than an icon above a title can be (at most 46 % of the key).
+    // Larger than an icon above a title can be (at most 42 % of the key).
+    let above_title = (72.0 * MARK_WITH_TEXT) as u32;
     assert!(
-        bottom - top > 36 && right - left > 36,
+        bottom - top > above_title && right - left > above_title,
         "{left},{top} {right},{bottom}"
     );
     assert!((i64::from(top + bottom) / 2 - 36).abs() <= 3);
@@ -612,4 +613,101 @@ fn an_ellipsis_is_its_own_character_not_a_question_mark() {
     let draw = |title: &str| render(&KeyFace::new(FaceStyle::Action, title), 72, 72);
     assert_ne!(draw("…").rgb(), draw("?").rgb());
     assert_ne!(draw("Checking…").rgb(), draw("Checking?").rgb());
+}
+
+/// The strongest edges of a frame: the mean of the largest tenth of the
+/// differences between horizontally neighbouring pixels (luma).
+fn edge_contrast(frame: &Frame) -> f32 {
+    let luma =
+        |p: [u8; 3]| 0.299 * f32::from(p[0]) + 0.587 * f32::from(p[1]) + 0.114 * f32::from(p[2]);
+    let mut steps: Vec<f32> = (0..frame.height())
+        .flat_map(|y| (1..frame.width()).map(move |x| (x, y)))
+        .filter_map(|(x, y)| Some((luma(frame.pixel(x, y)?) - luma(frame.pixel(x - 1, y)?)).abs()))
+        .filter(|step| *step > 8.0)
+        .collect();
+    steps.sort_by(|a, b| b.total_cmp(a));
+    let top = &steps[..(steps.len() / 10).max(1)];
+    top.iter().sum::<f32>() / top.len() as f32
+}
+
+/// `frame` scaled up `factor` times with bilinear filtering, as a browser
+/// shows a small image in a large box.
+fn upscaled(frame: &Frame, factor: u32) -> Frame {
+    let image =
+        image::RgbImage::from_raw(frame.width(), frame.height(), frame.rgb().to_vec()).unwrap();
+    let scaled = image::imageops::resize(
+        &image,
+        frame.width() * factor,
+        frame.height() * factor,
+        image::imageops::FilterType::Triangle,
+    );
+    let mut out = Frame::filled(scaled.width(), scaled.height(), [0, 0, 0]);
+    for (x, y, pixel) in scaled.enumerate_pixels() {
+        out.put(x, y, pixel.0);
+    }
+    out
+}
+
+/// The editor asks for a key at the size it shows it (CSS size times the
+/// display's pixel ratio): drawn at that size, its icon and title keep
+/// sharp edges, where the device's 72 pixels scaled up three times (as the
+/// preview did) blur them. The device's own size is drawn as before.
+#[test]
+fn keys_drawn_at_display_size_are_sharper_than_scaled_up_device_images() {
+    let face = KeyFace::new(FaceStyle::Action, "Open Terminal").with_symbol(Some("terminal"));
+    let native = render(&face, 72, 72);
+    assert_eq!((native.width(), native.height()), (72, 72));
+    let display = render(&face, 216, 216);
+    assert_eq!((display.width(), display.height()), (216, 216));
+    let blurred = upscaled(&native, 3);
+    let (sharp, soft) = (edge_contrast(&display), edge_contrast(&blurred));
+    assert!(
+        sharp > soft * 1.6,
+        "drawn at size: {sharp}, scaled up: {soft}"
+    );
+    // The same layout at both sizes: the ink covers the same share of the
+    // key, within a pixel of the small one.
+    let bg = background(FaceStyle::Action);
+    let (l, t, r, b) = ink_box(&native, bg).unwrap();
+    let (dl, dt, dr, db) = ink_box(&display, bg).unwrap();
+    for (small, large) in [(l, dl), (t, dt), (r, dr), (b, db)] {
+        assert!(
+            (f64::from(large) / 3.0 - f64::from(small)).abs() <= 1.5,
+            "{small} vs {large}"
+        );
+    }
+}
+
+/// Icons stay in proportion: never more than about two fifths of the key
+/// above a title, a little over half without one, at every size.
+#[test]
+fn icons_keep_their_proportions_at_every_size() {
+    let titled = KeyFace::new(FaceStyle::Action, "Mute").with_symbol(Some("volume-2"));
+    let alone = KeyFace::new(FaceStyle::Action, "").with_symbol(Some("volume-2"));
+    let bg = background(FaceStyle::Action);
+    for side in [72_u32, 96, 120, 144, 216] {
+        let key = side as f32;
+        let (left, top, right, bottom) = ink_box(&render(&alone, side, side), bg).unwrap();
+        let largest = ((right - left + 1).max(bottom - top + 1)) as f32;
+        assert!(largest <= key * MARK_ALONE + 1.0, "{side}: {largest}");
+        assert!(largest >= key * 0.4, "{side}: {largest}");
+        let mark = layout(
+            &Request {
+                face: &titled,
+                look: &appearance(),
+                has_mark: true,
+                over_icon: false,
+            },
+            side,
+            side,
+        );
+        let (_, top, mark_side) = mark.mark.expect("the icon is drawn");
+        assert!(
+            mark_side <= key * MARK_WITH_TEXT + 0.01,
+            "{side}: {mark_side}"
+        );
+        assert!(mark_side >= key * 0.3, "{side}: {mark_side}");
+        // Never on the title.
+        assert!(top + mark_side < mark.block.unwrap().0, "{side}");
+    }
 }

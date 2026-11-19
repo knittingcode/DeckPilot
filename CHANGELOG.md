@@ -62,6 +62,35 @@ released either. 0.6.0 is the first version intended for publication.
   drag shows the action's icon and name.
 - System monitor keys show their value under the title: `23%`,
   `12.4/32 GiB`, `↓ 2.1 MB/s` / `↑ 340 kB/s`, `68% used`.
+- The editor's preview draws each key at the size it is shown on the
+  screen, Retina displays included, instead of enlarging the device's
+  72-pixel image, so icons and titles are sharp. The device still gets
+  images at its own size. Empty keys are drawn in the editor's key tone in
+  both themes.
+- Keys are drawn with a slightly smaller icon (about two fifths of the key
+  above a title, a little over half without one), a little more room
+  between icon and title, and a smaller status dot, on the device and in
+  the preview.
+- The device editor no longer has a "Preview with project" selector.
+  Labels such as `{project.key}` show the profile's active project, as on
+  the device. Projects, their assignments and project actions are
+  unchanged, and the editor works the same with the Projects module
+  disabled or not installed. The hint about project placeholders in the
+  action editor appears only with the Projects module, and the Work Session
+  controller is offered only with the Work Session module (keys that use it
+  keep it).
+- The editor's Action Library is always shown at one fixed width; it can no
+  longer be collapsed or resized, and the width and collapsed state earlier
+  versions remembered are forgotten. In a window narrower than the main
+  window's minimum (860 × 560), which only some Linux window managers
+  allow, it sits under the editor instead of beside it.
+- The toolbar has no "Device Editor" title. The device and profile
+  selectors appear only where they apply: in the device editor both; on
+  the Action Library, Workflows, Projects and Work Session pages the
+  profile; in the settings, the Marketplace, the dashboard and the Layouts
+  page neither. Settings show "Settings / section" in the toolbar and their
+  title once, on the page. Leaving the editor for any view and coming back
+  keeps the device, profile, layout, page and selected keys.
 
 - The configuration database is upgraded to schema 10 (an encrypted
   backup is made first). DeckPilot 0.8.1 and earlier cannot open the
@@ -71,6 +100,12 @@ released either. 0.6.0 is the first version intended for publication.
 
 ### Added
 
+- Plugin API 1.4: a plugin view may declare `context` (`none`, `device`,
+  `profile` or `device+profile`) in `contributes.views`, the toolbar
+  selectors the app shows with it (`none` when absent). The declaration
+  gives the plugin no data and no permission. Manifests without it are
+  unchanged; agents up to 0.8.1 (plugin API 1.3) refuse manifests that
+  use it.
 - The editor's preview shows live values (e.g. CPU usage) as the device
   does, read by the agent; it says when values are stale or unavailable.
   IPC protocol 11 (`watchKeyStates`); older agents and apps keep working

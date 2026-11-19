@@ -11,6 +11,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { App } from "@/App"
 import { NAVIGATE_EVENT } from "@/lib/api"
 import type { DeviceLayout, ProfileView, SecurityView } from "@/lib/types"
+import type { PluginNavigationEntry } from "@/plugins/types"
 import { api, resetApi } from "@/test/api-mock"
 import { installDomStubs } from "@/test/dom"
 import { agentConnection, agentStatus, deviceInfo, deviceModel, profiles } from "@/test/fixtures"
@@ -24,6 +25,10 @@ vi.mock("@/lib/api", async () => {
 })
 vi.mock("@tauri-apps/api/event", async () => (await import("@/test/tauri")).eventModule)
 vi.mock("sonner", async () => (await import("@/test/toast")).sonnerModule)
+// Plugin views reuse the app's pages; what they show is tested elsewhere.
+vi.mock("@/pages/variables-table", () => ({
+  VariablesTable: ({ namespace }: { namespace?: string }) => <p>variables under {namespace}</p>,
+}))
 
 const unlocked = {
   database: "encrypted",
@@ -432,12 +437,226 @@ describe("main window shell", { timeout: 20_000 }, () => {
   })
 })
 
+/** The toolbar's selectors, by their accessible names; empty when hidden. */
+function selectorsOf(toolbar: HTMLElement): string[] {
+  const leading = toolbar.querySelector<HTMLElement>("[data-slot='titlebar-leading']")
+  return leading
+    ? within(leading)
+        .getAllByRole("button")
+        .map((b) => b.getAttribute("aria-label") ?? "")
+    : []
+}
+
+describe("context-aware toolbar", { timeout: 20_000 }, () => {
+  it("has no Device Editor title in the toolbar, and keeps its commands", async () => {
+    const { toolbar } = await renderShell()
+    expect(within(toolbar).queryByRole("heading")).not.toBeInTheDocument()
+    expect(within(toolbar).queryByText("Device Editor")).not.toBeInTheDocument()
+    expect(within(toolbar).queryByText(/Assign actions to the controls/)).not.toBeInTheDocument()
+    expect(toolbar).toHaveAttribute("data-context", "device+profile")
+    // The order: room for the window controls, the selectors, the page's
+    // (empty) context, the app's commands.
+    const slots = [...toolbar.children].map(
+      (child) => child.getAttribute("data-slot") ?? child.getAttribute("role") ?? "context",
+    )
+    expect(slots).toEqual([
+      "titlebar-controls-inset",
+      "titlebar-leading",
+      "context",
+      "titlebar-trailing",
+    ])
+    const app = within(toolbar).getByRole("group", { name: "App" })
+    expect(
+      within(app)
+        .getAllByRole("button")
+        .map((b) => b.getAttribute("aria-label")),
+    ).toEqual(["Notifications", "Settings"])
+    // The page still has a heading for assistive technology.
+    expect(screen.getByRole("heading", { name: "Device Editor" })).toHaveClass("sr-only")
+  })
+
+  it("shows the device and profile selectors in the editor, not in the settings", async () => {
+    const { user, toolbar } = await renderShell()
+    expect(selectorsOf(toolbar)).toEqual([
+      "Device: Stream Deck +, connected",
+      "Profile: Work, active on the device",
+    ])
+    await user.click(gearOf(toolbar))
+    const nav = await screen.findByRole("generic", { name: "Settings" })
+    await user.click(within(nav).getByRole("button", { name: "Profiles" }))
+    await screen.findByText("All profiles", undefined, { timeout: 5000 })
+    // No selectors and no status of them; no empty room where they were.
+    expect(selectorsOf(toolbar)).toEqual([])
+    expect(toolbar.querySelector("[data-slot='titlebar-leading']")).toBeNull()
+    expect(within(toolbar).queryByRole("button", { name: /^Device:/ })).toBeNull()
+    expect(within(toolbar).queryByRole("button", { name: /^Profile:/ })).toBeNull()
+    expect(toolbar).toHaveAttribute("data-context", "none")
+    // The location starts right after the room for the window controls.
+    const inset = toolbar.querySelector("[data-slot='titlebar-controls-inset']")
+    const location = within(toolbar).getByRole("list", { name: "Location" })
+    expect(inset?.nextElementSibling).toContainElement(location)
+    expect(within(location).getByRole("button", { name: "Settings" })).toBeInTheDocument()
+    // The page's title is on the page, not again in the toolbar.
+    expect(within(toolbar).queryByRole("heading")).not.toBeInTheDocument()
+    expect(within(toolbar).queryByText("Profiles")).toBeNull()
+    // Notifications, settings and the rail stay.
+    expect(within(toolbar).getByRole("button", { name: "Notifications" })).toBeInTheDocument()
+    expect(gearOf(toolbar)).toHaveAttribute("aria-pressed", "true")
+    expect(screen.getByRole("button", { name: "Device Editor" })).toBeInTheDocument()
+    // Back in the editor: the same device and profile, chosen again by nobody.
+    await user.click(screen.getByRole("button", { name: "Device Editor" }))
+    await waitFor(() => {
+      expect(selectorsOf(toolbar)).toEqual([
+        "Device: Stream Deck +, connected",
+        "Profile: Work, active on the device",
+      ])
+    })
+  })
+
+  it("shows only the profile for the profile's pages, nothing on the dashboard", async () => {
+    const { user, toolbar } = await renderShell()
+    await user.click(screen.getByRole("button", { name: "Workflows" }))
+    await waitFor(() => {
+      expect(toolbar).toHaveAttribute("data-context", "profile")
+    })
+    expect(selectorsOf(toolbar)).toEqual(["Profile: Work, active on the device"])
+    await user.click(screen.getByRole("button", { name: "Dashboard" }))
+    await waitFor(() => {
+      expect(toolbar).toHaveAttribute("data-context", "none")
+    })
+    expect(selectorsOf(toolbar)).toEqual([])
+  })
+
+  it("keeps the device, the profile, the layout's page and the selected key across views", async () => {
+    const { user, toolbar } = await renderShell()
+    await user.click(screen.getByRole("button", { name: /^Device:/ }))
+    await user.click(screen.getByRole("menuitem", { name: /Stream Deck MK\.2/ }))
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "Layout name" })).toHaveValue("Work MK.2")
+    })
+    await user.click(screen.getByRole("button", { name: "Key 3" }))
+    expect(screen.getByRole("button", { name: "Key 3" })).toHaveAttribute("aria-pressed", "true")
+    const agentCalls = api.agentStatus.mock.calls.length
+
+    // Settings, then another workspace page, then back.
+    await user.click(gearOf(toolbar))
+    await screen.findByRole("generic", { name: "Settings" })
+    await user.click(screen.getByRole("button", { name: "Workflows" }))
+    await waitFor(() => {
+      expect(toolbar).toHaveAttribute("data-context", "profile")
+    })
+    await user.click(screen.getByRole("button", { name: "Device Editor" }))
+    await screen.findByRole("group", { name: /controls$/ })
+    expect(screen.getByRole("textbox", { name: "Layout name" })).toHaveValue("Work MK.2")
+    expect(screen.getByRole("button", { name: "Key 3" })).toHaveAttribute("aria-pressed", "true")
+    expect(selectorsOf(toolbar)).toEqual([
+      "Device: Stream Deck MK.2, not connected",
+      "Profile: Work, active on the device",
+    ])
+    // Hiding the selectors connected nothing again.
+    expect(api.agentStatus.mock.calls.length).toBeLessThanOrEqual(agentCalls + 1)
+  })
+})
+
 describe("main window with plugins", { timeout: 20_000 }, () => {
   beforeEach(() => {
     vi.stubEnv("VITE_DECKPILOT_PLUGINS", "1")
   })
   afterEach(() => {
     vi.unstubAllEnvs()
+  })
+
+  /** The app with the plugin flag, a fake plugin client and `navigation` entries. */
+  async function renderWithPlugins(navigation: PluginNavigationEntry[] = []) {
+    vi.resetModules()
+    const { App: WithPlugins } = await import("@/App")
+    const { PluginClientContext } = await import("@/plugins/api")
+    const { createFakePluginClient, HELLO } = await import("@/test/plugins")
+    const client = createFakePluginClient({
+      helloInstalled: true,
+      navigation: { [HELLO]: navigation },
+    })
+    const user = userEvent.setup()
+    render(
+      <PluginClientContext value={client}>
+        <WithPlugins />
+      </PluginClientContext>,
+    )
+    const toolbar = await screen.findByRole("banner", { name: "Toolbar" })
+    await screen.findByRole("group", { name: /controls$/ })
+    return { user, toolbar, client, HELLO }
+  }
+
+  const view = (id: string, context?: string): PluginNavigationEntry => ({
+    id,
+    label: `View ${id}`,
+    view: { id: `${id}-view`, kind: "variables", ...(context === undefined ? {} : { context }) },
+  })
+
+  it("hides the selectors in the Marketplace and keeps the editor's selection", async () => {
+    const { user, toolbar } = await renderWithPlugins()
+    await user.click(screen.getByRole("button", { name: "Key 2" }))
+    await user.click(within(toolbar).getByRole("button", { name: "Marketplace" }))
+    await waitFor(() => {
+      expect(toolbar).toHaveAttribute("data-context", "none")
+    })
+    expect(selectorsOf(toolbar)).toEqual([])
+    expect(within(toolbar).getByRole("button", { name: "Marketplace" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    )
+    // Settings, then the editor again: as it was.
+    await user.click(gearOf(toolbar))
+    await screen.findByRole("generic", { name: "Settings" })
+    expect(selectorsOf(toolbar)).toEqual([])
+    await user.click(screen.getByRole("button", { name: "Device Editor" }))
+    await screen.findByRole("group", { name: /controls$/ })
+    expect(selectorsOf(toolbar)).toEqual([
+      "Device: Stream Deck +, connected",
+      "Profile: Work, active on the device",
+    ])
+    expect(screen.getByRole("textbox", { name: "Layout name" })).toHaveValue("Work Plus")
+    expect(screen.getByRole("button", { name: "Key 2" })).toHaveAttribute("aria-pressed", "true")
+  })
+
+  it("shows what each plugin view declares, and nothing for none, absent or unknown", async () => {
+    const { user, toolbar, client } = await renderWithPlugins([
+      view("plain"),
+      view("device", "device"),
+      view("profile", "profile"),
+      view("both", "device+profile"),
+    ])
+    const open = async (id: string) => {
+      await user.click(await within(toolbar).findByRole("button", { name: `View ${id}` }))
+      await screen.findByText(/variables under/)
+    }
+    await open("plain")
+    expect(selectorsOf(toolbar)).toEqual([])
+    await open("device")
+    expect(selectorsOf(toolbar)).toEqual(["Device: Stream Deck +, connected"])
+    await open("profile")
+    expect(selectorsOf(toolbar)).toEqual(["Profile: Work, active on the device"])
+    await open("both")
+    expect(selectorsOf(toolbar)).toEqual([
+      "Device: Stream Deck +, connected",
+      "Profile: Work, active on the device",
+    ])
+    // Showing the selectors asked the plugin for nothing and gave it nothing:
+    // the client only listed the entries and their icons.
+    const asked = Object.entries(client)
+      .filter(([, fn]) => vi.isMockFunction(fn) && fn.mock.calls.length > 0)
+      .map(([name]) => name)
+    expect(asked.filter((name) => !["listNavigation", "getNavigationIcon"].includes(name))).toEqual(
+      expect.not.arrayContaining(["invoke", "runAction", "setSettings"]),
+    )
+  })
+
+  it("treats a malformed context as none", async () => {
+    const { user, toolbar } = await renderWithPlugins([view("odd", "everything")])
+    await user.click(await within(toolbar).findByRole("button", { name: "View odd" }))
+    await screen.findByText(/variables under/)
+    expect(toolbar).toHaveAttribute("data-context", "none")
+    expect(selectorsOf(toolbar)).toEqual([])
   })
 
   it("has the Marketplace between notifications and settings", async () => {

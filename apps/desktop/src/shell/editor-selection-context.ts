@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react"
 
 import type { AsyncState } from "@/hooks/use-async"
+import type { EditorPlace } from "@/layout-editor/use-layout-editing"
 import type { DeviceId, DeviceModel } from "@/lib/types"
 
 /**
@@ -38,6 +39,13 @@ export interface EditorSelection {
   guard: () => boolean
   /** The layout has unsaved changes. */
   isDirty: () => boolean
+  /**
+   * Where the editor was in a layout (`<profile>:<layout>`): its page and
+   * selected keys, kept while other views (Settings, the Marketplace,
+   * plugin views) are on screen, so it comes back as it was.
+   */
+  place: (layout: string) => EditorPlace | undefined
+  rememberPlace: (layout: string, place: EditorPlace) => void
 }
 
 export const EditorSelectionContext = createContext<EditorSelection | null>(null)
@@ -47,6 +55,11 @@ export const UNSAVED_WARNING = "Save or revert the current layout first"
 /** Whether the editor's layout has unsaved changes; owned by the shell. */
 export interface DirtyFlag {
   current: boolean
+}
+
+/** The editor selection, if the editor is inside the shell (not in tests of it alone). */
+export function useOptionalEditorSelection(): EditorSelection | null {
+  return useContext(EditorSelectionContext)
 }
 
 export function useEditorSelection(): EditorSelection {

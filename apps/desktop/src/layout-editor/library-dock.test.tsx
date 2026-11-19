@@ -1,124 +1,73 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest"
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
-import userEvent from "@testing-library/user-event"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { cleanup, render, screen, within } from "@testing-library/react"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
-import { LibraryDock } from "./library-dock"
+import tauriConfig from "../../src-tauri/tauri.conf.json?raw"
+import { LIBRARY_BESIDE_FROM, LibraryDock } from "./library-dock"
 import {
-  LIBRARY_COLLAPSED_KEY,
-  LIBRARY_OVERLAY_BELOW,
-  LIBRARY_WIDTH,
-  LIBRARY_WIDTH_KEY,
-  clampLibraryWidth,
-  loadLibraryWidth,
+  LIBRARY_COMPATIBLE_ONLY_KEY,
+  OBSOLETE_LIBRARY_KEYS,
+  removeObsoleteLibraryKeys,
 } from "./library-sidebar"
 
-/** A window `width` pixels wide, as far as media queries go. */
-function windowWidth(width: number) {
-  window.matchMedia = vi.fn((query: string) => {
-    const max = /max-width: (\d+)px/.exec(query)
-    return {
-      matches: max ? width <= Number(max[1]) : false,
-      media: query,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    } as unknown as MediaQueryList
-  })
-}
-
 function renderDock() {
-  const user = userEvent.setup()
   render(
     <LibraryDock>
       <input aria-label="Search the library" />
     </LibraryDock>,
   )
-  return user
+  return screen.getByRole("complementary", { name: "Action Library" })
 }
 
 beforeEach(() => {
   localStorage.clear()
-  windowWidth(1440)
-  Element.prototype.setPointerCapture = () => undefined
 })
 afterEach(cleanup)
 
-describe("library sidebar", () => {
-  it("keeps its width within limits", () => {
-    expect(clampLibraryWidth(10)).toBe(LIBRARY_WIDTH.min)
-    expect(clampLibraryWidth(9999)).toBe(LIBRARY_WIDTH.max)
-    expect(clampLibraryWidth(Number.NaN)).toBe(LIBRARY_WIDTH.default)
-    localStorage.setItem(LIBRARY_WIDTH_KEY, "nonsense")
-    expect(loadLibraryWidth()).toBe(LIBRARY_WIDTH.default)
+describe("library dock", () => {
+  it("is always shown, with no way to collapse or resize it", () => {
+    const library = renderDock()
+    expect(within(library).getByLabelText("Search the library")).toBeVisible()
+    expect(within(library).queryByRole("button")).not.toBeInTheDocument()
+    expect(screen.queryByRole("separator")).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /collapse|show the library|library/i })).toBeNull()
+    expect(library).not.toHaveAttribute("aria-expanded")
   })
 
-  it("is resized with the keyboard and the pointer, and remembers the width", async () => {
-    const user = renderDock()
-    const library = screen.getByRole("complementary", { name: "Action Library" })
-    expect(library).toHaveStyle({ width: `${LIBRARY_WIDTH.default}px` })
-    const handle = screen.getByRole("separator", { name: "Resize the library" })
-    handle.focus()
-    // The handle is on the left edge: left widens.
-    await user.keyboard("{ArrowLeft}")
-    expect(handle).toHaveAttribute("aria-valuenow", String(LIBRARY_WIDTH.default + 16))
-    expect(localStorage.getItem(LIBRARY_WIDTH_KEY)).toBe(String(LIBRARY_WIDTH.default + 16))
-    await user.keyboard("{End}")
-    expect(library).toHaveStyle({ width: `${LIBRARY_WIDTH.max}px` })
-
-    fireEvent.pointerDown(handle, { button: 0, clientX: 800, pointerId: 1 })
-    fireEvent.pointerMove(handle, { clientX: 900, pointerId: 1 })
-    fireEvent.pointerUp(handle, { clientX: 900, pointerId: 1 })
-    expect(localStorage.getItem(LIBRARY_WIDTH_KEY)).toBe(String(LIBRARY_WIDTH.max - 100))
-
-    cleanup()
-    renderDock()
-    expect(screen.getByRole("complementary", { name: "Action Library" })).toHaveStyle({
-      width: `${LIBRARY_WIDTH.max - 100}px`,
-    })
+  it("has the fixed width of the design token beside the editor", () => {
+    const library = renderDock()
+    // No inline width (nothing remembered or dragged): the token decides.
+    expect(library.style.width).toBe("")
+    expect(library.className).toContain("min-[860px]:w-(--library-width)")
+    expect(library.className).toContain("shrink-0")
   })
 
-  it("collapses and expands, and remembers it", async () => {
-    const user = renderDock()
-    await user.click(screen.getByRole("button", { name: "Collapse the library" }))
-    expect(screen.queryByLabelText("Search the library")).not.toBeInTheDocument()
-    expect(localStorage.getItem(LIBRARY_COLLAPSED_KEY)).toBe("true")
-
-    cleanup()
-    const again = renderDock()
-    expect(screen.getByRole("complementary", { name: "Action Library" })).toHaveAttribute(
-      "data-layout",
-      "collapsed",
-    )
-    await again.click(screen.getByRole("button", { name: "Show the library" }))
-    expect(screen.getByLabelText("Search the library")).toBeInTheDocument()
-    expect(localStorage.getItem(LIBRARY_COLLAPSED_KEY)).toBe("false")
+  it("sits under the editor, full width, in windows narrower than the minimum", () => {
+    const library = renderDock()
+    expect(LIBRARY_BESIDE_FROM).toBe(860)
+    expect(library.className).toContain("max-[859px]:w-full")
+    expect(library.className).toContain("max-[859px]:h-(--library-stacked-height)")
+    // The main window cannot be made narrower than that.
+    const config = JSON.parse(tauriConfig) as {
+      app: { windows: { label: string; minWidth: number; minHeight: number }[] }
+    }
+    const main = config.app.windows.find((w) => w.label === "main")
+    expect(main?.minWidth).toBe(LIBRARY_BESIDE_FROM)
+    expect(main?.minHeight).toBeGreaterThanOrEqual(560)
   })
 
-  it("opens as an overlay in narrow windows", async () => {
-    windowWidth(LIBRARY_OVERLAY_BELOW - 100)
-    const user = renderDock()
-    expect(screen.queryByRole("complementary")).not.toBeInTheDocument()
-    const toggle = screen.getByRole("button", { name: "Library" })
-    expect(toggle).toHaveAttribute("aria-expanded", "false")
-    await user.click(toggle)
-    const overlay = screen.getByRole("complementary", { name: "Action Library" })
-    expect(overlay).toHaveAttribute("data-layout", "overlay")
-    expect(screen.getByLabelText("Search the library")).toBeInTheDocument()
-    await user.keyboard("{Escape}")
-    expect(screen.queryByRole("complementary")).not.toBeInTheDocument()
-    await user.click(toggle)
-    await user.click(screen.getByRole("button", { name: "Close the library" }))
-    expect(screen.queryByRole("complementary")).not.toBeInTheDocument()
-  })
-
-  it("stays beside the editor from the breakpoint on", () => {
-    windowWidth(LIBRARY_OVERLAY_BELOW)
-    renderDock()
-    expect(screen.getByRole("complementary", { name: "Action Library" })).toHaveAttribute(
-      "data-layout",
-      "sidebar",
-    )
+  it("ignores and removes the width and collapsed state earlier versions kept", () => {
+    localStorage.setItem("deckpilot.editor.libraryWidth", "120")
+    localStorage.setItem("deckpilot.editor.libraryCollapsed", "true")
+    localStorage.setItem(LIBRARY_COMPATIBLE_ONLY_KEY, "true")
+    const library = renderDock()
+    expect(library.style.width).toBe("")
+    expect(within(library).getByLabelText("Search the library")).toBeVisible()
+    removeObsoleteLibraryKeys()
+    for (const key of OBSOLETE_LIBRARY_KEYS) expect(localStorage.getItem(key)).toBeNull()
+    // The library's other preference stays.
+    expect(localStorage.getItem(LIBRARY_COMPATIBLE_ONLY_KEY)).toBe("true")
   })
 })

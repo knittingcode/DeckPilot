@@ -212,7 +212,18 @@ Status: implemented. The agent provides plugin API 1.3 (`PLUGIN_API` in
 
 `contributes.navigation` (≤ 4 entries: `id`, `label` ≤ 24 characters,
 `icon`, `view`) and `contributes.views` (≤ 8: `id`, `kind` ∈ `variables`,
-`actions`, `settings`) add toolbar entries that open host-rendered views:
+`actions`, `settings`, and from plugin API 1.4 an optional `context` ∈
+`none`, `device`, `profile`, `device+profile`) add toolbar entries that open
+host-rendered views:
+
+- `context` says which of the app's toolbar selectors the view shows (the
+  device, the profile being edited, both or neither; absent: `none`). It
+  needs `engines.pluginApi` `^1.4` (a validator rule; agents up to 1.3
+  refuse the field). It changes only the app's chrome: the plugin gets no
+  device or profile data for it and no permission; what a plugin may read
+  stays decided by its granted permissions. The agent passes it on in
+  `PluginView.context` (left out for `none`); the app treats absent and
+  unknown values as `none`.
 
 - `view` names a declared view; ids are unique local ids (≤ 32
   characters).

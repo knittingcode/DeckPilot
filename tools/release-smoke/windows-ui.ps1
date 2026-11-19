@@ -18,12 +18,19 @@
 # that window still run):
 #   main window › toolbar (Marketplace, Settings, device and profile
 #   selectors, the rail) › agent and its tray icon › Marketplace lists the
-#   production catalog › install Memory with consent › the settings window
-#   (its own top-level window) lists it › enable with consent › uninstall ›
-#   a profile created in Settings › Device Editor with a model, the Action
-#   Library and the key inspector › closing the main window (the app ends,
-#   the agent keeps running) › reopening restores the window and the
-#   profile being edited.
+#   production catalog › install Memory with consent › Settings › Plugins
+#   lists it › enable with consent › uninstall › a profile created in
+#   Settings › Device Editor with a model, the Action Library and the key
+#   inspector › closing the main window (the app ends, the agent keeps
+#   running) › reopening restores the window and the profile being edited.
+#
+# Two shells are accepted, told apart by what is on screen, and each step
+# says which one it saw: up to 0.8.1 the settings are a top-level window of
+# their own ("DeckPilot Settings", "Back to DeckPilot" returns) and the
+# toolbar has Back/Forward and the page title; later releases show the
+# settings as a view of the main window (a sidebar labelled "Settings" with
+# "Search settings"), opened without any window and left with the rail or
+# the toolbar, and the toolbar has neither.
 #
 # A failed step also lists every top-level window of the app, the hidden
 # ones too (EnumWindows), and whether each window's thread still answers
@@ -237,6 +244,84 @@ function Ui-SettingsWindow([int]$Seconds = $script:UiLong) {
   } $Seconds
 }
 
+# The settings as a view of the main window (releases after 0.8.1): their
+# search field, unique to the settings' sidebar, described with the sidebar
+# labelled "Settings" around it; $null when they are not shown.
+function Ui-SettingsView($Main) {
+  $search = Ui-All $Main { (Ui-Type $_) -eq 'Edit' -and (Ui-Name $_) -eq 'Search settings' } | Select-Object -First 1
+  if (-not $search) { return $null }
+  $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+  $e = $search
+  for ($i = 0; $i -lt 8; $i++) {
+    try { $e = $walker.GetParent($e) } catch { $e = $null }
+    if (-not $e -or $e -eq $script:AE::RootElement) { break }
+    if ((Ui-Name $e) -eq 'Settings' -and (Ui-Type $e) -ne 'Button') { return "sidebar 'Settings' ($(Ui-Type $e)) with 'Search settings'" }
+  }
+  return "'Search settings' (the sidebar's own label not exposed)"
+}
+
+# After a command that opens the settings: 'window' (up to 0.8.1, the
+# visible top-level window) or 'view' (in the main window); $null on time-out.
+function Ui-SettingsAppeared($Main, [int]$Seconds = $script:UiLong) {
+  try {
+    return Ui-Until "the settings: a window 'DeckPilot Settings' (up to 0.8.1) or the settings view in the main window" {
+      $d = Ui-Desktop
+      if ($d -and (Ui-Window $d.Id 'DeckPilot Settings')) { return 'window' }
+      if (Ui-SettingsView $Main) { return 'view' }
+    } $Seconds
+  } catch { return $null }
+}
+
+# The toolbar's Settings button: a toggle (aria-pressed), unlike the
+# settings' breadcrumb "Settings".
+function Ui-Gear($Main) {
+  $all = @(Ui-All $Main { (Ui-Type $_) -eq 'Button' -and (Ui-Name $_) -like 'Settings*' })
+  $toggle = $all | Where-Object { Ui-Pattern $_ ([System.Windows.Automation.TogglePattern]::Pattern) } | Select-Object -First 1
+  if ($toggle) { return $toggle }
+  return $all | Select-Object -First 1
+}
+
+function Ui-Pressed($e) {
+  if (-not $e) { return 'not found' }
+  $t = Ui-Pattern $e ([System.Windows.Automation.TogglePattern]::Pattern)
+  if (-not $t) { return 'pressed state not exposed (no Toggle pattern)' }
+  if ($t.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) { return 'pressed' }
+  return 'not pressed'
+}
+
+# Every titled top-level window of the app, hidden ones too (EnumWindows),
+# but not the input method's own ("hwnd|class|title|visible|thread").
+function Ui-AllWindows {
+  $d = Ui-Desktop
+  if (-not $d) { return @() }
+  return @([SmokeUi.Native]::TopLevel([uint32]$d.Id) | Where-Object {
+    $f = $_ -split '\|', 5
+    $f[2] -ne '' -and $f[1] -notin 'IME', 'MSCTFIME UI'
+  })
+}
+
+# Asserts that opening the settings view created no window, not even a
+# hidden one (0.8.0 and 0.8.1 created a settings window that never showed).
+function Ui-NoNewWindow($Main, [int]$VisibleBefore, [int]$TitledBefore) {
+  Start-Sleep 2
+  $d = Ui-Desktop
+  if (-not $d) { throw 'deckpilot-desktop ended' }
+  $all = Ui-AllWindows
+  $settings = @($all | Where-Object { ($_ -split '\|', 5)[2] -eq 'DeckPilot Settings' })
+  if ($settings) { throw "the settings view is in the main window, but a window 'DeckPilot Settings' exists too (visible $((($settings[0]) -split '\|', 5)[3]))" }
+  $visible = @(Ui-TopWindows $d.Id).Count
+  $titled = @($all).Count
+  if ($visible -gt $VisibleBefore -or $titled -gt $TitledBefore) { throw "the settings view is in the main window, but windows appeared: visible top-level $VisibleBefore -> $visible, titled (hidden too) $TitledBefore -> $titled" }
+  if (Ui-All $Main { (Ui-Type $_) -eq 'Button' -and (Ui-Name $_) -eq 'Back to DeckPilot' } | Select-Object -First 1) { throw "the settings view has a 'Back to DeckPilot' button" }
+  return "no other window (visible top-level $VisibleBefore -> $visible, titled incl. hidden $TitledBefore -> $titled), no 'Back to DeckPilot'"
+}
+
+function Ui-WindowCounts {
+  $d = Ui-Desktop
+  if (-not $d) { return @(0, 0) }
+  return @(@(Ui-TopWindows $d.Id).Count, @(Ui-AllWindows).Count)
+}
+
 # Whether the thread of a window pumps its messages: IsHungAppWindow (no
 # message retrieved for 5 s) and a WM_NULL round trip within 5 s.
 function Ui-Responds([IntPtr]$Hwnd) {
@@ -336,9 +421,21 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
         if ($hit) { $seen += "$($w.Key) '$hit'" } else { $missing += $w.Key }
       }
       if ($missing) { throw "missing in the toolbar: $($missing -join ', '); buttons: $($names -join ' | ')" }
-      $title = if (Ui-HasText $main 'Device Editor') { "page title 'Device Editor'" } else { 'no page title' }
-      $rail = @($names | Where-Object { $_ -in 'Device Editor', 'Dashboard', 'Action Library', 'Workflows' })
-      "$($seen -join '; '); $title; rail: $(if ($rail) { $rail -join ', ' } else { 'labels not exposed' }); all buttons: $($names -join ' | ')"
+      # Up to 0.8.1: Back/Forward, a sidebar toggle and the page title
+      # "Device Editor" in the toolbar. Later: none of them; the editor
+      # keeps a visually hidden heading "Device Editor".
+      $toolbar = Ui-All $main { (Ui-Name $_) -eq 'Toolbar' -and (Ui-Type $_) -ne 'Button' } | Select-Object -First 1
+      $inToolbar = [bool]($toolbar -and (Ui-HasText $toolbar 'Device Editor'))
+      $heading = [bool](Ui-All $main { (Ui-Name $_) -eq 'Device Editor' -and (Ui-Type $_) -notin 'Button', 'ToolTip', 'ListItem', 'MenuItem' } | Select-Object -First 1)
+      $history = @('Back', 'Forward' | Where-Object { $names -contains $_ })
+      $toggle = $names -contains 'Toggle Sidebar'
+      $variant = if ($history -or $inToolbar -or $toggle) {
+        "UI up to 0.8.1: $(if ($history) { $history -join '/' } else { 'no Back/Forward' }), $(if ($toggle) { 'sidebar toggle' } else { 'no sidebar toggle' }), $(if ($inToolbar) { "page title 'Device Editor' in the toolbar" } else { 'no page title in the toolbar' })"
+      } else {
+        "new UI: no Back/Forward, no sidebar toggle, no title in the toolbar ($(if ($toolbar) { "toolbar group 'Toolbar'" } else { 'toolbar group not exposed' })); $(if ($heading) { "page heading 'Device Editor'" } else { "no page heading 'Device Editor' exposed" })"
+      }
+      $rail = @($names | Where-Object { $_ -in 'Device Editor', 'Layouts', 'Dashboard', 'Action Library', 'Workflows' })
+      "$($seen -join '; '); $variant; rail: $(if ($rail) { $rail -join ', ' } else { 'labels not exposed' }); all buttons: $($names -join ' | ')"
     }
     'agent and tray icon' = {
       $agent = Ui-Until 'deckpilot-agent' { Get-Process deckpilot-agent -ErrorAction SilentlyContinue | Select-Object -First 1 }
@@ -390,19 +487,45 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
       } $script:UiLong
       "$boxes consent box(es) checked; install status '$status'; $consentShot; $(Ui-Shot 'installed')"
     }
-    'Settings opens its own window, Plugins lists it' = {
+    'Settings > Plugins lists it' = {
       $main = $state.main
+      $visibleBefore, $titledBefore = Ui-WindowCounts
       $settingsButton = Ui-Find $main 'the Settings button' { (Ui-Type $_) -eq 'Button' -and (Ui-Name $_) -like 'Settings*' }
+      $pressedBefore = Ui-Pressed $settingsButton
       [void](Ui-Invoke $settingsButton)
       $how = 'Invoke'
-      $settings = $null
-      try { $settings = Ui-SettingsWindow 15 } catch {}
-      if (-not $settings) {
+      $where = Ui-SettingsAppeared $main 15
+      if (-not $where) {
         # In case UIA's Invoke did not reach the button's click handler: a
         # real click on it, then the full wait.
         $how = "Invoke, then $(Ui-Click $main $settingsButton)"
-        $settings = Ui-SettingsWindow
+        $where = Ui-SettingsAppeared $main
+        if (-not $where) { throw "timed out after $($script:UiLong) s waiting for the settings: neither a window 'DeckPilot Settings' (up to 0.8.1) nor the settings view in the main window" }
       }
+      if ($where -eq 'view') {
+        # The settings as a view of the main window; the Marketplace
+        # (Memory's details) waits under them and comes back as it was.
+        $marker = Ui-SettingsView $main
+        $windows = Ui-NoNewWindow $main $visibleBefore $titledBefore
+        $pressed = Ui-Pressed (Ui-Gear $main)
+        if ($pressed -eq 'not pressed') { throw 'the Settings button is not pressed while the settings are shown' }
+        [void](Ui-Invoke (Ui-Button $main 'Plugins'))
+        [void](Ui-Until "$($script:PluginName) v$($script:PluginVersion) in the installed list of Settings > Plugins" {
+          $list = Ui-All $main { (Ui-Name $_) -eq 'Installed plugins' -and (Ui-Type $_) -ne 'Button' } | Select-Object -First 1
+          $list -and (Ui-HasText $list $script:PluginName) -and (Ui-HasText $list "v$($script:PluginVersion)")
+        })
+        $shot = Ui-Shot 'settings-plugins'
+        [void](Ui-Invoke (Ui-Button $main 'Marketplace'))
+        [void](Ui-Until 'the settings view to close' { -not (Ui-SettingsView $main) })
+        $status = Ui-Until "the Marketplace as it was before the settings: $($script:PluginName)'s install status" {
+          $group = Ui-All $main { (Ui-Name $_) -eq 'Install status' } | Select-Object -First 1
+          if ($group) { $t = Ui-Joined $group; if ($t.Contains("Installed $($script:PluginVersion)")) { $t } }
+        }
+        $after = Ui-Pressed (Ui-Gear $main)
+        if ($after -eq 'pressed') { throw 'the Settings button stays pressed after leaving the settings' }
+        return "new UI: the Settings button ($how; $pressedBefore before) showed the settings in the main window ($marker); $windows; Settings button $pressed; Extensions > Plugins lists $($script:PluginName) v$($script:PluginVersion); the toolbar's Marketplace left them: the Marketplace is back as it was (install status '$status'), Settings button $after; $shot; $(Ui-Shot 'settings-left')"
+      }
+      $settings = Ui-SettingsWindow
       $state.settingsHwnd = $settings.Current.NativeWindowHandle
       [void](Ui-Button $settings 'Back to DeckPilot')
       [void](Ui-Invoke (Ui-Button $settings 'Plugins'))
@@ -413,7 +536,7 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
       $w = Ui-Pattern $settings ([System.Windows.Automation.WindowPattern]::Pattern)
       if ($w) { $w.Close() } else { [void](Ui-Invoke (Ui-Button $settings 'Back to DeckPilot')) }
       [void](Ui-Until 'the settings window to close' { $d = Ui-Desktop; -not ($d -and (Ui-Window $d.Id 'DeckPilot Settings')) })
-      "Settings button ($how) opened the separate top-level window 'DeckPilot Settings' (hwnd $($state.settingsHwnd), main window hwnd $($main.Current.NativeWindowHandle)); Extensions > Plugins lists $($script:PluginName) v$($script:PluginVersion); closed; $shot"
+      "UI up to 0.8.1: Settings button ($how) opened the separate top-level window 'DeckPilot Settings' (hwnd $($state.settingsHwnd), main window hwnd $($main.Current.NativeWindowHandle)); Extensions > Plugins lists $($script:PluginName) v$($script:PluginVersion); closed; $shot"
     }
     'enable with consent' = {
       $main = $state.main
@@ -473,8 +596,14 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
         if ($editor) { [void](Ui-Invoke $editor) }
         $create = Ui-Button $main 'Create a profile'
       }
+      $visibleBefore, $titledBefore = Ui-WindowCounts
       [void](Ui-Invoke $create)
-      $settings = Ui-SettingsWindow
+      $where = Ui-SettingsAppeared $main
+      if (-not $where) { throw "timed out after $($script:UiLong) s waiting for Settings > Profiles: neither a window 'DeckPilot Settings' (up to 0.8.1) nor the settings view in the main window" }
+      # Up to 0.8.1 the settings window; later the main window's settings view.
+      $inWindow = $where -eq 'window'
+      $settings = if ($inWindow) { Ui-SettingsWindow } else { $main }
+      $windows = if ($inWindow) { '' } else { Ui-NoNewWindow $main $visibleBefore $titledBefore }
       [void](Ui-Invoke (Ui-Button $settings 'New profile'))
       $field = Ui-Find $settings "the profile's Name field" { (Ui-Type $_) -eq 'Edit' -and (Ui-Name $_) -eq 'Name' }
       $value = Ui-Pattern $field ([System.Windows.Automation.ValuePattern]::Pattern)
@@ -486,11 +615,29 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
         $field.SetFocus(); [System.Windows.Forms.SendKeys]::SendWait($script:ProfileName); Start-Sleep -Milliseconds 500
       }
       [void](Ui-Invoke $save)
-      [void](Ui-Until "'$($script:ProfileName)' in All profiles" { -not (Ui-All $settings { (Ui-Type $_) -eq 'Button' -and (Ui-Name $_) -eq 'Save' } | Select-Object -First 1) -and (Ui-HasText $settings $script:ProfileName) })
+      if ($inWindow) {
+        [void](Ui-Until "'$($script:ProfileName)' in All profiles" { -not (Ui-All $settings { (Ui-Type $_) -eq 'Button' -and (Ui-Name $_) -eq 'Save' } | Select-Object -First 1) -and (Ui-HasText $settings $script:ProfileName) })
+        $shot = Ui-Shot 'settings-profiles'
+        $w = Ui-Pattern $settings ([System.Windows.Automation.WindowPattern]::Pattern)
+        if ($w) { $w.Close() }
+        return "UI up to 0.8.1: Create a profile opened Settings > Profiles in the window 'DeckPilot Settings'; New profile '$($script:ProfileName)' saved and listed; $shot"
+      }
+      # The compact table (aria-label "Profiles"): each profile's name is a
+      # button that makes it the profile being edited; the toolbar has no
+      # profile selector in the settings, so a button of that name is the row.
+      [void](Ui-Until "'$($script:ProfileName)' in the table of All profiles" {
+        -not (Ui-All $main { (Ui-Type $_) -eq 'Button' -and (Ui-Name $_) -eq 'Save' } | Select-Object -First 1) -and
+        (Ui-HasText $main 'All profiles') -and
+        [bool](Ui-All $main { (Ui-Type $_) -eq 'Button' -and (Ui-Name $_) -eq $script:ProfileName } | Select-Object -First 1)
+      })
+      $table = Ui-All $main { (Ui-Name $_) -eq 'Profiles' -and (Ui-Type $_) -in 'Table', 'DataGrid' } | Select-Object -First 1
       $shot = Ui-Shot 'settings-profiles'
-      $w = Ui-Pattern $settings ([System.Windows.Automation.WindowPattern]::Pattern)
-      if ($w) { $w.Close() }
-      "Create a profile opened Settings > Profiles; New profile '$($script:ProfileName)' saved and listed; $shot"
+      # Back where Create a profile was pressed: the rail's Device Editor.
+      [void](Ui-Invoke (Ui-Button $main 'Device Editor'))
+      [void](Ui-Until 'the settings view to close' { -not (Ui-SettingsView $main) })
+      $selector = Ui-Find $main "the Device Editor's profile selector" { (Ui-Type $_) -eq 'Button' -and (Ui-Name $_) -like 'Profile:*' }
+      [void](Ui-Find $main "the Device Editor's device selector" { (Ui-Type $_) -eq 'Button' -and ((Ui-Name $_) -like 'Device:*' -or (Ui-Name $_) -eq 'Choose a device') })
+      "new UI: Create a profile showed Settings > Profiles in the main window; $windows; New profile '$($script:ProfileName)' saved and listed in All profiles ($(if ($table) { "table 'Profiles'" } else { 'table not exposed as Table' }), row button '$($script:ProfileName)'); the rail's Device Editor left the settings: back in the Device Editor (device and profile selectors, '$(Ui-Name $selector)'); $shot; $(Ui-Shot 'settings-left-editor')"
     }
     'Device Editor, Action Library and key inspector' = {
       $main = $state.main
@@ -530,13 +677,16 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
       }
       $canvas = Ui-Find $main 'the device canvas' { (Ui-Name $_) -like '* controls' -and (Ui-Type $_) -ne 'Button' } $script:UiLong
       $library = Ui-Find $main 'the Action Library' { (Ui-Name $_) -eq 'Action Library' -and (Ui-Type $_) -ne 'Button' }
+      # Up to 0.8.1 the library collapses and resizes; later it is fixed.
+      $libraryControls = @(Ui-Texts $main | Where-Object { $_ -in 'Collapse the library', 'Resize the library', 'Show the library', 'Close the library' } | Sort-Object -Unique)
+      $libraryKind = if ($libraryControls) { "with $($libraryControls -join ', ')" } else { 'fixed (no collapse or resize control)' }
       [void](Ui-Find $main 'the inspector' { (Ui-Name $_) -like 'Select a key, dial or touch zone*' })
       $key = Ui-Find $main "'Key 1'" { (Ui-Name $_) -eq 'Key 1' -and (Ui-Type $_) -ne 'Text' }
       $how = Ui-Click $main $key
       [void](Ui-Until "the inspector of Key 1" { -not (Ui-All $main { (Ui-Name $_) -like 'Select a key, dial or touch zone*' } | Select-Object -First 1) })
       $device = Ui-Find $main 'the device selector' { (Ui-Type $_) -eq 'Button' -and (Ui-Name $_) -like 'Device:*' }
       $state.editorRect = Ui-Rect $main
-      "profile selector '$(Ui-Name $profile)'; device menu: $($modelNames -join ' | '); chose '$modelName' -> '$(Ui-Name $device)'; $layout; canvas '$(Ui-Name $canvas)'; library '$(Ui-Name $library)' ($(Ui-Type $library)); Key 1 selected ($how), the inspector shows it; $menuShot; $(Ui-Shot 'editor')"
+      "profile selector '$(Ui-Name $profile)'; device menu: $($modelNames -join ' | '); chose '$modelName' -> '$(Ui-Name $device)'; $layout; canvas '$(Ui-Name $canvas)'; library '$(Ui-Name $library)' ($(Ui-Type $library), $libraryKind); Key 1 selected ($how), the inspector shows it; $menuShot; $(Ui-Shot 'editor')"
     }
     'closing the main window' = {
       $main = $state.main
@@ -567,11 +717,11 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
   # agent and the profile stay) and they run, so a defect of that window
   # does not hide the rest of the app.
   $needs = @{
-    'profile created in Settings' = 'Settings opens its own window, Plugins lists it'
+    'profile created in Settings' = 'Settings > Plugins lists it'
     'Device Editor, Action Library and key inspector' = 'profile created in Settings'
     'reopening restores the window and the profile' = 'profile created in Settings'
   }
-  $restartable = @('Settings opens its own window, Plugins lists it')
+  $restartable = @('Settings > Plugins lists it')
   $failed = $null
   $skipped = @{}
   $restarted = $null

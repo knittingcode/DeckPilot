@@ -14,6 +14,8 @@ export const workSessionModule: FrontendModule = {
     "work-session": {
       view: lazy(() => import("./work-session-page").then((m) => ({ default: m.WorkSessionPage }))),
       icon: Timer,
+      // The work sessions of the profile being edited.
+      context: "profile",
     },
   },
 }

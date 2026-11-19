@@ -299,7 +299,10 @@ impl Gui {
     /// Without a layout for the device (a fresh configuration may have
     /// none) the editor offers to create one instead.
     fn editor(&mut self) {
-        self.wait("//header[@aria-label='Toolbar']//h1[normalize-space(.)='Device Editor']");
+        // The rail marks the current page (`aria-current`); the toolbar has
+        // no page title (the editor's own heading is visually hidden, and
+        // WebDriver does not report it as displayed).
+        self.wait("//button[@aria-current='page'][.//span[normalize-space(.)='Device Editor']]");
         if self.wd().wait(EDITOR, Duration::from_secs(10)).is_ok() {
             self.wait(LIBRARY);
             self.wait("//*[@data-slot='device-editor-main']//*[normalize-space(.)='Control']");

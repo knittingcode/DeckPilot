@@ -430,6 +430,62 @@ func joined(_ root: AXUIElement) -> String {
 
 func hasText(_ root: AXUIElement, _ text: String) -> Bool { first(root) { name($0) == text } != nil || joined(root).contains(text) }
 
+// Two shells are accepted, told apart by what is on screen: up to 0.8.1 the
+// settings are a window of their own ("DeckPilot Settings", "Back to
+// DeckPilot" returns); later releases show them as a view of the main
+// window (a sidebar labelled "Settings" with "Search settings"), left with
+// the rail or the toolbar, and opening them opens no window.
+let settingsTitle = "DeckPilot Settings"
+
+func settingsWindowOpen() -> AXUIElement? { windows(app).first { string($0, kAXTitleAttribute) == settingsTitle } }
+
+/// The settings as a view of `w`: its search field (unique to the
+/// settings' sidebar), described with the sidebar around it.
+func settingsView(_ w: AXUIElement) -> String? {
+  guard let search = first(w, { role($0) == kAXTextFieldRole as String && name($0) == "Search settings" }) else { return nil }
+  var e: AXUIElement? = search
+  for _ in 0..<8 {
+    guard let parent = e.flatMap({ attr($0, kAXParentAttribute) }) else { break }
+    let p = parent as! AXUIElement
+    if name(p) == "Settings", !isButton(p) { return "sidebar 'Settings' (\(role(p))) with 'Search settings'" }
+    e = p
+  }
+  return "'Search settings' (the sidebar's own label not exposed)"
+}
+
+/// The toolbar's Settings button (a toggle: aria-pressed), not the
+/// settings' breadcrumb "Settings".
+func gear(_ w: AXUIElement) -> AXUIElement? {
+  first(w) { isButton($0) && name($0).hasPrefix("Settings") && subrole($0) == "AXToggle" }
+    ?? first(w) { isButton($0) && name($0).hasPrefix("Settings") }
+}
+
+/// "pressed", "not pressed" or why it is not known (aria-pressed: AXValue of an AXToggle).
+func pressedState(_ e: AXUIElement?) -> String {
+  guard let e else { return "not found" }
+  guard subrole(e) == "AXToggle", let v = attr(e, kAXValueAttribute) as? Int else { return "pressed state not exposed (\(role(e)) \(subrole(e)))" }
+  return v == 1 ? "pressed" : "not pressed"
+}
+
+/// Asserts that opening the settings view opened no window.
+func noNewWindow(_ axBefore: Int, _ screenBefore: Int) throws -> String {
+  pause(2)
+  if let w = settingsWindowOpen() { throw Failure("the settings view is in the main window, but a window '\(string(w, kAXTitleAttribute))' opened too") }
+  let ax = windows(app).count
+  let screen = screenWindows(desktop).count
+  if ax > axBefore || screen > screenBefore { throw Failure("the settings view is in the main window, but windows appeared: AX windows \(axBefore) -> \(ax), on screen \(screenBefore) -> \(screen)") }
+  if first(mainWindow, { isButton($0) && name($0) == "Back to DeckPilot" }) != nil { throw Failure("the settings view has a 'Back to DeckPilot' button") }
+  return "no other window (AX windows \(axBefore) -> \(ax), on screen \(screenBefore) -> \(screen)), no 'Back to DeckPilot'"
+}
+
+/// Which settings appeared after a command that opens them.
+func settingsAppeared(_ what: String) throws -> String {
+  try until("\(what): a window '\(settingsTitle)' (up to 0.8.1) or the settings view in the main window", long) { () -> String? in
+    if settingsWindowOpen() != nil { return "window" }
+    return settingsView(mainWindow) != nil ? "view" : nil
+  }
+}
+
 let axSteps: [(String, () throws -> String)] = [
   ("main window", {
     mainWindow = try main()
@@ -451,9 +507,22 @@ let axSteps: [(String, () throws -> String)] = [
       if let hit = names.first(where: test) { seen.append("\(what) '\(hit)'") } else { missing.append(what) }
     }
     if !missing.isEmpty { throw Failure("missing in the toolbar: \(missing.joined(separator: ", ")); buttons: \(names.joined(separator: " | "))") }
-    let title = hasText(mainWindow, "Device Editor") ? "page title 'Device Editor'" : "no page title"
-    let rail = names.filter { ["Device Editor", "Dashboard", "Action Library", "Workflows"].contains($0) }
-    return "\(seen.joined(separator: "; ")); \(title); rail: \(rail.isEmpty ? "labels not exposed" : rail.joined(separator: ", ")); all buttons: \(names.joined(separator: " | "))"
+    // Up to 0.8.1: Back/Forward, a sidebar toggle and the page title
+    // "Device Editor" in the toolbar. Later: none of them; the editor keeps
+    // a visually hidden heading "Device Editor".
+    let toolbar = first(mainWindow) { name($0) == "Toolbar" && !isButton($0) }
+    let inToolbar = toolbar.map { hasText($0, "Device Editor") } ?? false
+    let heading = first(mainWindow) { role($0) == "AXHeading" && (name($0) == "Device Editor" || joined($0) == "Device Editor") } != nil
+    let history = ["Back", "Forward"].filter { names.contains($0) }
+    let toggle = names.contains("Toggle Sidebar")
+    let variant: String
+    if !history.isEmpty || inToolbar || toggle {
+      variant = "UI up to 0.8.1: \(history.isEmpty ? "no Back/Forward" : history.joined(separator: "/")), \(toggle ? "sidebar toggle" : "no sidebar toggle"), \(inToolbar ? "page title 'Device Editor' in the toolbar" : "no page title in the toolbar")"
+    } else {
+      variant = "new UI: no Back/Forward, no sidebar toggle, no title in the toolbar (\(toolbar == nil ? "toolbar group not exposed" : "toolbar group 'Toolbar'")); \(heading ? "page heading 'Device Editor'" : "no page heading 'Device Editor' exposed")"
+    }
+    let rail = names.filter { ["Device Editor", "Layouts", "Dashboard", "Action Library", "Workflows"].contains($0) }
+    return "\(seen.joined(separator: "; ")); \(variant); rail: \(rail.isEmpty ? "labels not exposed" : rail.joined(separator: ", ")); all buttons: \(names.joined(separator: " | "))"
   }),
   ("menu bar item of the agent", {
     let (agent, item, count) = try agentMenuBarItem()
@@ -493,17 +562,45 @@ let axSteps: [(String, () throws -> String)] = [
     }
     return "\(boxes) consent box(es) checked; install status '\(status)'; \(consentShot); \(screenshot("installed"))"
   }),
-  ("Settings opens its own window, Plugins lists it", {
-    try press(try find(mainWindow, "the Settings button") { isButton($0) && name($0).hasPrefix("Settings") })
-    let settings = try settingsWindow()
-    let onScreen = screenWindows(desktop).count
-    _ = try button(settings, "Back to DeckPilot")
-    try press(try button(settings, "Plugins"))
-    _ = try until("\(pluginName) v\(pluginVersion) in the plugin list") { hasText(settings, pluginName) && hasText(settings, "v\(pluginVersion)") ? true : nil }
+  ("Settings > Plugins lists \(pluginName)", {
+    let axBefore = windows(app).count
+    let screenBefore = screenWindows(desktop).count
+    let settingsButton = try find(mainWindow, "the Settings button") { isButton($0) && name($0).hasPrefix("Settings") }
+    let pressedBefore = pressedState(settingsButton)
+    try press(settingsButton)
+    if try settingsAppeared("the settings") == "window" {
+      let settings = try settingsWindow()
+      let onScreen = screenWindows(desktop).count
+      _ = try button(settings, "Back to DeckPilot")
+      try press(try button(settings, "Plugins"))
+      _ = try until("\(pluginName) v\(pluginVersion) in the plugin list") { hasText(settings, pluginName) && hasText(settings, "v\(pluginVersion)") ? true : nil }
+      let shot = screenshot("settings-plugins")
+      if let close = attr(settings, kAXCloseButtonAttribute) { try press(close as! AXUIElement) } else { try press(try button(settings, "Back to DeckPilot")) }
+      _ = try until("the settings window to close") { settingsWindowOpen() == nil ? true : nil }
+      return "UI up to 0.8.1: separate window '\(settingsTitle)' (\(windows(app).count + 1) AX windows, \(onScreen) on screen while open); Extensions > Plugins lists \(pluginName) v\(pluginVersion); closed with its close button; \(shot)"
+    }
+    // The settings as a view of the main window; the Marketplace (Memory's
+    // details) waits under them and comes back as it was.
+    let marker = settingsView(mainWindow) ?? "?"
+    let windowsEvidence = try noNewWindow(axBefore, screenBefore)
+    let pressed = pressedState(gear(mainWindow))
+    if pressed == "not pressed" { throw Failure("the Settings button is not pressed while the settings are shown") }
+    try press(try button(mainWindow, "Plugins"))
+    _ = try until("\(pluginName) v\(pluginVersion) in the installed list of Settings > Plugins") { () -> Bool? in
+      guard let list = first(mainWindow, { name($0) == "Installed plugins" && !isButton($0) }) else { return nil }
+      return hasText(list, pluginName) && hasText(list, "v\(pluginVersion)") ? true : nil
+    }
     let shot = screenshot("settings-plugins")
-    if let close = attr(settings, kAXCloseButtonAttribute) { try press(close as! AXUIElement) } else { try press(try button(settings, "Back to DeckPilot")) }
-    _ = try until("the settings window to close") { windows(app).contains { string($0, kAXTitleAttribute) == "DeckPilot Settings" } ? nil : true }
-    return "separate window 'DeckPilot Settings' (\(windows(app).count + 1) AX windows, \(onScreen) on screen while open); Extensions > Plugins lists \(pluginName) v\(pluginVersion); closed with its close button; \(shot)"
+    try press(try button(mainWindow, "Marketplace"))
+    _ = try until("the settings view to close") { settingsView(mainWindow) == nil ? true : nil }
+    let status = try until("the Marketplace as it was before the settings: \(pluginName)'s install status") { () -> String? in
+      guard let group = first(mainWindow, { name($0) == "Install status" }) else { return nil }
+      let t = joined(group)
+      return t.contains("Installed \(pluginVersion)") ? t : nil
+    }
+    let after = pressedState(gear(mainWindow))
+    if after == "pressed" { throw Failure("the Settings button stays pressed after leaving the settings") }
+    return "new UI: the Settings button (\(pressedBefore) before) showed the settings in the main window (\(marker)); \(windowsEvidence); Settings button \(pressed); Extensions > Plugins lists \(pluginName) v\(pluginVersion); the toolbar's Marketplace left them: the Marketplace is back as it was (install status '\(status)'), Settings button \(after); \(shot); \(screenshot("settings-left"))"
   }),
   ("enable with consent", {
     try marketplace(mainWindow)
@@ -555,8 +652,13 @@ let axSteps: [(String, () throws -> String)] = [
       if let editor = first(mainWindow, { isButton($0) && name($0) == "Device Editor" }) { try press(editor) }
       create = try button(mainWindow, "Create a profile")
     }
+    let axBefore = windows(app).count
+    let screenBefore = screenWindows(desktop).count
     try press(create!)
-    let settings = try settingsWindow()
+    let inWindow = try settingsAppeared("Settings > Profiles") == "window"
+    // Up to 0.8.1 the settings window; later the main window's settings view.
+    let settings: AXUIElement = try inWindow ? settingsWindow() : mainWindow
+    let windowsEvidence = try inWindow ? "" : noNewWindow(axBefore, screenBefore)
     try press(try button(settings, "New profile"))
     // WebKit names a labelled input by its label (AXTitle, or the
     // AXTitleUIElement's text); the dialog focuses the field on open.
@@ -579,10 +681,28 @@ let axSteps: [(String, () throws -> String)] = [
       pause(0.5)
     }
     try press(save)
-    _ = try until("'\(profileName)' in All profiles") { first(settings, { isButton($0) && name($0) == "Save" }) == nil && hasText(settings, profileName) ? true : nil }
+    if inWindow {
+      _ = try until("'\(profileName)' in All profiles") { first(settings, { isButton($0) && name($0) == "Save" }) == nil && hasText(settings, profileName) ? true : nil }
+      let shot = screenshot("settings-profiles")
+      if let close = attr(settings, kAXCloseButtonAttribute) { try press(close as! AXUIElement) }
+      return "UI up to 0.8.1: Create a profile opened Settings > Profiles in the window '\(settingsTitle)'; New profile '\(profileName)' (\(how)) saved and listed; \(shot)"
+    }
+    // The compact table (aria-label "Profiles"): each profile's name is a
+    // button that makes it the profile being edited; the toolbar has no
+    // profile selector in the settings, so a button of that name is the row.
+    _ = try until("'\(profileName)' in the table of All profiles") { () -> Bool? in
+      first(mainWindow, { isButton($0) && name($0) == "Save" }) == nil && hasText(mainWindow, "All profiles")
+        && first(mainWindow, { isButton($0) && name($0) == profileName }) != nil ? true : nil
+    }
+    let table = first(mainWindow) { name($0) == "Profiles" && (role($0) == kAXTableRole as String || role($0) == "AXGrid") }
     let shot = screenshot("settings-profiles")
-    if let close = attr(settings, kAXCloseButtonAttribute) { try press(close as! AXUIElement) }
-    return "Create a profile opened Settings > Profiles; New profile '\(profileName)' (\(how)) saved and listed; \(shot)"
+    // Back where Create a profile was pressed: the rail's Device Editor.
+    try press(try button(mainWindow, "Device Editor"))
+    _ = try until("the settings view to close") { settingsView(mainWindow) == nil ? true : nil }
+    let selector = try find(mainWindow, "the Device Editor's profile selector") { isButton($0) && name($0).hasPrefix("Profile:") }
+    _ = try find(mainWindow, "the Device Editor's device selector") { isButton($0) && (name($0).hasPrefix("Device:") || name($0) == "Choose a device") }
+    let heading = first(mainWindow) { role($0) == "AXHeading" && (name($0) == "Device Editor" || joined($0) == "Device Editor") } != nil
+    return "new UI: Create a profile showed Settings > Profiles in the main window; \(windowsEvidence); New profile '\(profileName)' (\(how)) saved and listed in All profiles (\(table != nil ? "table 'Profiles'" : "table role not exposed"), row button '\(profileName)'); the rail's Device Editor left the settings: back in the Device Editor (\(heading ? "heading 'Device Editor', " : "")device and profile selectors, '\(name(selector))'); \(shot); \(screenshot("settings-left-editor"))"
   }),
   ("Device Editor, Action Library and key inspector", {
     var profile = try find(mainWindow, "the profile selector") { isButton($0) && (name($0).hasPrefix("Profile:") || name($0) == "Choose the profile to edit") }
@@ -629,13 +749,16 @@ let axSteps: [(String, () throws -> String)] = [
     }
     let canvas = try find(mainWindow, "the device canvas", long, isCanvas)
     let library = try find(mainWindow, "the Action Library") { name($0) == "Action Library" && !isButton($0) }
+    // Up to 0.8.1 the library collapses and resizes; later it is fixed.
+    let libraryControls = all(mainWindow).map(name).filter { ["Collapse the library", "Resize the library", "Show the library", "Close the library"].contains($0) }
+    let libraryKind = libraryControls.isEmpty ? "fixed (no collapse or resize control)" : "with \(Array(Set(libraryControls)).sorted().joined(separator: ", "))"
     _ = try find(mainWindow, "the inspector") { name($0).hasPrefix("Select a key, dial or touch zone") }
     let key = try find(mainWindow, "'Key 1'") { name($0) == "Key 1" && role($0) != kAXStaticTextRole as String }
     let how = try click(running, key)
     _ = try until("the inspector of Key 1") { first(mainWindow, { name($0).hasPrefix("Select a key, dial or touch zone") }) == nil ? true : nil }
     let device = try find(mainWindow, "the device selector") { isButton($0) && name($0).hasPrefix("Device:") }
     mainFrame = frame(mainWindow)
-    return "profile selector '\(name(profile))'; device menu: \(modelNames.joined(separator: " | ")); chose '\(modelName)' -> '\(name(device))'; \(layout); canvas '\(name(canvas))'; library '\(name(library))' (\(role(library)) \(subrole(library))); Key 1 selected (\(how)), the inspector shows it; \(menuShot); \(screenshot("editor"))"
+    return "profile selector '\(name(profile))'; device menu: \(modelNames.joined(separator: " | ")); chose '\(modelName)' -> '\(name(device))'; \(layout); canvas '\(name(canvas))'; library '\(name(library))' (\(role(library)) \(subrole(library)), \(libraryKind)); Key 1 selected (\(how)), the inspector shows it; \(menuShot); \(screenshot("editor"))"
   }),
   ("closing the main window leaves the Dock, the app and agent keep running", {
     let before = "policy \(policy(desktop)), lsappinfo \(lsType(desktop)), Dock: \(dockItems()?.contains("DeckPilot") == true ? "DeckPilot" : "no DeckPilot")"

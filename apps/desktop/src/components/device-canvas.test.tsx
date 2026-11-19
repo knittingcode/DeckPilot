@@ -139,7 +139,10 @@ describe("DeviceCanvas", () => {
     )
     const canvas = screen.getByRole("group", { name: "Stream Deck MK.2 controls" })
     expect(canvas.style.getPropertyValue("--key")).toBe("88px")
-    expect(canvas.style.padding).toBe("calc(var(--key) * 0.35)")
+    // In whole pixels, so every key (and its image) starts on a pixel
+    // boundary and is not resampled: 0.35 and 0.2 keys, rounded.
+    expect(canvas.style.padding).toBe("31px")
+    expect(document.querySelector<HTMLElement>("[data-slot=device-keys]")?.style.gap).toBe("18px")
     cleanup()
     // Without a size: the size step, as before.
     render(

@@ -1,6 +1,8 @@
 import type { LucideIcon } from "lucide-react"
 import type { LazyExoticComponent } from "react"
 
+import type { ToolbarContext } from "@/lib/toolbar-context"
+
 type View = LazyExoticComponent<() => React.JSX.Element>
 
 /**
@@ -13,7 +15,15 @@ export interface FrontendModule {
   /** Shown in Settings → Modules. */
   icon?: LucideIcon
   /** Views for the page ids declared in the module's manifest. */
-  pages: Record<string, { view: View; icon: LucideIcon }>
+  pages: Record<
+    string,
+    {
+      view: View
+      icon: LucideIcon
+      /** Which toolbar selectors the page shows (`lib/toolbar-context.ts`); default `none`. */
+      context?: ToolbarContext
+    }
+  >
   /** Cards shown on the dashboard while the module is enabled. */
   dashboardCards?: View[]
   /**

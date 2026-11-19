@@ -30,6 +30,7 @@ import {
   triggerKey,
   triggerLabel,
 } from "@/lib/layout-model"
+import { useActionModules } from "@/lib/app-context"
 import { SWITCH_LAYOUT, layoutSwitchOf } from "@/lib/layout-navigation"
 import type {
   ActionType,
@@ -47,6 +48,7 @@ import { LayoutNavigationPanels, type LayoutNavigationContext } from "./layout-s
 import {
   decodeTarget,
   encodeTarget,
+  WORK_SESSION_MODULE,
   gestureOnlyGroups,
   unavailableTarget,
   type TargetGroup,
@@ -170,6 +172,12 @@ function ControlInspector({
 }: InspectorProps & { control: ControlId }) {
   const bindings = bindingsFor(draft, pageId, control)
   const gestures = acceptsGestures(model, control)
+  // The Work Session controller belongs to the Work Session module: offered
+  // while it is enabled, and kept on a control that already uses it.
+  const modules = useActionModules()
+  const workSession =
+    modules.some((m) => m.id === WORK_SESSION_MODULE && m.enabled) ||
+    bindings.some((b) => b.target.type === "stateful")
   // Press and release are edited as gestures (single click is the press).
   const triggers = supportedTriggers(model, control).filter(
     (t) => !gestures || (t.type !== "press" && t.type !== "release"),
@@ -206,7 +214,7 @@ function ControlInspector({
             control={control}
             profile={profile ?? { actions: [], workflows: [], projects: [] }}
             groups={groups}
-            gestureGroups={gestureOnlyGroups()}
+            gestureGroups={gestureOnlyGroups(workSession)}
             encode={encodeTarget}
             decode={decodeTarget}
             types={types}
