@@ -17,9 +17,10 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use deckpilot_ipc::plugins::{
-    self, AvailablePlugin, KnownPlugin, ModuleMigrationInfo, PluginActionOutcome,
-    PluginCredentialSlot, PluginDetails, PluginInstallSource, PluginRetention, PluginRuntimeStatus,
-    PluginSettings, PluginSummary, PluginUpdateOutcome, RegistryStatus,
+    self, AvailablePlugin, KnownPlugin, ModuleMigrationInfo, NavigationIconTheme,
+    PluginActionOutcome, PluginCredentialSlot, PluginDetails, PluginInstallSource,
+    PluginNavigationEntry, PluginRetention, PluginRuntimeStatus, PluginSettings, PluginState,
+    PluginSummary, PluginUpdateOutcome, RegistryStatus,
 };
 use deckpilot_ipc::{
     AgentClient, Capability, ClientError, ClientKind, ErrorCode, Request, Response, plugin_answers,
@@ -132,6 +133,9 @@ struct Connection {
     /// agent without it answers in one message, which it shortens or
     /// refuses when the answer does not fit.
     paged: bool,
+    /// The agent lists plugin navigation entries and serves their icons
+    /// ([`plugins::feature::NAVIGATION`], plugin API 1.3).
+    navigation: bool,
 }
 
 /// Opens a connection for plugin requests. Unless `gated` is false (only
@@ -149,16 +153,22 @@ async fn connect(state: &AppState, gated: bool) -> PluginResult<Connection> {
         return Err(PluginError::too_old(client.protocol()));
     }
     let mut paged = false;
+    let mut navigation = false;
     if gated {
         match client.request(Request::GetPluginRuntime).await? {
             Response::PluginRuntime { status } if status.available => {
                 paged = status.has_feature(plugins::feature::PAGED_ANSWERS);
+                navigation = status.has_feature(plugins::feature::NAVIGATION);
             }
             Response::PluginRuntime { status } => return Err(PluginError::unavailable(&status)),
             other => return Err(PluginError::unexpected(&other)),
         }
     }
-    Ok(Connection { client, paged })
+    Ok(Connection {
+        client,
+        paged,
+        navigation,
+    })
 }
 
 /// Sends one plugin request over a connection of its own. Every request
@@ -252,6 +262,94 @@ pub async fn list_plugins(state: State<'_, AppState>) -> PluginResult<Vec<Plugin
         Err(_) => state.plugin_actions().clear(),
     }
     answer
+}
+
+/// One toolbar entry of an enabled plugin (`contributes.navigation`,
+/// plugin API 1.3), as `list_plugin_navigation` returns it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginNavigationItem {
+    /// The plugin's id (`<publisher>.<name>`).
+    pub plugin: String,
+    pub plugin_name: String,
+    #[serde(flatten)]
+    pub entry: PluginNavigationEntry,
+}
+
+/// The navigation entries of `plugins` the app shows: those of enabled
+/// plugins, in the agent's order of plugins and the manifest's order of
+/// entries. A disabled, broken, quarantined or changing plugin shows none;
+/// an uninstalled one is no longer listed.
+pub fn navigation_items(plugins: &[PluginSummary]) -> Vec<PluginNavigationItem> {
+    plugins
+        .iter()
+        .filter(|plugin| plugin.state == PluginState::Enabled)
+        .flat_map(|plugin| {
+            plugin.navigation.iter().map(|entry| PluginNavigationItem {
+                plugin: plugin.id.clone(),
+                plugin_name: plugin.name.clone(),
+                entry: entry.clone(),
+            })
+        })
+        .collect()
+}
+
+/// The toolbar entries of the installed and enabled plugins. Empty with
+/// an agent that does not list them ([`plugins::feature::NAVIGATION`]);
+/// refused like `list_plugins` when the agent answers no plugin request.
+#[tauri::command]
+pub async fn list_plugin_navigation(
+    state: State<'_, AppState>,
+) -> PluginResult<Vec<PluginNavigationItem>> {
+    let mut connection = connect(&state, true).await?;
+    if !connection.navigation {
+        return Ok(Vec::new());
+    }
+    // The paged listing: summaries without their actions, which the
+    // entries do not need, so it fits one message whatever the plugins.
+    match connection.client.request(Request::ListPluginsPaged).await? {
+        Response::Plugins { plugins } => Ok(navigation_items(&plugins)),
+        other => Err(PluginError::unexpected(&other)),
+    }
+}
+
+async fn navigation_icon(
+    state: &AppState,
+    plugin: &str,
+    entry: &str,
+    theme: NavigationIconTheme,
+) -> PluginResult<Option<String>> {
+    let mut connection = connect(state, true).await?;
+    if !connection.navigation {
+        return Ok(None);
+    }
+    Ok(plugin_answers::navigation_icon(&mut connection.client, plugin, entry, theme).await?)
+}
+
+/// A navigation entry's icon for `theme` as a `data:` URL (`image/png`,
+/// `image/webp` or `image/svg+xml`, an SVG sanitized by the agent) for an
+/// `<img>`. `null` on any failure (no agent, plugins unavailable, an
+/// older agent, no such entry, a missing, unsafe or modified file): the
+/// app then shows its fallback icon. Never an error.
+#[tauri::command]
+pub async fn get_plugin_navigation_icon(
+    state: State<'_, AppState>,
+    plugin: String,
+    entry: String,
+    theme: NavigationIconTheme,
+) -> PluginResult<Option<String>> {
+    Ok(navigation_icon(&state, &plugin, &entry, theme)
+        .await
+        .ok()
+        .flatten()
+        .filter(|url| is_icon_data_url(url)))
+}
+
+/// Whether `url` is a `data:` URL of a navigation icon's media type.
+fn is_icon_data_url(url: &str) -> bool {
+    plugins::NAVIGATION_ICON_MEDIA_TYPES
+        .iter()
+        .any(|media| url.starts_with(&format!("data:{media};base64,")))
 }
 
 #[tauri::command]
@@ -649,6 +747,65 @@ mod tests {
     use deckpilot_ipc::IpcError;
 
     use super::*;
+
+    fn summary(id: &str, state: &str, navigation: serde_json::Value) -> PluginSummary {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "name": format!("Plugin {id}"), "publisher": "acme",
+            "version": "1.0.0", "state": state, "origin": {"type": "sideload"},
+            "actions": [], "navigation": navigation,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn only_enabled_plugins_show_navigation_entries() {
+        let entry = |id: &str| {
+            serde_json::json!({"id": id, "label": "GitHub",
+                "view": {"id": "dashboard", "kind": "variables"}})
+        };
+        let plugins = [
+            summary(
+                "acme.one",
+                "enabled",
+                serde_json::json!([entry("a"), entry("b")]),
+            ),
+            summary("acme.off", "disabled", serde_json::json!([entry("c")])),
+            summary("acme.broken", "broken", serde_json::json!([entry("d")])),
+            summary("acme.none", "enabled", serde_json::json!([])),
+            summary("acme.two", "enabled", serde_json::json!([entry("e")])),
+        ];
+        let items = navigation_items(&plugins);
+        assert_eq!(
+            serde_json::to_value(&items).unwrap(),
+            serde_json::json!([
+                {"plugin": "acme.one", "pluginName": "Plugin acme.one", "id": "a",
+                 "label": "GitHub", "view": {"id": "dashboard", "kind": "variables"}},
+                {"plugin": "acme.one", "pluginName": "Plugin acme.one", "id": "b",
+                 "label": "GitHub", "view": {"id": "dashboard", "kind": "variables"}},
+                {"plugin": "acme.two", "pluginName": "Plugin acme.two", "id": "e",
+                 "label": "GitHub", "view": {"id": "dashboard", "kind": "variables"}},
+            ])
+        );
+    }
+
+    #[test]
+    fn only_icon_data_urls_reach_the_frontend() {
+        for url in [
+            "data:image/png;base64,AAAA",
+            "data:image/webp;base64,AAAA",
+            "data:image/svg+xml;base64,AAAA",
+        ] {
+            assert!(is_icon_data_url(url), "{url}");
+        }
+        for url in [
+            "data:text/html;base64,AAAA",
+            "data:image/svg+xml,<svg/>",
+            "https://example.com/x.png",
+            "javascript:alert(1)",
+        ] {
+            assert!(!is_icon_data_url(url), "{url}");
+        }
+    }
 
     #[test]
     fn agent_errors_keep_their_reason() {

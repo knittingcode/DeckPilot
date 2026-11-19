@@ -6,7 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 import { clearFocus, peekFocus } from "@/lib/focus"
 import type { DeviceLayout, ReferenceSite, Workflow } from "@/lib/types"
-import { ActionsPage } from "@/pages/actions"
+import { ActionLibraryView, ActionsPage } from "@/pages/actions"
 import { api, resetApi } from "@/test/api-mock"
 import { installDomStubs } from "@/test/dom"
 import { ACTION_TYPES, action, builtInModules, profileView, stepWorkflow } from "@/test/fixtures"
@@ -452,5 +452,27 @@ describe("Action references", () => {
     expect(api.replaceActionReferences).not.toHaveBeenCalled()
     expect(api.unbindActionReferences).not.toHaveBeenCalled()
     expect(api.deleteAction).not.toHaveBeenCalled()
+  })
+})
+
+describe("a plugin's actions view", () => {
+  it("lists only the actions of the plugin", async () => {
+    const greet = action("a-greet", "Greet Ada", "acme.hello-weather.greet")
+    api.getProfile.mockResolvedValue(library([docs, greet, containers]))
+    renderWithApp(
+      <ActionLibraryView plugin={{ id: "acme.hello-weather", name: "Hello Weather" }} />,
+      { modules },
+    )
+    expect(await screen.findByRole("button", { name: /Greet Ada/ })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /Open docs/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /Docker status/ })).not.toBeInTheDocument()
+  })
+
+  it("says when the plugin has no actions yet", async () => {
+    api.getProfile.mockResolvedValue(library([docs]))
+    renderWithApp(<ActionLibraryView plugin={{ id: "knit.lights", name: "Home Lights" }} />, {
+      modules,
+    })
+    expect(await screen.findByText("No actions of Home Lights yet")).toBeInTheDocument()
   })
 })

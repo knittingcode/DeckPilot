@@ -9,7 +9,7 @@ import {
   renamePage,
   setAutoReturn,
 } from "@/lib/layout-model"
-import type { BindingTarget, ControlId, DeviceLayout, DeviceModel } from "@/lib/types"
+import type { BindingTarget, ControlId, DeviceLayout, DeviceModel, Trigger } from "@/lib/types"
 
 import { type KeyLookChange, applyAppearance } from "./appearance"
 import { canRedo, canUndo, commit, history, redo, undo } from "@/lib/history"
@@ -41,7 +41,15 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`
  * State of the layout editor: the draft with its undo history, the open
  * page and how it was reached, the selection and the clipboard.
  */
-export function useLayoutEditing(model: DeviceModel, saved: DeviceLayout) {
+export function useLayoutEditing(
+  model: DeviceModel,
+  saved: DeviceLayout,
+  /**
+   * Whether `target` can run from `control` for `trigger`: assigning and
+   * dropping prefer such triggers (docs/device-controls.md).
+   */
+  accepts?: (control: ControlId, target: BindingTarget, trigger: Trigger) => boolean,
+) {
   const [state, setState] = useState(() => history(saved))
   const [openPage, setOpenPage] = useState(saved.homePage)
   // The stored layout the draft is compared with. Page commands (reorder,
@@ -156,7 +164,16 @@ export function useLayoutEditing(model: DeviceModel, saved: DeviceLayout) {
       if (selected.length > 0) change(clearControls(draft, pageId, selected))
     },
     assign: (target: BindingTarget) => {
-      change(assignTarget(model, draft, pageId, selected, target))
+      change(
+        assignTarget(
+          model,
+          draft,
+          pageId,
+          selected,
+          target,
+          accepts && ((control, trigger) => accepts(control, target, trigger)),
+        ),
+      )
     },
     /**
      * Creates a folder in the open page and makes `control` open it, as one
@@ -181,7 +198,16 @@ export function useLayoutEditing(model: DeviceModel, saved: DeviceLayout) {
       // An action type and a Multi Action are placed by the editor, which
       // creates the action or the workflow.
       if (source.type === "actionType" || source.type === "newMultiAction") return
-      const next = dropOnControl(model, draft, pageId, source, over)
+      const next = dropOnControl(
+        model,
+        draft,
+        pageId,
+        source,
+        over,
+        accepts && source.type === "target"
+          ? (control, trigger) => accepts(control, source.target, trigger)
+          : undefined,
+      )
       if (!next) {
         toast.error(`${controlLabel(over)} cannot take these bindings`)
         return

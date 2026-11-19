@@ -100,6 +100,26 @@ export type InputCapability =
 /** A kind that is absent is not supported. */
 export type ActionControls = Partial<Record<ControlId["kind"], InputCapability[]>>
 
+/**
+ * Why an action cannot run from a binding (`IncompatibilityReason` of
+ * deckpilot-core, docs/device-controls.md section 2).
+ */
+export type IncompatibilityReason =
+  | {
+      type: "controlKindUnsupported"
+      kind: ControlId["kind"]
+      /** The kinds the action supports. */
+      supported: ControlId["kind"][]
+    }
+  | {
+      type: "inputUnsupportedByAction"
+      kind: ControlId["kind"]
+      input: InputCapability
+      /** The inputs the action supports on the kind. */
+      supported: InputCapability[]
+    }
+  | { type: "inputUnsupportedByControl"; kind: ControlId["kind"]; input: InputCapability }
+
 export interface ActionInstance {
   id: string
   name: string
@@ -901,7 +921,7 @@ export interface ControlFace {
    * Bindings of this control on the page whose action cannot run from it,
    * with the reason (docs/device-controls.md). Omitted when there are none.
    */
-  incompatible?: { trigger: Trigger; reason: { type: string }; message: string }[]
+  incompatible?: { trigger: Trigger; reason: IncompatibilityReason; message: string }[]
 }
 
 export type ConnectionState = "connected" | "disconnected"

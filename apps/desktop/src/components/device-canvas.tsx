@@ -37,6 +37,14 @@ interface CanvasProps {
   droppable?: boolean
   /** Controls can be dragged onto other controls. */
   draggable?: boolean
+  /**
+   * Why what is dragged (its drag data) cannot be dropped on `control`;
+   * `null` when it can. A control that refuses shows it while the drag is
+   * over it.
+   */
+  dropRejection?: (control: ControlId, dragged: unknown) => string | null
+  /** A control that just refused a drop, shown as refused for a moment. */
+  rejected?: ControlId | null
   /** Wraps each control, e.g. in a context menu. */
   wrapControl?: (control: ControlId, element: ReactElement) => ReactNode
   size?: "sm" | "md"
@@ -81,6 +89,12 @@ function Control({
   const face = props.faces?.get(key)
   const image = props.images?.get(key)
   const summary = props.summaries?.get(key) ?? (shape === "dial" ? props.captions?.get(key) : "")
+  const refusal =
+    drop.isOver && props.dropRejection
+      ? props.dropRejection(control, drop.active?.data.current)
+      : null
+  const refused =
+    refusal !== null || (props.rejected ? sameControl(props.rejected, control) : false)
   // Only pointer dragging: Enter and Space keep selecting the control.
   const onPointerDown = props.draggable
     ? (drag.listeners?.onPointerDown as React.PointerEventHandler | undefined)
@@ -93,6 +107,7 @@ function Control({
       }}
       type="button"
       data-control={key}
+      data-drop={refused ? "rejected" : drop.isOver ? "accepted" : undefined}
       disabled={!interactive}
       tabIndex={interactive ? (tabStop ? 0 : -1) : undefined}
       aria-label={controlLabel(control)}
@@ -103,9 +118,10 @@ function Control({
         shape === "key" && "aspect-square rounded-lg",
         shape === "zone" && "aspect-[2/1] rounded-md",
         shape === "dial" && "aspect-square rounded-full",
-        "ring-offset-2 ring-offset-neutral-900 focus-visible:ring-2 focus-visible:ring-sky-400",
-        selected && "ring-2 ring-amber-400",
-        drop.isOver && "ring-2 ring-emerald-400",
+        "ring-offset-2 ring-offset-device-body focus-visible:ring-2 focus-visible:ring-device-focus",
+        selected && "ring-2 ring-device-selected",
+        drop.isOver && !refused && "ring-2 ring-device-drop",
+        refused && "ring-2 ring-destructive",
         drag.isDragging && "opacity-50",
       )}
       onPointerDown={onPointerDown}
@@ -116,7 +132,7 @@ function Control({
       }}
     >
       {shape === "dial" ? (
-        <div className="flex size-full flex-col items-center justify-center rounded-full border-4 border-neutral-600 bg-neutral-800 p-1 text-center text-[10px] leading-tight text-neutral-200">
+        <div className="flex size-full flex-col items-center justify-center rounded-full border-4 border-device-dial-border bg-device-dial p-1 text-center text-[10px] leading-tight text-device-dial-foreground">
           <span className="line-clamp-2">
             {(props.captions?.get(key) ?? "").split(" · ")[0]?.replace(/^[^:]*: /, "")}
           </span>
@@ -172,7 +188,7 @@ export function DeviceCanvas(props: CanvasProps) {
   return (
     <div
       ref={container}
-      className="inline-grid gap-3 rounded-2xl border border-neutral-700 bg-neutral-900 p-4 shadow-inner dark:border-neutral-600 dark:bg-black"
+      className="inline-grid gap-3 rounded-2xl border border-device-body-border bg-device-body p-4 shadow-inner"
       role="group"
       aria-label={`${model.name} controls`}
       onKeyDown={onKeyDown}
@@ -195,7 +211,7 @@ export function DeviceCanvas(props: CanvasProps) {
       )}
       {touchZones.length > 0 && (
         <div
-          className="grid gap-1 rounded-lg bg-neutral-950 p-1"
+          className="grid gap-1 rounded-lg bg-device-strip p-1"
           style={{ width, gridTemplateColumns: `repeat(${touchZones.length}, minmax(0, 1fr))` }}
         >
           {touchZones.map((control) => (

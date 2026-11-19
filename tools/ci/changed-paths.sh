@@ -25,7 +25,7 @@ pattern() {
     # (plugins/runtime), the bundled first-party plugins
     # (plugins/first-party), their pins compiled into the agent
     # (crates/deckpilot-plugin-bundled) and their check.
-    packaging) echo '^apps/desktop/src-tauri/(tauri[^/]*\.json$|build\.rs$|Cargo\.toml$|capabilities/|entitlements/|icons/|app-icon\.svg$)|^\.github/scripts/(verify-macos-app|apple-certificate)\.sh$|^apps/agent/(build\.rs|Cargo\.toml|Info\.plist)$|^crates/deckpilot-distribution/|^crates/deckpilot-plugin-bundled/|^plugins/(first-party|runtime)/|^tools/release-pipeline/check-bundled-plugins\.sh$|^packaging/|^tools/ci/|^\.github/workflows/|^Cargo\.(lock|toml)$|^apps/desktop/package\.json$' ;;
+    packaging) echo '^apps/desktop/src-tauri/(tauri[^/]*\.json$|build\.rs$|Cargo\.toml$|capabilities/|entitlements/|icons/|app-icon\.svg$)|^\.github/scripts/(verify-macos-app|apple-certificate)\.sh$|^apps/agent/(build\.rs|Cargo\.toml|Info\.plist)$|^crates/deckpilot-distribution/|^crates/deckpilot-plugin-bundled/|^plugins/(first-party|runtime)/|^tools/release-pipeline/check-bundled-plugins\.sh$|^packaging/|^tools/ci/(check-|test-check-|install-linux-deps|msi-version|sign-macos-|stage-plugin-runtime|throwaway-updater-key|updater-fragment|changed-paths)|^\.github/workflows/(packaging|release)\.yml$|^Cargo\.(lock|toml)$|^apps/desktop/package\.json$' ;;
     # Real credential stores.
     keystore) echo '^crates/deckpilot-keystore/|^tools/ci/with-keyring\.sh$|^\.github/workflows/ci\.yml$' ;;
     # Assembly of the release's latest.json, including the pinned download

@@ -99,8 +99,8 @@ The site states what DeckPilot does today, including what it does not do.
   (`src/lib/releases.ts`); `tests/check-no-version.mjs` fails if a version
   appears in `src/`.
 - **Drafts never appear.** Only releases with `draft: false` and a
-  publication date are considered. A stable release is offered before a
-  newer pre-release, which is then mentioned.
+  publication date are considered. The newest stable release (by version)
+  is offered before a newer pre-release, which is then mentioned.
 - **A button exists only for a file the release has**, and only for assets
   served from this repository's release downloads.
 - **Signing statements come from the release.** They are read from the
@@ -117,7 +117,12 @@ The site states what DeckPilot does today, including what it does not do.
 
 A build bakes the release into the pages. The workflow builds again on
 every push to `main` that touches the website, every day, when started by
-hand, and when a release is published. As a last resort the download page
+hand, and after a stable release: the release workflow, once the release is
+published and verified, starts the website workflow on `main` (its `website`
+job; a release it publishes raises no `release` event for other workflows).
+The page offers the newest stable release by version, never a pre-release
+while a stable release exists, and a fix of an older line published later
+does not replace it. As a last resort the download page
 asks GitHub's API in the browser whether a newer release exists and shows a
 notice with a link; if that request fails, nothing changes.
 

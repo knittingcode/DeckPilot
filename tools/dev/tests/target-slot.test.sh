@@ -73,6 +73,21 @@ echo "$h5 Thu Jan  1 00:00:00 1970" > "$work/pool/slot-2.lock/owner"
 s5=$(ts acquire --owner "$h5" 2> /dev/null)
 check "a lock of a reused PID is taken over" test "$s5" = "$work/pool/slot-2"
 ts release --owner "$h4" "$s4"; ts release --owner "$h5" "$s5"
+# On Linux, ps can print the start time of one live process one second
+# apart in two calls. A live owner stays the owner whatever ps prints now:
+# the start on the first line of the owner file is set off by one second
+# (any other time does as well), the stable one on the second is kept.
+holder; h7=$last_holder
+s7=$(ts acquire --owner "$h7")
+holder; h8=$last_holder
+s8=$(ts acquire --owner "$h8")
+{ echo "$h7 Thu Jan  1 00:00:01 1970"; sed -n 2p "$s7.lock/owner"; } > "$work/owner.new"
+mv "$work/owner.new" "$s7.lock/owner"
+holder; h9=$last_holder
+status=0; ts acquire --owner "$h9" > /dev/null 2> "$work/jitter.err" || status=$?
+check "a live owner is not taken for gone when ps prints another start time" test "$status" = 3
+[ "$status" = 3 ] || cat "$work/jitter.err"
+ts release --owner "$h7" "$s7"; ts release --owner "$h8" "$s8"
 
 # --- run, concurrency ------------------------------------------------------------
 # Each run marks its slot busy; a second run in the same slot at the same
@@ -237,20 +252,40 @@ EOF
   mkws "$work/wt-b" B1
   got=$(wt_run "$work/wt-a" "$work/wt.1.log")
   check "worktree A runs its code ($got)" test "$got" = A1/A1
+  # Which layout this cargo writes (see scrub_slot): the scrub handles both,
+  # the toolchain decides which one is tested here.
+  prof="$work/wt-pool/slot-1/debug"
+  if [ -d "$prof/.fingerprint" ]; then
+    echo "     cargo $(cargo -V | cut -d' ' -f2) writes the old layout (.fingerprint, deps)"
+  else
+    echo "     cargo $(cargo -V | cut -d' ' -f2) writes the new layout (build/<package>/<hash>)"
+  fi
   got=$(wt_run "$work/wt-b" "$work/wt.2.log")
   check "worktree B, next in the same slot, runs its own code ($got)" test "$got" = B1/B1
-  # A third-party crate in the slot (stand-in): kept across worktrees.
-  fake="$work/wt-pool/slot-1/debug"
-  mkdir -p "$fake/.fingerprint/thirdparty-0123456789abcdef"
-  : > "$fake/deps/libthirdparty-0123456789abcdef.rlib"
+  # A third-party crate in the slot (stand-ins in both layouts): kept across
+  # worktrees.
+  fake_old="$prof/.fingerprint/thirdparty-0123456789abcdef $prof/deps/libthirdparty-0123456789abcdef.rlib"
+  fake_new="$prof/build/thirdparty/0123456789abcdef/fingerprint $prof/build/thirdparty/0123456789abcdef/out/libthirdparty.rlib"
+  mkdir -p "$prof/.fingerprint/thirdparty-0123456789abcdef" "$prof/deps" \
+    "$prof/build/thirdparty/0123456789abcdef/fingerprint" "$prof/build/thirdparty/0123456789abcdef/out"
+  : > "$prof/deps/libthirdparty-0123456789abcdef.rlib"
+  : > "$prof/build/thirdparty/0123456789abcdef/out/libthirdparty.rlib"
   sleep 1
   settag "$work/wt-a" A2
   got=$(wt_run "$work/wt-a" "$work/wt.3.log")
   check "worktree A after an edit runs its code ($got)" test "$got" = A2/A2
+  # A profile directory in a layout of neither kind (a later cargo).
+  odd="$work/wt-pool/slot-1/odd-triple/debug"
+  mkdir -p "$odd/units/probe-core"
+  : > "$odd/.cargo-lock"
+  : > "$odd/units/probe-core/output"
   got=$(wt_run "$work/wt-b" "$work/wt.4.log")
   check "worktree B after A's newer build runs its own code ($got)" test "$got" = B1/B1
-  check "the scrub keeps dependencies that are not the worktree's own" \
-    test -d "$fake/.fingerprint/thirdparty-0123456789abcdef" -a -f "$fake/deps/libthirdparty-0123456789abcdef.rlib"
+  check "the scrub empties a profile directory in an unknown layout" test ! -e "$odd/units"
+  kept=1
+  # shellcheck disable=SC2086 # word splitting of the path lists is intended
+  for f in $fake_old $fake_new; do [ -e "$f" ] || { kept=0; echo "     removed: $f"; }; done
+  check "the scrub keeps dependencies that are not the worktree's own" test "$kept" = 1
   got=$(wt_run "$work/wt-b" "$work/wt.5.log")
   check "worktree B again in its slot runs its code ($got)" test "$got" = B1/B1
   check "the same worktree again in its slot rebuilds nothing" \

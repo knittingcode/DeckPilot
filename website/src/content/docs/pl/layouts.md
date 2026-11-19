@@ -1,20 +1,20 @@
 ---
 title: Układy
-description: Zaprojektuj w narzędziu Layout Designer, co pokazuje i robi każdy klawisz, korzystając ze stron, folderów, kolorów, ikon i skrótów.
+description: Zaprojektuj w narzędziu Device Editor, co pokazuje i robi każdy klawisz, korzystając ze stron, folderów, kolorów, ikon i skrótów.
 group: design
 order: 5
 ---
 
 Układ określa, co pokazuje i co robi każdy klawisz danego modelu urządzenia. Układy należą do profilu i do modelu urządzenia, a projektować je można bez podłączonego urządzenia.
 
-## Layout Designer
+## Device Editor
 
-Otwórz **Devices › Layout Designer**. Wybierz **Profile**, **Device model** i **Layout**; gwiazdka oznacza układ aktywny dla danego modelu.
+DeckPilot otwiera się w narzędziu **Device Editor**; jest ono też pierwszą pozycją paska nawigacji. Urządzenie i profil wybierasz na pasku narzędzi: lista urządzeń pokazuje najpierw podłączone urządzenia, a pozostałe modele jako **Not connected**. Następnie wybierz **Layout**; gwiazdka oznacza układ aktywny dla danego modelu.
 
 - **New layout** tworzy układ. Przełącznik **Place the profile's actions and workflows on the keys** jest domyślnie włączony i wypełnia nowy układ za Ciebie.
 - **Duplicate** kopiuje układ, **Make active** umieszcza go na urządzeniu, a **Delete** go usuwa.
 
-Edytor składa się z trzech części: biblioteki **Library** (Actions, Workflows, Navigation), obszaru urządzenia oraz panelu właściwości wybranego elementu.
+Edytor składa się z trzech części: obszaru urządzenia pośrodku, panelu właściwości wybranego elementu pod nim oraz biblioteki **Library** (Actions, Workflows, Navigation) po prawej stronie. Bibliotekę można poszerzyć, przeciągając jej krawędź, i zwinąć; w wąskim oknie otwiera ją przycisk **Library**.
 
 ## Umieszczanie czegoś na klawiszu
 
@@ -23,6 +23,15 @@ Edytor składa się z trzech części: biblioteki **Library** (Actions, Workflow
 - kliknij klawisz prawym przyciskiem myszy i użyj polecenia **Assign**.
 
 Menu kontekstowe zawiera też polecenia Copy, Cut, Paste, Duplicate i Clear. To, co klawisz robi po pojedynczym kliknięciu, podwójnym kliknięciu i długim naciśnięciu, opisuje strona [Gesty](../gestures/).
+
+## Które akcje pasują do którego elementu
+
+Nie każda akcja działa na każdym elemencie urządzenia. Akcja określa, czy uruchamia ją klawisz, pokrętło czy strefa dotykowa, i jakie zdarzenie: naciśnięcie, obrót, dotknięcie. Większość akcji działa tylko na klawiszach; Next page, Previous page, Brightness oraz akcje przełączania projektów działają też na pokrętle. Akcje wtyczek działają na klawiszach, chyba że wtyczka określa inaczej.
+
+- Gdy zaznaczony jest jeden element, biblioteka pokazuje, co do niego pasuje. Akcje, które nie pasują, pozostają widoczne, ale wyszarzone, z powodem, na przykład *Requires a dial. The selected Stream Deck MK.2 key supports press actions only.* Przełącznik **Compatible only** je ukrywa; wybór jest zapamiętywany.
+- Upuszczenie akcji na element, z którego nie może się uruchomić, zostaje odrzucone: element dostaje czerwoną obwódkę, powód jest wyświetlany i odczytywany przez czytnik ekranu, a nic nie zostaje przypisane.
+- W panelu właściwości każde zdarzenie (kliknięcie, obrót w prawo, dotknięcie) proponuje tylko akcje, które mogą się z niego uruchomić; pozostałe są oznaczone **(not on this control)**.
+- Przypisanie zapisane wcześniej albo zaimportowane, które nie może działać na swoim elemencie, zostaje zachowane bez zmian, ale nie jest uruchamiane. Panel właściwości podaje powód (**Not run from this control: …**), a zapisywanie wymienia takie przypisania. Zadziała znowu, gdy pojawi się zgodna akcja albo urządzenie. Nowe takie przypisanie zapisywanie odrzuca, podając powód.
 
 ## Strony i foldery
 

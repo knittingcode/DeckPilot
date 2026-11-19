@@ -155,7 +155,9 @@ impl MockHost {
 /// action behave differently from its declaration: the id, the version,
 /// `engines.pluginApi` and `engines.sdk` against this SDK, the action ids
 /// (in order) and, per action, every parameter's key, `required`, kind,
-/// bounds, options and default. A [`Param::text`](crate::Param::text)
+/// bounds, options and default, and its `controls`
+/// ([`Action::controls`](crate::Action::controls), compared per kind as
+/// sets). A [`Param::text`](crate::Param::text)
 /// matches the manifest kinds `text` (with `maxLength`), `project`,
 /// `lines`, `pairs` and `code`, which all arrive as text; `number` and
 /// `secret` parameters have no manifest kind in manifest version 1 and
@@ -277,6 +279,17 @@ pub fn manifest_mismatches(plugin: &Plugin, manifest: &serde_json::Value) -> Vec
                 &default,
             );
         }
+        // Controls compare as sets per kind: the order in the manifest
+        // does not matter. Absent on both sides is equal.
+        let declared_controls = m.get("controls").filter(|c| !c.is_null());
+        let normalized = declared_controls
+            .map(|c| crate::Controls::from_json(c).map_or_else(|| c.clone(), |c| c.to_json()));
+        let plugin_controls = action.declared_controls().map(crate::Controls::to_json);
+        differ(
+            format!("{}: controls", action.id()),
+            normalized.as_ref().unwrap_or(&Value::Null),
+            plugin_controls.as_ref().unwrap_or(&Value::Null),
+        );
     }
     out
 }

@@ -4,8 +4,10 @@
 //
 //   node tools/release-smoke/gui.mjs --port <tauri-driver port> --app <executable> --label <label> --out <dir>
 //
-// Main window › Settings › Plugins › Discover › Memory (deckpilot.memory)
-// › Install with consent › Installed › Enable with consent › Uninstall.
+// The application shell of 0.8.0 and later: main window (toolbar) ›
+// Marketplace › Discover › Memory (deckpilot.memory) › Install with consent
+// › the settings window (its own window) › Extensions › Plugins lists it ›
+// back in the main window: Installed › Enable with consent › Uninstall.
 // The selectors are those of apps/desktop/src-tauri/tests/marketplace_gui.rs.
 // Each step is recorded in <out>/results.tsv (see common.sh); a step that
 // fails stops the flow, the rest are recorded as not reached. A session
@@ -71,6 +73,12 @@ const lit = (t) => (t.includes("'") ? `"${t}"` : `'${t}'`)
 const button = (t) => `//button[normalize-space(.)=${lit(t)}]`
 const tab = (t) => `//button[@role='tab' and starts-with(normalize-space(.),${lit(t)})]`
 const DIALOG = "//*[@role='dialog' or @role='alertdialog']"
+/** The toolbar's Settings button (its label mentions an available update). */
+const SETTINGS = "//header[@aria-label='Toolbar']//button[starts-with(@aria-label,'Settings')]"
+/** The toolbar's Marketplace button. */
+const MARKETPLACE = "//header[@aria-label='Toolbar']//button[@aria-label='Marketplace']"
+/** The identifier of the settings window (apps/desktop/src-tauri/src/windows.rs). */
+const SETTINGS_WINDOW = "app.settings"
 
 async function findAll(xpath) {
   const found = await call("POST", s("elements"), { using: "xpath", value: xpath })
@@ -194,35 +202,62 @@ async function dialogClosed() {
   await until("the dialog to close", async () => !(await visible(DIALOG)), WAIT)
 }
 
-async function installedTab() {
+const handles = async () => (await call("GET", s("window/handles"))) ?? []
+const switchTo = (handle) => call("POST", s("window"), { handle })
+const windowId = () => execute("return document.documentElement.dataset.window || ''")
+
+/** The main window (its toolbar), switched to; returns its handle. */
+async function mainWindow(timeout = WAIT) {
+  return until(
+    "the main window's toolbar",
+    async () => {
+      for (const handle of await handles()) {
+        await switchTo(handle)
+        if ((await windowId()) === "" && (await visible(MARKETPLACE))) return handle
+      }
+      return null
+    },
+    timeout,
+  )
+}
+
+/** The Marketplace (toolbar › Marketplace) at its tabs, unless open already. */
+async function marketplace() {
   // A plugin's details replace the tabs until "Back to plugins".
   if (await visible(button("Back to plugins"))) await click(button("Back to plugins"))
-  if (!(await visible(tab("Installed")))) {
-    if (!(await visible(button("Plugins")))) await click(button("Settings"))
-    await click(button("Plugins"))
+  if (!(await visible(tab("Discover")))) {
+    await click(MARKETPLACE)
+    await wait(tab("Discover"))
   }
+}
+
+async function installedTab() {
+  await marketplace()
   await click(tab("Installed"))
   await wait("//ul[@aria-label='Installed plugins']")
 }
 
 const card = `//ul[@aria-label='Plugins']//button[.//span[normalize-space(.)=${lit(NAME)}]]`
+const installedItem = `//ul[@aria-label='Installed plugins']//li[.//span[normalize-space(.)=${lit(NAME)}]]`
+let mainHandle
 
 const steps = [
   [
     "main window",
     async () => {
-      await wait(button("Settings"), LONG)
+      mainHandle = await mainWindow(LONG)
+      await wait("//header[@aria-label='Toolbar']//h1[normalize-space(.)='Device Editor']")
+      await wait(SETTINGS)
       const status = await invoke("agent_status", {})
-      return `main window shown (button Settings); agent_status: ${JSON.stringify(status).slice(0, 300)}; ${await screenshot("main")}`
+      return `main window shown (toolbar with Marketplace and Settings, Device Editor); agent_status: ${JSON.stringify(status).slice(0, 300)}; ${await screenshot("main")}`
     },
   ],
   [
-    "Settings > Extensions > Plugins",
+    "toolbar > Marketplace",
     async () => {
-      await click(button("Settings"))
-      await click(button("Plugins"))
-      await wait(tab("Discover"))
-      return `Discover tab shown; ${await screenshot("plugins")}`
+      await marketplace()
+      await wait("//h1[normalize-space(.)='Marketplace']")
+      return `Marketplace shown in the main window (Discover tab); ${await screenshot("marketplace")}`
     },
   ],
   [
@@ -264,6 +299,36 @@ const steps = [
     },
   ],
   [
+    "Settings window > Extensions > Plugins lists Memory",
+    async () => {
+      await switchTo(mainHandle)
+      const before = new Set(await handles())
+      await click(SETTINGS)
+      const settings = await until(
+        "the settings window",
+        async () => {
+          for (const handle of await handles()) {
+            if (handle === mainHandle) continue
+            await switchTo(handle)
+            if ((await windowId()) === SETTINGS_WINDOW) return handle
+          }
+          await switchTo(mainHandle)
+          return null
+        },
+        LONG,
+      )
+      await wait(button("Back to DeckPilot"))
+      await click(button("Plugins"))
+      const row = await wait(`${installedItem}//span[normalize-space(.)='v${VERSION}']`)
+      await execute("arguments[0].scrollIntoView({block: 'center'});", [{ [ELEMENT]: row }])
+      const shot = await screenshot("settings-plugins")
+      await click(button("Back to DeckPilot"))
+      await switchTo(mainHandle)
+      await wait(MARKETPLACE)
+      return `settings window ${before.has(settings) ? "(already open)" : "opened"} as its own window (${SETTINGS_WINDOW}); Extensions > Plugins lists ${NAME} v${VERSION}; back to the main window; ${shot}`
+    },
+  ],
+  [
     "enable with consent",
     async () => {
       await installedTab()
@@ -286,7 +351,7 @@ const steps = [
     "uninstall",
     async () => {
       await installedTab()
-      await click(`//ul[@aria-label='Installed plugins']${button("Uninstall")}`)
+      await click(`${installedItem}${button("Uninstall")}`)
       await wait(DIALOG)
       const confirmShot = await screenshot("uninstall-confirm")
       await click(`${DIALOG}${button("Uninstall")}`)
@@ -314,10 +379,13 @@ async function main() {
     record("WebDriver session on the release build", "pass", `session ${session} for ${app}`)
   } catch (e) {
     // Windows: msedgedriver hands WebView2 its debugging port through
-    // WEBVIEW2_* variables, which only debug builds apply
-    // (apps/desktop/src-tauri/src/windows.rs, for_webdriver).
+    // WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, which WebView2 ignores when the
+    // app passes browser arguments of its own (wry's defaults); only debug
+    // builds merge the variable in (apps/desktop/src-tauri/src/windows.rs,
+    // for_webdriver). The AdditionalBrowserArguments registry override is
+    // ignored the same way (checked against 0.8.0).
     const why = /DevToolsActivePort/.test(e.message)
-      ? " (release builds do not apply msedgedriver's WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS/WEBVIEW2_USER_DATA_FOLDER: windows::for_webdriver is debug-only, so the webview never opens its debugging port)"
+      ? " (release builds pass their own WebView2 browser arguments, so WebView2 ignores msedgedriver's WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS (--remote-debugging-port) and the webview never opens its debugging port; windows::for_webdriver, which merges it in, is debug-only)"
       : ""
     record(
       "WebDriver session on the release build",

@@ -1,20 +1,20 @@
 ---
 title: Layouts
-description: Design what each key shows and does in the Layout Designer, with pages, folders, colours, your own icons and keyboard shortcuts.
+description: Design what each key shows and does in the Device Editor, with pages, folders, colours, your own icons and keyboard shortcuts.
 group: design
 order: 5
 ---
 
 A layout says what every key of a device model shows and does. Layouts belong to a profile and to a device model, and can be designed without the device being connected.
 
-## The Layout Designer
+## The Device Editor
 
-Open **Devices › Layout Designer**. Choose the **Profile**, the **Device model** and the **Layout**; a star marks the layout that is active for that model.
+DeckPilot opens with the **Device Editor**; it is also the first entry of the navigation rail. Choose the device and the profile in the toolbar: the device selector lists connected devices first and the other models as **Not connected**. Then choose the **Layout**; a star marks the layout that is active for that model.
 
 - **New layout** creates a layout. The switch **Place the profile's actions and workflows on the keys** is on by default and fills the new layout for you.
 - **Duplicate** copies the layout, **Make active** puts it on the device, **Delete** removes it.
 
-The editor has three parts: the **Library** (Actions, Workflows, Navigation), the device canvas, and the inspector for the selected control.
+The editor has three parts: the device canvas in the middle, the inspector for the selected control below it, and the **Library** (Actions, Workflows, Navigation) at the right. The Library can be resized by dragging its edge and collapsed; in a narrow window it opens with the **Library** button.
 
 ## Putting something on a key
 
@@ -23,6 +23,15 @@ The editor has three parts: the **Library** (Actions, Workflows, Navigation), th
 - right-click a key and use **Assign**.
 
 The context menu also has Copy, Cut, Paste, Duplicate and Clear. What a key does on a single click, a double click and a long press is described in [Gestures](../gestures/).
+
+## Which actions fit which control
+
+Not every action works on every control. An action says whether it runs from a key, a dial or a touch zone, and from which inputs: a press, a turn, a tap. Most actions work on keys only; Next page, Previous page, Brightness and the project switching actions also work on a dial. Plugin actions work on keys unless their plugin says otherwise.
+
+- With one control selected, the Library shows what fits it. What does not fit stays visible but greyed out, with the reason, for example *Requires a dial. The selected Stream Deck MK.2 key supports press actions only.* Turn on **Compatible only** to hide it; the choice is remembered.
+- Dropping an action on a control it cannot run from is refused: the control is outlined in red, the reason is shown and read out, and nothing is assigned.
+- In the inspector, each trigger (a click, a turn right, a tap) offers only actions that can run from it; the others are marked **(not on this control)**.
+- A binding saved earlier, or imported, that cannot run from its control is kept as it is but not run. The inspector says why (**Not run from this control: …**) and saving lists such bindings. It works again as soon as a compatible action or device is there. A new binding like that is refused on saving, with the reason.
 
 ## Pages and folders
 

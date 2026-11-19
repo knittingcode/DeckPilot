@@ -1661,6 +1661,33 @@ fn native_windows_are_opened_by_identifier_and_reused() {
     windows::closed(&app, &label, true);
     assert!(registry.spec(&label).is_none());
     assert_eq!(registry.open_labels().len(), 1);
+
+    // The settings: a workspace window, opened at a page and reused for
+    // the next one. They are never sized to their content.
+    h.ok(
+        "open_window",
+        json!({ "id": "app.settings", "page": "security" }),
+    );
+    let settings_label = windows::label_for("app.settings");
+    let settings = app
+        .get_webview_window(&settings_label)
+        .expect("settings window created");
+    let windows_open = count();
+    h.ok(
+        "open_window",
+        json!({ "id": "app.settings", "page": "module:projects" }),
+    );
+    // A page that is no page reference is ignored, not refused.
+    h.ok(
+        "open_window",
+        json!({ "id": "app.settings", "page": "../index.html" }),
+    );
+    assert_eq!(count(), windows_open, "one settings window");
+    let before_fit = settings.inner_size().unwrap();
+    let fitted = windows::fit(&settings, (200.0, 100.0), (200.0, 100.0)).unwrap();
+    assert_eq!(settings.inner_size().unwrap(), before_fit, "not resized");
+    assert_ne!(fitted, (200.0, 100.0), "not sized to its content");
+    windows::closed(&app, &settings_label, true);
 }
 
 // System-managed keys and sensitive operations. The agent's credential store
@@ -3304,6 +3331,7 @@ fn plugin_refusal(h: &Harness, cmd: &str, args: Value) -> (String, String) {
 fn plugin_commands() -> Vec<(&'static str, Value)> {
     vec![
         ("list_plugins", json!({})),
+        ("list_plugin_navigation", json!({})),
         ("get_plugin", json!({ "plugin": "example.hello" })),
         ("list_available_plugins", json!({ "refresh": true })),
         (
@@ -3393,6 +3421,14 @@ fn plugin_commands_refuse_unless_the_agent_answers_plugin_requests() {
     let h = Harness::new();
     let commands = plugin_commands();
 
+    // A navigation icon is never refused: no icon, and the app shows its
+    // fallback.
+    let icon = json!({ "plugin": "example.hello", "entry": "dashboard", "theme": "dark" });
+    assert_eq!(
+        h.ok("get_plugin_navigation_icon", icon.clone()),
+        Value::Null
+    );
+
     // No agent: typed, and nothing is sent anywhere.
     let (reason, _) = plugin_refusal(&h, "get_plugin_runtime", json!({}));
     assert_eq!(reason, "agentNotRunning");
@@ -3419,6 +3455,7 @@ fn plugin_commands_refuse_unless_the_agent_answers_plugin_requests() {
         assert_eq!(reason, "pluginsUnavailable", "{cmd}: {message}");
         assert!(!message.is_empty(), "{cmd}");
     }
+    assert_eq!(h.ok("get_plugin_navigation_icon", icon), Value::Null);
     // Watching events against such an agent subscribes to nothing and
     // fails nothing.
     h.ok("watch_plugin_events", json!({}));

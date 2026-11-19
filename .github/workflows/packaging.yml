@@ -100,7 +100,11 @@ env:
   # Empty for events without inputs (pull requests, pushes, nightly).
   PRERELEASE_INPUT: ${{ inputs.prerelease && 'true' || 'false' }}
   MSI_VERSION_INPUT: ${{ inputs.msi-version }}
-  RUST_CACHE_SAVE: ${{ github.ref == 'refs/heads/main' }}
+  # Not named RUST_*: Swatinem/rust-cache hashes every RUST*, CARGO*, CC*,
+  # CFLAGS*, CXX* and CMAKE* variable into its cache key, so a variable that
+  # differs between main and pull requests gave them different keys and no
+  # pull request ever restored main's cache.
+  SAVE_RUST_CACHE: ${{ github.ref == 'refs/heads/main' }}
   # The distribution record compiled into the app and the agent
   # (crates/deckpilot-distribution), as in the release builds; the package
   # checks read it back from every package.
@@ -148,7 +152,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: package-linux
-          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
+          save-if: ${{ env.SAVE_RUST_CACHE == 'true' }}
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -193,6 +197,87 @@ jobs:
       - name: Checked version
         id: version
         run: echo "version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)" >> "$GITHUB_OUTPUT"
+      # For the installation check on clean systems (install-linux).
+      - name: Keep the packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-packages
+          path: |
+            target/release/bundle/deb/*.deb
+            target/release/bundle/rpm/*.rpm
+            target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 3
+
+  # The packages built above, installed on clean systems with only the
+  # dependencies they declare, and their agent started (under Xvfb, with an
+  # isolated profile): the .deb with apt on a fresh Ubuntu 24.04 runner,
+  # the .rpm with dnf in a Fedora container, the AppImage's agent with and
+  # without the system's own tray library, and the agent on a system
+  # without any (it must keep running without a tray icon). The agent's
+  # tray loads libayatana-appindicator3 at run time; 0.7.0's packages did
+  # not declare it, its AppImage did not bundle it, and the agent could not
+  # start without it (tools/ci/check-linux-install.sh).
+  install-linux:
+    name: Package install (Linux .deb and AppImage on Ubuntu 24.04, .rpm on Fedora)
+    needs: package-linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: linux-packages
+          path: ${{ runner.temp }}/packages
+      # Xvfb and D-Bus for starting the agent, FUSE for the AppImage, and
+      # the WebKitGTK runtime: an AppImage expects the system's own base
+      # graphics libraries (libEGL and others linuxdeploy never bundles),
+      # which a desktop has and a bare runner does not. None of them pulls
+      # in the tray library (checked before each start).
+      - name: Test tools and a desktop's base libraries
+        run: |
+          # No man page index rebuilds (minutes on hosted runners).
+          sudo rm -f /var/lib/man-db/auto-update
+          # A download that stalls (a mirror that stops sending) fails after 30 s
+          # and is retried, instead of hanging until the step's timeout.
+          sudo apt-get update -q -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30
+          timeout 900 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+            -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 xvfb xauth dbus libfuse2t64 libwebkit2gtk-4.1-0
+      # Without the tray library on the system: the agent keeps running
+      # without a tray icon (the .deb's agent, not installed), and the
+      # AppImage's agent uses the library it bundles.
+      - name: The agent without a tray library
+        run: |
+          deb=$(find "$RUNNER_TEMP/packages" -name '*.deb' | head -n 1)
+          test -n "$deb"
+          dpkg-deb -x "$deb" "$RUNNER_TEMP/deb-files"
+          tools/ci/check-linux-install.sh without-tray "$RUNNER_TEMP/deb-files/usr/bin/deckpilot-agent"
+      - name: The AppImage's agent on a system without the tray library
+        run: |
+          appimage=$(find "$RUNNER_TEMP/packages" -name '*.AppImage' | head -n 1)
+          test -n "$appimage"
+          tools/ci/check-linux-install.sh appimage "$appimage"
+      - name: Install the .deb with its declared dependencies and start the agent
+        run: |
+          deb=$(find "$RUNNER_TEMP/packages" -name '*.deb' | head -n 1)
+          test -n "$deb"
+          timeout 1200 tools/ci/check-linux-install.sh deb "$deb"
+      # Now with the system's own libayatana-appindicator3 (installed with
+      # the .deb), built against Ubuntu 24.04's newer GLib.
+      - name: The AppImage's agent on a system with its own tray library
+        run: |
+          appimage=$(find "$RUNNER_TEMP/packages" -name '*.AppImage' | head -n 1)
+          tools/ci/check-linux-install.sh appimage "$appimage"
+      - name: Install the .rpm in Fedora and start the agent
+        run: |
+          rpm=$(find "$RUNNER_TEMP/packages" -name '*.rpm' | head -n 1)
+          if [ -z "$rpm" ]; then
+            echo "pre-release version: no .rpm was built"
+            exit 0
+          fi
+          timeout 1200 tools/ci/check-linux-install.sh rpm "$rpm"
 
   # Builds the Windows installers with the release configuration, the way
   # the release workflow does (agent built in a bash step with Strawberry
@@ -217,7 +302,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: package-windows
-          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
+          save-if: ${{ env.SAVE_RUST_CACHE == 'true' }}
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -316,7 +401,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: package-macos
-          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
+          save-if: ${{ env.SAVE_RUST_CACHE == 'true' }}
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

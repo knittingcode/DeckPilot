@@ -61,8 +61,30 @@ pool="${DECKPILOT_TARGET_POOL:-$HOME/.cache/deckpilot/target-pool}"
 slots="${DECKPILOT_TARGET_SLOTS:-3}"
 case "$slots" in '' | *[!0-9]* | 0) usage_error "DECKPILOT_TARGET_SLOTS must be a positive number" ;; esac
 
-# Start time of a process, to tell a live owner from a reused PID.
+# Start time of a process, to tell a live owner from a reused PID, as ps
+# prints it. On Linux this is not stable: procps adds the start in ticks to
+# the boot time, which follows adjustments of the system clock, so two
+# calls for one live process can print times one second apart, and a live
+# owner would be taken for gone. Kept in the owner file for older copies of
+# this script (worktrees on other commits share the pool).
 start_of() { ps -o lstart= -p "$1" 2> /dev/null | sed 's/^ *//; s/ *$//'; }
+
+# A start time that does not change while the process lives: on Linux the
+# start in clock ticks since boot (field 22 of /proc/<pid>/stat; the command
+# name in field 2 may hold spaces and parentheses, hence the cut after the
+# last ")"), elsewhere the time ps prints (macOS reads it from the kernel's
+# record of the start). Empty if the process is gone.
+stable_start_of() {
+  if [ -r "/proc/$1/stat" ]; then
+    st=$(cat "/proc/$1/stat" 2> /dev/null) || return 0
+    st=${st##*) }
+    # shellcheck disable=SC2086 # split into fields; field 3 is now $1
+    set -- $st
+    [ -z "${20:-}" ] || echo "ticks:${20}"
+  else
+    start_of "$1"
+  fi
+}
 
 # Seconds since a file was last modified (0 if it is gone).
 age_of() {
@@ -72,8 +94,10 @@ age_of() {
 
 # Writes the owner file of <lock> for <pid> atomically (rename), so that a
 # reader never sees it empty or half written and takes the lock for stale.
+# Line 1 is "<pid> <start as ps prints it>", the only line that older copies
+# of this script read; line 2 is "start <stable start>".
 write_owner() { # <lock> <pid>
-  printf '%s %s\n' "$2" "$(start_of "$2")" > "$1/owner.$$"
+  printf '%s %s\nstart %s\n' "$2" "$(start_of "$2")" "$(stable_start_of "$2")" > "$1/owner.$$"
   mv -f "$1/owner.$$" "$1/owner"
 }
 
@@ -107,10 +131,17 @@ lock_held() { # <n>
   lock_seen=0
   [ -d "$lock" ] || return 1
   lock_seen=1
-  opid=""; ostart=""
-  [ ! -f "$lock/owner" ] || read -r opid ostart < "$lock/owner" || true
+  opid=""; ostart=""; otag=""; ostable=""
+  if [ -f "$lock/owner" ]; then
+    { read -r opid ostart && read -r otag ostable; } < "$lock/owner" 2> /dev/null || true
+  fi
   if [ -z "$opid" ] || [ -z "$ostart" ]; then
     [ "$(age_of "$lock")" -lt 30 ]
+    return
+  fi
+  # An owner file of an older copy of this script has no stable start.
+  if [ "$otag" = start ] && [ -n "$ostable" ]; then
+    [ "$(stable_start_of "$opid")" = "$ostable" ]
     return
   fi
   [ "$(start_of "$opid")" = "$ostart" ]
@@ -183,12 +214,40 @@ local_packages() { # <dir>
 # binaries, examples, docs). Registry and git dependencies are keyed by
 # version and source, are identical across worktrees, and are kept. If the
 # packages cannot be determined, the whole slot is emptied.
+#
+# Cargo has two layouts of a profile directory (debug, release,
+# <triple>/debug, ...), and which one a slot holds depends on the toolchain
+# that built in it:
+#   up to 1.99:  .fingerprint/<pkg>-<hash>, build/<pkg>-<hash> (build
+#                scripts), deps/<crate>-<hash>, deps/lib<crate>-<hash>.*
+#   1.100 on:    build/<pkg>/<hash>/{fingerprint,out,run}, one directory
+#                per package holding all of its units
+# Both have incremental/<crate>-<hash> and the uplifted outputs at the top.
 own_entries() { # stdin: paths; prints those named <one of $names>-*
   while IFS= read -r f; do
     for n in $names; do
       case "${f##*/}" in "$n"-*) echo "$f" ;; esac
     done
   done
+}
+
+# The same for paths <profile>/build/<pkg>/<hash>/fingerprint: prints those
+# whose <pkg> is exactly one of $names.
+own_units() { # stdin: paths
+  while IFS= read -r f; do
+    u=${f%/*/fingerprint}
+    for n in $names; do
+      [ "${u##*/}" != "$n" ] || echo "$f"
+    done
+  done
+}
+
+# The profile directories of slot <dir>: those holding cargo's build lock
+# (.cargo-lock) or an old-layout .fingerprint directory.
+profile_dirs() { # <dir>
+  { find "$1" -mindepth 2 -maxdepth 3 -type f -name .cargo-lock
+    find "$1" -mindepth 2 -maxdepth 4 -type d -name .fingerprint
+  } | while IFS= read -r m; do dirname "$m"; done | sort -u
 }
 
 scrub_slot() { # <slot dir> <worktree>
@@ -201,17 +260,27 @@ scrub_slot() { # <slot dir> <worktree>
     return 0
   fi
   echo "target-slot: $(basename "$dir") was last used by another worktree; removing its workspace crates" >&2
-  # Profile directories (debug, release, <triple>/debug, ...) are those
-  # holding a .fingerprint directory.
-  find "$dir" -mindepth 2 -maxdepth 4 -type d -name .fingerprint | while IFS= read -r fp; do
-    p=$(dirname "$fp")
+  profile_dirs "$dir" | while IFS= read -r p; do
+    # A layout that is neither of the two (a later cargo) would make this
+    # scrub remove nothing: empty that profile directory instead.
+    if [ ! -d "$p/.fingerprint" ] \
+      && [ -z "$(find "$p/build" -mindepth 3 -maxdepth 3 -type d -name fingerprint 2> /dev/null | head -n 1)" ]; then
+      echo "target-slot: unknown layout of ${p#"$dir"/}; emptying it" >&2
+      find "$p" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      continue
+    fi
     for e in "$p"/* "$p"/.[!.]*; do
-      case "${e##*/}" in .fingerprint | build | deps | incremental | .cargo-lock | '*' | '.[!.]*') ;; *) rm -rf "$e" ;; esac
+      case "${e##*/}" in
+        .fingerprint | build | deps | incremental | .cargo-lock | .cargo-build-lock | .cargo-artifact-lock | '*' | '.[!.]*') ;;
+        *) rm -rf "$e" ;;
+      esac
     done
     for n in $names; do
       c=$(printf '%s' "$n" | tr - _)
+      # Old layout, then the new one (build/<pkg> exactly).
       rm -rf "$p/.fingerprint/$n"-* "$p/build/$n"-* \
-        "$p/deps/$c"-* "$p/deps/lib$c"-* "$p/incremental/$c"-*
+        "$p/deps/$c"-* "$p/deps/lib$c"-* "$p/incremental/$c"-* \
+        "${p:?}/build/$n"
     done
   done
   find "$dir" -mindepth 1 -maxdepth 2 -type d -name doc | while IFS= read -r d; do
@@ -221,7 +290,10 @@ scrub_slot() { # <slot dir> <worktree>
     done
   done
   # A fingerprint left behind would let a stale artifact through: fail.
-  left=$(find "$dir" -mindepth 3 -maxdepth 5 -path '*/.fingerprint/*' -prune -print | own_entries)
+  left=$(
+    find "$dir" -mindepth 3 -maxdepth 5 -path '*/.fingerprint/*' -prune -print | own_entries
+    find "$dir" -mindepth 5 -maxdepth 6 -type d -path '*/build/*/*/fingerprint' -prune -print | own_units
+  )
   [ -z "$left" ] || { echo "target-slot: could not remove: $left" >&2; return 1; }
 }
 

@@ -30,7 +30,7 @@
 # are reported as warnings and in the summaries. Not a required check. No secrets, no environment, read-only token: the release
 # is public. Nothing is built from this commit except tauri-driver.
 #
-#   gh workflow run "Release smoke" -f tag=v0.7.0   (default: the latest release)
+#   gh workflow run "Release smoke" -f tag=v0.8.0   (default: the latest release)
 name: Release smoke
 
 on:
@@ -55,7 +55,7 @@ env:
   # Pinned; installed with `cargo install --locked`.
   TAURI_DRIVER_VERSION: 2.1.0
   # The release a pull request's run tests.
-  PULL_REQUEST_TAG: v0.7.0
+  PULL_REQUEST_TAG: v0.8.0
   # Whether failed product checks fail the jobs (tools/release-smoke/common.sh).
   SMOKE_STRICT: ${{ github.event_name == 'workflow_dispatch' }}
 

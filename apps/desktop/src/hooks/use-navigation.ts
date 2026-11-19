@@ -7,13 +7,11 @@ import {
   browserStorage,
   canGoBack,
   canGoForward,
-  closeSettings,
   current,
   forward,
   initialNavigation,
   loadNavigation,
   locationOf,
-  openSettings,
   push,
   sanitize,
   saveNavigation,
@@ -29,10 +27,17 @@ export const SHORTCUTS = IS_MAC
 /**
  * The navigation of the main window: history, persistence across launches,
  * keyboard shortcuts and the back and forward mouse buttons. `exists` tells
- * which locations are valid; others are removed from the history, for
+ * which workspace pages are valid; others are removed from the history, for
  * example after a module was disabled.
+ *
+ * The settings are a window of their own: locations in them (`settings:…`,
+ * and pages that moved there such as `profiles`) go to `openSettings`
+ * instead of the history.
  */
-export function useNavigation(exists: ((location: Location) => boolean) | null) {
+export function useNavigation(
+  exists: ((location: Location) => boolean) | null,
+  openSettings: (page?: string) => void,
+) {
   const [stored, setStored] = useState<NavigationState>(
     () => loadNavigation(browserStorage()) ?? initialNavigation(),
   )
@@ -40,9 +45,11 @@ export function useNavigation(exists: ((location: Location) => boolean) | null) 
   // Locations that stopped existing are dropped when the state is used,
   // and before every change.
   const existsRef = useRef(exists)
+  const settingsRef = useRef(openSettings)
   useEffect(() => {
     existsRef.current = exists
-  }, [exists])
+    settingsRef.current = openSettings
+  }, [exists, openSettings])
   const valid = useMemo(() => (exists ? sanitize(stored, exists) : stored), [stored, exists])
 
   useEffect(() => {
@@ -56,28 +63,21 @@ export function useNavigation(exists: ((location: Location) => boolean) | null) 
         return change(exists ? sanitize(previous, exists) : previous)
       })
     }
+    const go = (location: Location) => {
+      if (location.mode === "settings") {
+        settingsRef.current(location.page)
+        return
+      }
+      setState((previous) => push(previous, location))
+    }
     return {
       // Old page names (e.g. `models`) lead to where the page moved.
       navigate: (page: string) => {
-        const location = locationOf(page)
-        setState((previous) =>
-          location.mode === "settings"
-            ? openSettings(previous, location.page)
-            : push(previous, location),
-        )
+        go(locationOf(page))
       },
-      go: (location: Location) => {
-        setState((previous) =>
-          location.mode === "settings"
-            ? openSettings(previous, location.page)
-            : push(previous, location),
-        )
-      },
+      go,
       openSettings: (page?: string) => {
-        setState((previous) => openSettings(previous, page))
-      },
-      closeSettings: () => {
-        setState(closeSettings)
+        settingsRef.current(page)
       },
       back: () => {
         setState(back)

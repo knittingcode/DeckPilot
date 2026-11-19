@@ -68,7 +68,53 @@ export function ConfigureDialog({
   /** Settings or credentials changed (the list reads the plugin again). */
   onChanged: () => void
 }) {
-  const id = item.summary.id
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+    >
+      <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Configure {item.summary.name}</DialogTitle>
+          <DialogDescription>
+            Settings and credentials of version {item.summary.version}, stored by the agent for this
+            plugin only.
+          </DialogDescription>
+        </DialogHeader>
+        <PluginConfiguration
+          id={item.summary.id}
+          name={item.summary.name}
+          client={client}
+          onClose={onClose}
+          onChanged={onChanged}
+        />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
+ * A plugin's settings, server origins and credentials: in the configure
+ * dialog and in the plugin's settings view of the toolbar (a view the app
+ * draws; the plugin provides only its declared fields).
+ */
+export function PluginConfiguration({
+  id,
+  name,
+  client,
+  onClose,
+  onChanged,
+}: {
+  id: string
+  name: string
+  client: PluginClient
+  /** "Cancel" of the settings form. */
+  onClose: () => void
+  /** Settings or credentials changed. */
+  onChanged: () => void
+}) {
   const [settings, setSettings] = useState<Loaded<{ status: "ready"; settings: PluginSettings }>>({
     status: "loading",
   })
@@ -103,105 +149,91 @@ export function ConfigureDialog({
   const hasCredentials = slots.status !== "ready" || slots.credentials.length > 0
 
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) onClose()
-      }}
-    >
-      <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle>Configure {item.summary.name}</DialogTitle>
-          <DialogDescription>
-            Settings and credentials of version {item.summary.version}, stored by the agent for this
-            plugin only.
-          </DialogDescription>
-        </DialogHeader>
-        {hasSettings && (
-          <section className="grid gap-3" aria-labelledby="configure-settings">
-            <h4
-              id="configure-settings"
-              className="text-xs font-medium text-muted-foreground uppercase"
-            >
-              Settings
-            </h4>
-            {settings.status === "loading" ? (
-              <p className="text-sm text-muted-foreground">Loading settings…</p>
-            ) : settings.status === "error" ? (
-              <ErrorText error={settings.error} />
-            ) : (
-              <SettingsForm
-                key={JSON.stringify(settings.settings.values)}
-                settings={settings.settings}
-                onCancel={onClose}
-                save={async (values) => {
-                  const next = await client.setSettings(id, values)
-                  setSettings({ status: "ready", settings: next })
-                  onChanged()
-                  return next
-                }}
-              />
-            )}
-          </section>
-        )}
-        {settings.status === "ready" && (settings.settings.origins ?? []).length > 0 && (
-          <UserOriginsSection
-            plugin={item.summary.name}
-            origins={settings.settings.origins ?? []}
-            grant={(setting, origin, privateNetwork) =>
-              client.grantUserOrigin(id, setting, origin, privateNetwork)
-            }
-            revoke={(setting) => client.revokeUserOrigin(id, setting)}
-            onSettings={(next) => {
-              setSettings({ status: "ready", settings: next })
-              onChanged()
-            }}
-          />
-        )}
-        {hasCredentials && (
-          <section className="grid gap-3" aria-labelledby="configure-credentials">
-            <h4
-              id="configure-credentials"
-              className="text-xs font-medium text-muted-foreground uppercase"
-            >
-              Credentials
-            </h4>
-            {slots.status === "loading" ? (
-              <p className="text-sm text-muted-foreground">Loading credentials…</p>
-            ) : slots.status === "error" ? (
-              <ErrorText error={slots.error} />
-            ) : (
-              <>
-                <p className="text-xs text-muted-foreground">
-                  A secret goes to the agent once and is never shown again, here or anywhere. The
-                  plugin never sees it: the agent adds it only to requests to the hosts listed.
-                </p>
-                <ul className="grid gap-2" aria-label={`Credentials of ${item.summary.name}`}>
-                  {slots.credentials.map((slot) => (
-                    <CredentialRow
-                      key={slot.key}
-                      plugin={item.summary.name}
-                      slot={slot}
-                      set={(secret) => client.setCredential(id, slot.key, secret)}
-                      remove={() => client.deleteCredential(id, slot.key)}
-                      onSlots={(next) => {
-                        setSlots({ status: "ready", credentials: next })
-                        onChanged()
-                      }}
-                    />
-                  ))}
-                </ul>
-              </>
-            )}
-          </section>
-        )}
-        {!hasSettings && !hasCredentials && (
-          <p className="text-sm text-muted-foreground">
-            This version declares no settings and no credentials.
-          </p>
-        )}
-      </DialogContent>
-    </Dialog>
+    <>
+      {hasSettings && (
+        <section className="grid gap-3" aria-labelledby="configure-settings">
+          <h4
+            id="configure-settings"
+            className="text-xs font-medium text-muted-foreground uppercase"
+          >
+            Settings
+          </h4>
+          {settings.status === "loading" ? (
+            <p className="text-sm text-muted-foreground">Loading settings…</p>
+          ) : settings.status === "error" ? (
+            <ErrorText error={settings.error} />
+          ) : (
+            <SettingsForm
+              key={JSON.stringify(settings.settings.values)}
+              settings={settings.settings}
+              onCancel={onClose}
+              save={async (values) => {
+                const next = await client.setSettings(id, values)
+                setSettings({ status: "ready", settings: next })
+                onChanged()
+                return next
+              }}
+            />
+          )}
+        </section>
+      )}
+      {settings.status === "ready" && (settings.settings.origins ?? []).length > 0 && (
+        <UserOriginsSection
+          plugin={name}
+          origins={settings.settings.origins ?? []}
+          grant={(setting, origin, privateNetwork) =>
+            client.grantUserOrigin(id, setting, origin, privateNetwork)
+          }
+          revoke={(setting) => client.revokeUserOrigin(id, setting)}
+          onSettings={(next) => {
+            setSettings({ status: "ready", settings: next })
+            onChanged()
+          }}
+        />
+      )}
+      {hasCredentials && (
+        <section className="grid gap-3" aria-labelledby="configure-credentials">
+          <h4
+            id="configure-credentials"
+            className="text-xs font-medium text-muted-foreground uppercase"
+          >
+            Credentials
+          </h4>
+          {slots.status === "loading" ? (
+            <p className="text-sm text-muted-foreground">Loading credentials…</p>
+          ) : slots.status === "error" ? (
+            <ErrorText error={slots.error} />
+          ) : (
+            <>
+              <p className="text-xs text-muted-foreground">
+                A secret goes to the agent once and is never shown again, here or anywhere. The
+                plugin never sees it: the agent adds it only to requests to the hosts listed.
+              </p>
+              <ul className="grid gap-2" aria-label={`Credentials of ${name}`}>
+                {slots.credentials.map((slot) => (
+                  <CredentialRow
+                    key={slot.key}
+                    plugin={name}
+                    slot={slot}
+                    set={(secret) => client.setCredential(id, slot.key, secret)}
+                    remove={() => client.deleteCredential(id, slot.key)}
+                    onSlots={(next) => {
+                      setSlots({ status: "ready", credentials: next })
+                      onChanged()
+                    }}
+                  />
+                ))}
+              </ul>
+            </>
+          )}
+        </section>
+      )}
+      {!hasSettings && !hasCredentials && (
+        <p className="text-sm text-muted-foreground">
+          This version declares no settings and no credentials.
+        </p>
+      )}
+    </>
   )
 }
 

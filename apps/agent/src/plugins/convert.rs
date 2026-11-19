@@ -10,7 +10,9 @@ use deckpilot_ipc::plugins as ipc;
 use deckpilot_plugin_abi::capability::AuthScheme;
 use deckpilot_plugin_abi::{ActionOutcome, HttpMethod, ParamValue, Params};
 use deckpilot_plugin_broker::{ApprovedPermission, ApprovedPermissions};
-use deckpilot_plugin_manifest::{Manifest, PermissionKind, Sha256Digest};
+use deckpilot_plugin_manifest::{
+    IconFormat, IconTheme, MAX_RASTER_ICON_BYTES, Manifest, PermissionKind, Sha256Digest, ViewKind,
+};
 use deckpilot_plugin_store::{
     AuditRecord, GrantKey, GrantScope, GrantStatus, InstallSource, PRIVATE_NETWORK_KEY,
     PermissionDiff, PluginRecord, PluginState, StoredGrant, Tier,
@@ -186,6 +188,7 @@ pub fn summary(record: &PluginRecord, stored: &[StoredGrant]) -> ipc::PluginSumm
         actions,
         action_count: None,
         health: None,
+        navigation: manifest.map(navigation).unwrap_or_default(),
     }
 }
 
@@ -325,20 +328,140 @@ pub fn icon_chunk_of(
     if !icon_ok(bytes, expected) {
         return None;
     }
+    // Checked above: the file's own hash.
+    chunk(bytes, "image/png", expected, offset)
+}
+
+/// The chunk of `bytes` (whose sha256 is `digest`) at `offset`; `None` for
+/// an offset that is not a chunk's start.
+fn chunk(
+    bytes: &[u8],
+    media_type: &str,
+    digest: &Sha256Digest,
+    offset: u64,
+) -> Option<ipc::PluginIconChunk> {
     let start = usize::try_from(offset).ok()?;
     if start % ipc::ICON_CHUNK_BYTES != 0 || start >= bytes.len() {
         return None;
     }
     let end = (start + ipc::ICON_CHUNK_BYTES).min(bytes.len());
     Some(ipc::PluginIconChunk {
-        media_type: "image/png".to_owned(),
+        media_type: media_type.to_owned(),
         size: bytes.len() as u64,
-        // Checked above: the file's own hash.
-        sha256: expected.to_string(),
+        sha256: digest.to_string(),
         offset,
         data: base64::engine::general_purpose::STANDARD.encode(&bytes[start..end]),
         next: (end < bytes.len()).then_some(end as u64),
     })
+}
+
+fn sha256(bytes: &[u8]) -> Sha256Digest {
+    use sha2::Digest as _;
+    Sha256Digest::from_bytes(sha2::Sha256::digest(bytes).into())
+}
+
+/// The toolbar entries of a manifest (`contributes.navigation`, plugin API
+/// 1.3) with their views, in manifest order.
+pub fn navigation(manifest: &Manifest) -> Vec<ipc::PluginNavigationEntry> {
+    manifest
+        .contributes
+        .navigation()
+        .iter()
+        .filter_map(|entry| {
+            let view = manifest.contributes.view_of(entry)?;
+            Some(ipc::PluginNavigationEntry {
+                id: entry.id.clone(),
+                label: entry.label.clone(),
+                view: ipc::PluginView {
+                    id: view.id.clone(),
+                    kind: match view.kind {
+                        ViewKind::Variables => "variables",
+                        ViewKind::Actions => "actions",
+                        ViewKind::Settings => "settings",
+                    }
+                    .to_owned(),
+                },
+            })
+        })
+        .collect()
+}
+
+/// What the app may show of a navigation entry's icon: the file the
+/// manifest names for the theme (else for the other theme), read with
+/// `read`, only when its sha256 is the one `files` (the integrity record)
+/// has for it, and then as [`deckpilot_plugin_manifest::display_icon`]
+/// gives it (a PNG or WebP within its limits as it is, an SVG sanitized).
+/// Anything else gives none, and the app shows its fallback icon.
+pub fn navigation_icon_of(
+    manifest: &Manifest,
+    files: &BTreeMap<String, Sha256Digest>,
+    navigation: &ipc::NavigationIconRef,
+    read: impl FnOnce(&str) -> Option<Vec<u8>>,
+) -> Option<(IconFormat, Vec<u8>)> {
+    let entry = manifest
+        .contributes
+        .navigation()
+        .iter()
+        .find(|entry| entry.id == navigation.entry)?;
+    let theme = match navigation.theme {
+        ipc::NavigationIconTheme::Light => IconTheme::Light,
+        ipc::NavigationIconTheme::Dark => IconTheme::Dark,
+    };
+    let relative = entry.icon.file(theme)?;
+    let expected = files.get(relative)?;
+    let bytes = read(relative)?;
+    if bytes.len() > MAX_RASTER_ICON_BYTES || sha256(&bytes) != *expected {
+        return None;
+    }
+    let (format, shown) = deckpilot_plugin_manifest::display_icon(relative, &bytes).ok()?;
+    Some((format, shown.into_owned()))
+}
+
+/// [`navigation_icon_of`] for the active version installed in `dir`: a
+/// regular file of at most [`MAX_RASTER_ICON_BYTES`] (no link).
+fn navigation_icon(
+    dir: &Path,
+    record: &PluginRecord,
+    navigation: &ipc::NavigationIconRef,
+) -> Option<(IconFormat, Vec<u8>)> {
+    let active = record.active()?;
+    navigation_icon_of(
+        &active.manifest,
+        &active.integrity.files,
+        navigation,
+        |relative| {
+            let path = dir.join(relative);
+            let meta = std::fs::symlink_metadata(&path).ok()?;
+            if !meta.is_file() || meta.len() > MAX_RASTER_ICON_BYTES as u64 {
+                return None;
+            }
+            std::fs::read(&path).ok()
+        },
+    )
+}
+
+/// A navigation icon as a `data:` URL, as the app puts it in an `<img>`
+/// (`plugin_answers::navigation_icon` joins the chunks into the same).
+#[cfg(test)]
+fn navigation_icon_data(format: IconFormat, bytes: &[u8]) -> String {
+    format!(
+        "data:{};base64,{}",
+        format.media_type(),
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    )
+}
+
+/// The chunk at `offset` of a navigation entry's icon (`getPluginIcon`
+/// with `navigation`), checked and sanitized on every request; its size
+/// and sha256 are those of the bytes sent.
+pub fn navigation_icon_chunk(
+    dir: &Path,
+    record: &PluginRecord,
+    navigation: &ipc::NavigationIconRef,
+    offset: u64,
+) -> Option<ipc::PluginIconChunk> {
+    let (format, bytes) = navigation_icon(dir, record, navigation)?;
+    chunk(&bytes, format.media_type(), &sha256(&bytes), offset)
 }
 
 /// Grant keys from a request's consent.
@@ -590,6 +713,163 @@ mod tests {
         assert_eq!(icon_chunk_of(&png, &expected, 1), None);
         assert_eq!(icon_chunk_of(&png, &expected, png.len() as u64), None);
         assert_eq!(icon_chunk_of(&png, &digest(b"other"), 0), None);
+    }
+
+    /// A plugin API 1.3 manifest with two navigation entries: one with a
+    /// light SVG and a dark PNG, one with a single WebP.
+    fn navigation_manifest() -> Manifest {
+        let mut value: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../plugins/examples/hello-weather/manifest.json"
+        ))
+        .unwrap();
+        value["engines"]["pluginApi"] = serde_json::json!("^1.3");
+        value["contributes"]["navigation"] = serde_json::json!([
+            {"id": "dashboard", "label": "Weather", "view": "live",
+             "icon": {"light": "assets/nav.svg", "dark": "assets/nav-dark.png"}},
+            {"id": "setup", "label": "Setup", "view": "config", "icon": "assets/setup.webp"}
+        ]);
+        value["contributes"]["views"] = serde_json::json!([
+            {"id": "live", "kind": "variables"}, {"id": "config", "kind": "settings"}
+        ]);
+        let manifest: Manifest = serde_json::from_value(value).unwrap();
+        manifest.validate().unwrap();
+        manifest
+    }
+
+    const NAV_SVG: &[u8] =
+        br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><!-- c --><path d="M0 0h24v24H0z"/></svg>"#;
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = PNG.to_vec();
+        bytes.extend(b"\0\0\0\x0dIHDR");
+        bytes.extend(width.to_be_bytes());
+        bytes.extend(height.to_be_bytes());
+        bytes.extend([8, 6, 0, 0, 0, 0, 0, 0, 0]);
+        bytes
+    }
+
+    fn nav(entry: &str, theme: ipc::NavigationIconTheme) -> ipc::NavigationIconRef {
+        ipc::NavigationIconRef {
+            entry: entry.into(),
+            theme,
+        }
+    }
+
+    #[test]
+    fn navigation_entries_list_their_views() {
+        let manifest = navigation_manifest();
+        let entries = navigation(&manifest);
+        assert_eq!(
+            serde_json::to_value(&entries).unwrap(),
+            serde_json::json!([
+                {"id": "dashboard", "label": "Weather", "view": {"id": "live", "kind": "variables"}},
+                {"id": "setup", "label": "Setup", "view": {"id": "config", "kind": "settings"}}
+            ])
+        );
+        let plain: Manifest = serde_json::from_str(include_str!(
+            "../../../../plugins/examples/hello-weather/manifest.json"
+        ))
+        .unwrap();
+        assert_eq!(navigation(&plain), Vec::new());
+    }
+
+    /// The icon the app gets as a `data:` URL, and every case that gives
+    /// none (so the app shows its fallback icon).
+    #[test]
+    fn navigation_icons_are_checked_and_sanitized_or_absent() {
+        use ipc::NavigationIconTheme::{Dark, Light};
+        let manifest = navigation_manifest();
+        let dark = png(32, 32);
+        let mut webp = b"RIFF\x12\0\0\0WEBPVP8L\x05\0\0\0\x2f".to_vec();
+        webp.extend((15u32 | (15 << 14)).to_le_bytes());
+        webp.push(0);
+        let disk: BTreeMap<String, Vec<u8>> = [
+            ("assets/nav.svg", NAV_SVG.to_vec()),
+            ("assets/nav-dark.png", dark.clone()),
+            ("assets/setup.webp", webp.clone()),
+        ]
+        .into_iter()
+        .map(|(path, bytes)| (path.to_owned(), bytes))
+        .collect();
+        let record: BTreeMap<String, Sha256Digest> =
+            disk.iter().map(|(p, b)| (p.clone(), sha256(b))).collect();
+        let show = |navigation: &ipc::NavigationIconRef,
+                    files: &BTreeMap<String, Sha256Digest>,
+                    disk: &BTreeMap<String, Vec<u8>>| {
+            navigation_icon_of(&manifest, files, navigation, |p| disk.get(p).cloned())
+                .map(|(format, bytes)| navigation_icon_data(format, &bytes))
+        };
+
+        // The light SVG, sanitized (the comment is gone).
+        let light = show(&nav("dashboard", Light), &record, &disk).unwrap();
+        let clean = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h24v24H0z"/></svg>"#;
+        assert_eq!(
+            light,
+            format!(
+                "data:image/svg+xml;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(clean)
+            )
+        );
+        assert!(
+            show(&nav("dashboard", Dark), &record, &disk)
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
+        // One file for both themes.
+        for theme in [Light, Dark] {
+            assert!(
+                show(&nav("setup", theme), &record, &disk)
+                    .unwrap()
+                    .starts_with("data:image/webp;base64,")
+            );
+        }
+
+        // No such entry.
+        assert_eq!(show(&nav("nowhere", Light), &record, &disk), None);
+        // Not in the integrity record.
+        let mut unrecorded = record.clone();
+        unrecorded.remove("assets/nav.svg");
+        assert_eq!(show(&nav("dashboard", Light), &unrecorded, &disk), None);
+        // Missing on disk.
+        let mut missing = disk.clone();
+        missing.remove("assets/nav-dark.png");
+        assert_eq!(show(&nav("dashboard", Dark), &record, &missing), None);
+        // Modified after install.
+        let mut modified = disk.clone();
+        modified.insert("assets/nav-dark.png".into(), png(33, 32));
+        assert_eq!(show(&nav("dashboard", Dark), &record, &modified), None);
+        // Unsafe or oversized, even when recorded (a store written by an
+        // older agent, or a check that got stricter).
+        for (path, bytes) in [
+            (
+                "assets/nav.svg",
+                br#"<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>"#.to_vec(),
+            ),
+            (
+                "assets/nav.svg",
+                br#"<svg xmlns="http://www.w3.org/2000/svg"><use href="https://e.example/x#a"/></svg>"#
+                    .to_vec(),
+            ),
+            ("assets/nav-dark.png", png(2048, 32)),
+            ("assets/nav-dark.png", NAV_SVG.to_vec()),
+        ] {
+            let mut disk = disk.clone();
+            disk.insert(path.into(), bytes);
+            let record: BTreeMap<String, Sha256Digest> =
+                disk.iter().map(|(p, b)| (p.clone(), sha256(b))).collect();
+            let theme = if path == "assets/nav.svg" { Light } else { Dark };
+            assert_eq!(show(&nav("dashboard", theme), &record, &disk), None, "{path}");
+        }
+    }
+
+    #[test]
+    fn navigation_icon_chunks_carry_the_media_type_and_the_sent_bytes() {
+        let svg = deckpilot_plugin_manifest::sanitize_svg(NAV_SVG).unwrap();
+        let first = chunk(svg.as_bytes(), "image/svg+xml", &sha256(svg.as_bytes()), 0).unwrap();
+        assert_eq!(first.media_type, "image/svg+xml");
+        assert_eq!(first.size, svg.len() as u64);
+        assert_eq!(first.sha256, sha256(svg.as_bytes()).to_string());
+        assert_eq!(first.next, None);
     }
 
     #[test]

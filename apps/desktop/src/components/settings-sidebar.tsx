@@ -18,8 +18,8 @@ import { useAppContext } from "@/lib/app-context"
 import { groupedSettings, searchSettings, settingsPages } from "@/settings/registry"
 
 /**
- * Navigation of the settings. Replaces the workspace sidebar while settings
- * are open; "Back" returns to the workspace page that was open before.
+ * Navigation of the settings window. "Back to DeckPilot" brings the main
+ * window to the front.
  */
 export function SettingsSidebar({ current }: { current: string }) {
   const { modules, updates, openSettings, closeSettings } = useAppContext()

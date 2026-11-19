@@ -1,6 +1,6 @@
 //! Why a package was refused.
 
-use deckpilot_plugin_manifest::{ManifestError, Sha256Digest, ValidationErrors};
+use deckpilot_plugin_manifest::{IconError, ManifestError, Sha256Digest, ValidationErrors};
 
 /// Why a package path was refused.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -85,6 +85,10 @@ pub enum PackageError {
     PermissionsMismatch,
     #[error("the package contents break the package rules: {0}")]
     Contents(ValidationErrors),
+    /// A `contributes.navigation` icon the app may not show (plugin API
+    /// 1.3; `deckpilot_plugin_manifest::check_icon`).
+    #[error("the navigation icon `{path}` {error}")]
+    NavigationIcon { path: String, error: IconError },
     #[error("{0} already exists; refusing to overwrite it")]
     TargetExists(String),
     #[error("{path}: {message}")]

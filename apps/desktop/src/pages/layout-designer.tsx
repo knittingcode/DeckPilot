@@ -1,13 +1,12 @@
 import { Copy, Info, Plus, Star, Trash2 } from "lucide-react"
-import { useRef, useState } from "react"
+import { type ReactNode, useEffect, useState } from "react"
 import { toast } from "sonner"
 
 import { ConfirmDialog } from "@/components/confirm-dialog"
-import { EmptyState, ErrorNotice, Loading, Page } from "@/components/page"
+import { EmptyState, ErrorNotice, Loading } from "@/components/page"
 import { RequireProfile } from "@/components/require-profile"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -26,6 +25,7 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { useAsync } from "@/hooks/use-async"
+import { useTitlebar } from "@/hooks/use-titlebar"
 import { LayoutEditor } from "@/layout-editor/editor"
 import { api } from "@/lib/api"
 import { toastFailure } from "@/lib/failure"
@@ -33,150 +33,143 @@ import { useAppContext } from "@/lib/app-context"
 import { useFocusTarget } from "@/lib/focus"
 import type { DeviceLayout, DeviceModel, Platform } from "@/lib/types"
 import { LEVELS, PLATFORM_LABELS, currentPlatform, verificationOn } from "@/lib/verification"
+import { useEditorSelection } from "@/shell/editor-selection-context"
 
 export function LayoutDesignerPage() {
+  useTitlebar({
+    title: "Device Editor",
+    subtitle: "Assign actions to the controls of the device chosen in the toolbar",
+  })
   return (
-    <Page
-      title="Layout Designer"
-      description="Assign configured actions to device controls, with or without hardware"
-      profileScoped
-    >
-      <RequireProfile>{(profileId) => <Designer initialProfileId={profileId} />}</RequireProfile>
-    </Page>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <RequireProfile>{(profileId) => <Designer profileId={profileId} />}</RequireProfile>
+    </div>
   )
 }
 
-function Designer({ initialProfileId }: { initialProfileId: string }) {
-  const { profiles, revision } = useAppContext()
-  const [profileId, setProfileId] = useState(initialProfileId)
+/**
+ * The device editor. Profile and device come from the toolbar (the shell's
+ * editor selection); the layout of the model is chosen here.
+ */
+function Designer({ profileId }: { profileId: string }) {
+  const { revision, agent } = useAppContext()
+  const selection = useEditorSelection()
   const view = useAsync(() => api.getProfile(profileId), `${profileId}:${revision}`)
-  const models = useAsync(() => api.listDeviceModels(), "models").state
+  const models = selection.models
   // Opened from another page (e.g. the references of an action): that layout.
   const focus = useFocusTarget("layout")
-  const [modelId, setModelId] = useState<string | null>(null)
-  const [layoutId, setLayoutId] = useState<string | null>(focus?.layout ?? null)
-  const dirty = useRef(false)
+  const { showLayout, adoptModel, setDirty } = selection
+  useEffect(() => {
+    if (focus) showLayout(focus.layout)
+  }, [focus, showLayout])
+  const ready = view.state.status === "ready" && models.status === "ready"
+  const profile = view.state.status === "ready" ? view.state.data.profile : null
+  const catalog = models.status === "ready" ? models.data : []
+  const connected = (agent?.status?.devices ?? [])
+    .filter((d) => d.state === "connected")
+    .map((d) => d.descriptor?.modelId ?? d.id.model)
+  const focused = profile?.layouts.find((l) => l.id === selection.layoutId)
+  const model = profile
+    ? (catalog.find((m) => m.id === focused?.model) ??
+      catalog.find((m) => m.id === selection.modelId) ??
+      // Nothing chosen yet: a connected device first.
+      catalog.find((m) => connected.includes(m.id)) ??
+      catalog.find((m) => profile.layouts.some((l) => l.model === m.id)) ??
+      catalog[0])
+    : undefined
+  // The toolbar shows the model the editor settled on.
+  useEffect(() => {
+    if (model && model.id !== selection.modelId) adoptModel(model.id)
+  }, [model, selection.modelId, adoptModel])
+  // Nothing unsaved once the editor is gone.
+  useEffect(
+    () => () => {
+      setDirty(false)
+    },
+    [setDirty],
+  )
 
-  const guard = (change: () => void) => {
-    if (dirty.current) {
-      toast.warning("Save or revert the current layout first")
-      return
-    }
-    change()
+  if (!ready) {
+    if (view.state.status === "error")
+      return (
+        <Padded>
+          <ErrorNotice error={view.state.error} />
+        </Padded>
+      )
+    if (models.status === "error")
+      return (
+        <Padded>
+          <ErrorNotice error={models.error} />
+        </Padded>
+      )
+    return (
+      <Padded>
+        <Loading />
+      </Padded>
+    )
   }
-
-  if (view.state.status === "loading" || models.status === "loading") return <Loading />
-  if (view.state.status === "error") return <ErrorNotice error={view.state.error} />
-  if (models.status === "error") return <ErrorNotice error={models.error} />
-  const profile = view.state.data.profile
-  const focused = profile.layouts.find((l) => l.id === layoutId)
-  const model =
-    models.data.find((m) => m.id === modelId) ??
-    models.data.find((m) => m.id === focused?.model) ??
-    models.data.find((m) => profile.layouts.some((l) => l.model === m.id)) ??
-    models.data[0]
-  if (!model) return <EmptyState title="No device models available" />
+  if (!model || !profile || view.state.status !== "ready") {
+    return (
+      <Padded>
+        <EmptyState title="No device models available" />
+      </Padded>
+    )
+  }
   const layouts = profile.layouts.filter((l) => l.model === model.id)
   const activeForModel = profile.activeLayouts?.[model.id] ?? layouts[0]?.id ?? null
   const layout =
-    layouts.find((l) => l.id === layoutId) ??
+    layouts.find((l) => l.id === selection.layoutId) ??
     layouts.find((l) => l.id === activeForModel) ??
     layouts[0]
 
-  return (
-    <div className="grid gap-4">
-      <Card>
-        <CardContent className="flex flex-wrap items-end gap-4">
-          <div className="grid gap-2">
-            <Label htmlFor="designer-profile">Profile</Label>
-            <Select
-              value={profileId}
-              onValueChange={(id) => {
-                guard(() => {
-                  setProfileId(id)
-                  setLayoutId(null)
-                })
-              }}
-            >
-              <SelectTrigger id="designer-profile" className="w-48">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {profiles.profiles.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.name}
-                    {p.id === profiles.activeProfileId ? " (on device)" : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="designer-model">Device model</Label>
-            <Select
-              value={model.id}
-              onValueChange={(id) => {
-                guard(() => {
-                  setModelId(id)
-                  setLayoutId(null)
-                })
-              }}
-            >
-              <SelectTrigger id="designer-model" className="w-52">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {models.data.map((m) => (
-                  <SelectItem key={m.id} value={m.id}>
-                    {m.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <LayoutToolbar
-            profileId={profileId}
-            model={model}
-            layouts={layouts}
-            current={layout ?? null}
-            activeForModel={activeForModel}
-            onSelect={(id) => {
-              guard(() => {
-                setLayoutId(id)
-              })
-            }}
-            onChanged={(id) => {
-              if (id) setLayoutId(id)
-              view.reload()
-            }}
-          />
-        </CardContent>
-      </Card>
-
-      <VerificationNotice model={model} />
-
-      {layout ? (
-        <LayoutEditor
-          key={`${profileId}:${layout.id}`}
+  const header = (
+    <>
+      <div className="flex flex-wrap items-end gap-4">
+        <LayoutToolbar
           profileId={profileId}
-          view={view.state.data}
           model={model}
-          saved={layout}
-          onDirtyChange={(value) => {
-            dirty.current = value
+          layouts={layouts}
+          current={layout ?? null}
+          activeForModel={activeForModel}
+          onSelect={(id) => {
+            selection.selectLayout(id)
           }}
-          onSaved={() => {
-            dirty.current = false
+          onChanged={(id) => {
+            if (id) showLayout(id, model.id)
             view.reload()
           }}
         />
-      ) : (
-        <EmptyState title={`No layout for ${model.name} in this profile`}>
-          Create one with “New layout”. Layouts can be designed without the device.
-        </EmptyState>
-      )}
-    </div>
+      </div>
+      <VerificationNotice model={model} />
+    </>
   )
+
+  return layout ? (
+    <LayoutEditor
+      key={`${profileId}:${layout.id}`}
+      profileId={profileId}
+      view={view.state.data}
+      model={model}
+      saved={layout}
+      header={header}
+      onDirtyChange={setDirty}
+      onSaved={() => {
+        setDirty(false)
+        view.reload()
+      }}
+    />
+  ) : (
+    <Padded>
+      {header}
+      <EmptyState title={`No layout for ${model.name} in this profile`}>
+        Create one with “New layout”. Layouts can be designed without the device.
+      </EmptyState>
+    </Padded>
+  )
+}
+
+function Padded({ children }: { children: ReactNode }) {
+  return <div className="grid content-start gap-4 p-4">{children}</div>
 }
 
 function LayoutToolbar({

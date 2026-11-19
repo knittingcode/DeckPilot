@@ -33,4 +33,8 @@ export function resetBackend() {
 }
 
 /** The module `@tauri-apps/api/event` is replaced with. */
-export const eventModule = { listen, emit: vi.fn(() => Promise.resolve()) }
+export const eventModule = {
+  listen,
+  emit: vi.fn(() => Promise.resolve()),
+  emitTo: vi.fn(() => Promise.resolve()),
+}

@@ -1,7 +1,9 @@
 import { useDndMonitor, useDroppable } from "@dnd-kit/core"
 import { ListOrdered, X } from "lucide-react"
 import { useState, type ReactNode } from "react"
+import { toast } from "sonner"
 
+import { IncompatibleNote } from "@/components/incompatible-note"
 import { ParameterField } from "@/components/parameter-field"
 import {
   AlertDialog,
@@ -46,6 +48,7 @@ import type {
   GestureTimings,
   ParameterValue,
   Profile,
+  Trigger,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { setOverride } from "@/lib/workflow-model"
@@ -65,6 +68,7 @@ import {
   setKeyTiming,
   slotGesture,
   timingError,
+  triggerFor,
   updateBinding,
   type ClickTiming,
   type TimingField,
@@ -126,6 +130,24 @@ export interface GestureEditorProps {
    * without it, no "Edit steps" is offered.
    */
   onEditWorkflow?: (workflow: string) => void
+  /**
+   * Why `target` cannot run from this control for `trigger`, in words;
+   * `null` when it can. Such targets are offered disabled with the reason
+   * (docs/device-controls.md).
+   */
+  incompatible?: (target: BindingTarget, trigger: Trigger) => string | null
+  /** Bindings of the control kept although they cannot run, with the reason. */
+  notRun?: { trigger: Trigger; reason: string }[]
+}
+
+/** The reason a binding of `trigger` is kept but not run, if it is. */
+function notRunReason(
+  notRun: GestureEditorProps["notRun"],
+  trigger: Trigger,
+  binding: ControlBinding | undefined,
+): string | undefined {
+  if (!binding) return undefined
+  return notRun?.find((n) => n.trigger.type === trigger.type)?.reason
 }
 
 /**
@@ -211,6 +233,16 @@ export function GestureEditor(props: GestureEditorProps) {
   const base = `gesture-${controlKey(control)}`
 
   const assign = (gesture: Gesture, target: BindingTarget | null) => {
+    // A drop of an action that cannot run from this gesture is refused
+    // (the selects offer such actions disabled).
+    const refused = target ? props.incompatible?.(target, triggerFor(mode, gesture)) : null
+    if (refused) {
+      toast.error(
+        `Not put on the ${GESTURE_LABELS[gesture].toLowerCase()} of ${controlLabel(control)}`,
+        { description: refused },
+      )
+      return
+    }
     if (target && needsConversion(draft, pageId, control, gesture, target)) {
       setPending({ gesture, target })
       return
@@ -276,6 +308,8 @@ export function GestureEditor(props: GestureEditorProps) {
             id={`${base}-release`}
             groups={props.groups}
             encode={props.encode}
+            trigger={{ type: "release" }}
+            incompatible={props.incompatible}
             value={release?.target}
             onValueChange={(value) => {
               const target = props.decode(value)
@@ -295,6 +329,7 @@ export function GestureEditor(props: GestureEditorProps) {
           <UnavailableNote
             reason={release ? unavailableIn(props.groups, props.encode(release.target)) : undefined}
           />
+          <IncompatibleNote reason={notRunReason(props.notRun, { type: "release" }, release)} />
           <p className="text-xs text-muted-foreground">
             Runs when the key is let go, without delay. Keys with a double click or long press
             cannot use it.
@@ -357,12 +392,17 @@ function TargetSelect({
   id,
   groups,
   encode,
+  trigger,
+  incompatible,
   value,
   onValueChange,
 }: {
   id: string
   groups: GestureTargetGroup[]
   encode: (target: BindingTarget | undefined) => string
+  /** What the chosen target is bound to, for `incompatible`. */
+  trigger: Trigger
+  incompatible: GestureEditorProps["incompatible"]
   value: BindingTarget | undefined
   onValueChange: (value: string) => void
 }) {
@@ -376,16 +416,22 @@ function TargetSelect({
         {groups.map((group) => (
           <SelectGroup key={group.label}>
             <SelectLabel>{group.label}</SelectLabel>
-            {group.options.map((option) => (
-              <SelectItem
-                key={option.value}
-                value={option.value}
-                disabled={option.unavailable !== undefined}
-              >
-                {option.label}
-                {option.unavailable !== undefined && " (unavailable)"}
-              </SelectItem>
-            ))}
+            {group.options.map((option) => {
+              const why = incompatible?.(option.target, trigger) ?? undefined
+              return (
+                <SelectItem
+                  key={option.value}
+                  value={option.value}
+                  disabled={option.unavailable !== undefined || why !== undefined}
+                  title={why}
+                >
+                  {option.label}
+                  {option.unavailable !== undefined
+                    ? " (unavailable)"
+                    : why !== undefined && " (not on this control)"}
+                </SelectItem>
+              )
+            })}
           </SelectGroup>
         ))}
       </SelectContent>
@@ -396,6 +442,7 @@ function TargetSelect({
 function GestureRow({
   draft,
   pageId,
+  control,
   profile,
   groups,
   gestureGroups,
@@ -413,6 +460,8 @@ function GestureRow({
   slot,
   resolveDrop,
   onEditWorkflow,
+  incompatible,
+  notRun,
 }: GestureEditorProps & {
   /** The id of the row's drop target. */
   slot: string
@@ -447,6 +496,7 @@ function GestureRow({
   }
 
   const droppable = resolveDrop !== undefined
+  const trigger = binding?.trigger ?? triggerFor(keyMode(draft, pageId, control), gesture)
   return (
     <Slot id={slot} filled={binding !== undefined} droppable={droppable}>
       <div className="grid gap-2" role="group" aria-labelledby={`${id}-label`}>
@@ -478,6 +528,8 @@ function GestureRow({
           id={id}
           groups={[...groups, ...(gestureGroups ?? [])]}
           encode={encode}
+          trigger={trigger}
+          incompatible={incompatible}
           value={target}
           onValueChange={(value) => {
             onAssign(decode(value))
@@ -490,6 +542,7 @@ function GestureRow({
               : undefined
           }
         />
+        <IncompatibleNote reason={notRunReason(notRun, trigger, binding)} />
         {binding && (
           <Input
             aria-label={`Label for ${label}`}

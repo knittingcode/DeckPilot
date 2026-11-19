@@ -2,12 +2,14 @@ import {
   DndContext,
   KeyboardSensor,
   PointerSensor,
+  defaultAnnouncements,
   useSensor,
   useSensors,
+  type Announcements,
   type DragEndEvent,
 } from "@dnd-kit/core"
 import { Redo2, RotateCcw, Save, Undo2 } from "lucide-react"
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react"
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 import { toast } from "sonner"
 
 import { DeviceCanvas } from "@/components/device-canvas"
@@ -35,6 +37,12 @@ import { IS_MAC } from "@/hooks/use-navigation"
 import { api, errorMessage } from "@/lib/api"
 import { appliedByAgent, toastSaved } from "@/lib/agent-reload"
 import { useActionModules, useAppContext } from "@/lib/app-context"
+import {
+  controlCapabilities,
+  describeIncompatibility,
+  whyNotForTrigger,
+  whyNotOnControl,
+} from "@/lib/compatibility"
 import { pluginActionUnavailable, withPluginTypes } from "@/lib/plugin-actions"
 import {
   bindingsFor,
@@ -46,19 +54,21 @@ import {
   targetLabel,
   triggerLabel,
 } from "@/lib/layout-model"
-import { DEFAULT_TIMINGS } from "@/components/gesture-editor/model"
+import { DEFAULT_TIMINGS, readableTriggers } from "@/components/gesture-editor/model"
 import { isStepWorkflow, newMultiAction } from "@/lib/multi-action"
 import { StepEditor } from "@/pages/workflow-steps"
 import type {
   ActionInstance,
   ActionType,
   BindingTarget,
+  ControlFace,
   ControlId,
   DeviceLayout,
   DeviceModel,
   GestureTimings,
   KeyFace,
   ProfileView,
+  Trigger,
   Workflow,
 } from "@/lib/types"
 
@@ -77,10 +87,11 @@ import {
   type DragSource,
 } from "./editing"
 import { Inspector } from "./inspector"
+import { LibraryDock } from "./library-dock"
 import { LibraryPanel } from "./library-panel"
 import { PageBar } from "./page-bar"
 import { PageTreePanel } from "./page-tree-panel"
-import { targetGroups } from "./targets"
+import { markIncompatible, targetGroups } from "./targets"
 import { useEditorShortcuts } from "@/hooks/use-editor-shortcuts"
 import { shortcutLabel } from "@/lib/shortcuts"
 import { useIcons } from "./use-icons"
@@ -101,6 +112,8 @@ function usePreviewFaces(
   const [preview, setPreview] = useState({
     faces: new Map<string, KeyFace>(),
     images: new Map<string, string>(),
+    /** Bindings kept although they cannot run from their control. */
+    incompatible: new Map<string, NonNullable<ControlFace["incompatible"]>>(),
   })
   useEffect(() => {
     let cancelled = false
@@ -112,6 +125,11 @@ function usePreviewFaces(
             faces: new Map(result.map((r) => [controlKey(r.control), r.face])),
             images: new Map(
               result.flatMap((r) => (r.image ? [[controlKey(r.control), r.image] as const] : [])),
+            ),
+            incompatible: new Map(
+              result.flatMap((r) =>
+                r.incompatible?.length ? [[controlKey(r.control), r.incompatible] as const] : [],
+              ),
             ),
           })
         },
@@ -163,6 +181,7 @@ export function LayoutEditor({
   view,
   model,
   saved,
+  header,
   onDirtyChange,
   onSaved,
 }: {
@@ -170,16 +189,12 @@ export function LayoutEditor({
   view: ProfileView
   model: DeviceModel
   saved: DeviceLayout
+  /** Shown above the device, e.g. the layout chooser. */
+  header?: ReactNode
   onDirtyChange: (dirty: boolean) => void
   onSaved: () => void
 }) {
   const { profiles, refresh } = useAppContext()
-  const editing = useLayoutEditing(model, saved)
-  const { draft, pageId, selected, selection, commands } = editing
-  const [previewProject, setPreviewProject] = useState<string | null>(view.activeProjectId)
-  const [errors, setErrors] = useState<string[]>([])
-  const dirty = JSON.stringify(draft) !== JSON.stringify(editing.baseline)
-  const { projects } = view.profile
   // Actions created by dropping a type from the catalog, until the
   // reloaded profile has them: they are named, drawn and reused at once.
   const [created, setCreated] = useState<ActionInstance[]>([])
@@ -190,6 +205,39 @@ export function LayoutEditor({
     ],
     [view.profile.actions, created],
   )
+  const gestureContext = useGestureContext()
+  const modules = useActionModules()
+  const catalog = useMemo(() => catalogGroups(modules), [modules])
+  // Every action type the editor knows, for compatibility
+  // (docs/device-controls.md): the backend's list with the plugins', and
+  // the catalog's.
+  const typeById = useMemo(() => {
+    const map = new Map<string, ActionType>()
+    for (const group of catalog)
+      for (const entry of group.entries) map.set(entry.type.id, entry.type)
+    for (const type of gestureContext.types) map.set(type.id, type)
+    return map
+  }, [catalog, gestureContext.types])
+  const typeOfTarget = (target: BindingTarget): ActionType | undefined => {
+    if (target.type !== "action") return undefined
+    const action = actions.find((a) => a.id === target.action)
+    return action ? typeById.get(action.actionType) : undefined
+  }
+  /** Why `target` cannot run from `control` for `trigger`; `null` when it can. */
+  const incompatibleFor = (control: ControlId, target: BindingTarget, trigger: Trigger) => {
+    const type = typeOfTarget(target)
+    return type ? whyNotForTrigger(type, model, control, trigger) : null
+  }
+  const editing = useLayoutEditing(
+    model,
+    saved,
+    (control, target, trigger) => incompatibleFor(control, target, trigger) === null,
+  )
+  const { draft, pageId, selected, selection, commands } = editing
+  const [previewProject, setPreviewProject] = useState<string | null>(view.activeProjectId)
+  const [errors, setErrors] = useState<string[]>([])
+  const dirty = JSON.stringify(draft) !== JSON.stringify(editing.baseline)
+  const { projects } = view.profile
   // Multi Actions created here, likewise until the reloaded profile has them.
   const [createdWorkflows, setCreatedWorkflows] = useState<Workflow[]>([])
   const workflows = useMemo(
@@ -204,8 +252,7 @@ export function LayoutEditor({
   const openSteps = workflows.find((w) => w.id === stepsOf)
   const profile = useMemo(() => ({ actions, workflows, projects }), [actions, workflows, projects])
   const library = useIcons(profileId)
-  const gestureContext = useGestureContext()
-  const { faces, images } = usePreviewFaces(
+  const { faces, images, incompatible } = usePreviewFaces(
     profileId,
     draft,
     pageId,
@@ -216,14 +263,97 @@ export function LayoutEditor({
     ...library,
     usage: (icon) => effectiveUsage(icon.usages, icon.id, editing.baseline, draft),
   }
-  const modules = useActionModules()
   const groups = useMemo(
     () => targetGroups(profile, draft, pageId, (type) => pluginActionUnavailable(modules, type)),
     [profile, draft, pageId, modules],
   )
   const bound = boundControls(draft, pageId)
   const controls = orderedControls(model)
-  const catalog = useMemo(() => catalogGroups(modules), [modules])
+
+  /** The targets, those that cannot go on `control` marked with the reason. */
+  const groupsFor = (control: ControlId) =>
+    markIncompatible(groups, (typeId) => {
+      const type = typeById.get(typeId)
+      return type ? whyNotOnControl(type, model, control) : null
+    })
+  // The library is for the selected control, when exactly one is.
+  const libraryControl = selected.length === 1 ? (selected[0] ?? null) : null
+
+  /**
+   * Why what is dragged cannot be dropped on `control`, in words; `null`
+   * when it can. An action that cannot run from the control (any of its
+   * triggers, or the ones a moved control's bindings use) is refused.
+   */
+  const dropRejection = (control: ControlId, dragged: unknown): string | null => {
+    const source = dragged as DragSource | undefined
+    if (!source) return null
+    if (source.type === "actionType") {
+      const type = typeById.get(source.actionType)
+      return type ? whyNotOnControl(type, model, control) : null
+    }
+    if (source.type === "target") {
+      const type = typeOfTarget(source.target)
+      return type ? whyNotOnControl(type, model, control) : null
+    }
+    if (source.type === "control") {
+      const moves = [
+        ...bindingsFor(draft, pageId, source.control).map((b) => [b, control] as const),
+        ...bindingsFor(draft, pageId, control).map((b) => [b, source.control] as const),
+      ]
+      for (const [binding, to] of moves) {
+        const why = incompatibleFor(to, binding.target, binding.trigger)
+        if (why) return why
+      }
+    }
+    return null
+  }
+  /** What is dragged, as the announcement names it. */
+  const draggedName = (dragged: unknown): string => {
+    const source = dragged as DragSource | undefined
+    if (source?.type === "actionType") return typeById.get(source.actionType)?.name ?? "The action"
+    if (source?.type === "target") {
+      return targetLabel(source.target, actions, workflows, draft)
+    }
+    if (source?.type === "control") return controlLabel(source.control)
+    return "This"
+  }
+  const refusal = (control: ControlId, dragged: unknown): string | null => {
+    const why = dropRejection(control, dragged)
+    return why ? `${draggedName(dragged)} cannot go on ${controlLabel(control)}. ${why}` : null
+  }
+  // The control that just refused a drop and the announcement, for a moment.
+  const [rejected, setRejected] = useState<{ control: ControlId; message: string } | null>(null)
+  const rejectedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(
+    () => () => {
+      clearTimeout(rejectedTimer.current)
+    },
+    [],
+  )
+  const reject = (control: ControlId, dragged: unknown, why: string) => {
+    const message = `${draggedName(dragged)} cannot go on ${controlLabel(control)}. ${why}`
+    toast.error(`${draggedName(dragged)} was not put on ${controlLabel(control)}`, {
+      description: why,
+    })
+    setRejected({ control, message })
+    clearTimeout(rejectedTimer.current)
+    rejectedTimer.current = setTimeout(() => {
+      setRejected(null)
+    }, 2500)
+  }
+  const announcements: Announcements = {
+    ...defaultAnnouncements,
+    onDragOver(event) {
+      const control = event.over ? parseControlKey(String(event.over.id)) : null
+      const why = control ? refusal(control, event.active.data.current) : null
+      return why ?? defaultAnnouncements.onDragOver(event)
+    },
+    onDragEnd(event) {
+      const control = event.over ? parseControlKey(String(event.over.id)) : null
+      const why = control ? refusal(control, event.active.data.current) : null
+      return why ? `Not placed. ${why}` : defaultAnnouncements.onDragEnd(event)
+    },
+  }
 
   /**
    * The action a dropped type stands for: the profile's action that is
@@ -357,6 +487,11 @@ export function LayoutEditor({
     const source = event.active.data.current as DragSource | undefined
     const target = event.over ? parseControlKey(String(event.over.id)) : null
     if (!source || !target) return
+    const why = dropRejection(target, source)
+    if (why) {
+      reject(target, source, why)
+      return
+    }
     if (source.type === "actionType") void placeType(source.actionType, target)
     else if (source.type === "newMultiAction") void placeMultiAction(target)
     else commands.drop(source, target)
@@ -388,6 +523,17 @@ export function LayoutEditor({
           : "Layout saved",
         saved.agentReload,
       )
+      const kept = saved.incompatible ?? []
+      if (kept.length > 0) {
+        toast.warning(
+          kept.length === 1
+            ? "1 binding is kept but not run"
+            : `${kept.length} bindings are kept but not run`,
+          {
+            description: `Their action cannot run from their control: ${kept.map(readableTriggers).join("; ")}`,
+          },
+        )
+      }
       onSaved()
       refresh()
     } catch (e) {
@@ -400,213 +546,258 @@ export function LayoutEditor({
   const hasControls = controls.length > 0
 
   return (
-    <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-      <div className="grid gap-4 xl:grid-cols-[14rem_1fr] 2xl:grid-cols-[16rem_1fr_20rem]">
-        <LibraryPanel groups={groups} catalog={catalog} multiAction />
-
-        <Card>
-          <CardHeader className="gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <Input
-                aria-label="Layout name"
-                className="h-8 w-56 font-medium"
-                value={draft.name}
-                onChange={(e) => {
-                  commands.change({ ...draft, name: e.target.value }, "layout-name")
-                }}
-              />
-              {dirty && <Badge variant="outline">Unsaved</Badge>}
-              <div className="flex-1" />
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Undo"
-                title={`Undo (${shortcutLabel("Z")})`}
-                disabled={!editing.canUndo}
-                onClick={commands.undo}
-              >
-                <Undo2 />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Redo"
-                title={`Redo (${shortcutLabel("Z", true)})`}
-                disabled={!editing.canRedo}
-                onClick={commands.redo}
-              >
-                <Redo2 />
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!dirty}
-                onClick={() => {
-                  commands.revert()
-                  setErrors([])
-                }}
-              >
-                <RotateCcw /> Revert
-              </Button>
-              <Button size="sm" disabled={!dirty} onClick={() => void save()}>
-                <Save /> Save
-              </Button>
-            </div>
-            <PageBar
-              draft={draft}
-              pageId={pageId}
-              trail={editing.trail}
-              onOpen={commands.openPage}
-              onBack={commands.back}
-              onAdd={commands.addPage}
-              onRename={commands.renamePage}
-              onDelete={commands.deletePage}
-              onAutoReturn={commands.setAutoReturn}
-            />
-            <PageTreePanel
-              profileId={profileId}
-              draft={draft}
-              layouts={view.profile.layouts}
-              dirty={dirty}
-              pageId={pageId}
-              onOpen={commands.openPage}
-              onStored={(layout, page) => {
-                if (layout) commands.reset(layout, page)
-                onSaved()
-                refresh()
-              }}
-            />
-          </CardHeader>
-          <CardContent className="grid gap-4">
-            {errors.length > 0 && <ErrorNotice error={errors.join(" ")} />}
-            {hasControls ? (
-              <div className="overflow-x-auto p-1">
-                <DeviceCanvas
-                  model={model}
-                  images={images}
-                  faces={faces}
-                  icons={icons}
-                  captions={summaries}
-                  summaries={summaries}
-                  selection={selection.controls}
-                  focused={selection.focus}
-                  onSelect={commands.select}
-                  onOpen={commands.openFolder}
-                  onControlKeyDown={onControlKeyDown}
-                  droppable
-                  draggable
-                  wrapControl={(control, element) => (
-                    <ControlMenu
-                      label={controlLabel(control)}
-                      groups={groups}
-                      state={{
-                        count: selected.length,
-                        hasBindings: selected.some((c) => bound.has(controlKey(c))),
-                        canPaste: editing.clipboard !== null,
-                        folderName: (() => {
-                          const id = folderOf(draft, pageId, control)
-                          return id ? findPage(draft, id)?.name : undefined
-                        })(),
-                        canCreateFolder: isFree(draft, pageId, control),
-                      }}
-                      commands={{
-                        onOpen: () => {
-                          commands.selectForMenu(control)
-                        },
-                        assign: commands.assign,
-                        copy: commands.copy,
-                        cut: commands.cut,
-                        paste: commands.paste,
-                        duplicate: commands.duplicate,
-                        clear: commands.clear,
-                        openFolder: () => {
-                          commands.openFolder(control)
-                        },
-                        newFolder: () => {
-                          commands.newFolder(control)
-                        },
-                      }}
-                    >
-                      {element}
-                    </ControlMenu>
-                  )}
+    <DndContext sensors={sensors} onDragEnd={onDragEnd} accessibility={{ announcements }}>
+      {/*
+        One drag and drop context for the whole editor: the library (right)
+        drops onto the device (centre) and onto the gestures of the
+        inspector (below the device).
+      */}
+      <div data-slot="device-editor" className="relative flex min-h-0 flex-1">
+        <div
+          data-slot="device-editor-main"
+          className="grid min-w-0 flex-1 content-start gap-4 overflow-y-auto p-4"
+        >
+          {header}
+          <Card>
+            <CardHeader className="gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  aria-label="Layout name"
+                  className="h-8 w-56 font-medium"
+                  value={draft.name}
+                  onChange={(e) => {
+                    commands.change({ ...draft, name: e.target.value }, "layout-name")
+                  }}
                 />
+                {dirty && <Badge variant="outline">Unsaved</Badge>}
+                <div className="flex-1" />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Undo"
+                  title={`Undo (${shortcutLabel("Z")})`}
+                  disabled={!editing.canUndo}
+                  onClick={commands.undo}
+                >
+                  <Undo2 />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Redo"
+                  title={`Redo (${shortcutLabel("Z", true)})`}
+                  disabled={!editing.canRedo}
+                  onClick={commands.redo}
+                >
+                  <Redo2 />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!dirty}
+                  onClick={() => {
+                    commands.revert()
+                    setErrors([])
+                  }}
+                >
+                  <RotateCcw /> Revert
+                </Button>
+                <Button size="sm" disabled={!dirty} onClick={() => void save()}>
+                  <Save /> Save
+                </Button>
               </div>
-            ) : (
-              <EmptyState title={`${model.name} has no configurable controls`} />
-            )}
-            {hasControls && bound.size === 0 && (
-              <EmptyState title={isFolderPage ? "This folder is empty" : "This page is empty"}>
-                Drag an action, a workflow or “New folder” from the library onto a control, or
-                select a control and choose in the inspector.
-              </EmptyState>
-            )}
-            {isFolderPage && !hasWayBack(draft, pageId) && (
-              <p className="text-xs text-muted-foreground" role="note">
-                This folder has no “Back” binding. On the device, DeckPilot adds one on its first
-                free key. To choose the key, drag “Back” from the library onto a control.
-              </p>
-            )}
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <Label htmlFor="preview-project">Preview with project</Label>
-              <Select
-                value={previewProject ?? "none"}
-                onValueChange={(value) => {
-                  setPreviewProject(value === "none" ? null : value)
-                }}
-              >
-                <SelectTrigger id="preview-project" className="h-8 w-40">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">No project</SelectItem>
-                  {projects.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>
-                      {p.key}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <span className="text-xs text-muted-foreground">
-                Labels such as {"{project.key}"} follow the selected project.
-              </span>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Inspector
-          model={model}
-          draft={draft}
-          pageId={pageId}
-          selection={selected}
-          focus={selection.focus}
-          groups={groups}
-          folder={folder}
-          profile={profile}
-          types={gestureContext.types}
-          gestureDefaults={gestureContext.defaults}
-          issues={errors}
-          onChange={commands.change}
-          onClear={commands.clear}
-          onOpenFolder={() => {
-            if (selection.focus) commands.openFolder(selection.focus)
-          }}
-          onClose={commands.clearSelection}
-          resolveDrop={resolveSlotDrop}
-          onEditWorkflow={setStepsOf}
-          appearance={
-            selected.length > 0 ? (
-              <AppearancePanel
+              <PageBar
                 draft={draft}
                 pageId={pageId}
-                controls={selected}
-                images={images}
-                icons={iconState}
-                onChange={commands.restyle}
+                trail={editing.trail}
+                onOpen={commands.openPage}
+                onBack={commands.back}
+                onAdd={commands.addPage}
+                onRename={commands.renamePage}
+                onDelete={commands.deletePage}
+                onAutoReturn={commands.setAutoReturn}
               />
-            ) : undefined
-          }
-        />
+              <PageTreePanel
+                profileId={profileId}
+                draft={draft}
+                layouts={view.profile.layouts}
+                dirty={dirty}
+                pageId={pageId}
+                onOpen={commands.openPage}
+                onStored={(layout, page) => {
+                  if (layout) commands.reset(layout, page)
+                  onSaved()
+                  refresh()
+                }}
+              />
+            </CardHeader>
+            <CardContent className="grid gap-4">
+              {errors.length > 0 && <ErrorNotice error={errors.map(readableTriggers).join(" ")} />}
+              <p
+                className="sr-only"
+                role="status"
+                aria-live="assertive"
+                data-slot="drop-announcement"
+              >
+                {rejected?.message ?? ""}
+              </p>
+              {hasControls ? (
+                <div className="overflow-x-auto p-1">
+                  <DeviceCanvas
+                    model={model}
+                    images={images}
+                    faces={faces}
+                    icons={icons}
+                    captions={summaries}
+                    summaries={summaries}
+                    selection={selection.controls}
+                    focused={selection.focus}
+                    onSelect={commands.select}
+                    onOpen={commands.openFolder}
+                    onControlKeyDown={onControlKeyDown}
+                    droppable
+                    draggable
+                    dropRejection={dropRejection}
+                    rejected={rejected?.control ?? null}
+                    wrapControl={(control, element) => (
+                      <ControlMenu
+                        label={controlLabel(control)}
+                        groups={groupsFor(control)}
+                        state={{
+                          count: selected.length,
+                          hasBindings: selected.some((c) => bound.has(controlKey(c))),
+                          canPaste: editing.clipboard !== null,
+                          folderName: (() => {
+                            const id = folderOf(draft, pageId, control)
+                            return id ? findPage(draft, id)?.name : undefined
+                          })(),
+                          canCreateFolder: isFree(draft, pageId, control),
+                        }}
+                        commands={{
+                          onOpen: () => {
+                            commands.selectForMenu(control)
+                          },
+                          assign: commands.assign,
+                          copy: commands.copy,
+                          cut: commands.cut,
+                          paste: commands.paste,
+                          duplicate: commands.duplicate,
+                          clear: commands.clear,
+                          openFolder: () => {
+                            commands.openFolder(control)
+                          },
+                          newFolder: () => {
+                            commands.newFolder(control)
+                          },
+                        }}
+                      >
+                        {element}
+                      </ControlMenu>
+                    )}
+                  />
+                </div>
+              ) : (
+                <EmptyState title={`${model.name} has no configurable controls`} />
+              )}
+              {hasControls && bound.size === 0 && (
+                <EmptyState title={isFolderPage ? "This folder is empty" : "This page is empty"}>
+                  Drag an action, a workflow or “New folder” from the library onto a control, or
+                  select a control and choose in the inspector.
+                </EmptyState>
+              )}
+              {isFolderPage && !hasWayBack(draft, pageId) && (
+                <p className="text-xs text-muted-foreground" role="note">
+                  This folder has no “Back” binding. On the device, DeckPilot adds one on its first
+                  free key. To choose the key, drag “Back” from the library onto a control.
+                </p>
+              )}
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <Label htmlFor="preview-project">Preview with project</Label>
+                <Select
+                  value={previewProject ?? "none"}
+                  onValueChange={(value) => {
+                    setPreviewProject(value === "none" ? null : value)
+                  }}
+                >
+                  <SelectTrigger id="preview-project" className="h-8 w-40">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No project</SelectItem>
+                    {projects.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.key}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <span className="text-xs text-muted-foreground">
+                  Labels such as {"{project.key}"} follow the selected project.
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Inspector
+            model={model}
+            draft={draft}
+            pageId={pageId}
+            selection={selected}
+            focus={selection.focus}
+            groups={groups}
+            folder={folder}
+            profile={profile}
+            types={gestureContext.types}
+            gestureDefaults={gestureContext.defaults}
+            issues={errors}
+            onChange={commands.change}
+            onClear={commands.clear}
+            onOpenFolder={() => {
+              if (selection.focus) commands.openFolder(selection.focus)
+            }}
+            onClose={commands.clearSelection}
+            resolveDrop={resolveSlotDrop}
+            onEditWorkflow={setStepsOf}
+            incompatible={incompatibleFor}
+            notRun={
+              selection.focus
+                ? (incompatible.get(controlKey(selection.focus)) ?? []).map((found) => ({
+                    trigger: found.trigger,
+                    reason: describeIncompatibility(
+                      found.reason,
+                      model,
+                      selection.focus ? controlCapabilities(model, selection.focus) : null,
+                    ),
+                  }))
+                : []
+            }
+            appearance={
+              selected.length > 0 ? (
+                <AppearancePanel
+                  draft={draft}
+                  pageId={pageId}
+                  controls={selected}
+                  images={images}
+                  icons={iconState}
+                  onChange={commands.restyle}
+                />
+              ) : undefined
+            }
+          />
+        </div>
+        <LibraryDock>
+          <LibraryPanel
+            groups={libraryControl ? groupsFor(libraryControl) : groups}
+            catalog={catalog}
+            multiAction
+            variant="plain"
+            compatibility={{
+              control: libraryControl ? controlLabel(libraryControl) : null,
+              catalog: (type) =>
+                libraryControl ? whyNotOnControl(type, model, libraryControl) : null,
+            }}
+          />
+        </LibraryDock>
       </div>
       <DeletePageDialog
         deletion={editing.deleting ? pageDeletion(draft, editing.deleting) : null}
