@@ -88,7 +88,7 @@ fn cpu_keys() {
     assert_eq!(
         report.state,
         ButtonState::new()
-            .with_detail("CPU 37%")
+            .with_detail("37%")
             .with_indicator(Indicator::Ok)
             .with_progress(37)
             .with_series([10, 20, 37])
@@ -114,11 +114,13 @@ fn memory_keys() {
     assert_eq!(
         report.state,
         ButtonState::new()
-            .with_detail("RAM 62%")
+            .with_detail("9.9/16 GiB")
             .with_indicator(Indicator::Ok)
             .with_progress(62)
     );
     assert_eq!(report.data[0], ("usedPercent", "62".to_owned()));
+    assert_eq!(short_gib(32 * GIB), "32");
+    assert_eq!(short_gib(GIB * 15 / 2), "7.5");
     assert_eq!(report.data[2], ("totalBytes", (16 * GIB).to_string()));
     let full = memory_report(
         Memory {
@@ -162,9 +164,7 @@ fn network_keys() {
     );
     assert_eq!(
         all.state,
-        ButtonState::new()
-            .with_label("In 1.2M")
-            .with_detail("Out 56K")
+        ButtonState::new().with_detail("↓ 1.2 MB/s\n↑ 56 kB/s")
     );
     assert_eq!(network_report(&rates, Some("  ")).unwrap(), all);
     // One interface by name, case ignored; loopback when asked for.
@@ -179,11 +179,14 @@ fn network_keys() {
     assert_eq!(missing.code, codes::NOT_FOUND);
     // No interface at all is no traffic.
     let quiet = network_report(&[], None).unwrap();
-    assert_eq!(quiet.state.detail.as_deref(), Some("Out 0B"));
-    // Both lines fit the narrowest key (eight columns).
+    assert_eq!(quiet.state.detail.as_deref(), Some("↓ 0 B/s\n↑ 0 B/s"));
+    // Two short lines that fit the narrowest key; the title stays.
     let busy = network_report(&[interface("eth0", 999_000.0, 999_000.0, false)], None).unwrap();
-    for text in [busy.state.label.unwrap(), busy.state.detail.unwrap()] {
-        assert!(text.chars().count() <= 8, "{text}");
+    assert_eq!(busy.state.label, None);
+    let detail = busy.state.detail.unwrap();
+    assert_eq!(detail.lines().count(), 2);
+    for text in detail.lines() {
+        assert!(text.chars().count() <= 10, "{text}");
     }
 }
 
@@ -248,7 +251,7 @@ fn disk_keys() {
     assert_eq!(
         report.state,
         ButtonState::new()
-            .with_detail("45% free")
+            .with_detail("55% used")
             .with_indicator(Indicator::Ok)
             .with_progress(55)
     );
@@ -264,15 +267,23 @@ fn disk_keys() {
 
 #[test]
 fn texts_fit_the_key() {
-    // The longest texts a key shows stay within the narrowest key's eight
-    // columns.
+    // The values a key shows under its title are short: the renderer
+    // shrinks a value a little, then cuts it, on the narrowest key (72 px,
+    // where "12.4/32 GiB" still fits whole).
     let cpu = cpu_report(100, &[], USE).state;
-    let memory = memory_report(Memory { used: 1, total: 1 }, USE)
-        .unwrap()
-        .state;
-    let disk = disk_report(&volume("/", 100, 99), FREE).unwrap().state;
-    for state in [cpu, memory, disk] {
+    let memory = memory_report(
+        Memory {
+            used: 128 * GIB - 1,
+            total: 128 * GIB,
+        },
+        USE,
+    )
+    .unwrap()
+    .state;
+    let disk = disk_report(&volume("/", 100, 0), FREE).unwrap().state;
+    for (state, longest) in [(cpu, 4), (memory, 13), (disk, 9)] {
         let detail = state.detail.unwrap();
-        assert!(detail.chars().count() <= 8, "{detail}");
+        assert!(detail.chars().count() <= longest, "{detail}");
+        assert_eq!(state.label, None, "the key keeps its title");
     }
 }

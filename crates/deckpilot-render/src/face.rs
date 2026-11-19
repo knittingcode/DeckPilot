@@ -1,9 +1,19 @@
 //! Renders [`KeyFace`]s into device-independent [`Frame`]s.
 //!
 //! The renderer only needs the target size, so the same code serves any key
-//! or display size. Text uses a built-in 8 x 8 bitmap font (see `glyphs`: ASCII,
-//! Latin-1, Latin Extended-A such as Polish letters, `…`, `€` and typographic
-//! quotes and dashes); other characters are shown as `?`.
+//! or display size: every measure below is a share of the key's shorter
+//! side, so a 72 px key (Stream Deck MK.2), a 96 px key (XL), a 120 px key
+//! (Stream Deck +) and a 200 x 100 touch-strip zone are laid out alike.
+//!
+//! A key is **icon first**: its main mark sits in the upper part, the title
+//! (Inter Medium) below it and a value line (the face's detail, Inter
+//! semibold, e.g. a monitor's `23%`) under the title. The mark is, in this
+//! order, the binding's own icon (an image the user imported, drawn under
+//! everything as before), the state's glyph (a closed set of shapes,
+//! [`crate::marks`]) or the key's icon by name ([`KeyFace::symbol`], drawn
+//! from the built-in Lucide icons, an unknown name as the fallback icon).
+//! Text is anti-aliased (see [`crate::text`]), wrapped by width and cut with
+//! `…`; characters the font does not have are shown as `?`.
 //!
 //! Live state is drawn as marks that do not depend on any module: an
 //! indicator dot in the top-right corner, a progress bar along the bottom
@@ -12,26 +22,33 @@
 //! flips between two values) is not drawn again.
 //!
 //! A state's further marks ([`crate::marks`]) are an accent background
-//! from a fixed palette, a glyph from a closed set of shapes above the
-//! title, a badge in the top left corner and a series drawn as a line
-//! behind the texts. What the user chose for the key wins: its background
-//! over the accent, its icon over the glyph.
+//! from a fixed palette, a badge in the top left corner and a series drawn
+//! as a line behind the texts. What the user chose for the key wins: its
+//! background over the accent, its icon over the glyph and the symbol.
 //!
 //! A face's [`KeyAppearance`] sets its background and text colours, the
-//! title's size and position (or hides it) and an icon, drawn below the
-//! title and the state marks, scaled to the key (see [`crate::icons`]).
+//! title's size and position (or hides it) and an icon, scaled to the key
+//! (see [`crate::icons`]).
+
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "keys are a few hundred pixels wide at most; coordinates are clamped before use"
+)]
 
 use std::collections::{HashMap, VecDeque};
 
-use deckpilot_core::{FaceStyle, FontSize, Indicator, KeyAppearance, KeyFace, TitleAlign};
+use deckpilot_core::{FaceStyle, FontSize, Glyph, Indicator, KeyAppearance, KeyFace, TitleAlign};
 use deckpilot_device::Frame;
 
 use crate::icons::{self, Icons};
 use crate::marks;
+use crate::text::{self, Style, Weight};
 
-const GLYPH: u32 = 8;
 const WHITE: [u8; 3] = [240, 240, 240];
-const MUTED: [u8; 3] = [160, 160, 170];
+/// The value line: a little softer than the title.
+const MUTED: [u8; 3] = [200, 200, 208];
 const ACCENT: [u8; 3] = [56, 189, 248];
 const GREEN: [u8; 3] = [34, 197, 94];
 const AMBER: [u8; 3] = [245, 158, 11];
@@ -50,14 +67,16 @@ fn indicator_color(indicator: Indicator) -> [u8; 3] {
     }
 }
 
+/// Backgrounds close to the black of a Stream Deck's screens: the icon
+/// carries the key, the background only tells kinds of keys apart.
 fn background(style: FaceStyle) -> [u8; 3] {
     match style {
         FaceStyle::Empty => [0, 0, 0],
-        FaceStyle::Action => [39, 39, 42],
-        FaceStyle::Workflow => [30, 41, 59],
-        FaceStyle::Folder => [49, 46, 129],
-        FaceStyle::Back => [63, 63, 70],
-        FaceStyle::Notice => [69, 26, 3],
+        FaceStyle::Action => [28, 28, 32],
+        FaceStyle::Workflow => [22, 32, 50],
+        FaceStyle::Folder => [36, 34, 84],
+        FaceStyle::Back => [40, 40, 46],
+        FaceStyle::Notice => [66, 32, 10],
     }
 }
 
@@ -66,15 +85,180 @@ pub fn render(face: &KeyFace, width: u32, height: u32) -> Frame {
     render_with(face, width, height, &Icons::default())
 }
 
-/// Glyph scale of a title: small is the font's own size, medium grows on
-/// larger keys, large is one step above medium.
-fn text_scale(size: FontSize, width: u32) -> u32 {
-    let medium = if width >= 120 { 2 } else { 1 };
-    match size {
-        FontSize::Small => 1,
-        FontSize::Medium => medium,
-        FontSize::Large => medium + 1,
+/// The title's em size on a key whose shorter side is `side` pixels.
+fn title_size(size: FontSize, key_side: f32) -> f32 {
+    let share = match size {
+        FontSize::Small => 0.13,
+        FontSize::Medium => 0.155,
+        FontSize::Large => 0.19,
+    };
+    (key_side * share).max(6.0)
+}
+
+/// What the key's main mark is, when it is not the user's own icon.
+#[derive(Debug, Clone, Copy)]
+enum Mark<'a> {
+    Glyph(Glyph),
+    Symbol(&'a str),
+}
+
+/// A square, `(left, top, side)`.
+type Square = (f32, f32, f32);
+
+/// Where the mark and the lines of text go on a key.
+#[derive(Debug, Default)]
+struct Layout {
+    mark: Option<Square>,
+    /// Lines with their style, colour and top.
+    lines: Vec<(String, Style, [u8; 3], f32)>,
+    /// Top and bottom of the text block, if there is text.
+    block: Option<(f32, f32)>,
+}
+
+struct Request<'a> {
+    face: &'a KeyFace,
+    look: &'a KeyAppearance,
+    has_mark: bool,
+    over_icon: bool,
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "one key's layout, read top to bottom"
+)]
+fn layout(request: &Request<'_>, width: u32, height: u32) -> Layout {
+    let Request {
+        face,
+        look,
+        has_mark,
+        over_icon,
+    } = *request;
+    let (w, h) = (width as f32, height as f32);
+    let side = w.min(h);
+    let pad = (side * 0.07).max(2.0);
+    // Room for the toggle mark at the top and the progress bar at the
+    // bottom.
+    let margin = (h / 12.0).max(3.0);
+    let inner = (h - 2.0 * margin).max(0.0);
+    let text_width = (w - 2.0 * pad).max(1.0);
+    let ink = look.text_color.map_or(WHITE, deckpilot_core::Color::rgb);
+    let value_ink = if face.highlighted {
+        ACCENT
+    } else {
+        look.text_color.map_or(MUTED, deckpilot_core::Color::rgb)
+    };
+    let title_style = Style::new(
+        Weight::Medium,
+        title_size(look.font_size.unwrap_or_default(), side),
+    );
+    let value_style = Style::new(
+        Weight::SemiBold,
+        title_size(FontSize::Medium, side).max(title_style.size * 0.9),
+    );
+    let show_text = look.shows_title();
+    let values = if show_text {
+        value_lines(face.detail.as_deref(), value_style, text_width)
+    } else {
+        Vec::new()
+    };
+    let max_title =
+        if has_mark { 2_usize } else { 3 }.saturating_sub(values.len().saturating_sub(1));
+    let mut titles: Vec<String> = if show_text {
+        title_style.wrap(&face.title, text_width, max_title.max(1))
+    } else {
+        Vec::new()
+    };
+    let block_height = |titles: usize| {
+        titles as f32 * title_style.line_height()
+            + values
+                .iter()
+                .map(|(_, style)| style.line_height())
+                .sum::<f32>()
+    };
+    // Lines that fit on the key at all.
+    while !titles.is_empty() && block_height(titles.len()) > inner {
+        titles.pop();
     }
+    let align = look.title_align.unwrap_or(if has_mark || over_icon {
+        TitleAlign::Bottom
+    } else {
+        TitleAlign::Middle
+    });
+    let gap = (side * 0.05).max(1.0);
+    let smallest_mark = side * 0.3;
+    let largest_mark = if titles.is_empty() && values.is_empty() {
+        side * 0.62
+    } else {
+        side * 0.46
+    };
+    // A two-line title gives way to the mark first.
+    if has_mark && align != TitleAlign::Middle {
+        while titles.len() > 1 && inner - block_height(titles.len()) - gap < smallest_mark {
+            titles = title_style.wrap(&face.title, text_width, titles.len() - 1);
+        }
+    }
+    let text_height = block_height(titles.len());
+    let has_text = !titles.is_empty() || !values.is_empty();
+    let block_top = match align {
+        TitleAlign::Top => margin,
+        TitleAlign::Middle => (h - text_height) / 2.0,
+        TitleAlign::Bottom => h - margin - text_height,
+    };
+    let mark = has_mark.then(|| {
+        let (from, to) = if has_text {
+            match align {
+                TitleAlign::Top => (block_top + text_height + gap, h - margin),
+                // Centred text: the mark is not drawn over it.
+                TitleAlign::Middle => (0.0, 0.0),
+                TitleAlign::Bottom => (margin, block_top - gap),
+            }
+        } else {
+            (margin, h - margin)
+        };
+        let room = (to - from).min(w - 2.0 * pad);
+        (room >= side * 0.2).then(|| {
+            let mark_side = room.min(largest_mark);
+            (
+                (w - mark_side) / 2.0,
+                from + (to - from - mark_side) / 2.0,
+                mark_side,
+            )
+        })
+    });
+    let mut lines = Vec::new();
+    let mut y = block_top;
+    for title in titles {
+        lines.push((title, title_style, ink, y));
+        y += title_style.line_height();
+    }
+    for (value, style) in values {
+        lines.push((value, style, value_ink, y));
+        y += style.line_height();
+    }
+    Layout {
+        mark: mark.flatten(),
+        lines,
+        block: has_text.then_some((block_top, block_top + text_height)),
+    }
+}
+
+/// The value lines of `detail` (at most two), each a little smaller when
+/// it is too wide, then cut.
+fn value_lines(detail: Option<&str>, style: Style, width: f32) -> Vec<(String, Style)> {
+    detail
+        .map(|detail| {
+            detail
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .take(2)
+                .map(|line| {
+                    let style = style.shrunk_to(line, width, 0.8);
+                    (style.fit(line, width), style)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Renders a face at `width` x `height` pixels, with its icon from `icons`.
@@ -87,7 +271,7 @@ pub fn render_with(face: &KeyFace, width: u32, height: u32, icons: &Icons) -> Fr
         _ => background(face.style),
     };
     let mut frame = Frame::filled(width, height, fill);
-    if face.is_empty() {
+    if face.is_empty() || width == 0 || height == 0 {
         return frame;
     }
     let icon = look
@@ -100,69 +284,62 @@ pub fn render_with(face: &KeyFace, width: u32, height: u32, icons: &Icons) -> Fr
     if let Some(series) = &face.series {
         marks::draw_series(&mut frame, series, marks::lighten(fill, 35));
     }
-    // The user's icon wins over a state's glyph.
-    let glyph = face.glyph.filter(|_| icon.is_none());
-    if let Some(glyph) = glyph {
-        marks::draw_glyph(&mut frame, glyph, ink);
+    // The user's icon wins over a state's glyph, the glyph over the key's
+    // own icon.
+    let mark = if icon.is_some() {
+        None
+    } else if let Some(glyph) = face.glyph {
+        Some(Mark::Glyph(glyph))
+    } else {
+        face.symbol.as_deref().map(Mark::Symbol)
+    };
+    let placed = layout(
+        &Request {
+            face,
+            look,
+            has_mark: mark.is_some(),
+            over_icon: icon.is_some(),
+        },
+        width,
+        height,
+    );
+    if let (Some(mark), Some((left, top, side))) = (mark, placed.mark) {
+        match mark {
+            Mark::Glyph(glyph) => marks::draw_glyph_in(&mut frame, glyph, (left, top, side), ink),
+            Mark::Symbol(name) => text::draw_icon(&mut frame, name, left, top, side, ink),
+        }
+    }
+    if icon.is_some()
+        && let Some((top, bottom)) = placed.block
+    {
+        // Text over a picture sits on a translucent band, not a shadow.
+        scrim(&mut frame, top - 1.0, bottom + 1.0);
+    }
+    let center = width as f32 / 2.0;
+    for (line, style, color, top) in &placed.lines {
+        style.draw_centered(&mut frame, line, center, *top, *color);
     }
     if face.highlighted {
-        border(&mut frame, ACCENT, 3);
-    }
-    if look.shows_title() {
-        // Under a glyph the title goes to the bottom, as under an icon.
-        let align = look
-            .title_align
-            .unwrap_or(if icon.is_some() || glyph.is_some() {
-                TitleAlign::Bottom
-            } else {
-                TitleAlign::Middle
-            });
-        draw_title(&mut frame, face, look, align, icon.is_some());
+        let thickness = (width.min(height) / 36).max(2);
+        border(&mut frame, ACCENT, thickness);
     }
     draw_state(&mut frame, face);
     frame
 }
 
-fn draw_title(
-    frame: &mut Frame,
-    face: &KeyFace,
-    look: &KeyAppearance,
-    align: TitleAlign,
-    over_icon: bool,
-) {
-    let (width, height) = (frame.width(), frame.height());
-    let scale = text_scale(look.font_size.unwrap_or_default(), width);
-    let columns = ((width.saturating_sub(4)) / (GLYPH * scale)).max(1) as usize;
-    let mut lines = wrap(&face.title, columns, 4);
-    let detail = face.detail.as_deref().map(|d| truncate(d, columns));
-    let line_height = GLYPH * scale + 2;
-    // Keep the lines that fit on the key.
-    let fitting = usize::try_from(height.saturating_sub(4) / line_height).unwrap_or(0);
-    lines.truncate(fitting.saturating_sub(usize::from(detail.is_some())).max(1));
-    let total_lines = lines.len() + usize::from(detail.is_some());
-    let block = u32::try_from(total_lines).unwrap_or(0) * line_height;
-    // Room for the toggle mark at the top and the progress bar at the
-    // bottom.
-    let margin = (height / 12).max(3);
-    let mut y = match align {
-        TitleAlign::Top => margin,
-        TitleAlign::Middle => height.saturating_sub(block) / 2,
-        TitleAlign::Bottom => height.saturating_sub(block + margin),
-    };
-    let title = look.text_color.map_or(WHITE, deckpilot_core::Color::rgb);
-    let detail_color = if face.highlighted {
-        ACCENT
-    } else {
-        look.text_color.map_or(MUTED, deckpilot_core::Color::rgb)
-    };
-    // A shadow keeps text readable on top of an icon.
-    let shadow = over_icon.then_some([0, 0, 0]);
-    for line in lines.drain(..) {
-        draw_text(frame, &line, y, scale, title, shadow);
-        y += line_height;
-    }
-    if let Some(detail) = detail {
-        draw_text(frame, &detail, y, scale, detail_color, shadow);
+/// Darkens the rows from `top` to `bottom` so that text on them reads on
+/// any picture.
+fn scrim(frame: &mut Frame, top: f32, bottom: f32) {
+    let (from, to) = (
+        top.max(0.0) as u32,
+        (bottom.max(0.0) as u32).min(frame.height()),
+    );
+    for y in from..to {
+        for x in 0..frame.width() {
+            if let Some(under) = frame.pixel(x, y) {
+                frame.put(x, y, text::mix(under, [0, 0, 0], 0.5));
+            }
+        }
     }
 }
 
@@ -176,31 +353,8 @@ fn draw_icon(frame: &mut Frame, icon: &image::RgbaImage) {
         let Some(under) = frame.pixel(x, y) else {
             continue;
         };
-        let blend = |top: u8, bottom: u8| {
-            let mixed =
-                (u16::from(top) * u16::from(a) + u16::from(bottom) * (255 - u16::from(a))) / 255;
-            u8::try_from(mixed).unwrap_or(u8::MAX)
-        };
-        frame.put(
-            x,
-            y,
-            [blend(r, under[0]), blend(g, under[1]), blend(b, under[2])],
-        );
+        frame.put(x, y, text::mix(under, [r, g, b], f32::from(a) / 255.0));
     }
-}
-
-fn draw_text(
-    frame: &mut Frame,
-    text: &str,
-    y: u32,
-    scale: u32,
-    color: [u8; 3],
-    shadow: Option<[u8; 3]>,
-) {
-    if let Some(shadow) = shadow {
-        draw_centered_at(frame, text, y + 1, scale, shadow, 1);
-    }
-    draw_centered_at(frame, text, y, scale, color, 0);
 }
 
 /// The indicator, progress, toggle and badge marks of a face.
@@ -243,22 +397,27 @@ fn fill(frame: &mut Frame, x: u32, y: u32, width: u32, height: u32, color: [u8; 
     }
 }
 
+/// An anti-aliased dot (or ring) around `(cx, cy)`.
 fn circle(frame: &mut Frame, (cx, cy): (u32, u32), radius: u32, color: [u8; 3], ring: bool) {
-    let r = i64::from(radius);
-    let inner = (r - 1).max(0);
-    for dy in -r..=r {
-        for dx in -r..=r {
-            let distance = dx * dx + dy * dy;
-            if distance > r * r || (ring && distance < inner * inner) {
-                continue;
-            }
-            let (Ok(x), Ok(y)) = (
-                u32::try_from(i64::from(cx) + dx),
-                u32::try_from(i64::from(cy) + dy),
-            ) else {
-                continue;
+    let r = radius as f32;
+    let inner = (r - (r / 3.0).max(1.2)).max(0.0);
+    let reach = i64::from(radius) + 1;
+    for dy in -reach..=reach {
+        for dx in -reach..=reach {
+            let distance = ((dx * dx + dy * dy) as f32).sqrt();
+            let outer = (r + 0.5 - distance).clamp(0.0, 1.0);
+            let coverage = if ring {
+                outer.min((distance - inner + 0.5).clamp(0.0, 1.0))
+            } else {
+                outer
             };
-            frame.put(x, y, color);
+            text::blend_at(
+                frame,
+                (i64::from(cx) + dx) as f32,
+                (i64::from(cy) + dy) as f32,
+                color,
+                coverage,
+            );
         }
     }
 }
@@ -334,483 +493,5 @@ fn border(frame: &mut Frame, color: [u8; 3], thickness: u32) {
     }
 }
 
-fn truncate(text: &str, columns: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= columns {
-        text.to_owned()
-    } else {
-        let mut cut: String = chars[..columns.saturating_sub(1)].iter().collect();
-        cut.push('.');
-        cut
-    }
-}
-
-/// Word-wraps `text` into at most `max_lines` lines of `columns` characters.
-fn wrap(text: &str, columns: usize, max_lines: usize) -> Vec<String> {
-    let mut lines: Vec<String> = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        let mut word = word.to_owned();
-        loop {
-            let needed = if current.is_empty() {
-                word.chars().count()
-            } else {
-                current.chars().count() + 1 + word.chars().count()
-            };
-            if needed <= columns {
-                if !current.is_empty() {
-                    current.push(' ');
-                }
-                current.push_str(&word);
-                break;
-            }
-            if current.is_empty() {
-                // A single word longer than a line: hard-break it.
-                let head: String = word.chars().take(columns).collect();
-                word = word.chars().skip(columns).collect();
-                lines.push(head);
-                if word.is_empty() {
-                    break;
-                }
-            } else {
-                lines.push(std::mem::take(&mut current));
-            }
-        }
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    if lines.len() > max_lines {
-        lines.truncate(max_lines);
-        if let Some(last) = lines.last_mut() {
-            *last = truncate(&format!("{last}  "), columns);
-        }
-    }
-    lines
-}
-
-fn draw_centered_at(
-    frame: &mut Frame,
-    text: &str,
-    y: u32,
-    scale: u32,
-    color: [u8; 3],
-    offset: u32,
-) {
-    let width = u32::try_from(text.chars().count()).unwrap_or(0) * GLYPH * scale;
-    let mut x = frame.width().saturating_sub(width) / 2 + offset;
-    for ch in text.chars() {
-        {
-            let rows = crate::glyphs::glyph(ch);
-            for (row, bits) in rows.iter().enumerate() {
-                for column in 0..GLYPH {
-                    if bits & (1 << column) != 0 {
-                        let row = u32::try_from(row).unwrap_or(0);
-                        for dy in 0..scale {
-                            for dx in 0..scale {
-                                frame.put(x + column * scale + dx, y + row * scale + dy, color);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        x += GLYPH * scale;
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn lit(frame: &Frame, background: [u8; 3]) -> usize {
-        (0..frame.height())
-            .flat_map(|y| (0..frame.width()).map(move |x| (x, y)))
-            .filter(|(x, y)| frame.pixel(*x, *y) != Some(background))
-            .count()
-    }
-
-    #[test]
-    fn empty_faces_are_black() {
-        let frame = render(&KeyFace::empty(), 72, 72);
-        assert_eq!(lit(&frame, [0, 0, 0]), 0);
-    }
-
-    #[test]
-    fn text_is_drawn_within_bounds_for_any_size() {
-        let face = KeyFace::new(FaceStyle::Action, "Start Work").with_detail("SHOP");
-        for (w, h) in [(72, 72), (96, 96), (120, 120), (200, 100), (8, 8)] {
-            let frame = render(&face, w, h);
-            assert_eq!((frame.width(), frame.height()), (w, h));
-            if w >= 72 {
-                assert!(lit(&frame, background(FaceStyle::Action)) > 20);
-            }
-        }
-    }
-
-    #[test]
-    fn polish_labels_keep_their_letters() {
-        let key = |title: &str, detail: &str| {
-            render(
-                &KeyFace::new(FaceStyle::Action, title).with_detail(detail),
-                72,
-                72,
-            )
-            .rgb()
-            .to_vec()
-        };
-        // Diacritics are drawn, not replaced or dropped.
-        assert_ne!(key("Mgła", "12°C"), key("Mgla", "12 C"));
-        assert_ne!(key("Mgła", "12°C"), key("Mg?a", "12?C"));
-        assert_ne!(key("Żółć", ""), key("Zolc", ""));
-        assert_ne!(key("ŻÓŁĆ", ""), key("ZOLC", ""));
-        for word in ["Zażółć", "gęślą", "jaźń", "ĄĆĘŁŃÓŚŹŻ", "ąćęłńóśźż"]
-        {
-            assert_ne!(
-                key(word, ""),
-                key(&"?".repeat(word.chars().count()), ""),
-                "{word}"
-            );
-        }
-        // Each letter takes one cell, so labels are laid out as before.
-        let title = |text: &str| render(&KeyFace::new(FaceStyle::Action, text), 72, 72);
-        let ink = |frame: &Frame| {
-            (0..frame.width())
-                .filter(|x| (0..frame.height()).any(|y| frame.pixel(*x, y) != frame.pixel(0, 0)))
-                .count()
-        };
-        assert!(ink(&title("Łódź")) <= ink(&title("WWWW")));
-        // What the font still lacks is a question mark, as before.
-        assert_eq!(key("中", ""), key("?", ""));
-    }
-
-    #[test]
-    fn highlight_draws_a_border() {
-        let face = KeyFace::new(FaceStyle::Action, "CMS").highlighted(true);
-        let frame = render(&face, 72, 72);
-        assert_eq!(frame.pixel(0, 0), Some(ACCENT));
-        assert_eq!(frame.pixel(71, 71), Some(ACCENT));
-    }
-
-    /// Accent, glyph, badge and series: drawn from the typed face at any
-    /// size, and never over what the user chose for the key.
-    #[test]
-    fn accent_glyph_badge_and_series_are_drawn_and_the_users_look_wins() {
-        use deckpilot_core::{Accent, Color, Glyph};
-        let count = |frame: &Frame, color: [u8; 3]| {
-            (0..frame.height())
-                .flat_map(|y| (0..frame.width()).map(move |x| (x, y)))
-                .filter(|(x, y)| frame.pixel(*x, *y) == Some(color))
-                .count()
-        };
-        let plain = KeyFace::new(FaceStyle::Action, "Focus");
-        let base = render(&plain, 96, 96);
-
-        // An accent is the background; the title stays light on it.
-        let mut accented = plain.clone();
-        accented.accent = Some(Accent::Green);
-        let frame = render(&accented, 96, 96);
-        let green = marks::accent_color(Accent::Green);
-        assert_eq!(frame.pixel(1, 50), Some(green));
-        assert_eq!(count(&frame, WHITE), count(&base, WHITE));
-        assert_eq!(count(&frame, background(FaceStyle::Action)), 0);
-
-        // A glyph is drawn in the upper part and moves the title down.
-        let mut with_glyph = plain.clone();
-        with_glyph.glyph = Some(Glyph::Timer);
-        let frame = render(&with_glyph, 96, 96);
-        let rows = |frame: &Frame| -> Vec<u32> {
-            (0..frame.height())
-                .filter(|y| (0..frame.width()).any(|x| frame.pixel(x, *y) == Some(WHITE)))
-                .collect()
-        };
-        assert!(count(&frame, WHITE) > count(&base, WHITE) + 100);
-        assert!(rows(&frame).first().unwrap() < &20, "{:?}", rows(&frame));
-        assert!(rows(&frame).last().unwrap() > rows(&base).last().unwrap());
-
-        // A badge in the top left corner, below the toggle mark.
-        let mut badged = plain.clone();
-        badged.badge = Some("7".into());
-        let frame = render(&badged, 96, 96);
-        assert_ne!(frame.pixel(3, 3), base.pixel(3, 3));
-        badged.toggle = Some(true);
-        let frame = render(&badged, 96, 96);
-        assert_eq!(frame.pixel(48, 0), Some(GREEN));
-        assert_eq!(
-            frame.pixel(3, 1),
-            Some(GREEN),
-            "the toggle mark is not covered"
-        );
-
-        // A series is a lighter line behind the title: the title's pixels
-        // are all still there.
-        let mut charted = plain.clone();
-        charted.series = Some(vec![10, 80, 30, 100, 0]);
-        let frame = render(&charted, 96, 96);
-        let line = marks::lighten(background(FaceStyle::Action), 35);
-        assert!(count(&frame, line) > 60);
-        assert_eq!(count(&frame, WHITE), count(&base, WHITE));
-
-        // The user's background and icon win over accent and glyph; the
-        // user's text colour is the glyph's.
-        let mut users = with_glyph.clone();
-        users.accent = Some(Accent::Red);
-        users.appearance = Some(KeyAppearance {
-            background: Some(Color([1, 2, 3])),
-            text_color: Some(Color([250, 250, 0])),
-            ..KeyAppearance::default()
-        });
-        let frame = render(&users, 96, 96);
-        assert_eq!(frame.pixel(1, 50), Some([1, 2, 3]));
-        assert_eq!(count(&frame, marks::accent_color(Accent::Red)), 0);
-        assert!(count(&frame, [250, 250, 0]) > 100);
-        let icon =
-            icons::import("Halves", &icons::tests::png(&icons::tests::halves(64, 64))).unwrap();
-        let mut profile = deckpilot_core::Profile::new("P");
-        let id = icon.id;
-        profile.icons.push(icon);
-        let mut iconed = with_glyph.clone();
-        iconed.appearance = Some(KeyAppearance {
-            icon: Some(deckpilot_core::IconRef {
-                id,
-                fit: deckpilot_core::IconFit::Fill,
-            }),
-            ..KeyAppearance::default()
-        });
-        let with_icon = render_with(&iconed, 96, 96, &Icons::from_profile(&profile));
-        iconed.glyph = None;
-        let without_glyph = render_with(&iconed, 96, 96, &Icons::from_profile(&profile));
-        assert_eq!(with_icon.rgb(), without_glyph.rgb());
-
-        // Empty and tiny faces: nothing is drawn, nothing panics.
-        let mut empty = KeyFace::empty();
-        empty.accent = Some(Accent::Blue);
-        empty.glyph = Some(Glyph::Star);
-        empty.badge = Some("1".into());
-        empty.series = Some(vec![1, 2]);
-        assert_eq!(lit(&render(&empty, 72, 72), [0, 0, 0]), 0);
-        let mut all = accented.clone();
-        all.glyph = Some(Glyph::Heart);
-        all.badge = Some("9999".into());
-        all.series = Some(vec![100; 32]);
-        all.progress = Some(40);
-        all.toggle = Some(false);
-        all.indicator = Some(Indicator::Running);
-        for (w, h) in [(1, 1), (8, 8), (72, 72), (144, 144), (200, 100), (100, 30)] {
-            let frame = render(&all, w, h);
-            assert_eq!((frame.width(), frame.height()), (w, h));
-        }
-        // Faces differ by their marks, so the cache keeps them apart.
-        let mut cache = FrameCache::new(4);
-        let icons = Icons::default();
-        assert_ne!(
-            cache.frame(&accented, 72, 72, &icons).rgb(),
-            cache.frame(&plain, 72, 72, &icons).rgb()
-        );
-        assert_eq!(cache.rendered(), 2);
-    }
-
-    #[test]
-    fn state_marks_are_drawn() {
-        let plain = KeyFace::new(FaceStyle::Action, "Repo");
-        let base = render(&plain, 72, 72);
-        let marked = |face: &KeyFace| {
-            let frame = render(face, 72, 72);
-            (0..72u32)
-                .flat_map(|y| (0..72u32).map(move |x| (x, y)))
-                .filter(|(x, y)| frame.pixel(*x, *y) != base.pixel(*x, *y))
-                .count()
-        };
-        for indicator in [
-            Indicator::Ok,
-            Indicator::Warning,
-            Indicator::Error,
-            Indicator::Running,
-            Indicator::Unknown,
-            Indicator::Loading,
-        ] {
-            let face = plain.clone().with_indicator(indicator);
-            assert!(marked(&face) > 4, "{indicator:?}");
-            let frame = render(&face, 72, 72);
-            let color = indicator_color(indicator);
-            assert!(
-                (0..72u32).any(|x| (0..20u32).any(|y| frame.pixel(x, y) == Some(color))),
-                "{indicator:?}"
-            );
-        }
-        // Progress fills the bottom edge in proportion.
-        let half = render(&plain.clone().with_progress(Some(50)), 72, 72);
-        assert_eq!(half.pixel(10, 71), Some(BLUE));
-        assert_eq!(half.pixel(60, 71), Some(TRACK));
-        let mut toggled = plain.clone();
-        toggled.toggle = Some(true);
-        assert_eq!(render(&toggled, 72, 72).pixel(36, 0), Some(GREEN));
-        // Tiny keys do not panic.
-        let mut all = plain
-            .with_indicator(Indicator::Error)
-            .with_progress(Some(100));
-        all.toggle = Some(false);
-        for (w, h) in [(1, 1), (8, 8), (200, 100)] {
-            let frame = render(&all, w, h);
-            assert_eq!((frame.width(), frame.height()), (w, h));
-        }
-    }
-
-    #[test]
-    fn frames_are_cached_by_face_and_size() {
-        let mut cache = FrameCache::new(2);
-        let none = Icons::default();
-        let a = KeyFace::new(FaceStyle::Action, "A");
-        let b = KeyFace::new(FaceStyle::Action, "B");
-        let c = KeyFace::new(FaceStyle::Action, "C");
-        let first = cache.frame(&a, 72, 72, &none);
-        assert_eq!(cache.frame(&a, 72, 72, &none), first);
-        assert_eq!(cache.rendered(), 1);
-        cache.frame(&a, 96, 96, &none);
-        assert_eq!(cache.rendered(), 2);
-        // A different state is a different face.
-        cache.frame(&a.clone().with_indicator(Indicator::Ok), 72, 72, &none);
-        assert_eq!(cache.rendered(), 3);
-        cache.frame(&b, 72, 72, &none);
-        cache.frame(&c, 72, 72, &none);
-        assert_eq!(cache.len(), 2);
-        // `a` was dropped as the oldest.
-        cache.frame(&a, 72, 72, &none);
-        assert_eq!(cache.rendered(), 6);
-        cache.clear();
-        assert!(cache.is_empty());
-    }
-
-    fn appearance() -> KeyAppearance {
-        KeyAppearance::default()
-    }
-
-    fn rows_with(frame: &Frame, color: [u8; 3]) -> Vec<u32> {
-        (0..frame.height())
-            .filter(|y| (0..frame.width()).any(|x| frame.pixel(x, *y) == Some(color)))
-            .collect()
-    }
-
-    #[test]
-    fn appearance_sets_colours_size_and_position() {
-        use deckpilot_core::Color;
-        let plain = KeyFace::new(FaceStyle::Action, "Go");
-        let styled = plain.clone().with_appearance(Some(&KeyAppearance {
-            background: Some(Color([200, 0, 0])),
-            text_color: Some(Color([0, 255, 0])),
-            ..appearance()
-        }));
-        let frame = render(&styled, 72, 72);
-        assert_eq!(frame.pixel(0, 0), Some([200, 0, 0]));
-        assert_ne!(rows_with(&frame, [0, 255, 0]), Vec::<u32>::new());
-        assert_eq!(rows_with(&frame, WHITE), Vec::<u32>::new());
-
-        // Top, middle and bottom titles.
-        let at = |align| {
-            let face = plain.clone().with_appearance(Some(&KeyAppearance {
-                title_align: Some(align),
-                ..appearance()
-            }));
-            let rows = rows_with(&render(&face, 72, 72), WHITE);
-            (rows[0], *rows.last().unwrap())
-        };
-        let (top, _) = at(TitleAlign::Top);
-        let (middle_first, middle_last) = at(TitleAlign::Middle);
-        let (_, bottom) = at(TitleAlign::Bottom);
-        assert!(top < 12, "{top}");
-        assert!(middle_first > 24 && middle_last < 48);
-        assert!(bottom > 60, "{bottom}");
-
-        // Larger fonts use more rows; hidden titles none.
-        let height = |size| {
-            let face = plain.clone().with_appearance(Some(&KeyAppearance {
-                font_size: Some(size),
-                ..appearance()
-            }));
-            rows_with(&render(&face, 72, 72), WHITE).len()
-        };
-        assert_eq!(height(FontSize::Small), height(FontSize::Medium));
-        assert!(height(FontSize::Large) > height(FontSize::Medium));
-        let mut big_key = plain.clone().with_appearance(Some(&KeyAppearance {
-            font_size: Some(FontSize::Small),
-            ..appearance()
-        }));
-        let small_on_big = rows_with(&render(&big_key, 120, 120), WHITE).len();
-        big_key.appearance = None;
-        assert!(rows_with(&render(&big_key, 120, 120), WHITE).len() > small_on_big);
-        let hidden = plain.with_appearance(Some(&KeyAppearance {
-            show_title: Some(false),
-            ..appearance()
-        }));
-        assert_eq!(
-            rows_with(&render(&hidden, 72, 72), WHITE),
-            Vec::<u32>::new()
-        );
-        // Empty keys stay black whatever their appearance says.
-        let empty = KeyFace::empty().with_appearance(Some(&KeyAppearance {
-            background: Some(Color([1, 2, 3])),
-            ..appearance()
-        }));
-        assert_eq!(render(&empty, 8, 8).pixel(0, 0), Some([0, 0, 0]));
-    }
-
-    #[test]
-    fn icons_are_drawn_under_titles_and_state_marks() {
-        use deckpilot_core::{IconFit, IconRef};
-        let icon =
-            icons::import("Halves", &icons::tests::png(&icons::tests::halves(64, 64))).unwrap();
-        let mut profile = deckpilot_core::Profile::new("Work");
-        let id = icon.id;
-        profile.icons.push(icon);
-        let icons = Icons::from_profile(&profile);
-        let face = KeyFace::new(FaceStyle::Action, "Go")
-            .with_appearance(Some(&KeyAppearance {
-                icon: Some(IconRef {
-                    id,
-                    fit: IconFit::Fill,
-                }),
-                ..appearance()
-            }))
-            .with_indicator(Indicator::Error)
-            .with_progress(Some(100));
-        let frame = render_with(&face, 72, 72, &icons);
-        // The icon fills the key: red on the left, blue on the right.
-        assert_eq!(frame.pixel(2, 20), Some([255, 0, 0]));
-        assert_eq!(frame.pixel(40, 30), Some([0, 0, 255]));
-        // The title sits at the bottom by default, in white with a shadow.
-        let white = rows_with(&frame, WHITE);
-        assert!(*white.first().unwrap() > 40);
-        assert_ne!(rows_with(&frame, [0, 0, 0]), Vec::<u32>::new());
-        // State marks stay on top.
-        assert_eq!(frame.pixel(36, 71), Some(BLUE));
-        assert!(rows_with(&frame, RED).iter().any(|y| *y < 16));
-
-        // Without the decoded icon (e.g. missing), the key is drawn
-        // without it.
-        let missing = render(&face, 72, 72);
-        assert_eq!(missing.pixel(2, 20), Some(background(FaceStyle::Action)));
-    }
-
-    #[test]
-    fn wraps_and_truncates() {
-        assert_eq!(wrap("Start Work", 9, 4), vec!["Start", "Work"]);
-        assert_eq!(
-            wrap("Supercalifragilistic", 9, 4),
-            vec!["Supercali", "fragilist", "ic"]
-        );
-        assert_eq!(wrap("a b c d e f g h i j", 1, 2).len(), 2);
-        assert_eq!(truncate("ABCDEFGHIJK", 9), "ABCDEFGH.");
-        assert_eq!(wrap("", 9, 4), Vec::<String>::new());
-    }
-
-    #[test]
-    fn an_ellipsis_is_three_dots_not_a_question_mark() {
-        let draw = |text: &str| {
-            let mut frame = Frame::filled(8, 8, [0, 0, 0]);
-            draw_centered_at(&mut frame, text, 0, 1, WHITE, 0);
-            frame
-        };
-        assert_ne!(draw("…"), draw("?"));
-        assert_eq!(lit(&draw("…"), [0, 0, 0]), 12);
-    }
-}
+mod tests;

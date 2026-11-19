@@ -105,10 +105,12 @@ dirs = "7"
 elgato-streamdeck = { version = "0.14", default-features = false }
 # Plugin packages (`.dpplugin`): gzip-compressed ustar archives.
 flate2 = "1"
-font8x8 = { version = "0.3", default-features = false }
 getrandom = "0.4"
 hkdf = "0.13"
 hidapi = "2.6"
+# Key texts and icons (crates/deckpilot-render): outline fonts, rasterized
+# with anti-aliasing. `std` only: no system font lookup.
+ab_glyph = { version = "0.2.32", default-features = false, features = ["std"] }
 image = { version = "0.25", default-features = false }
 minisign-verify = "0.3"
 # Plugin navigation icons (SVG allow-list sanitizer); already in the tree

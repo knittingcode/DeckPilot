@@ -5,12 +5,13 @@
 //! (previews), so both draw exactly the same.
 
 mod face;
-mod glyphs;
 pub mod icons;
 mod marks;
+mod text;
 
 pub use face::{FrameCache, render, render_with};
 pub use icons::{IconError, Icons};
+pub use text::{FALLBACK_ICON, has_icon, icon_names};
 
 /// Encodes a frame as PNG, e.g. for a preview in the app.
 pub fn frame_png(frame: &deckpilot_device::Frame) -> Option<Vec<u8>> {
