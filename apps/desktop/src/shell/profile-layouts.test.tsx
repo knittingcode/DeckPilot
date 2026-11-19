@@ -9,7 +9,7 @@ import { ProfileLayouts } from "@/shell/profile-layouts"
 import { api, resetApi } from "@/test/api-mock"
 import { installDomStubs } from "@/test/dom"
 import { renderWithApp } from "@/test/render"
-import { sharedLayout, unknownModelLayout } from "@/test/shared-layouts"
+import { assignment, sharedLayout, unknownModelLayout } from "@/test/shared-layouts"
 import { resetToasts, toast } from "@/test/toast"
 
 vi.mock("@/lib/api", async () => (await import("@/test/api-mock")).apiModule)
@@ -61,7 +61,7 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-async function renderLayouts(onOpenLayout?: (id: string) => void) {
+async function renderLayouts(onOpenLayout?: (layout: SharedLayoutSummary) => void) {
   const view = renderWithApp(<ProfileLayouts profileId="profile-1" onOpenLayout={onOpenLayout} />)
   await screen.findByRole("list")
   return view
@@ -156,11 +156,30 @@ describe("layouts of a profile", () => {
   })
 
   it("warns about an unknown model and opens layouts", async () => {
-    api.profileLayouts.mockResolvedValue([entry(old, 0)])
+    api.profileLayouts.mockResolvedValue([entry(old, 0), entry(desk, 1)])
     const onOpen = vi.fn()
     const { user } = await renderLayouts(onOpen)
     expect(item("Old pad").getByText("Unknown model")).toBeInTheDocument()
-    await user.click(item("Old pad").getByRole("button", { name: "Open Old pad" }))
-    expect(onOpen).toHaveBeenCalledWith("old")
+    // The Device Editor has no model to show it on.
+    expect(item("Old pad").getByRole("button", { name: "Open Old pad" })).toBeDisabled()
+    await user.click(item("Desk").getByRole("button", { name: "Open Desk" }))
+    expect(onOpen).toHaveBeenCalledWith(desk)
+  })
+
+  it("says which other profiles use a layout", async () => {
+    api.profileLayouts.mockResolvedValue([
+      entry(
+        sharedLayout({
+          id: "desk",
+          name: "Desk",
+          profiles: [assignment("profile-1", "Work"), assignment("profile-2", "Home")],
+        }),
+        0,
+      ),
+      entry(music, 1),
+    ])
+    await renderLayouts()
+    expect(item("Desk").getByText("Also in Home")).toBeInTheDocument()
+    expect(item("Music").queryByText(/Also in/)).not.toBeInTheDocument()
   })
 })

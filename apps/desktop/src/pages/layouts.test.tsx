@@ -190,13 +190,26 @@ describe("Layouts page", () => {
     expect(screen.getByRole("checkbox", { name: "Travel" })).toBeEnabled()
   })
 
-  it("opens a used layout in the Device Editor, not an unused one", async () => {
+  it("opens a used layout in the Device Editor", async () => {
     const { user, context } = await renderPage()
-    expect(
-      row("Spare").getByRole("button", { name: "Open Spare in the Device Editor" }),
-    ).toBeDisabled()
     await user.click(row("Desk").getByRole("button", { name: "Open Desk in the Device Editor" }))
     expect(context.navigate).toHaveBeenCalledWith("designer")
+  })
+
+  it("offers to use an unused layout in the profile being edited before opening it", async () => {
+    api.assignLayout.mockResolvedValue(null)
+    const { user, context } = await renderPage()
+    await user.click(row("Spare").getByRole("button", { name: "Open Spare in the Device Editor" }))
+    const dialog = await screen.findByRole("alertdialog")
+    expect(dialog).toHaveTextContent("Use “Spare” in Work?")
+    expect(context.navigate).not.toHaveBeenCalled()
+    await user.click(within(dialog).getByRole("button", { name: "Use in Work" }))
+    await waitFor(() => {
+      expect(api.assignLayout).toHaveBeenCalledWith("profile-1", "layout-2")
+    })
+    await waitFor(() => {
+      expect(context.navigate).toHaveBeenCalledWith("designer")
+    })
   })
 
   it("creates a layout for a model, assigned to the profile being edited", async () => {

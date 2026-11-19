@@ -32,6 +32,11 @@ interface CanvasProps {
   faces?: Map<string, KeyFace>
   /** Rendered key images (PNG data URLs); shown instead of the drawn face. */
   images?: Map<string, string>
+  /**
+   * Keys that cannot do anything now, with why in a word or two (e.g. "No
+   * previous layout"): drawn dimmed with that detail, as on the device.
+   */
+  unavailable?: Map<string, string>
   icons?: Map<string, string | null | undefined>
   /** Text for controls without a display (dials). */
   captions?: Map<string, string>
@@ -118,8 +123,10 @@ function Control({
   const selected = props.selection?.some((c) => sameControl(c, control)) ?? false
   const interactive = Boolean(props.onSelect)
   const face = props.faces?.get(key)
-  const image = props.images?.get(key)
-  const summary = props.summaries?.get(key) ?? (shape === "dial" ? props.captions?.get(key) : "")
+  const unavailable = props.unavailable?.get(key)
+  const image = unavailable === undefined ? props.images?.get(key) : undefined
+  const described = props.summaries?.get(key) ?? (shape === "dial" ? props.captions?.get(key) : "")
+  const summary = unavailable && described ? `${described} (${unavailable})` : described
   const refusal =
     drop.isOver && props.dropRejection
       ? props.dropRejection(control, drop.active?.data.current)
@@ -181,7 +188,16 @@ function Control({
         // The key as the device draws it, edge to edge; the button carries the name.
         <img src={image} alt="" draggable={false} className="size-full object-cover" />
       ) : (
-        <FaceTile face={face} icon={props.icons?.get(key)} compact={shape === "zone"} />
+        <FaceTile
+          face={
+            unavailable === undefined
+              ? face
+              : { ...(face ?? { style: "action", title: "" }), detail: unavailable }
+          }
+          icon={props.icons?.get(key)}
+          compact={shape === "zone"}
+          unavailable={unavailable !== undefined}
+        />
       )}
     </button>
   )

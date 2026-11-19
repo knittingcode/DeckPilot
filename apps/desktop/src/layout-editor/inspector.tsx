@@ -30,9 +30,11 @@ import {
   triggerKey,
   triggerLabel,
 } from "@/lib/layout-model"
+import { SWITCH_LAYOUT, layoutSwitchOf } from "@/lib/layout-navigation"
 import type {
   ActionType,
   BindingTarget,
+  ControlBinding,
   ControlId,
   DeviceLayout,
   DeviceModel,
@@ -41,6 +43,7 @@ import type {
   Trigger,
 } from "@/lib/types"
 
+import { LayoutNavigationPanels, type LayoutNavigationContext } from "./layout-switch-inspector"
 import {
   decodeTarget,
   encodeTarget,
@@ -88,6 +91,8 @@ interface InspectorProps {
    * cannot run from it, with the reason (`preview_layout`).
    */
   notRun?: { trigger: Trigger; reason: string }[]
+  /** For keys that switch layouts or go back to the previous one. */
+  layoutNavigation?: LayoutNavigationContext
 }
 
 /** Settings of the selected control, or a summary of a multi-selection. */
@@ -161,6 +166,7 @@ function ControlInspector({
   onEditWorkflow,
   incompatible,
   notRun = [],
+  layoutNavigation,
 }: InspectorProps & { control: ControlId }) {
   const bindings = bindingsFor(draft, pageId, control)
   const gestures = acceptsGestures(model, control)
@@ -173,6 +179,16 @@ function ControlInspector({
   const why = incompatible
     ? (target: BindingTarget, trigger: Trigger) => incompatible(control, target, trigger)
     : undefined
+  // A Switch layout key without a label shows its layout's name.
+  const labelPlaceholder = (binding: ControlBinding) => {
+    if (binding.target.type !== "action" || !layoutNavigation) return undefined
+    const id = binding.target.action
+    const action = profile?.actions.find((a) => a.id === id)
+    if (action?.actionType !== SWITCH_LAYOUT) return undefined
+    const layout = layoutSwitchOf(action, binding.target.overrides).layout
+    const name = layoutNavigation.layouts.find((l) => l.id === layout)?.name
+    return name
+  }
   return (
     <Card className="h-fit">
       <CardHeader className="flex flex-row items-center gap-2">
@@ -201,6 +217,7 @@ function ControlInspector({
             onEditWorkflow={onEditWorkflow}
             incompatible={why}
             notRun={notRun}
+            labelPlaceholder={labelPlaceholder}
           />
         )}
         {!gestures && controlMessages.length > 0 && (
@@ -276,7 +293,7 @@ function ControlInspector({
               {binding && (
                 <Input
                   aria-label={`Label for ${triggerLabel(trigger)}`}
-                  placeholder="Label (optional)"
+                  placeholder={labelPlaceholder(binding) ?? "Label (optional)"}
                   maxLength={32}
                   value={binding.label ?? ""}
                   onChange={(e) => {
@@ -302,6 +319,16 @@ function ControlInspector({
             </Button>
           )}
         </div>
+        {layoutNavigation && profile && (
+          <LayoutNavigationPanels
+            draft={draft}
+            pageId={pageId}
+            control={control}
+            actions={profile.actions}
+            context={layoutNavigation}
+            onChange={onChange}
+          />
+        )}
         <p className="text-xs text-muted-foreground">
           Only events this model can produce are offered. Unbound controls stay blank on the device.
         </p>

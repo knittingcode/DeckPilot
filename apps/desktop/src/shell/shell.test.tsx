@@ -110,6 +110,8 @@ beforeEach(() => {
   api.listIcons.mockResolvedValue([])
   api.pageTree.mockResolvedValue({ pages: [], warnings: [] })
   api.listActionTypes.mockResolvedValue([])
+  api.listSharedLayouts.mockResolvedValue([])
+  api.profileLayouts.mockResolvedValue([])
   api.getGestureDefaults.mockResolvedValue({ doubleClickMs: 300, longPressMs: 700 })
   api.listExecutions.mockResolvedValue([])
   api.openWindow.mockResolvedValue(null)

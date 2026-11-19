@@ -18,8 +18,14 @@ import { Switch } from "@/components/ui/switch"
 import type { ActionType } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-import { catalogDragId, filterCatalog, type CatalogEntry, type CatalogGroup } from "./catalog"
-import type { DragSource } from "./editing"
+import {
+  catalogDragId,
+  filterCatalog,
+  presetDragId,
+  type CatalogEntry,
+  type CatalogGroup,
+} from "./catalog"
+import type { ActionPreset, DragSource } from "./editing"
 import { loadCompatibleOnly, saveCompatibleOnly } from "./library-sidebar"
 import type { TargetGroup, TargetOption } from "./targets"
 
@@ -233,6 +239,47 @@ function CatalogItem({ entry, incompatible }: { entry: CatalogEntry; incompatibl
   )
 }
 
+/**
+ * A ready-made action of a type in the library, e.g. "Switch to Teams": the
+ * profile's action that is exactly it, else a new one, is put on the control.
+ */
+export interface PresetEntry {
+  /** Unique among the presets. */
+  key: string
+  label: string
+  description: string
+  /** The catalog group it is listed in, e.g. "Navigation". */
+  category: string
+  type: ActionType
+  preset: ActionPreset
+}
+
+function PresetItem({ entry, incompatible }: { entry: PresetEntry; incompatible?: string }) {
+  const source: DragSource = { type: "actionType", actionType: entry.type.id, preset: entry.preset }
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: presetDragId(entry.key),
+    data: source,
+    disabled: incompatible !== undefined,
+  })
+  const icon = <ActionIcon name={entry.preset.icon ?? entry.type.node?.icon} />
+  if (incompatible !== undefined) {
+    return <IncompatibleEntry label={entry.label} reason={incompatible} icon={icon} />
+  }
+  return (
+    <li
+      ref={setNodeRef}
+      className={cn(ENTRY, isDragging && "opacity-60")}
+      {...attributes}
+      {...listeners}
+      aria-label={`Drag ${entry.label} onto a control`}
+      title={entry.description}
+    >
+      <EntryIcon>{icon}</EntryIcon>
+      <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+    </li>
+  )
+}
+
 /** A group of the library that can be folded away. */
 function Section({
   label,
@@ -282,6 +329,7 @@ const matches = (text: string, needle: string) => text.toLowerCase().includes(ne
 export function LibraryPanel({
   groups,
   catalog = [],
+  presets = [],
   multiAction = false,
   variant = "card",
   compatibility,
@@ -289,6 +337,8 @@ export function LibraryPanel({
   groups: TargetGroup[]
   /** Action types that can be placed directly; see `catalogGroups`. */
   catalog?: CatalogGroup[]
+  /** Ready-made actions listed with the catalog's group of their category. */
+  presets?: PresetEntry[]
   /** Offers "Multi Action", which puts a new step workflow on a key. */
   multiAction?: boolean
   /**
@@ -335,6 +385,16 @@ export function LibraryPanel({
       entries: hiding ? group.entries.filter((e) => whyNot(e.type) === undefined) : group.entries,
     }))
     .filter((group) => group.entries.length > 0)
+  const shownPresets = presets.filter(
+    (p) =>
+      matches(`${p.label} ${p.description} ${p.category}`, needle) &&
+      !(hiding && whyNot(p.type) !== undefined),
+  )
+  const presetsOf = (category: string) => shownPresets.filter((p) => p.category === category)
+  for (const category of new Set(shownPresets.map((p) => p.category))) {
+    if (!types.some((group) => group.label === category))
+      types.push({ label: category, entries: [] })
+  }
   const folder = !searching || matches("new folder folders navigation", needle)
   const multi =
     multiAction && (!searching || matches("new multi action sequence steps workflow", needle))
@@ -446,7 +506,7 @@ export function LibraryPanel({
             <Section
               key={id}
               label={id}
-              count={group.entries.length}
+              count={group.entries.length + presetsOf(group.label).length}
               open={isOpen(id)}
               onToggle={() => {
                 toggle(id)
@@ -454,6 +514,9 @@ export function LibraryPanel({
             >
               {group.entries.map((entry) => (
                 <CatalogItem key={entry.type.id} entry={entry} incompatible={whyNot(entry.type)} />
+              ))}
+              {presetsOf(group.label).map((entry) => (
+                <PresetItem key={entry.key} entry={entry} incompatible={whyNot(entry.type)} />
               ))}
             </Section>
           )

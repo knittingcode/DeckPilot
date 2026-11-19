@@ -983,6 +983,11 @@ export interface DeviceInfo {
   source: string
   /** Absent from older agents. */
   descriptor?: DeviceDescriptor
+  /**
+   * The layout *Back to previous layout* returns this device to, in the
+   * active profile; absent when there is none (and from older agents).
+   */
+  previousLayout?: string
 }
 
 export interface ProfileInfo {

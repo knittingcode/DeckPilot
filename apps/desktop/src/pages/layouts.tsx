@@ -260,8 +260,10 @@ function LayoutRow({
   onChanged: () => void
   onDialog: (dialog: RowDialog) => void
 }) {
-  const open = useOpenLayout()
-  const unused = layout.profiles.length === 0
+  const { open, dialog } = useOpenLayout()
+  // Unused: opening offers to assign it to the profile being edited, which
+  // a layout of an unknown model cannot be.
+  const closed = layout.profiles.length === 0 && hasUnknownModel(layout)
   return (
     <TableRow data-layout={layout.id}>
       <TableCell className="max-w-64 truncate font-medium">{layout.name}</TableCell>
@@ -283,12 +285,12 @@ function LayoutRow({
           <Tooltip>
             <TooltipTrigger asChild>
               {/* A wrapper: disabled buttons get no pointer events, so no tooltip. */}
-              <span tabIndex={unused ? 0 : -1} className="inline-flex">
+              <span tabIndex={closed ? 0 : -1} className="inline-flex">
                 <Button
                   variant="ghost"
                   size="icon-sm"
                   aria-label={`Open ${layout.name} in the Device Editor`}
-                  disabled={unused}
+                  disabled={closed}
                   onClick={() => {
                     open(layout)
                   }}
@@ -298,9 +300,10 @@ function LayoutRow({
               </span>
             </TooltipTrigger>
             <TooltipContent>
-              {unused ? "Assign it to a profile first" : "Open in Device Editor"}
+              {closed ? "Its device model is unknown" : "Open in Device Editor"}
             </TooltipContent>
           </Tooltip>
+          {dialog}
           <AssignmentPopover layout={layout} onChanged={onChanged} />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

@@ -5,6 +5,7 @@
 
 import type { ActionInput } from "@/lib/api"
 import { creatableTypes } from "@/lib/modules"
+import type { ActionPreset } from "./editing"
 import type {
   ActionInstance,
   ActionParameters,
@@ -128,4 +129,55 @@ export function filterCatalog(groups: CatalogGroup[], query: string): CatalogGro
       ),
     }))
     .filter((group) => group.entries.length > 0)
+}
+
+/** The settings of a preset over the type's defaults; empty texts are left out. */
+function presetParameters(type: ActionType, preset: ActionPreset): ActionParameters {
+  return Object.fromEntries(
+    Object.entries({ ...defaultParameters(type), ...preset.parameters }).filter(
+      ([, value]) => !(value.type === "text" && value.value === ""),
+    ),
+  )
+}
+
+/**
+ * An action of the profile that is exactly what `preset` makes: the same
+ * type and settings and no label of its own. Reused like `existingDefault`.
+ */
+export function existingPreset(
+  actions: ActionInstance[],
+  type: ActionType,
+  preset: ActionPreset,
+): ActionInstance | undefined {
+  const wanted = presetParameters(type, preset)
+  const keys = type.parameters.map((p) => p.key)
+  const empty = (value: ParameterValue | undefined) =>
+    value === undefined || (value.type === "text" && value.value === "") ? undefined : value
+  return actions.find(
+    (action) =>
+      action.actionType === type.id &&
+      !action.label &&
+      keys.every((key) => sameValue(empty(action.parameters[key]), wanted[key])),
+  )
+}
+
+/** What to create for a preset dropped on a control. */
+export function newPresetAction(
+  actions: ActionInstance[],
+  type: ActionType,
+  preset: ActionPreset,
+): ActionInput {
+  return {
+    name: freeActionName(actions, preset.name),
+    actionType: type.id,
+    parameters: presetParameters(type, preset),
+    description: "",
+    icon: preset.icon ?? type.node?.icon ?? null,
+    label: null,
+  }
+}
+
+/** The id of a library entry that puts `preset` (named by `key`) on a control. */
+export function presetDragId(key: string): string {
+  return `library:preset:${key}`
 }

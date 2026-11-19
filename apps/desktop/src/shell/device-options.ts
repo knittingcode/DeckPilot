@@ -70,3 +70,21 @@ export function currentOption(
     options.find((o) => o.model === model)
   )
 }
+
+/**
+ * The connected device the editor is showing, as the agent reports it: the
+ * one it was chosen through, else a connected device of the model.
+ */
+export function selectedDevice(
+  devices: DeviceInfo[],
+  model: string | null,
+  device: DeviceId | null,
+): DeviceInfo | null {
+  if (!model) return null
+  const connected = devices.filter((d) => d.state === "connected" && modelOf(d) === model)
+  return (
+    (device && connected.find((d) => d.id.serial === device.serial && device.model === model)) ||
+    connected[0] ||
+    null
+  )
+}

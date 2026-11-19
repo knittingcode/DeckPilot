@@ -1,11 +1,16 @@
-import { AlertTriangle, ArrowDown, ArrowUp, ExternalLink, Plus, Star, X } from "lucide-react"
+import { ArrowDown, ArrowUp, Plus, SquarePen, X } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
 import { ConfirmDialog } from "@/components/confirm-dialog"
-import { LayoutCompatibilitySummary, LayoutDevice } from "@/components/layout-compatibility"
+import { LayoutDevice } from "@/components/layout-compatibility"
 import { ErrorNotice, Loading } from "@/components/page"
-import { Badge } from "@/components/ui/badge"
+import {
+  InlineStatus,
+  SettingsGroup,
+  SettingsRow,
+  SettingsSection,
+} from "@/components/settings-layout"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -22,19 +27,17 @@ import { fitsModel, hasUnknownModel, modelLabel } from "@/lib/shared-layouts"
 import type { ProfileLayoutEntry, SharedLayoutSummary } from "@/lib/types"
 
 /**
- * The shared layouts assigned to one profile, in the profile's order: the
- * default layout per device model, the order, removing (the layout itself
- * is kept) and assigning more.
- *
- * phase 2: shown in Settings › Profiles; `onOpenLayout` opens the layout
- * in the Device Editor there.
+ * Settings › Profiles, "Layouts": the shared layouts assigned to one
+ * profile, in the profile's order, with the default layout per device
+ * model, the order, removing (the layout itself is kept), assigning more
+ * and opening one in the Device Editor.
  */
 export function ProfileLayouts({
   profileId,
   onOpenLayout,
 }: {
   profileId: string
-  onOpenLayout?: (layoutId: string) => void
+  onOpenLayout?: (layout: SharedLayoutSummary) => void
 }) {
   const { revision, refresh } = useAppContext()
   const key = `${profileId}:${revision}`
@@ -57,9 +60,10 @@ export function ProfileLayouts({
     }
   }
 
-  if (entries.state.status === "loading") return <Loading />
-  if (entries.state.status === "error") return <ErrorNotice error={entries.state.error} />
-  const list = [...entries.state.data].sort((a, b) => a.position - b.position)
+  const list =
+    entries.state.status === "ready"
+      ? [...entries.state.data].sort((a, b) => a.position - b.position)
+      : []
   const order = list.map((e) => e.layout.id)
   const assigned = new Set(order)
   const available =
@@ -73,45 +77,10 @@ export function ProfileLayouts({
   }
 
   return (
-    <section className="grid gap-2" aria-label="Layouts of the profile">
-      {list.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No layouts assigned to this profile.</p>
-      ) : (
-        <ol className="grid divide-y rounded-md border">
-          {list.map((entry, index) => (
-            <EntryRow
-              key={entry.layout.id}
-              entry={entry}
-              first={index === 0}
-              last={index === list.length - 1}
-              busy={busy}
-              onMove={(by) => {
-                move(index, by)
-              }}
-              onDefault={() => {
-                void run(
-                  () => api.setDefaultLayout(profileId, entry.layout.id),
-                  `Default layout for ${modelLabel(entry.layout)} changed`,
-                )
-              }}
-              onRemove={() => {
-                void run(
-                  () => api.unassignLayout(profileId, entry.layout.id),
-                  "Layout removed from the profile; the layout is kept",
-                )
-              }}
-              onOpen={
-                onOpenLayout
-                  ? () => {
-                      onOpenLayout(entry.layout.id)
-                    }
-                  : undefined
-              }
-            />
-          ))}
-        </ol>
-      )}
-      <div>
+    <SettingsSection
+      title="Layouts"
+      description="The layouts this profile uses, in its order. Each device shows the default layout of its model; Switch layout keys show the others. Other profiles may use the same layouts."
+      actions={
         <AssignPicker
           layouts={available}
           loading={all.state.status === "loading"}
@@ -120,13 +89,56 @@ export function ProfileLayouts({
             void run(() => api.assignLayout(profileId, layout.id), `${layout.name} assigned`)
           }}
         />
-        {all.state.status === "error" && <ErrorNotice error={all.state.error} />}
-      </div>
-    </section>
+      }
+    >
+      {entries.state.status === "loading" && <Loading />}
+      {entries.state.status === "error" && <ErrorNotice error={entries.state.error} />}
+      {entries.state.status === "ready" &&
+        (list.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No layouts assigned to this profile.</p>
+        ) : (
+          <SettingsGroup role="list" aria-label="Layouts of the profile">
+            {list.map((entry, index) => (
+              <EntryRow
+                key={entry.layout.id}
+                profileId={profileId}
+                entry={entry}
+                first={index === 0}
+                last={index === list.length - 1}
+                busy={busy}
+                onMove={(by) => {
+                  move(index, by)
+                }}
+                onDefault={() => {
+                  void run(
+                    () => api.setDefaultLayout(profileId, entry.layout.id),
+                    `Default layout for ${modelLabel(entry.layout)} changed`,
+                  )
+                }}
+                onRemove={() => {
+                  void run(
+                    () => api.unassignLayout(profileId, entry.layout.id),
+                    "Layout removed from the profile; the layout is kept",
+                  )
+                }}
+                onOpen={
+                  onOpenLayout
+                    ? () => {
+                        onOpenLayout(entry.layout)
+                      }
+                    : undefined
+                }
+              />
+            ))}
+          </SettingsGroup>
+        ))}
+      {all.state.status === "error" && <ErrorNotice error={all.state.error} />}
+    </SettingsSection>
   )
 }
 
 function EntryRow({
+  profileId,
   entry,
   first,
   last,
@@ -136,6 +148,7 @@ function EntryRow({
   onRemove,
   onOpen,
 }: {
+  profileId: string
   entry: ProfileLayoutEntry
   first: boolean
   last: boolean
@@ -147,78 +160,128 @@ function EntryRow({
 }) {
   const { layout } = entry
   const model = modelLabel(layout)
+  const others = layout.profiles.filter((p) => p.profileId !== profileId)
   return (
-    <li
-      className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5 text-sm"
-      aria-label={layout.name}
-    >
-      <span className="min-w-0 flex-1 truncate font-medium">{layout.name}</span>
-      <span className="max-w-48 min-w-0 text-muted-foreground">
-        <LayoutDevice layout={layout} />
-      </span>
-      {!hasUnknownModel(layout) && <LayoutCompatibilitySummary layout={layout} />}
-      {entry.unavailable.length > 0 && <Unavailable items={entry.unavailable} />}
-      {entry.isDefault ? (
-        <Badge variant="secondary" aria-label={`Default for ${model}`}>
-          <Star aria-hidden />
-          Default for {model}
-        </Badge>
-      ) : (
-        <Button variant="ghost" size="xs" disabled={busy} onClick={onDefault}>
-          Make default for {model}
-        </Button>
-      )}
-      <span className="flex items-center gap-0.5">
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label={`Move ${layout.name} up`}
-          disabled={busy || first}
-          onClick={() => {
-            onMove(-1)
-          }}
-        >
-          <ArrowUp />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label={`Move ${layout.name} down`}
-          disabled={busy || last}
-          onClick={() => {
-            onMove(1)
-          }}
-        >
-          <ArrowDown />
-        </Button>
-        {onOpen && (
+    <div role="listitem" aria-label={layout.name}>
+      <SettingsRow
+        className="py-1.5"
+        label={<span className="block truncate">{layout.name}</span>}
+        description={
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="max-w-48 min-w-0">
+              <LayoutDevice layout={layout} />
+            </span>
+            {entry.isDefault && (
+              <InlineStatus tone="positive" aria-label={`Default for ${model}`}>
+                Default for {model}
+              </InlineStatus>
+            )}
+            {others.length > 0 && (
+              <InlineStatus
+                title={`Edits apply to ${others.map((p) => p.profileName).join(", ")} too`}
+              >
+                Also in {others.map((p) => p.profileName).join(", ")}
+              </InlineStatus>
+            )}
+            {!hasUnknownModel(layout) && <Compatibility layout={layout} />}
+            {entry.unavailable.length > 0 && <Unavailable items={entry.unavailable} />}
+          </span>
+        }
+      >
+        {!entry.isDefault && (
+          <Button variant="ghost" size="xs" disabled={busy} onClick={onDefault}>
+            Make default for {model}
+          </Button>
+        )}
+        <span className="flex items-center gap-0.5">
           <Button
             variant="ghost"
             size="icon-xs"
-            aria-label={`Open ${layout.name}`}
-            onClick={onOpen}
+            aria-label={`Move ${layout.name} up`}
+            disabled={busy || first}
+            onClick={() => {
+              onMove(-1)
+            }}
           >
-            <ExternalLink />
+            <ArrowUp />
           </Button>
-        )}
-        <ConfirmDialog
-          trigger={
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={`Move ${layout.name} down`}
+            disabled={busy || last}
+            onClick={() => {
+              onMove(1)
+            }}
+          >
+            <ArrowDown />
+          </Button>
+          {onOpen && (
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label={`Remove ${layout.name} from the profile`}
-              disabled={busy}
+              aria-label={`Open ${layout.name}`}
+              title="Open in the Device Editor"
+              disabled={hasUnknownModel(layout)}
+              onClick={onOpen}
             >
-              <X />
+              <SquarePen />
             </Button>
-          }
-          title={`Remove “${layout.name}” from this profile?`}
-          description="The layout itself is kept, with its pages and keys, and stays available to other profiles and in Layouts."
-          confirmLabel="Remove"
-          onConfirm={onRemove}
-        />
-      </span>
-    </li>
+          )}
+          <ConfirmDialog
+            trigger={
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={`Remove ${layout.name} from the profile`}
+                disabled={busy}
+              >
+                <X />
+              </Button>
+            }
+            title={`Remove “${layout.name}” from this profile?`}
+            description="The layout itself is kept, with its pages and keys, and stays available to other profiles and in Layouts."
+            confirmLabel="Remove"
+            onConfirm={onRemove}
+          />
+        </span>
+      </SettingsRow>
+    </div>
+  )
+}
+
+/** How many other models the layout fits; the tooltip explains each model. */
+function Compatibility({ layout }: { layout: SharedLayoutSummary }) {
+  const others = layout.compatibility.slice(1)
+  const fits = others.filter((c) => fitsModel(c.fit)).length
+  const misses = others.filter((c) => c.fit.type === "missing").length
+  const lines = layout.compatibility.map((c) => `${c.modelName}: ${c.explanation}`)
+  const label =
+    others.length === 0
+      ? "Own model only"
+      : [fits > 0 && `fits ${fits}`, misses > 0 && `misses ${misses}`].filter(Boolean).join(", ") ||
+        "Other models unknown"
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <InlineStatus
+          tabIndex={0}
+          role="note"
+          tone={misses > 0 ? "neutral" : "positive"}
+          aria-label={`Compatibility: ${lines.join("; ")}`}
+          className="rounded focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          {label}
+        </InlineStatus>
+      </TooltipTrigger>
+      <TooltipContent>
+        <ul className="grid gap-0.5">
+          {lines.map((text) => (
+            <li key={text}>{text}</li>
+          ))}
+        </ul>
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -228,15 +291,15 @@ function Unavailable({ items }: { items: string[] }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span
+        <InlineStatus
           tabIndex={0}
           role="note"
+          tone="warning"
           aria-label={`${label} in this profile: ${items.join("; ")}`}
-          className="inline-flex items-center gap-1 rounded text-xs text-amber-700 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none dark:text-amber-400"
+          className="rounded focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
-          <AlertTriangle className="size-3.5" aria-hidden />
           {label}
-        </span>
+        </InlineStatus>
       </TooltipTrigger>
       <TooltipContent>
         <p className="mb-1 font-medium">Cannot run in this profile:</p>
@@ -271,7 +334,7 @@ function AssignPicker({
           Assign layout
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-72">
+      <DropdownMenuContent align="end" className="w-72">
         <DropdownMenuLabel className="text-xs text-muted-foreground">
           {sorted.length === 0 ? "Every layout is assigned" : "Layouts not in this profile"}
         </DropdownMenuLabel>

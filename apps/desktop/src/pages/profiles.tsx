@@ -45,6 +45,8 @@ import { failureMessage, toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
 import { formatShortTimestamp, formatTimestamp } from "@/lib/format"
 import type { ProfileSummary } from "@/lib/types"
+import { useOpenLayout } from "@/shell/open-layout"
+import { ProfileLayouts } from "@/shell/profile-layouts"
 
 type DialogState =
   | { mode: "create" }
@@ -60,6 +62,7 @@ export function ProfilesSettings() {
   const { profiles, refresh, editingProfileId, setEditingProfileId } = useAppContext()
   const [dialog, setDialog] = useState<DialogState>(null)
   const { state } = useEditingProfile()
+  const { open: openLayout, dialog: openDialog } = useOpenLayout()
 
   const run = (operation: () => Promise<unknown>, message: string, failed: string) => {
     operation().then(
@@ -231,12 +234,15 @@ export function ProfilesSettings() {
               <Property label="Actions">{state.data.profile.actions.length}</Property>
               <Property label="Workflows">{state.data.profile.workflows.length}</Property>
               <Property label="Projects">{state.data.profile.projects.length}</Property>
-              <Property label="Layouts">{state.data.profile.layouts.length}</Property>
             </PropertyList>
           </SettingsGroup>
           {state.data.issues.length > 0 && <ErrorNotice error={state.data.issues.join(" ")} />}
         </SettingsSection>
       )}
+      {state.status === "ready" && (
+        <ProfileLayouts profileId={state.data.profile.id} onOpenLayout={openLayout} />
+      )}
+      {openDialog}
 
       <ProfileDialog
         state={dialog}
@@ -305,8 +311,8 @@ function ProfileMenu({
         title={`Delete “${profile.name}”?`}
         description={
           active
-            ? "This profile is active on the device. Its actions, workflows, projects and layouts are deleted and the device shows no layout until another profile is activated."
-            : "Its actions, workflows, projects and layouts are deleted. This cannot be undone."
+            ? "This profile is active on the device. Its actions, workflows and projects are deleted and the device shows no layout until another profile is activated. Its layouts are kept: they stay in Layouts, used by no profile unless another profile uses them too."
+            : "Its actions, workflows and projects are deleted. This cannot be undone. Its layouts are kept: they stay in Layouts, used by no profile unless another profile uses them too."
         }
         onConfirm={onDelete}
       />
@@ -389,8 +395,8 @@ function ProfileForm({
         <DialogTitle>{titles[state.mode]}</DialogTitle>
         {state.mode === "duplicate" && (
           <DialogDescription>
-            The copy gets its own actions, workflows, projects and layouts. Changing one profile
-            never changes the other.
+            The copy gets its own actions, workflows and projects, and independent copies of its
+            layouts. Changing one profile never changes the other.
           </DialogDescription>
         )}
       </DialogHeader>
