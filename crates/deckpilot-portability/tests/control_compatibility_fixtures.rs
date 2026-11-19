@@ -1,10 +1,12 @@
 //! Action/control compatibility on databases of earlier releases
 //! (`docs/device-controls.md`, "Migration"): the storage fixtures
-//! (`crates/deckpilot-storage/tests/fixtures`: 0.5.0, 0.6.0 and schema 8)
-//! open with this version, every profile loads and validates, every stored
-//! binding is the same, byte for byte, after loading, checking and saving
-//! again, and every key binding is compatible with the built-in action
-//! types. Every test works on a copy.
+//! (`crates/deckpilot-storage/tests/fixtures`: 0.5.0, 0.6.0, schema 8 and
+//! 0.8.1) open with this version, every profile loads and validates, every
+//! stored binding is the same, byte for byte, after loading, checking and
+//! saving again, and every key binding is compatible with the built-in
+//! action types. Every test works on a copy. (That the upgrade to schema 10
+//! moves the bindings into the shared layout tables unchanged is checked
+//! row by row in `deckpilot-storage`'s upgrade tests.)
 
 use std::path::{Path, PathBuf};
 
@@ -19,7 +21,7 @@ use serde_json::Value;
 /// fixtures, protecting demonstration data only).
 const PASSWORD: &str = "deckpilot-dev";
 
-const FIXTURES: [&str; 3] = ["v0.5.0-2", "v0.6.0", "schema8"];
+const FIXTURES: [&str; 4] = ["v0.5.0-2", "v0.6.0", "schema8", "v0.8.1"];
 
 struct Copy(PathBuf);
 
@@ -77,6 +79,29 @@ fn stored(store: &SqliteStore, id: &str) -> (u32, String) {
         .unwrap()
 }
 
+/// Every binding of a profile's stored layouts (schema 10: in the shared
+/// `layouts` table, in the profile's order), serialized.
+fn stored_bindings(store: &SqliteStore, id: &str) -> Vec<String> {
+    let documents: Vec<String> = store
+        .connection_for_tests()
+        .prepare(
+            "SELECT l.document FROM profile_layouts pl JOIN layouts l ON l.id = pl.layout_id
+             WHERE pl.profile_id = ?1 ORDER BY pl.position",
+        )
+        .unwrap()
+        .query_map([id], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    documents
+        .iter()
+        .flat_map(|document| {
+            let layout: Value = serde_json::from_str(document).unwrap();
+            bindings(&serde_json::json!({ "layouts": [layout] }))
+        })
+        .collect()
+}
+
 /// Every binding of a profile document, serialized, in document order.
 fn bindings(document: &Value) -> Vec<String> {
     document["layouts"]
@@ -103,13 +128,13 @@ fn stored_bindings_are_kept_and_key_bindings_stay_compatible() {
         assert!(!profiles.is_empty(), "{fixture} has profiles");
         for summary in profiles {
             let id = summary.id.to_string();
-            let (version, document) = stored(&store, &id);
-            let before: Value = serde_json::from_str(&document).unwrap();
+            let (version, _) = stored(&store, &id);
+            let before = stored_bindings(&store, &id);
             let profile = store.load_profile(summary.id).unwrap().unwrap();
 
             // Loading changes no binding.
             let loaded = serde_json::to_value(&profile).unwrap();
-            assert_eq!(bindings(&loaded), bindings(&before), "{fixture}: {id}");
+            assert_eq!(bindings(&loaded), before, "{fixture}: {id}");
 
             for layout in &profile.layouts {
                 // Nothing that validated before is new: compatibility is
@@ -151,9 +176,8 @@ fn stored_bindings_are_kept_and_key_bindings_stay_compatible() {
             // Saving again keeps every binding byte for byte and the
             // document version.
             store.save_profile(&profile).unwrap();
-            let (saved_version, saved) = stored(&store, &id);
-            let after: Value = serde_json::from_str(&saved).unwrap();
-            assert_eq!(bindings(&after), bindings(&before), "{fixture}: {id}");
+            let (saved_version, _) = stored(&store, &id);
+            assert_eq!(stored_bindings(&store, &id), before, "{fixture}: {id}");
             assert_eq!(saved_version, deckpilot_storage::DOCUMENT_VERSION);
             assert!(saved_version >= version);
             assert_eq!(store.load_profile(summary.id).unwrap().unwrap(), profile);
@@ -163,12 +187,16 @@ fn stored_bindings_are_kept_and_key_bindings_stay_compatible() {
         checked_bindings > 0 && checked_keys > 0,
         "the fixtures have key bindings"
     );
-    // The seeded Stream Deck + layout of every fixture binds a key-only
+    // The seeded Stream Deck + layout of the earlier fixtures binds a key-only
     // action (Log) to a tap on the touch strip: reported, kept, not run.
     // Its dial rotations run Next and Previous project, which declare
     // encoders, and stay compatible.
+    // The 0.8.1 seed no longer binds it.
     assert_eq!(
         reported,
-        FIXTURES.map(|fixture| format!("{fixture}: Dials: touch zone 0 Touch {{ gesture: Tap }}")),
+        FIXTURES[..3]
+            .iter()
+            .map(|fixture| format!("{fixture}: Dials: touch zone 0 Touch {{ gesture: Tap }}"))
+            .collect::<Vec<_>>(),
     );
 }
