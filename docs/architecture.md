@@ -214,7 +214,13 @@ watches the states of the shown page's keys (`watch_key_states`, IPC
 `watchKeyStates`, protocol 11) and draws them with `preview_layout`'s `live`
 argument. The agent reads them with the providers that serve the device,
 so the app never samples anything itself (see
-[background-agent.md](background-agent.md)). The frontend is React + TypeScript with Tailwind CSS and shadcn/ui
+[background-agent.md](background-agent.md)). The preview's key images are
+drawn by the same renderer at the size the editor shows a key on the
+display (`preview_layout`'s `keyPixels`: the key's CSS width times
+`devicePixelRatio`), not scaled up from the device's 72 or so pixels; the
+device itself still gets images at its own size. Labels follow the
+profile's active project, as on the device: the editor has no project
+selector of its own, as projects are an optional module. The frontend is React + TypeScript with Tailwind CSS and shadcn/ui
 components; `src/lib/types.ts` mirrors the serialized Rust types.
 
 Native windows besides the main window come from one catalog
@@ -274,16 +280,32 @@ store and its window-wide editing shortcuts are off (`ViewActiveContext`).
 
 The device editor (`layout-editor/editor.tsx`) has the device and its pages
 in the centre, the key inspector below it and the Action Library at the
-right (`LibraryDock`: resizable and collapsible, both remembered; an overlay
-in windows narrower than 960 px). One drag and drop context spans all
+right (`LibraryDock`: always shown, one fixed width from the
+`--library-width` token, never collapsed or resized; under the editor in
+windows narrower than the main window's 860 px minimum, which only a window
+manager ignoring it allows). The toolbar shows no title for the editor: its
+device and profile selectors say what is edited. One drag and drop context spans all
 three, so library entries drop onto controls and onto gesture slots. The
 device's colours are theme tokens (`--device-*` in `index.css`).
+
+The toolbar's device and profile selectors (with their connection and
+profile status) appear only for views that work on them
+(`lib/toolbar-context.ts`): the device editor shows both, the Action
+Library, Workflows and the Projects and Work Session pages the profile, the
+dashboard, the Layouts page, the Marketplace and the settings neither. A
+plugin view shows what its manifest declares (`contributes.views[].context`,
+plugin API 1.4; `none` when absent or unknown). Hiding them changes no
+selection: the shell keeps the device, the profile, the layout and, per
+layout, the editor's page and selected keys (`EditorSelectionProvider`), so
+the editor comes back as it was from any view. Without selectors the page's
+context starts where they would.
 
 Pages render only their content; their title,
 subtitle, breadcrumbs, status and commands go to the titlebar through
 `useTitlebar` (`lib/titlebar.ts`). Settings pages are the exception for the
 subtitle: the section's title and description head its content
-(`SettingsHeader`), the titlebar shows the breadcrumbs. Any component of a page may contribute —
+(`SettingsHeader`), the titlebar shows only the breadcrumbs (not the
+title a second time). Any component of a page may contribute —
 including module pages — and the titlebar imports no page or module. Actions
 have a placement: *primary* (always visible), *secondary* (visible while
 there is room, otherwise in the overflow menu) or *overflow*.
