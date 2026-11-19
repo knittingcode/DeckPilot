@@ -15,6 +15,14 @@ released either. 0.6.0 is the first version intended for publication.
 
 ## [Unreleased]
 
+### Changed
+
+- The encrypted storage now uses SQLCipher 4.20 (through rusqlite 0.42),
+  previously 4.19. The file format and key derivation settings are
+  unchanged, so existing databases open as before. The compatibility test
+  opens a database written by 0.8.0 with the new build, and a database
+  written by the new build with 0.8.0.
+
 ## [0.8.1] - 2026-11-19
 
 ### Security
