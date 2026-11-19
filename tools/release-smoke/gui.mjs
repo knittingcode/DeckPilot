@@ -252,12 +252,14 @@ const steps = [
     async () => {
       mainHandle = await mainWindow(LONG)
       // Up to 0.8.1 the toolbar shows the page title "Device Editor"; later
-      // the editor has no title there, only a visually hidden heading.
+      // the toolbar has no page title and the rail marks the current page.
       const titled = "//header[@aria-label='Toolbar']//h1[normalize-space(.)='Device Editor']"
-      await wait(`${titled} | //main//h1[normalize-space(.)='Device Editor']`)
+      await wait(
+        `${titled} | //button[@aria-current='page'][.//span[normalize-space(.)='Device Editor']]`,
+      )
       const editor = (await visible(titled))
         ? "UI up to 0.8.1: page title 'Device Editor' in the toolbar"
-        : "new UI: no title in the toolbar, the editor's heading 'Device Editor'"
+        : "new UI: no title in the toolbar; the rail marks Device Editor as the current page"
       await wait(SETTINGS)
       const status = await invoke("agent_status", {})
       return `main window shown (toolbar with Marketplace and Settings; ${editor}); agent_status: ${JSON.stringify(status).slice(0, 300)}; ${await screenshot("main")}`
