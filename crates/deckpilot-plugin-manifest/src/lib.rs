@@ -32,6 +32,7 @@
 //! representation at all.
 
 mod compat;
+mod dependency;
 mod error;
 mod icon;
 mod identity;
@@ -44,6 +45,10 @@ mod validate;
 pub use compat::{
     ApiLevel, ApiRequirement, HostEnvironment, Incompatibility, MAX_RANGE_LEN, Platform,
     RangeError, VersionRange,
+};
+pub use dependency::{
+    DEPENDENCIES_API, Dependency, DependencyTarget, MAX_BUILTIN_ID_LEN, MAX_DEPENDENCIES,
+    MAX_DEPENDENCY_JUSTIFICATION,
 };
 pub use error::{Issue, IssueCode, ManifestError, ValidationErrors};
 pub use icon::{

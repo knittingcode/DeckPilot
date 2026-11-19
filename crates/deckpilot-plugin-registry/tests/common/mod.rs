@@ -338,6 +338,7 @@ impl Registry {
                         engines: manifest.engines.clone(),
                         platforms: pv.platforms.clone(),
                         permissions: raw["permissions"].as_array().unwrap().clone(),
+                        dependencies: None,
                         manifest_sha256: pv.built.integrity.manifest_sha256,
                         source: VersionSource {
                             repository: "someone/test-plugin".into(),

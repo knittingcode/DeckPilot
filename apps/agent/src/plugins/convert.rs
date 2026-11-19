@@ -190,6 +190,7 @@ pub fn summary(record: &PluginRecord, stored: &[StoredGrant]) -> ipc::PluginSumm
         action_count: None,
         health: None,
         navigation: manifest.map(navigation).unwrap_or_default(),
+        installed_for: None,
     }
 }
 
@@ -260,6 +261,8 @@ pub fn details(
             .collect(),
         icon: None,
         storage: None,
+        dependencies: Vec::new(),
+        dependents: Vec::new(),
     }
 }
 

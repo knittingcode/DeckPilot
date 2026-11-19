@@ -18,8 +18,13 @@ import type {
   PendingPluginUpdate,
   PermissionChanges,
   PluginCredentialSlot,
+  PluginDependencyInfo,
+  PluginDependentInfo,
   PluginDetails,
   PluginEvent,
+  PluginInstallPlan,
+  PluginPlanStep,
+  PluginRemovalPlan,
   PluginHealth,
   PluginInstallSource,
   PluginNavigationEntry,
@@ -476,6 +481,7 @@ export function createFakePluginClient(options: FakeOptions = {}): FakePluginCli
       origin: p.origin,
       ...(p.previousVersion ? { previousVersion: p.previousVersion } : {}),
       ...(p.pending ? { stagedVersion: p.pending.version } : {}),
+      ...(installedFor.has(p.id) ? { installedFor: installedFor.get(p.id) ?? "" } : {}),
       actions: [
         {
           action: "greet",
@@ -529,6 +535,10 @@ export function createFakePluginClient(options: FakeOptions = {}): FakePluginCli
     audit: [],
     ...(p.id === HELLO ? { icon: ICON } : {}),
     ...(p.id === HELLO && options.helloStorage ? { storage: options.helloStorage } : {}),
+    ...(depsOf(p.id, p.version).length > 0
+      ? { dependencies: depsOf(p.id, p.version).map(withState) }
+      : {}),
+    ...(dependentsOf(p.id).length > 0 ? { dependents: dependentsOf(p.id) } : {}),
   })
   const changesTo = (p: Installed, to: string): PermissionChanges => {
     const before = new Set(declared(p).map((g) => g.key))
@@ -561,6 +571,127 @@ export function createFakePluginClient(options: FakeOptions = {}): FakePluginCli
   }
   const emit = (event: PluginEvent) => {
     for (const listener of listeners) listener(event)
+  }
+
+  // Dependencies (plugin API 1.4), from the registry versions' `dependencies`.
+  const installedFor = new Map<string, string>()
+  const depsOf = (id: string, v: string): PluginDependencyInfo[] =>
+    available.find((p) => p.id === id)?.versions.find((x) => x.version === v)?.dependencies ?? []
+  const withState = (d: PluginDependencyInfo): PluginDependencyInfo => {
+    const local = installed.get(d.id)
+    const name = available.find((a) => a.id === d.id)?.name
+    if (!local) return { ...d, ...(name ? { name } : {}), state: "missing" }
+    return {
+      ...d,
+      name: available.find((a) => a.id === d.id)?.name ?? d.id,
+      installedVersion: local.version,
+      state: local.state === "enabled" ? "satisfied" : "disabled",
+    }
+  }
+  const dependentsOf = (id: string): PluginDependentInfo[] =>
+    [...installed.values()]
+      .filter((q) => q.id !== id)
+      .flatMap((q) =>
+        depsOf(q.id, q.version)
+          .filter((d) => d.id === id)
+          .map((d) => ({
+            id: q.id,
+            name: available.find((a) => a.id === q.id)?.name ?? q.id,
+            enabled: q.state === "enabled",
+            version: d.version,
+            ...(d.optional ? { optional: true } : {}),
+          })),
+      )
+  const notGranted = (id: string, v: string): GrantInfo[] =>
+    grantsOf(version(id, v).permissions).map((g) => ({
+      key: g.key,
+      kind: g.key.split(":")[0] ?? g.key,
+      tier: g.tier,
+      status: "notGranted" as const,
+      scope: null,
+      ...(g.justification ? { justification: g.justification } : {}),
+    }))
+  const planOf = (id: string, v: string, optional: string[]): PluginInstallPlan => {
+    const steps: PluginPlanStep[] = []
+    const visit = (pid: string, pv: string) => {
+      for (const d of depsOf(pid, pv)) {
+        if ((d.optional && !optional.includes(d.id)) || steps.some((s) => s.id === d.id)) continue
+        const needs = [`${pid} ${pv} needs ${d.version}`]
+        const local = installed.get(d.id)
+        if (local) {
+          steps.push({
+            id: d.id,
+            name: available.find((a) => a.id === d.id)?.name ?? d.id,
+            version: local.version,
+            action: local.state === "enabled" ? "keep" : "enable",
+            requiredBy: needs,
+            ...(local.state === "enabled" ? {} : { permissions: info(local) }),
+          })
+          continue
+        }
+        const plugin =
+          available.find((a) => a.id === d.id) ??
+          refuse("dependency", `${d.id} is needed (${needs[0] ?? ""}) but is not available`)
+        const dv = plugin.latest ?? plugin.versions[0]?.version ?? ""
+        visit(d.id, dv)
+        steps.push({
+          id: d.id,
+          name: plugin.name,
+          version: dv,
+          action: "install",
+          ...(d.optional ? { optional: true } : {}),
+          requiredBy: needs,
+          permissions: notGranted(d.id, dv),
+        })
+      }
+    }
+    visit(id, v)
+    steps.push({
+      id,
+      name: available.find((a) => a.id === id)?.name ?? id,
+      version: v,
+      action: "install",
+      requested: true,
+      permissions: notGranted(id, v),
+    })
+    const left = depsOf(id, v).filter((d) => d.optional && !optional.includes(d.id))
+    return {
+      plugin: id,
+      version: v,
+      steps,
+      ...(left.length > 0
+        ? { optional: left.map((d) => ({ of: id, dependency: withState(d) })) }
+        : {}),
+      fingerprint: steps.map((s) => `${s.id}@${s.version}:${s.action}`).join(";"),
+    }
+  }
+  const removalOf = (id: string, uninstall: boolean): PluginRemovalPlan => {
+    const dependents = dependentsOf(id)
+    const required = dependents.filter((d) => !d.optional)
+    const own = get(id)
+    const orphans = uninstall
+      ? depsOf(id, own.version)
+          .filter((d) => installedFor.has(d.id))
+          .filter((d) => dependentsOf(d.id).every((x) => x.id === id))
+          .map((d) => ({
+            id: d.id,
+            name: available.find((a) => a.id === d.id)?.name ?? d.id,
+            enabled: installed.get(d.id)?.state === "enabled",
+            version: installed.get(d.id)?.version ?? "",
+          }))
+      : []
+    return {
+      plugin: id,
+      uninstall,
+      ...(required.length > 0 ? { requiredBy: required } : {}),
+      ...(required.some((d) => d.enabled)
+        ? { disables: required.filter((d) => d.enabled).map((d) => d.id) }
+        : {}),
+      ...(dependents.some((d) => d.optional)
+        ? { usedBy: dependents.filter((d) => d.optional) }
+        : {}),
+      ...(orphans.length > 0 ? { orphans } : {}),
+    }
   }
 
   for (const p of installed.values()) remember(p)
@@ -716,6 +847,88 @@ export function createFakePluginClient(options: FakeOptions = {}): FakePluginCli
         const k = known.get(id)
         if (k) known.set(id, { ...k, installed: false })
       }),
+    ),
+    planInstall: vi.fn((id: string, v: string | undefined, optional: string[]) =>
+      Promise.resolve().then(() => {
+        if (installed.has(id)) refuse("alreadyInstalled", `${id} is already installed`)
+        return planOf(id, v ?? available.find((p) => p.id === id)?.latest ?? "", optional)
+      }),
+    ),
+    installPlan: vi.fn(
+      (
+        plan: PluginInstallPlan,
+        optional: string[],
+        consent: Record<string, string[]>,
+        activate: boolean,
+      ) =>
+        Promise.resolve().then(() => {
+          const now = planOf(plan.plugin, plan.version, optional)
+          if (now.fingerprint !== plan.fingerprint) refuse("planChanged", "the plan changed")
+          // Each plugin's own consent, checked before anything is installed.
+          for (const step of now.steps) {
+            const own = consent[step.id] ?? []
+            const needed = (step.permissions ?? []).filter((p) => p.status !== "granted")
+            if (own.some((k) => !needed.some((p) => p.key === k))) {
+              refuse("unknownPermission", `${step.id} does not declare ${own.join(", ")}`)
+            }
+            if (activate && needed.some((p) => !own.includes(p.key))) {
+              refuse("consentRequired", `${step.id} needs consent for every permission`)
+            }
+          }
+          for (const step of now.steps) {
+            const own = consent[step.id] ?? []
+            if (step.action === "install") {
+              const p: Installed = {
+                id: step.id,
+                version: step.version,
+                state: activate ? "enabled" : "disabled",
+                origin: { type: "registry", registry: "/tmp/registry" },
+                grants: new Map(own.map((k) => [k, "granted" as const])),
+              }
+              installed.set(step.id, p)
+              remember(p)
+              if (!step.requested) installedFor.set(step.id, plan.plugin)
+            } else if (step.action === "enable") {
+              const p = get(step.id)
+              for (const k of own) p.grants.set(k, "granted")
+              if (activate) p.state = "enabled"
+            }
+          }
+          return details(get(plan.plugin))
+        }),
+    ),
+    planRemoval: vi.fn((id: string, uninstall: boolean) =>
+      Promise.resolve().then(() => removalOf(id, uninstall)),
+    ),
+    removePlugin: vi.fn(
+      (
+        id: string,
+        uninstall: boolean,
+        _keep: PluginRetention | undefined,
+        withDependents: boolean,
+        orphans: string[],
+      ) =>
+        Promise.resolve().then(() => {
+          const plan = removalOf(id, uninstall)
+          const disables = plan.disables ?? []
+          if (disables.length > 0 && !withDependents) {
+            refuse("requiredBy", `${id} is required by ${disables.join(", ")}`)
+          }
+          for (const d of disables) get(d).state = "disabled"
+          if (uninstall) {
+            installed.delete(id)
+            installedFor.delete(id)
+            for (const o of orphans) {
+              if (!(plan.orphans ?? []).some((x) => x.id === o)) {
+                refuse("invalidState", `${o} is not an orphan of ${id}`)
+              }
+              installed.delete(o)
+              installedFor.delete(o)
+            }
+          } else {
+            get(id).state = "disabled"
+          }
+        }),
     ),
     listKnownPlugins: vi.fn(() => Promise.resolve([...known.values()])),
     listNavigation: vi.fn(() =>

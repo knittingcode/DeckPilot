@@ -1255,27 +1255,60 @@ pub fn run(d: &mut dyn Driver, fx: &mut Fixture) {
     report.step(4, "Inspect its details", &via, "");
     d.screenshot("04-details");
 
-    // 5. Install 1.0.0 with consent to its permissions: installed,
-    // disabled, nothing fetched yet.
+    // 5. Install 1.0.0 with consent to its permissions: installed and
+    // nothing fetched yet. Installing a single plugin through IPC leaves it
+    // disabled. The app's install plan (docs/marketplace/dependencies.md)
+    // takes each plugin's consent in its one dialog and enables what it
+    // installed once every package is verified, so through the UI it is
+    // enabled already, with exactly the permissions consented to.
     let via = d.install(&[NETWORK, CREDENTIAL]);
     let plugin = details(d);
     assert_eq!(plugin["summary"]["version"], "1.0.0", "{plugin}");
-    assert_eq!(plugin["summary"]["state"], "disabled", "{plugin}");
+    let activated = plugin["summary"]["state"] == "enabled";
+    if activated {
+        assert!(
+            via.contains(&Via::Ui),
+            "enabled by an install without the plan dialog: {plugin}"
+        );
+        assert_eq!(permission(&plugin, NETWORK), "granted", "{plugin}");
+        assert_eq!(permission(&plugin, CREDENTIAL), "granted", "{plugin}");
+    } else {
+        assert_eq!(plugin["summary"]["state"], "disabled", "{plugin}");
+    }
     assert!(fx.registry_log().iter().any(|p| p.ends_with(".dpplugin")));
     assert!(
         fx.fetched().is_empty(),
-        "the plugin ran before it was enabled"
+        "the plugin fetched something before it was used"
     );
-    report.step(5, "Install it", &via, "");
+    let how = if activated {
+        "the install plan's consent enabled it"
+    } else {
+        "installed disabled"
+    };
+    report.step(5, "Install it", &via, how);
     d.screenshot("05-installed");
 
-    // 6. Enable it, granting every permission it declares.
-    let via = d.enable(&[NETWORK, CREDENTIAL]);
+    // 6. Enable it, granting every permission it declares (through the
+    // install plan, it is enabled with them already).
+    let via = if activated {
+        via
+    } else {
+        d.enable(&[NETWORK, CREDENTIAL])
+    };
     let plugin = details(d);
     assert_eq!(plugin["summary"]["state"], "enabled", "{plugin}");
     assert_eq!(permission(&plugin, NETWORK), "granted");
     assert_eq!(permission(&plugin, CREDENTIAL), "granted");
-    report.step(6, "Grant permissions (enable)", &via, "");
+    report.step(
+        6,
+        "Grant permissions (enable)",
+        &via,
+        if activated {
+            "enabled by the install plan (step 5)"
+        } else {
+            ""
+        },
+    );
     d.screenshot("06-enabled");
 
     // 7. Configure: a setting, the credential's secret; storage the

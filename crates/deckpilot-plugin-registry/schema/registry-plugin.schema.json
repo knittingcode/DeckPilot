@@ -72,6 +72,10 @@
           },
           "description": "Byte-for-byte the manifest's permissions array, shown in the consent dialog before download. The installer refuses a package whose manifest differs."
         },
+        "dependencies": {
+          "$ref": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json#/properties/dependencies",
+          "description": "The manifest's dependencies (plugin API 1.4), resolved before download; absent when it declares none. The installer refuses a package whose manifest differs."
+        },
         "manifest_sha256": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$",

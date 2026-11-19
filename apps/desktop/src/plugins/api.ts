@@ -16,8 +16,10 @@ import type {
   PluginCredentialSlot,
   PluginDetails,
   PluginEvent,
+  PluginInstallPlan,
   PluginInstallSource,
   PluginNavigationItem,
+  PluginRemovalPlan,
   PluginRetention,
   PluginRuntimeStatus,
   PluginSettings,
@@ -62,6 +64,36 @@ export interface PluginClient {
    * unless `keep` keeps settings and/or credentials for a later install.
    */
   uninstallPlugin(id: string, keep?: PluginRetention): Promise<void>
+  /**
+   * `planPluginInstall` (agent feature `dependencies`): resolves and
+   * verifies what installing `id` takes, with the optional integrations
+   * in `optional`; installs nothing.
+   */
+  planInstall(
+    id: string,
+    version: string | undefined,
+    optional: string[],
+  ): Promise<PluginInstallPlan>
+  /**
+   * `installPluginPlan`: carries out the plan the user confirmed, with
+   * the permissions granted to each plugin of it (`consent` by plugin id).
+   */
+  installPlan(
+    plan: PluginInstallPlan,
+    optional: string[],
+    consent: Record<string, string[]>,
+    activate: boolean,
+  ): Promise<PluginDetails>
+  /** `planPluginRemoval`. */
+  planRemoval(id: string, uninstall: boolean): Promise<PluginRemovalPlan>
+  /** `removePlugin`: with its enabled dependents disabled first, and the chosen orphans. */
+  removePlugin(
+    id: string,
+    uninstall: boolean,
+    keep: PluginRetention | undefined,
+    withDependents: boolean,
+    orphans: string[],
+  ): Promise<void>
   /** `invokePluginAction`. */
   invokeAction(
     id: string,
@@ -161,6 +193,9 @@ export type PluginErrorReason =
   | "invalidData"
   | "unknownMigration"
   | "answerTooLarge"
+  | "requiredBy"
+  | "dependency"
+  | "planChanged"
   | "failed"
 
 /** What each reason means, as a headline; the agent's message has the details. */
@@ -192,6 +227,9 @@ const TITLES: Partial<Record<string, string>> = {
   invalidData: "The values do not fit what the plugin declares",
   unknownMigration: "No such module migration",
   answerTooLarge: "The agent's answer is too large",
+  requiredBy: "Other plugins need this plugin",
+  dependency: "Its dependencies cannot be installed",
+  planChanged: "The install plan changed",
   failed: "The request failed",
 }
 
@@ -224,6 +262,9 @@ const HINTS: Partial<Record<string, string>> = {
   broken: "Its installed files no longer match their record; roll back or uninstall it.",
   alreadyInstalled: "Update it instead.",
   busy: "Wait for its running actions to finish, then try again.",
+  requiredBy: "Disable the plugins that need it with it, or first.",
+  dependency: "The plugin needs plugins or versions that cannot be installed here.",
+  planChanged: "Review the new plan and confirm it again.",
   answerTooLarge:
     "Part of it does not fit one message to the app, even in parts (for instance a plugin's very large settings); ask the plugin's publisher to shorten its manifest.",
 }

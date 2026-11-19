@@ -218,7 +218,27 @@ pub const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (plugin_id, setting_key)
     ) STRICT;
     ",
+    // 5: plugins installed only because another plugin needed them
+    // (`docs/marketplace/dependencies.md`), so they can be offered for
+    // removal once nothing needs them. Additive: a plugin without a row
+    // was installed by the user (every plugin installed before schema 5).
+    // Deleted with the plugin, and when the user installs it themselves.
+    r"
+    CREATE TABLE plugin_dependency_installs (
+        plugin_id    TEXT PRIMARY KEY REFERENCES plugins (plugin_id) ON DELETE CASCADE,
+        required_by  TEXT NOT NULL,
+        installed_at INTEGER NOT NULL
+    ) STRICT;
+    ",
 ];
+
+/// Encrypted backups of the plugin database written before a schema
+/// upgrade are kept here (`<plugins dir>/.backups`: a dot directory, so
+/// recovery never takes it for an orphaned plugin), the newest
+/// [`KEPT_BACKUPS`].
+pub const BACKUP_DIR: &str = ".backups";
+/// How many upgrade backups are kept.
+pub const KEPT_BACKUPS: usize = 3;
 
 /// The raw 256-bit SQLCipher key of the plugin database, supplied by the
 /// caller (the agent derives it next to the configuration key). Zeroized
@@ -312,7 +332,7 @@ impl Database {
             connection,
             path: path.to_path_buf(),
         };
-        database.migrate(migrations)?;
+        database.migrate(migrations, key)?;
         Ok(database)
     }
 
@@ -364,7 +384,7 @@ impl Database {
     /// set around it), every reference is checked with
     /// `PRAGMA foreign_key_check` before the commit, and foreign keys are
     /// switched back on whatever the outcome.
-    fn migrate(&mut self, migrations: &[&str]) -> Result<()> {
+    fn migrate(&mut self, migrations: &[&str], key: &StoreKey) -> Result<()> {
         let supported = schema_version_of(migrations);
         let found = user_version(&self.connection)?;
         if found == supported {
@@ -378,11 +398,72 @@ impl Database {
             // migrated it since `open` read the version.
             return self.apply(migrations);
         }
+        if found > 0 {
+            self.backup_before_migration(found, key)?;
+        }
         self.connection.pragma_update(None, "foreign_keys", false)?;
         let result = self.apply(migrations);
         let restored = self.connection.pragma_update(None, "foreign_keys", true);
         result?;
         restored?;
+        Ok(())
+    }
+
+    /// Writes an encrypted copy of the database at schema `version` to
+    /// `.backups/plugins-schema<version>-<ms>.db` before an upgrade, under
+    /// a temporary name renamed once it opened with the same key at the
+    /// same version, so an interrupted copy is never taken for a backup.
+    /// Older backups beyond [`KEPT_BACKUPS`] are deleted. Going back to a
+    /// build that knows only `version` means restoring this file (with the
+    /// same key) as `plugins.db`.
+    fn backup_before_migration(&self, version: u32, key: &StoreKey) -> Result<()> {
+        let dir = self
+            .path
+            .parent()
+            .map_or_else(|| PathBuf::from(BACKUP_DIR), |p| p.join(BACKUP_DIR));
+        std::fs::create_dir_all(&dir).map_err(|e| StoreError::io(&dir, &e))?;
+        let millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or_default();
+        let target = dir.join(format!("plugins-schema{version}-{millis}.db"));
+        let partial = dir.join(format!("plugins-schema{version}-{millis}.db.partial"));
+        let written = self
+            .export(&partial)
+            .and_then(|()| verify_backup(&partial, key, version))
+            .and_then(|()| {
+                std::fs::rename(&partial, &target).map_err(|e| StoreError::io(&target, &e))
+            });
+        if let Err(error) = written {
+            let _ = std::fs::remove_file(&partial);
+            return Err(error);
+        }
+        prune_backups(&dir);
+        Ok(())
+    }
+
+    /// `sqlcipher_export` into a new file encrypted with this connection's
+    /// key (an attached database without a `KEY` clause shares it).
+    fn export(&self, target: &Path) -> Result<()> {
+        if target.exists() {
+            std::fs::remove_file(target).map_err(|e| StoreError::io(target, &e))?;
+        }
+        let name = target.to_string_lossy().into_owned();
+        self.connection
+            .execute("ATTACH DATABASE ?1 AS plugin_backup", [name])?;
+        let exported = self
+            .connection
+            .query_row("SELECT sqlcipher_export('plugin_backup')", [], |_| Ok(()))
+            .and_then(|()| {
+                let version: u32 =
+                    self.connection
+                        .pragma_query_value(None, "user_version", |row| row.get(0))?;
+                self.connection
+                    .pragma_update(Some("plugin_backup"), "user_version", version)
+            });
+        let detached = self.connection.execute("DETACH DATABASE plugin_backup", []);
+        exported?;
+        detached?;
         Ok(())
     }
 
@@ -421,6 +502,65 @@ impl Database {
         }
         tx.commit()?;
         Ok(())
+    }
+}
+
+/// The backup opens with `key`, passes SQLite's quick check and is at
+/// `version`.
+fn verify_backup(path: &Path, key: &StoreKey, version: u32) -> Result<()> {
+    let check = Connection::open(path)?;
+    apply_key(&check, key)?;
+    let ok: String = check.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+    if ok != "ok" {
+        return Err(StoreError::Corrupt(format!(
+            "the backup failed its check: {ok}"
+        )));
+    }
+    let found = user_version(&check)?;
+    if found != version {
+        return Err(StoreError::Corrupt(format!(
+            "the backup of schema {version} is at schema {found}"
+        )));
+    }
+    Ok(())
+}
+
+/// Keeps the newest [`KEPT_BACKUPS`] backups (by name: the time is in
+/// it) and deletes leftovers of interrupted ones.
+fn prune_backups(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut backups: Vec<PathBuf> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if !name.starts_with("plugins-schema") {
+            continue;
+        }
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default();
+        if extension.eq_ignore_ascii_case("partial") {
+            let _ = std::fs::remove_file(&path);
+        } else if extension.eq_ignore_ascii_case("db") {
+            backups.push(path);
+        }
+    }
+    backups.sort_by_key(|p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.rsplit_once('-'))
+            .and_then(|(_, ms)| ms.trim_end_matches(".db").parse::<u128>().ok())
+            .unwrap_or_default()
+    });
+    while backups.len() > KEPT_BACKUPS {
+        let oldest = backups.remove(0);
+        let _ = std::fs::remove_file(oldest);
     }
 }
 
@@ -568,6 +708,112 @@ mod tests {
             result,
             Err(StoreError::UnsupportedSchema { found: 99, .. })
         ));
+    }
+
+    /// Schema 5 (the plugins installed as dependencies): a schema 4 file,
+    /// as 0.8.1 writes it, is backed up, then upgraded with its rows
+    /// kept; a schema 4 build refuses the upgraded file without writing
+    /// to it; the backup opens with the same key at schema 4.
+    #[cfg(feature = "sqlcipher")]
+    #[test]
+    fn a_schema_4_database_is_backed_up_and_upgraded_to_5() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plugins.db");
+        let key = StoreKey::from_bytes([11; 32]);
+        {
+            let old =
+                Database::open_as(&path, &key, DEFAULT_BUSY_TIMEOUT, &MIGRATIONS[..4]).unwrap();
+            assert_eq!(old.schema_version().unwrap(), 4);
+            old.connection()
+                .execute(
+                    "INSERT INTO plugins (plugin_id, state, source, installed_at, updated_at)
+                     VALUES ('acme.projects', 'enabled', 'sideload', 1, 1)",
+                    [],
+                )
+                .unwrap();
+        }
+        let upgraded = Database::open(&path, &key, DEFAULT_BUSY_TIMEOUT).unwrap();
+        assert_eq!(upgraded.schema_version().unwrap(), 5);
+        let kept: i64 = upgraded
+            .connection()
+            .query_row("SELECT count(*) FROM plugins", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(kept, 1);
+        // Every plugin of before counts as installed by the user.
+        let marked: i64 = upgraded
+            .connection()
+            .query_row("SELECT count(*) FROM plugin_dependency_installs", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(marked, 0);
+        drop(upgraded);
+
+        let backups: Vec<PathBuf> = std::fs::read_dir(dir.path().join(BACKUP_DIR))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(backups.len(), 1, "{backups:?}");
+        let name = backups[0]
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            name.starts_with("plugins-schema4-")
+                && backups[0].extension().is_some_and(|e| e == "db"),
+            "{name}"
+        );
+        let backup = Connection::open(&backups[0]).unwrap();
+        assert!(apply_key(&backup, &StoreKey::from_bytes([12; 32])).is_err());
+        let backup = Connection::open(&backups[0]).unwrap();
+        apply_key(&backup, &key).unwrap();
+        assert_eq!(user_version(&backup).unwrap(), 4);
+        let rows: i64 = backup
+            .query_row("SELECT count(*) FROM plugins", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
+        drop(backup);
+
+        // A build that knows schema 4 (0.8.1) leaves the new file alone.
+        let before = std::fs::read(&path).unwrap();
+        assert!(matches!(
+            Database::open_as(&path, &key, DEFAULT_BUSY_TIMEOUT, &MIGRATIONS[..4]),
+            Err(StoreError::UnsupportedSchema {
+                found: 5,
+                supported: 4
+            })
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        // A fresh file needs no backup.
+        let fresh = dir.path().join("fresh").join("plugins.db");
+        drop(Database::open(&fresh, &key, DEFAULT_BUSY_TIMEOUT).unwrap());
+        assert!(!fresh.parent().unwrap().join(BACKUP_DIR).exists());
+    }
+
+    #[test]
+    fn only_the_newest_backups_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        for ms in [5, 1, 4, 2, 3] {
+            std::fs::write(dir.path().join(format!("plugins-schema4-{ms}.db")), b"x").unwrap();
+        }
+        std::fs::write(dir.path().join("plugins-schema4-9.db.partial"), b"x").unwrap();
+        std::fs::write(dir.path().join("other.db"), b"x").unwrap();
+        prune_backups(dir.path());
+        let mut left: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            [
+                "other.db",
+                "plugins-schema4-3.db",
+                "plugins-schema4-4.db",
+                "plugins-schema4-5.db"
+            ]
+        );
     }
 
     #[cfg(feature = "sqlcipher")]
@@ -789,7 +1035,8 @@ mod tests {
         schema_2_database(&path, &key);
         drop(Database::open_as(&path, &key, DEFAULT_BUSY_TIMEOUT, SCHEMA_3).unwrap());
 
-        let db = Database::open(&path, &key, DEFAULT_BUSY_TIMEOUT).unwrap();
+        // A schema-4 build (schema 5 is tested on its own).
+        let db = Database::open_as(&path, &key, DEFAULT_BUSY_TIMEOUT, &MIGRATIONS[..4]).unwrap();
         assert_eq!(db.schema_version().unwrap(), 4);
         assert!(has_table(&db, "plugin_user_origins"));
         assert_eq!(count(&db, "SELECT count(*) FROM plugins"), 2);

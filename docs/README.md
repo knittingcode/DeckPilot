@@ -48,6 +48,10 @@ led to it; where the code differs, the code and the tests win.
 
 - [Plugins in the agent](marketplace/agent-integration.md): the experimental
   plugin backend, its IPC and how it is tested.
+- [Plugin dependencies](marketplace/dependencies.md): required and optional
+  dependencies of plugins (plugin API 1.4), how they are resolved, the
+  install plan with each plugin's consent, dependency-aware disable,
+  uninstall, update and rollback, and `plugins.db` schema 5.
 - [Plugin artifact contract](marketplace/artifact-contract.md): ABI 1 wasm
   modules and the package.
 - [Testing the marketplace locally](marketplace/local-testing.md): a local

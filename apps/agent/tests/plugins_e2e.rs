@@ -72,6 +72,11 @@ const FUTURE: &str = "acme.future-weather";
 /// icon than one IPC message carries.
 const BIG: &str = "acme.big-weather";
 const REVOKED: &str = "acme.revoked-weather";
+/// Plugin dependencies (plugin API 1.4): the app requires the base and
+/// can use the extra for its temperature action.
+const DEP_BASE: &str = "acme.dep-base";
+const DEP_APP: &str = "acme.dep-app";
+const DEP_EXTRA: &str = "acme.dep-extra";
 const NETWORK: &str = "network:api.open-meteo.com";
 const STARTUP: Duration = Duration::from_secs(30);
 /// How long the canned server takes to answer for Tokyo.
@@ -410,6 +415,18 @@ fn sdk_actions() -> Value {
 }
 
 /// The SDK test guest (it can panic on request) as a plugin.
+/// The sample as `id` at plugin API 1.4 with `dependencies`.
+fn dependency_manifest(id: &str, dependencies: Option<Value>) -> Value {
+    let mut manifest = hello_manifest(id, "1.0.0");
+    manifest["name"] = json!(format!("Dep {}", &id[9..]));
+    manifest["engines"]["pluginApi"] = json!("^1.4");
+    if let Some(dependencies) = dependencies {
+        manifest["dependencies"] = dependencies;
+        manifest["contributes"]["actions"][1]["requiresDependencies"] = json!([DEP_EXTRA]);
+    }
+    manifest
+}
+
 fn crashy_manifest() -> Value {
     let mut manifest = hello_manifest(CRASHY, "1.0.0");
     manifest["name"] = json!("SDK test");
@@ -766,6 +783,23 @@ impl Registry {
         future["engines"]["deckpilot"] = json!(">=9.0.0 <10.0.0");
         registry.add(&future, &artifacts.hello);
         registry.add(&hello_manifest(REVOKED, "1.0.0"), &artifacts.hello);
+        registry.add(&dependency_manifest(DEP_BASE, None), &artifacts.hello);
+        registry.add(&dependency_manifest(DEP_EXTRA, None), &artifacts.hello);
+        registry.add(
+            &dependency_manifest(
+                DEP_APP,
+                Some(json!([
+                    { "id": DEP_BASE, "version": ">=1.0.0 <2.0.0" },
+                    {
+                        "id": DEP_EXTRA,
+                        "version": ">=1.0.0",
+                        "optional": true,
+                        "justification": "Adds the temperature."
+                    }
+                ])),
+            ),
+            &artifacts.hello,
+        );
         registry.run(&[
             "revoke",
             "--id",
@@ -5143,5 +5177,251 @@ async fn plugin_keys_show_the_state_the_plugin_describes() {
     assert_eq!(face["title"], "Probe armed", "{face}");
     assert!(agent.request(Request::GetStatus).await.is_ok());
 
+    agent.stop().await;
+}
+
+// --------------------------------------------------------- dependencies
+
+async fn plan(agent: &Agent, plugin: &str) -> deckpilot_ipc::plugins::PluginInstallPlan {
+    match agent
+        .request(Request::PlanPluginInstall {
+            plugin: plugin.into(),
+            version: None,
+            optional: Vec::new(),
+        })
+        .await
+        .unwrap()
+    {
+        Response::PluginInstallPlan { plan } => *plan,
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+/// Each plugin's own declared permissions in the plan, as its consent.
+fn own_consent(
+    plan: &deckpilot_ipc::plugins::PluginInstallPlan,
+    only: &[&str],
+) -> BTreeMap<String, Vec<String>> {
+    plan.steps
+        .iter()
+        .filter(|s| only.contains(&s.id.as_str()))
+        .map(|s| {
+            (
+                s.id.clone(),
+                s.permissions.iter().map(|p| p.key.clone()).collect(),
+            )
+        })
+        .collect()
+}
+
+async fn install_plan(
+    agent: &Agent,
+    plan: &deckpilot_ipc::plugins::PluginInstallPlan,
+    fingerprint: &str,
+    consent: BTreeMap<String, Vec<String>>,
+) -> Result<Response, ClientError> {
+    agent
+        .request(Request::InstallPluginPlan {
+            plugin: plan.plugin.clone(),
+            version: None,
+            optional: Vec::new(),
+            fingerprint: fingerprint.to_owned(),
+            consent,
+            activate: true,
+        })
+        .await
+}
+
+async fn installed_ids(agent: &Agent) -> Vec<String> {
+    let Response::Plugins { plugins } = agent.request(Request::ListPlugins).await.unwrap() else {
+        panic!("plugins")
+    };
+    plugins.into_iter().map(|p| p.id).collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // one flow, step by step
+async fn plugins_with_dependencies_are_installed_and_removed_together() {
+    use deckpilot_ipc::plugins::{DependencyState, PlanStepAction};
+
+    let registry = shared_registry();
+    let env = Env::new("plugins-e2e-dependencies");
+    let agent = Agent::started(&env, registry).await;
+
+    // The plan: the base first, each with its own permissions; the extra
+    // is optional and left out.
+    let plan = plan(&agent, DEP_APP).await;
+    let ids: Vec<&str> = plan.steps.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids, [DEP_BASE, DEP_APP]);
+    assert!(
+        plan.steps
+            .iter()
+            .all(|s| s.action == PlanStepAction::Install)
+    );
+    assert!(plan.steps.iter().all(|s| !s.permissions.is_empty()));
+    assert!(
+        plan.steps[0].required_by[0].contains(DEP_APP),
+        "{:?}",
+        plan.steps[0]
+    );
+    assert_eq!(plan.optional.len(), 1);
+    assert_eq!(plan.optional[0].dependency.id, DEP_EXTRA);
+    assert_eq!(plan.optional[0].dependency.state, DependencyState::Missing);
+    assert!(
+        installed_ids(&agent).await.is_empty(),
+        "planning installs nothing"
+    );
+
+    // Not the plan the user saw.
+    let stale = install_plan(
+        &agent,
+        &plan,
+        "0f",
+        own_consent(&plan, &[DEP_BASE, DEP_APP]),
+    )
+    .await;
+    assert_eq!(reason_of(&stale), reason::PLAN_CHANGED);
+    // The dependency's permissions declined: nothing is installed.
+    let declined = install_plan(
+        &agent,
+        &plan,
+        &plan.fingerprint,
+        own_consent(&plan, &[DEP_APP]),
+    )
+    .await;
+    assert_eq!(
+        reason_of(&declined),
+        reason::CONSENT_REQUIRED,
+        "{}",
+        message_of(&declined)
+    );
+    assert_eq!(installed_ids(&agent).await, Vec::<String>::new());
+    // Consent to a plugin outside the plan is refused.
+    let mut stray = own_consent(&plan, &[DEP_BASE, DEP_APP]);
+    stray.insert(HELLO.into(), vec![NETWORK.into()]);
+    let refused = install_plan(&agent, &plan, &plan.fingerprint, stray).await;
+    assert_eq!(reason_of(&refused), reason::UNKNOWN_PERMISSION);
+
+    // Everything consented, each plugin for itself: both enabled.
+    install_plan(
+        &agent,
+        &plan,
+        &plan.fingerprint,
+        own_consent(&plan, &[DEP_BASE, DEP_APP]),
+    )
+    .await
+    .unwrap();
+    let base = agent.details(DEP_BASE).await;
+    assert_eq!(base.summary.state, PluginState::Enabled);
+    assert_eq!(base.summary.installed_for.as_deref(), Some(DEP_APP));
+    assert_eq!(base.dependents[0].id, DEP_APP);
+    assert_eq!(
+        permission_status(&base, NETWORK),
+        Some(PermissionStatus::Granted)
+    );
+    let app = agent.details(DEP_APP).await;
+    assert_eq!(app.summary.state, PluginState::Enabled);
+    assert_eq!(app.summary.installed_for, None);
+    let states: Vec<(&str, DependencyState)> = app
+        .dependencies
+        .iter()
+        .map(|d| (d.id.as_str(), d.state))
+        .collect();
+    assert_eq!(
+        states,
+        [
+            (DEP_BASE, DependencyState::Satisfied),
+            (DEP_EXTRA, DependencyState::Missing)
+        ]
+    );
+    // Only the action that needs the missing optional dependency is
+    // unavailable.
+    let action = |name: &str| {
+        app.summary
+            .actions
+            .iter()
+            .find(|a| a.action == name)
+            .unwrap()
+            .clone()
+    };
+    assert!(action("greet").available);
+    let temperature = action("current-temperature");
+    assert!(!temperature.available);
+    assert!(
+        temperature
+            .unavailable_reason
+            .as_deref()
+            .unwrap()
+            .contains(DEP_EXTRA),
+        "{temperature:?}"
+    );
+    let refused = agent
+        .invoke(DEP_APP, "current-temperature", json!({ "city": "berlin" }))
+        .await;
+    assert_eq!(reason_of(&refused), reason::NOT_ENABLED);
+
+    // The base cannot be turned off while the app needs it.
+    let blocked = agent
+        .request(Request::DisablePlugin {
+            plugin: DEP_BASE.into(),
+        })
+        .await;
+    assert_eq!(reason_of(&blocked), reason::REQUIRED_BY);
+    let Response::PluginRemovalPlan { plan: removal } = agent
+        .request(Request::PlanPluginRemoval {
+            plugin: DEP_BASE.into(),
+            uninstall: false,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("removal plan")
+    };
+    assert_eq!(removal.disables, [DEP_APP]);
+    // With its dependents, after the user saw them: both off.
+    agent
+        .request(Request::RemovePlugin {
+            plugin: DEP_BASE.into(),
+            uninstall: false,
+            keep: PluginRetention::default(),
+            with_dependents: true,
+            orphans: Vec::new(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        agent.details(DEP_APP).await.summary.state,
+        PluginState::Disabled
+    );
+    assert_eq!(
+        agent.details(DEP_BASE).await.summary.state,
+        PluginState::Disabled
+    );
+
+    // Uninstalling the app offers the base, installed only for it; it goes
+    // only because it is listed.
+    let Response::PluginRemovalPlan { plan: removal } = agent
+        .request(Request::PlanPluginRemoval {
+            plugin: DEP_APP.into(),
+            uninstall: true,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("removal plan")
+    };
+    assert_eq!(removal.orphans.len(), 1);
+    assert_eq!(removal.orphans[0].id, DEP_BASE);
+    agent
+        .request(Request::RemovePlugin {
+            plugin: DEP_APP.into(),
+            uninstall: true,
+            keep: PluginRetention::default(),
+            with_dependents: false,
+            orphans: vec![DEP_BASE.into()],
+        })
+        .await
+        .unwrap();
+    assert_eq!(installed_ids(&agent).await, Vec::<String>::new());
     agent.stop().await;
 }

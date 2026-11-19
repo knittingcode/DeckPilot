@@ -579,14 +579,18 @@ older clients ignore.
 | `listAvailablePlugins` | `refresh` | `availablePlugins { registry, plugins: [AvailablePlugin] }` (versions newest first, permissions, `withdrawn`, `incompatible`, `deckpilot`, `platforms`, `publishedAt`; per plugin `description`, `categories`, `publisherInfo`, `license`, `homepage`, `sourceRepository`, `deprecated`) |
 | `installPlugin` | `source: {type: "registry", plugin, version?} \| {type: "file", path}`, `consent: [key]` | `plugin` (state `disabled`) |
 | `enablePlugin` | `plugin`, `consent: [key]` | `plugin` (grants `consent` first; all declared permissions must be granted) |
-| `disablePlugin` | `plugin` | `plugin` |
+| `disablePlugin` | `plugin` | `plugin`; refused with `requiredBy` while an enabled plugin requires it (use `removePlugin`) |
 | `grantPluginPermissions` | `plugin`, `permissions: [key]` | `plugin` |
 | `revokePluginPermission` | `plugin`, `permission` | `plugin` |
-| `updatePlugin` | `plugin`, `version?`, `consent: [key]` | `pluginUpdate { plugin, outcome: {type: "applied" \| "awaitingConsent", version, changes} }` |
+| `updatePlugin` | `plugin`, `version?`, `consent: [key]` | `pluginUpdate { plugin, outcome: {type: "applied" \| "awaitingConsent", version, changes} }`; refused with `dependency` when an installed plugin does not accept the version or it needs dependencies that are not installed |
 | `approvePluginUpdate` | `plugin`, `consent: [key]` (every escalated key) | `pluginUpdate` |
 | `declinePluginUpdate` | `plugin` | `plugin` |
 | `rollbackPlugin` | `plugin` | `plugin` |
-| `uninstallPlugin` | `plugin`, `keep?: {settings?, credentials?}` | `ok` (see [retention](#uninstall-retention)) |
+| `uninstallPlugin` | `plugin`, `keep?: {settings?, credentials?}` | `ok` (see [retention](#uninstall-retention)); refused with `requiredBy` while an enabled plugin requires it |
+| `planPluginInstall` | `plugin`, `version?`, `optional?: [id]` | `pluginInstallPlan { plan: {plugin, version, steps: [{id, name, version, action: install \| update \| enable \| keep \| builtin \| enableBuiltin, fromVersion?, requested?, optional?, builtin?, requiredBy?, permissions?, publisher?, blocker?}], optional?: [{of, dependency}], fingerprint} }`: every package downloaded and verified, nothing installed (feature `dependencies`, [dependencies.md](dependencies.md#4-installing-planplugininstall-installpluginplan)) |
+| `installPluginPlan` | `plugin`, `version?`, `optional?`, `fingerprint`, `consent: {pluginId: [key]}`, `activate` | `plugin` (the requested one); refused with `planChanged` when the plan is no longer the one confirmed, `consentRequired` before anything is installed when a plugin would lack a permission; a failed step undoes the finished ones (feature `dependencies`) |
+| `planPluginRemoval` | `plugin`, `uninstall` | `pluginRemovalPlan { plan: {plugin, uninstall, requiredBy?, disables?, usedBy?, orphans?} }` (feature `dependencies`) |
+| `removePlugin` | `plugin`, `uninstall`, `keep?`, `withDependents`, `orphans?: [id]` | `ok`: the enabled dependents turned off first (never uninstalled), then the plugin; after an uninstall the listed orphans too (feature `dependencies`) |
 | `invokePluginAction` | `plugin`, `action`, `params: {name: bool \| number \| text \| list}` | `pluginActionResult { outcome: {status: "ok", message?, data} \| {status: "skipped"} \| {status: "failed", code, message?, retryable} }` (parameters that do not match the manifest: `failed`, `invalid-parameters`, before the host runs) |
 | `subscribePluginEvents` | `migrations?: bool` (omitted when false) | `ok`; then `pluginEvent` messages on this connection, `migrationChanged` ones only with `migrations: true` |
 | `listKnownPlugins` | — | `knownPlugins { plugins: [{id, name, publisher, namespace, lastVersion, installed, firstSeenAt, lastSeenAt}] }` |

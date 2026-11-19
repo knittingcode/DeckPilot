@@ -66,6 +66,9 @@ pub(super) enum Message {
     /// What `deckpilot.db` says about the modules that can migrate, after
     /// the agent loaded its modules (`migration.rs`).
     Migrate(Box<LegacySnapshot>),
+    /// The agent's built-in modules, after every module load (dependencies
+    /// on them).
+    Builtins(Vec<deckpilot_plugin_store::deps::BuiltinModule>),
     /// A plugin action from the workflow engine.
     Invoke {
         plugin: String,
@@ -187,6 +190,9 @@ struct State {
     /// Whether the migration pass of this opening of the store ran (it
     /// runs once, with the first snapshot after the store opened).
     migrated: bool,
+    /// The agent's built-in modules as last sent, for every opening of
+    /// the store.
+    builtins: Vec<deckpilot_plugin_store::deps::BuiltinModule>,
 }
 
 impl State {
@@ -212,8 +218,9 @@ impl State {
             ended,
             self.values.clone(),
         ) {
-            Ok(service) => {
+            Ok(mut service) => {
                 info!("plugin store opened");
+                service.set_builtins(self.builtins.clone());
                 self.service = Some(service);
                 self.problem = None;
             }
@@ -288,6 +295,13 @@ impl State {
             Message::Close => self.close(),
             Message::Rekey(old, new) => self.rekey(&old, &new),
             Message::Request(request, reply) => self.request(request, reply),
+            Message::Builtins(builtins) => {
+                if let Some(service) = &mut self.service {
+                    service.set_builtins(builtins.clone());
+                }
+                self.builtins = builtins;
+                self.publish();
+            }
             Message::Migrate(snapshot) => {
                 if let Some(service) = &mut self.service {
                     // The pass runs once per opening; every snapshot is
@@ -397,6 +411,7 @@ impl PluginWorker {
         let mut state = State {
             routing: routing.clone(),
             migrated: false,
+            builtins: Vec::new(),
             values: values.clone(),
             settings,
             data_dir: data_dir.to_path_buf(),
@@ -445,6 +460,11 @@ impl PluginWorker {
     /// The routing of migrated modules, as last published.
     pub fn legacy_routing(&self) -> LegacyRouting {
         self.routing.lock().map(|r| r.clone()).unwrap_or_default()
+    }
+
+    /// Hands the worker the agent's built-in modules.
+    pub fn builtins(&self, builtins: Vec<deckpilot_plugin_store::deps::BuiltinModule>) {
+        let _ = self.tx.send(Message::Builtins(builtins));
     }
 
     /// Hands the worker what `deckpilot.db` says about the modules that

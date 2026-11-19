@@ -56,6 +56,10 @@ pub struct Manifest {
     /// Everything the plugin may ever ask for. Deny by default: an operation
     /// not covered here is refused whatever the user consents to.
     pub permissions: Vec<Permission>,
+    /// Plugins and built-in modules this plugin needs (plugin API 1.4;
+    /// `dependency.rs`). Absent: none. A dependency grants nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependencies: Option<Vec<crate::dependency::Dependency>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports: Option<Supports>,
     pub contributes: Contributes,
@@ -846,6 +850,12 @@ pub struct Action {
     /// `device.requires` never adds a control kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controls: Option<ActionControls>,
+    /// Declared dependencies (by id) this action needs besides the
+    /// plugin's required ones, typically optional integrations (plugin API
+    /// 1.4): while one is missing or disabled only this action is
+    /// unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires_dependencies: Option<Vec<String>>,
 }
 
 /// Most inputs an action may declare for one control kind (the core's

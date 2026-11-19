@@ -213,6 +213,11 @@ export interface PluginSummary {
    * from older agents.
    */
   navigation?: PluginNavigationEntry[]
+  /**
+   * Installed only because this plugin needed it (agents with the
+   * `dependencies` feature); absent for a plugin the user installed.
+   */
+  installedFor?: string
 }
 
 /**
@@ -305,6 +310,10 @@ export interface PluginDetails {
   icon?: string
   /** What its storage holds and may hold; absent from older agents. */
   storage?: PluginStorageUsage
+  /** The active version's dependencies with their state here (plugin API 1.4). */
+  dependencies?: PluginDependencyInfo[]
+  /** Installed plugins that declare a dependency on this one. */
+  dependents?: PluginDependentInfo[]
 }
 
 /** `PluginDetails.storage`: bytes are keys plus JSON values, as UTF-8. */
@@ -424,6 +433,8 @@ export interface AvailableVersion {
   platforms?: string[]
   /** When the registry published it, in seconds since the Unix epoch. */
   publishedAt?: number
+  /** Its dependencies from the signed registry detail, with their state here. */
+  dependencies?: PluginDependencyInfo[]
 }
 
 /** The publisher of a registry plugin, as the registry index lists it. */
@@ -631,4 +642,87 @@ export interface MarketplaceSnapshot {
    * id (`getPluginSettings.missing`); only plugins with such settings.
    */
   missingSettings?: Record<string, string[]>
+}
+
+// ------------------------------------------------------------ dependencies
+
+/** The agent feature of dependency plans (`feature::DEPENDENCIES`). */
+export const DEPENDENCIES_FEATURE = "dependencies"
+
+/** A dependency's state on this computer. */
+export type DependencyState = "satisfied" | "disabled" | "wrongVersion" | "missing" | "unusable"
+
+/** One declared dependency of a plugin version (`PluginDependencyInfo`). */
+export interface PluginDependencyInfo {
+  /** A plugin id, or a built-in module id (`builtin`). */
+  id: string
+  /** The versions it accepts, e.g. `>=1.2.0 <2.0.0`. */
+  version: string
+  /** An optional integration: never installed by itself. */
+  optional?: boolean
+  justification?: string
+  /** A built-in module or a plugin that ships with DeckPilot. */
+  builtin?: boolean
+  name?: string
+  state: DependencyState
+  installedVersion?: string
+  /** The actions that need it. */
+  actions?: string[]
+}
+
+/** An installed plugin that declares a dependency on another. */
+export interface PluginDependentInfo {
+  id: string
+  name: string
+  enabled: boolean
+  version: string
+  optional?: boolean
+  actions?: string[]
+}
+
+export type PlanStepAction = "keep" | "enable" | "install" | "update" | "builtin" | "enableBuiltin"
+
+/** One plugin or module of an install plan (`PluginPlanStep`). */
+export interface PluginPlanStep {
+  id: string
+  name: string
+  version: string
+  action: PlanStepAction
+  fromVersion?: string
+  requested?: boolean
+  optional?: boolean
+  builtin?: boolean
+  requiredBy?: string[]
+  /** This plugin's own permissions (for an update: the new and broadened ones). */
+  permissions?: GrantInfo[]
+  publisher?: PublisherInfo
+  /** Why the plan cannot run as it is. */
+  blocker?: string
+}
+
+export interface PluginOptionalIntegration {
+  of: string
+  dependency: PluginDependencyInfo
+}
+
+/** `planPluginInstall`: everything installing a plugin takes, verified. */
+export interface PluginInstallPlan {
+  plugin: string
+  version: string
+  /** Dependencies first; the requested plugin last. */
+  steps: PluginPlanStep[]
+  optional?: PluginOptionalIntegration[]
+  fingerprint: string
+}
+
+/** `planPluginRemoval`: what disabling or uninstalling a plugin affects. */
+export interface PluginRemovalPlan {
+  plugin: string
+  uninstall: boolean
+  requiredBy?: PluginDependentInfo[]
+  /** Enabled plugins disabled with it, in that order. */
+  disables?: string[]
+  usedBy?: PluginDependentInfo[]
+  /** Dependencies nothing needs once it is uninstalled. */
+  orphans?: PluginDependentInfo[]
 }

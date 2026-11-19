@@ -92,6 +92,12 @@ released either. 0.6.0 is the first version intended for publication.
   title once, on the page. Leaving the editor for any view and coming back
   keeps the device, profile, layout, page and selected keys.
 
+- The plugin database (`plugins/plugins.db`, builds with plugins) is
+  upgraded to schema 5, which records the plugins installed only as
+  dependencies. An encrypted copy of the previous file is written to
+  `plugins/.backups` first. DeckPilot 0.8.1 refuses the upgraded plugin
+  database (its other features keep working); to go back, restore that
+  copy as `plugins.db`. The configuration database is not changed by this.
 - The configuration database is upgraded to schema 10 (an encrypted
   backup is made first). DeckPilot 0.8.1 and earlier cannot open the
   upgraded database; to go back, restore the `deckpilot-schema9-…` backup.
@@ -127,6 +133,26 @@ released either. 0.6.0 is the first version intended for publication.
   profile; each device remembers its layout across restarts, and the way
   back is kept per device and profile. Switch layout keys are titled with
   the layout they show, and Back shows when there is nothing to go back to.
+- Plugin dependencies (experimental plugins, plugin API 1.4; the agent now
+  provides 1.4). A plugin manifest can declare the plugins and built-in
+  modules it needs, required or optional, each with a version range, and
+  actions can name the optional ones they need. Installing a plugin from
+  the Marketplace first shows the whole plan: every plugin and built-in
+  module it needs, in install order, why each is needed, and each
+  plugin's own permissions. Every package is downloaded and checked
+  against the signed registry before anything is installed, nothing is
+  installed until you confirm, and if a step fails, what was done is
+  undone. A dependency never gets the permissions of the plugin that needs
+  it. Optional integrations are installed only when you select them;
+  without one, only the actions that use it are unavailable. Plugins that
+  others need cannot be turned off or uninstalled on their own: the
+  Marketplace shows which plugins are turned off with it. Plugins
+  installed only as dependencies are offered for removal, never removed
+  unless you check them. Updates and rollbacks never move a plugin to a
+  version that another installed plugin does not accept. Plugin details
+  list a version's dependencies and optional integrations with their state
+  here. Manifests without dependencies work as before. See
+  docs/marketplace/dependencies.md.
 
 ### Fixed
 

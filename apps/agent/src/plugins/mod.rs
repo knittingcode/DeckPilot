@@ -269,6 +269,10 @@ pub(crate) fn is_plugin_request(request: &Request) -> bool {
             | Request::RetryModuleMigration { .. }
             | Request::GrantPluginUserOrigin { .. }
             | Request::RevokePluginUserOrigin { .. }
+            | Request::PlanPluginInstall { .. }
+            | Request::InstallPluginPlan { .. }
+            | Request::PlanPluginRemoval { .. }
+            | Request::RemovePlugin { .. }
     )
 }
 
@@ -322,6 +326,7 @@ pub(crate) fn features() -> Vec<String> {
     vec![
         deckpilot_ipc::plugins::feature::PAGED_ANSWERS.to_owned(),
         deckpilot_ipc::plugins::feature::NAVIGATION.to_owned(),
+        deckpilot_ipc::plugins::feature::DEPENDENCIES.to_owned(),
     ]
 }
 
@@ -419,6 +424,32 @@ impl PluginRuntime {
         }
         #[cfg(not(feature = "plugins"))]
         let _ = (store, modules);
+    }
+
+    /// Hands the plugin worker the built-in modules just loaded
+    /// (`modules`, before plugins are registered), for plugins that depend
+    /// on one of them.
+    pub(crate) fn builtins(&self, modules: &deckpilot_core::ModuleRegistry) {
+        #[cfg(feature = "plugins")]
+        if let Some(worker) = &self.worker {
+            let builtins = modules
+                .modules()
+                .into_iter()
+                .filter(|m| !m.manifest.id.as_str().contains('.'))
+                .filter_map(|m| {
+                    Some(deckpilot_plugin_store::deps::BuiltinModule {
+                        version: semver::Version::parse(&m.manifest.version).ok()?,
+                        id: m.manifest.id.to_string(),
+                        name: m.manifest.name.clone(),
+                        enabled: m.enabled,
+                        supported: m.supported,
+                    })
+                })
+                .collect();
+            worker.builtins(builtins);
+        }
+        #[cfg(not(feature = "plugins"))]
+        let _ = modules;
     }
 
     /// Where the legacy action types of migrated modules go

@@ -21,6 +21,21 @@
 //! build that knows an older schema refuses a newer file with
 //! [`StoreError::UnsupportedSchema`] before writing anything.
 //!
+//! Schema 5 adds the plugins installed only as another plugin's dependency
+//! ([`PluginStore::dependency_installs`], [`deps`]). Before any upgrade of
+//! an existing file an encrypted, verified copy is written to
+//! `plugins/.backups/plugins-schema<n>-<ms>.db` (the newest
+//! [`KEPT_BACKUPS`] are kept): an older build refuses the upgraded file,
+//! so going back means restoring that copy as `plugins.db`.
+//!
+//! # Dependencies
+//!
+//! [`deps`] resolves what installing a plugin takes (its dependencies,
+//! recursively, against the installed plugins, the built-in modules and
+//! the registry), and what disabling or uninstalling one affects;
+//! [`PluginManager::apply_plan`] carries out a confirmed plan all or
+//! nothing, with every plugin's own consent.
+//!
 //! # First-party plugins
 //!
 //! A `deckpilot.*` id is installed only from the application bundle
@@ -74,12 +89,14 @@
 
 mod data;
 mod db;
+pub mod deps;
 mod error;
 mod failpoint;
 mod grants;
 mod layout;
 mod manager;
 mod origins;
+mod plan;
 mod recover;
 mod state;
 mod store;
@@ -90,8 +107,8 @@ pub use data::{
     StorageUsage,
 };
 pub use db::{
-    CONFIG_DATABASE_FILE, DEFAULT_BUSY_TIMEOUT, Database, MIGRATIONS, StoreKey,
-    supported_schema_version,
+    BACKUP_DIR, CONFIG_DATABASE_FILE, DEFAULT_BUSY_TIMEOUT, Database, KEPT_BACKUPS, MIGRATIONS,
+    StoreKey, supported_schema_version,
 };
 pub use error::{Result, StoreError};
 pub use failpoint::{CrashOnce, Failpoint, Failpoints, NoFailpoints, Operation};
@@ -110,6 +127,7 @@ pub use origins::{
     bound_credentials, declared_slot, open_url_user_origin_key, open_url_user_origin_setting,
     user_origin_key, user_origin_setting,
 };
+pub use plan::{AppliedPlan, PlannedStep, enabled_dependents};
 pub use recover::{Inconsistency, RecoveryReport};
 pub use state::{MigrationPhase, PluginState, TombstoneDecision};
 pub use store::{
