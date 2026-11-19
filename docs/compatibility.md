@@ -12,7 +12,23 @@ page says what happens then and how it is tested.
 | ----- | ----------------- | ------------ | --------------- |
 | Tag `v0.5.0-2` (signed draft test build, never published) | 0.5.0-2 | 4 | 5 |
 | Releases 0.6.0, 0.7.0, 0.8.0 and 0.8.1 | 0.6.0, 0.7.0, 0.8.0, 0.8.1 | 10 | 9 |
-| Current main | see `Cargo.toml` | 10 | 9 |
+| Current main (shared layouts) | see `Cargo.toml` | 10 | 10 |
+
+Schema 10 moves layouts, action instances and icons into shared tables
+and rewrites the profile documents (document version 6); see
+[Shared layouts](data-model.md#shared-layouts). The IPC protocol is
+unchanged: the agent reports the layout each device shows in the existing
+`DeviceInfo.layout`, and *Switch layout* and *Back to previous layout* are
+action types of the `deck` module, which need no new request. An app or
+agent of 0.6.0–0.8.1 refuses a schema 10 database before writing anything
+(“schema version 10 is newer than supported version 9”), as earlier
+releases refused newer schemas; going back means restoring the
+`deckpilot-schema9-…` backup. A 0.8.1 agent that still had the database
+open when a newer app upgraded it would read profile documents of version
+6, which it refuses, instead of seeing profiles without layouts. Exports
+without layouts of no profile stay payload version 2, which 0.6.0–0.8.1
+import; an export of everything with such layouts is version 3, which
+they refuse.
 
 DeckPilot 0.5.0 was never published. Its two draft prereleases (0.5.0-1
 and 0.5.0-2) have since been deleted; only the tag `v0.5.0-2` remains, as
@@ -83,6 +99,8 @@ with schema 7 and have not been recorded again for protocol 9 and schema 9.
 | 0.6.0 client with 0.6.0 agent | real (matrix), agent and desktop tests | works (protocol 6; measured before 0.6.0-alpha.2) |
 | 0.6.0 client with 0.5.0 agent | real (matrix: `real_agent` test against the running 0.5.0-2 agent); simulated (`peers` tests) | negotiates protocol 4 after refused `hello` 6 and 5; status read; `listExecutions` refused locally and never sent (measured before 0.6.0-alpha.2) |
 | 0.5.0 client with 0.6.0 agent | real (matrix: the 0.5.0-2 CLI client); agent test with recorded protocol 4 messages | works with protocol 4; `welcome` lists protocol 4's capabilities; protocol 5 requests refused with `unsupported` |
+| 0.8.1 agent given a schema 10 database | real (`tools/compat/matrix.sh v0.8.1`) | refused before anything is written; the database and key file stay byte-identical; this build still opens it |
+| this build given a 0.8.1 database | real (matrix: database created by the 0.8.1 tools); storage tests on the `v0.8.1` fixture | upgraded to schema 10; profiles, layouts in order, bindings, active layouts, actions, icons, active profile and project kept |
 | 0.5.0 agent given a 0.6.0 database | real (matrix) | refused ("schema version 7 is newer than supported version 5"); database and key file byte-identical afterwards; the 0.6.0 agent still opens it (measured before 0.6.0-alpha.2) |
 | 0.6.0 agent given a 0.5.0 database | real (matrix: database created by the 0.5.0-2 tools) | upgraded to schema 7; profiles, active profile and project kept (measured before 0.6.0-alpha.2) |
 | agent before protocol 4 | simulated (`peers`: a protocol 3 peer) | update required; stopping it with protocol 1 still works |

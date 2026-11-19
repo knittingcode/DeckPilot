@@ -133,12 +133,16 @@ The domain model and execution engine.
   `MachineResourceBinding`
 - `layout`: `DeviceLayout`, `LayoutPage`, `ControlBinding`, `Trigger`,
   `BindingTarget`
+- `shared_layouts`: layouts as resources shared by profiles — what a layout
+  uses and needs, its fit on each device model, what depends on the
+  profile it runs in, and the per-device way back between layouts
+  (`LayoutHistory`); see [Shared layouts](data-model.md#shared-layouts)
 - `profile`: `Profile` and consistency validation
 - `platform`: `Os`
 - `runtime`: `Engine` (runs actions and workflows)
 - `device_runtime`: `Runtime` (active profile and project, connected devices,
-  page navigation and folders, input dispatch, layout status) and
-  `LayoutStatus`
+  the layout each device shows, page and layout navigation, folders, input
+  dispatch, layout status) and `LayoutStatus`
 - `face`: `KeyFace`, the device-independent description of what a key shows
 
 Action handlers are pure with respect to the runtime context: they receive a
@@ -187,6 +191,7 @@ configuration from storage, apply one change through the domain model,
 persist it and notify the agent. Runtime changes and action execution are
 forwarded to the agent; a background task subscribes to agent events and
 forwards them to the window. The main window opens with the device editor;
+Layouts (every layout, the profiles that use it, its fit on each model),
 Dashboard, Action Library and Workflows are in its navigation rail, the
 plugin Marketplace (builds with plugins) in its toolbar. The settings
 (general, profiles, devices, agent, security, updates, plugins, diagnostics,
@@ -322,9 +327,10 @@ Simulated devices are counted separately from physical ones.
 
 | Area                   | Contents                                       | Portable |
 | ---------------------- | ---------------------------------------------- | -------- |
-| Profiles               | Actions, workflows, projects, layouts          | Yes      |
+| Profiles               | Workflows, projects, the layouts they use (in order, default per model), their own actions and icons | Yes |
+| Shared layouts         | Layouts and the actions and icons their keys use, one record each, used by any number of profiles | Yes (with the profiles that use them; all of them in an export of everything) |
 | Machine configuration  | Resource bindings, OS                          | No       |
-| Runtime state          | Active profile, active project per profile, device brightness | No |
+| Runtime state          | Active profile, active project per profile, device brightness, the page and layout each device shows per profile | No |
 | Secrets (planned)      | Credentials needed by actions                  | Never    |
 
 Portable data never contains absolute paths: `ResourceKey` rejects them by
