@@ -247,6 +247,41 @@ export function deviceModel(change: Partial<DeviceModel> = {}): DeviceModel {
   }
 }
 
+/** The models of the catalog by their geometry: keys, touch strip and dials. */
+export const DEVICE_MODELS = {
+  mk2: deviceModel(),
+  mini: deviceModel({
+    id: "elgato.streamdeck.mini",
+    name: "Stream Deck Mini",
+    usb: { vendorId: 0x0fd9, productId: 0x0063 },
+    capabilities: {
+      keys: { rows: 2, columns: 3, image: { width: 80, height: 80, format: "bmp" } },
+      encoders: null,
+      touch: null,
+    },
+  }),
+  xl: deviceModel({
+    id: "elgato.streamdeck.xl",
+    name: "Stream Deck XL",
+    usb: { vendorId: 0x0fd9, productId: 0x008f },
+    capabilities: {
+      keys: { rows: 4, columns: 8, image: { width: 96, height: 96, format: "jpeg" } },
+      encoders: null,
+      touch: null,
+    },
+  }),
+  plus: deviceModel({
+    id: "elgato.streamdeck.plus",
+    name: "Stream Deck +",
+    usb: { vendorId: 0x0fd9, productId: 0x0084 },
+    capabilities: {
+      keys: { rows: 2, columns: 4, image: { width: 120, height: 120, format: "jpeg" } },
+      encoders: { count: 4, pressable: true },
+      touch: { zones: 4, image: { width: 800, height: 100, format: "jpeg" }, gestures: ["tap"] },
+    },
+  }),
+} satisfies Record<string, DeviceModel>
+
 /** A connected device as the agent reports it. */
 export function deviceInfo(change: Partial<DeviceInfo> = {}): DeviceInfo {
   return {

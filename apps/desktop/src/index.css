@@ -49,14 +49,24 @@
 
   /* The device drawn in the editor (components/device-canvas.tsx): its
      body, touch strip and dials, and the marks of selection, keyboard
-     focus and a drop target. The key faces show what the device's own
+     focus and a drop target. The key images show what the device's own
      screens show and keep their colours. */
-  --device-body: oklch(0.32 0 0);
-  --device-body-border: oklch(0.42 0 0);
-  --device-strip: oklch(0.2 0 0);
+  --device-body: oklch(0.22 0 0);
+  --device-body-border: oklch(0.34 0 0);
+  --device-strip: oklch(0.15 0 0);
   --device-dial: oklch(0.27 0 0);
-  --device-dial-border: oklch(0.5 0 0);
+  --device-dial-border: oklch(0.46 0 0);
   --device-dial-foreground: oklch(0.92 0 0);
+  /* A key: its LCD when nothing is shown (a little lighter than the body),
+     its hairline border at rest and on hover, and the faces drawn until the
+     device's own image arrives (components/key-face.tsx). */
+  --device-key: oklch(0.26 0 0);
+  --device-key-border: oklch(0.35 0 0);
+  --device-key-hover: oklch(0.55 0 0);
+  --device-key-foreground: oklch(0.95 0 0);
+  --device-key-muted: oklch(0.78 0 0);
+  --device-face: oklch(0.31 0 0);
+  --device-face-folder: oklch(0.33 0.05 270);
   --device-selected: oklch(0.769 0.188 70.08);
   --device-focus: oklch(0.685 0.169 237.32);
   --device-drop: oklch(0.696 0.17 162.48);
@@ -90,12 +100,19 @@
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
 
-  --device-body: oklch(0.12 0 0);
-  --device-body-border: oklch(0.36 0 0);
-  --device-strip: oklch(0.08 0 0);
+  --device-body: oklch(0.17 0 0);
+  --device-body-border: oklch(0.3 0 0);
+  --device-strip: oklch(0.11 0 0);
   --device-dial: oklch(0.22 0 0);
-  --device-dial-border: oklch(0.45 0 0);
+  --device-dial-border: oklch(0.42 0 0);
   --device-dial-foreground: oklch(0.9 0 0);
+  --device-key: oklch(0.21 0 0);
+  --device-key-border: oklch(0.3 0 0);
+  --device-key-hover: oklch(0.5 0 0);
+  --device-key-foreground: oklch(0.94 0 0);
+  --device-key-muted: oklch(0.76 0 0);
+  --device-face: oklch(0.26 0 0);
+  --device-face-folder: oklch(0.28 0.05 270);
   --device-selected: oklch(0.828 0.189 84.43);
   --device-focus: oklch(0.746 0.16 232.66);
   --device-drop: oklch(0.765 0.177 163.22);
@@ -138,6 +155,13 @@
   --color-device-dial: var(--device-dial);
   --color-device-dial-border: var(--device-dial-border);
   --color-device-dial-foreground: var(--device-dial-foreground);
+  --color-device-key: var(--device-key);
+  --color-device-key-border: var(--device-key-border);
+  --color-device-key-hover: var(--device-key-hover);
+  --color-device-key-foreground: var(--device-key-foreground);
+  --color-device-key-muted: var(--device-key-muted);
+  --color-device-face: var(--device-face);
+  --color-device-face-folder: var(--device-face-folder);
   --color-device-selected: var(--device-selected);
   --color-device-focus: var(--device-focus);
   --color-device-drop: var(--device-drop);

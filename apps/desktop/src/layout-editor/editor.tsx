@@ -1,5 +1,6 @@
 import {
   DndContext,
+  DragOverlay,
   KeyboardSensor,
   PointerSensor,
   defaultAnnouncements,
@@ -7,12 +8,14 @@ import {
   useSensors,
   type Announcements,
   type DragEndEvent,
+  type DragStartEvent,
 } from "@dnd-kit/core"
 import { Redo2, RotateCcw, Save, Undo2 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 import { toast } from "sonner"
 
 import { DeviceCanvas } from "@/components/device-canvas"
+import { deviceGeometry, KEY_SIZE, keySize } from "@/components/device-geometry"
 import { EmptyState, ErrorNotice } from "@/components/page"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -87,11 +90,15 @@ import {
 import { Inspector } from "./inspector"
 import { LibraryDock } from "./library-dock"
 import { LibraryPanel } from "./library-panel"
-import { PageBar } from "./page-bar"
+import { dragLook } from "./drag-look"
+import { DragPreview } from "./drag-preview"
+import { PageNav } from "./page-nav"
+import { PageSettings, PagesSheet } from "./page-settings"
 import { PageTreePanel } from "./page-tree-panel"
 import { markIncompatible, targetGroups } from "./targets"
 import { useEditorShortcuts } from "@/hooks/use-editor-shortcuts"
 import { shortcutLabel } from "@/lib/shortcuts"
+import { useElementSize } from "./use-element-size"
 import { useIcons } from "./use-icons"
 import { useLayoutEditing } from "./use-layout-editing"
 import { usePreviewFaces } from "./use-preview-faces"
@@ -435,7 +442,13 @@ export function LayoutEditor({
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor),
   )
+  // What is being dragged, for the drag preview.
+  const [dragging, setDragging] = useState<DragSource | null>(null)
+  const onDragStart = (event: DragStartEvent) => {
+    setDragging((event.active.data.current as DragSource | undefined) ?? null)
+  }
   const onDragEnd = (event: DragEndEvent) => {
+    setDragging(null)
     const source = event.active.data.current as DragSource | undefined
     const target = event.over ? parseControlKey(String(event.over.id)) : null
     if (!source || !target) return
@@ -493,12 +506,38 @@ export function LayoutEditor({
     }
   }
 
+  // The preview fills the width of its workspace and at most about half
+  // the editor's height, so the inspector stays in view below it.
+  const workspace = useRef<HTMLDivElement>(null)
+  const main = useRef<HTMLDivElement>(null)
+  const space = useElementSize(workspace)
+  const editorSpace = useElementSize(main)
+  const unit = space
+    ? keySize(
+        {
+          // Less the padding around the device.
+          width: space.width - 16,
+          height: editorSpace ? editorSpace.height * 0.55 : undefined,
+        },
+        deviceGeometry(model),
+      )
+    : KEY_SIZE.fallback
+  const [managingPages, setManagingPages] = useState(false)
+
   const folder = selection.focus ? folderOf(draft, pageId, selection.focus) : undefined
   const isFolderPage = pageId !== draft.homePage
   const hasControls = controls.length > 0
 
   return (
-    <DndContext sensors={sensors} onDragEnd={onDragEnd} accessibility={{ announcements }}>
+    <DndContext
+      sensors={sensors}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragCancel={() => {
+        setDragging(null)
+      }}
+      accessibility={{ announcements }}
+    >
       {/*
         One drag and drop context for the whole editor: the library (right)
         drops onto the device (centre) and onto the gestures of the
@@ -506,12 +545,13 @@ export function LayoutEditor({
       */}
       <div data-slot="device-editor" className="relative flex min-h-0 flex-1">
         <div
+          ref={main}
           data-slot="device-editor-main"
           className="grid min-w-0 flex-1 content-start gap-4 overflow-y-auto p-4"
         >
           {header}
-          <Card>
-            <CardHeader className="gap-3">
+          <Card className="min-w-0">
+            <CardHeader className="gap-3 border-b [.border-b]:pb-3">
               <div className="flex flex-wrap items-center gap-2">
                 <Input
                   aria-label="Layout name"
@@ -558,30 +598,6 @@ export function LayoutEditor({
                   <Save /> Save
                 </Button>
               </div>
-              <PageBar
-                draft={draft}
-                pageId={pageId}
-                trail={editing.trail}
-                onOpen={commands.openPage}
-                onBack={commands.back}
-                onAdd={commands.addPage}
-                onRename={commands.renamePage}
-                onDelete={commands.deletePage}
-                onAutoReturn={commands.setAutoReturn}
-              />
-              <PageTreePanel
-                profileId={profileId}
-                draft={draft}
-                layouts={view.profile.layouts}
-                dirty={dirty}
-                pageId={pageId}
-                onOpen={commands.openPage}
-                onStored={(layout, page) => {
-                  if (layout) commands.reset(layout, page)
-                  onSaved()
-                  refresh()
-                }}
-              />
             </CardHeader>
             <CardContent className="grid gap-4">
               {errors.length > 0 && <ErrorNotice error={errors.map(readableTriggers).join(" ")} />}
@@ -594,58 +610,77 @@ export function LayoutEditor({
                 {rejected?.message ?? ""}
               </p>
               {hasControls ? (
-                <div className="overflow-x-auto p-1">
-                  <DeviceCanvas
-                    model={model}
-                    images={images}
-                    faces={faces}
-                    icons={icons}
-                    captions={summaries}
-                    summaries={summaries}
-                    selection={selection.controls}
-                    focused={selection.focus}
-                    onSelect={commands.select}
-                    onOpen={commands.openFolder}
-                    onControlKeyDown={onControlKeyDown}
-                    droppable
-                    draggable
-                    dropRejection={dropRejection}
-                    rejected={rejected?.control ?? null}
-                    wrapControl={(control, element) => (
-                      <ControlMenu
-                        label={controlLabel(control)}
-                        groups={groupsFor(control)}
-                        state={{
-                          count: selected.length,
-                          hasBindings: selected.some((c) => bound.has(controlKey(c))),
-                          canPaste: editing.clipboard !== null,
-                          folderName: (() => {
-                            const id = folderOf(draft, pageId, control)
-                            return id ? findPage(draft, id)?.name : undefined
-                          })(),
-                          canCreateFolder: isFree(draft, pageId, control),
-                        }}
-                        commands={{
-                          onOpen: () => {
-                            commands.selectForMenu(control)
-                          },
-                          assign: commands.assign,
-                          copy: commands.copy,
-                          cut: commands.cut,
-                          paste: commands.paste,
-                          duplicate: commands.duplicate,
-                          clear: commands.clear,
-                          openFolder: () => {
-                            commands.openFolder(control)
-                          },
-                          newFolder: () => {
-                            commands.newFolder(control)
-                          },
-                        }}
-                      >
-                        {element}
-                      </ControlMenu>
-                    )}
+                <div
+                  ref={workspace}
+                  data-slot="device-workspace"
+                  className="grid min-w-0 justify-items-center gap-3"
+                >
+                  {/* Scrolls sideways only where even the smallest keys do not fit. */}
+                  <div className="flex max-w-full justify-center-safe overflow-x-auto p-2">
+                    <DeviceCanvas
+                      model={model}
+                      keySize={unit}
+                      images={images}
+                      faces={faces}
+                      icons={icons}
+                      captions={summaries}
+                      summaries={summaries}
+                      selection={selection.controls}
+                      focused={selection.focus}
+                      onSelect={commands.select}
+                      onOpen={commands.openFolder}
+                      onControlKeyDown={onControlKeyDown}
+                      droppable
+                      draggable
+                      dropRejection={dropRejection}
+                      rejected={rejected?.control ?? null}
+                      wrapControl={(control, element) => (
+                        <ControlMenu
+                          label={controlLabel(control)}
+                          groups={groupsFor(control)}
+                          state={{
+                            count: selected.length,
+                            hasBindings: selected.some((c) => bound.has(controlKey(c))),
+                            canPaste: editing.clipboard !== null,
+                            folderName: (() => {
+                              const id = folderOf(draft, pageId, control)
+                              return id ? findPage(draft, id)?.name : undefined
+                            })(),
+                            canCreateFolder: isFree(draft, pageId, control),
+                          }}
+                          commands={{
+                            onOpen: () => {
+                              commands.selectForMenu(control)
+                            },
+                            assign: commands.assign,
+                            copy: commands.copy,
+                            cut: commands.cut,
+                            paste: commands.paste,
+                            duplicate: commands.duplicate,
+                            clear: commands.clear,
+                            openFolder: () => {
+                              commands.openFolder(control)
+                            },
+                            newFolder: () => {
+                              commands.newFolder(control)
+                            },
+                          }}
+                        >
+                          {element}
+                        </ControlMenu>
+                      )}
+                    />
+                  </div>
+                  <PageNav
+                    draft={draft}
+                    pageId={pageId}
+                    trail={editing.trail}
+                    onOpen={commands.openPage}
+                    onBack={commands.back}
+                    onAdd={commands.addPage}
+                    onManage={() => {
+                      setManagingPages(true)
+                    }}
                   />
                 </div>
               ) : (
@@ -751,6 +786,46 @@ export function LayoutEditor({
           />
         </LibraryDock>
       </div>
+      <DragOverlay dropAnimation={null}>
+        {dragging ? (
+          <DragPreview
+            look={dragLook(dragging, {
+              actions,
+              workflows,
+              types: typeById,
+              pageName: (id) => findPage(draft, id)?.name,
+              images,
+              faces,
+              icons,
+            })}
+          />
+        ) : null}
+      </DragOverlay>
+      <PagesSheet open={managingPages} onOpenChange={setManagingPages}>
+        <PageSettings
+          draft={draft}
+          pageId={pageId}
+          onRename={commands.renamePage}
+          onDelete={() => {
+            setManagingPages(false)
+            commands.deletePage()
+          }}
+          onAutoReturn={commands.setAutoReturn}
+        />
+        <PageTreePanel
+          profileId={profileId}
+          draft={draft}
+          layouts={view.profile.layouts}
+          dirty={dirty}
+          pageId={pageId}
+          onOpen={commands.openPage}
+          onStored={(layout, page) => {
+            if (layout) commands.reset(layout, page)
+            onSaved()
+            refresh()
+          }}
+        />
+      </PagesSheet>
       <DeletePageDialog
         deletion={editing.deleting ? pageDeletion(draft, editing.deleting) : null}
         onCancel={commands.cancelDeletePage}

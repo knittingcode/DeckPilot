@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { LayoutEditor } from "./editor"
 import type { DeviceLayout, DeviceModel, ProfileView } from "@/lib/types"
+import { currentPage, goToPage, managePages } from "@/test/pages"
 
 // Radix menus and selects rely on browser APIs that jsdom does not implement.
 Element.prototype.hasPointerCapture = () => false
@@ -134,7 +135,9 @@ describe("LayoutEditor", { timeout: 20_000 }, () => {
     expect(screen.getAllByRole("button", { name: /^Touch zone \d+$/ })).toHaveLength(4)
     expect(describes("Key 1")).toBe("Key 1: Press: Shop")
     expect(describes("Key 2")).toBe("Key 2")
-    expect(screen.getByText("Page 1 of 2")).toBeInTheDocument()
+    // "Tools" is a folder (a key of Home opens it): one top-level page.
+    expect(screen.getByText("Page 1 of 1")).toBeInTheDocument()
+    expect(currentPage()).toBe("Home")
   })
 
   it("selects with click, Cmd/Ctrl-click and Shift-click", async () => {
@@ -193,12 +196,12 @@ describe("LayoutEditor", { timeout: 20_000 }, () => {
     await user.keyboard("{Control>}d{/Control}")
     expect(describes("Key 7")).toBe("Key 7: Press: Shop")
 
-    await user.click(screen.getByRole("tab", { name: "Tools" }))
+    await goToPage(user, "Tools")
     await user.click(control("Key 2"))
     await user.keyboard("{Control>}v{/Control}")
     expect(describes("Key 2")).toBe("Key 2: Press: Shop")
 
-    await user.click(screen.getByRole("tab", { name: "Home" }))
+    await goToPage(user, "Home")
     await user.click(control("Key 1"))
     await user.keyboard("{Control>}x{/Control}")
     expect(describes("Key 1")).toBe("Key 1")
@@ -223,13 +226,14 @@ describe("LayoutEditor", { timeout: 20_000 }, () => {
 
     fireEvent.contextMenu(control("Key 4"))
     await user.click(await screen.findByRole("menuitem", { name: /Open “Tools”/ }))
-    expect(screen.getByRole("tab", { name: "Tools" })).toHaveAttribute("aria-selected", "true")
-    expect(screen.getByText("Page 2 of 2")).toBeInTheDocument()
+    expect(currentPage()).toBe("Tools")
+    // A folder is where its top-level page is.
+    expect(screen.getByText("Page 1 of 1")).toBeInTheDocument()
     expect(screen.getByText("This folder is empty")).toBeInTheDocument()
     expect(screen.getByRole("note")).toHaveTextContent("no “Back” binding")
 
     await user.click(screen.getByRole("button", { name: "Back" }))
-    expect(screen.getByRole("tab", { name: "Home" })).toHaveAttribute("aria-selected", "true")
+    expect(currentPage()).toBe("Home")
   })
 
   it("follows the stored page tree for Back, the location and deleting", async () => {
@@ -242,7 +246,7 @@ describe("LayoutEditor", { timeout: 20_000 }, () => {
       ],
     }
     const user = renderEditor(tree)
-    await user.click(screen.getByRole("tab", { name: "Git" }))
+    await goToPage(user, "Git")
     const location = screen.getByRole("navigation", { name: "Page location" })
     expect(
       within(location)
@@ -251,13 +255,13 @@ describe("LayoutEditor", { timeout: 20_000 }, () => {
     ).toEqual(["Home", "Tools", "Git"])
     expect(screen.getByRole("note")).toHaveTextContent("adds one on its first free key")
 
-    // Opened from its tab: Back goes to its folder, not straight home.
+    // Opened from the page menu: Back goes to its folder, not straight home.
     await user.click(screen.getByRole("button", { name: "Back" }))
-    expect(screen.getByRole("tab", { name: "Tools" })).toHaveAttribute("aria-selected", "true")
+    expect(currentPage()).toBe("Tools")
 
     // Deleting "Tools" asks first, saying what goes with it, and keeps
     // "Git" in a folder that exists.
-    await user.click(screen.getByRole("button", { name: "Delete page" }))
+    await user.click(within(await managePages(user)).getByRole("button", { name: "Delete page" }))
     const dialog = await screen.findByRole("alertdialog", { name: "Delete “Tools”?" })
     expect(dialog).toHaveTextContent(
       "1 control on other pages that opens it will do nothing afterwards.",
@@ -295,7 +299,7 @@ describe("LayoutEditor", { timeout: 20_000 }, () => {
     const user = renderEditor()
     await user.click(control("Key 1"))
     const range = document.createRange()
-    range.selectNodeContents(screen.getByText("Page 1 of 2"))
+    range.selectNodeContents(screen.getByText("Page 1 of 1"))
     window.getSelection()?.removeAllRanges()
     window.getSelection()?.addRange(range)
     const event = new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true })
