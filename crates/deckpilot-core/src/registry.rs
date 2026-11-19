@@ -17,6 +17,16 @@ use crate::{
     ParameterKind, ParameterSpec, ParameterValue, Profile, Project, RefreshPolicy, StateError,
 };
 
+/// What an action does between the layouts of a device
+/// ([`ActionHandler::layout_navigation`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutNavigation {
+    /// Shows this layout (*Switch layout*).
+    SwitchTo(crate::LayoutId),
+    /// Returns to the layout shown before (*Back to previous layout*).
+    Back,
+}
+
 /// Implementation of one action type.
 pub trait ActionHandler: Send + Sync {
     /// Static definition of the action type handled by this implementation.
@@ -40,6 +50,14 @@ pub trait ActionHandler: Send + Sync {
     /// their own threads and call [`ActionHandler::execute`] there.
     fn runs_detached(&self) -> bool {
         false
+    }
+
+    /// Whether the action moves a device between layouts (*Switch layout*,
+    /// *Back to previous layout*), so that its key can show the target
+    /// layout's name and whether there is a way back. `None` (the
+    /// default): it does not.
+    fn layout_navigation(&self, _parameters: &ActionParameters) -> Option<LayoutNavigation> {
+        None
     }
 
     /// Checks normalized parameters against the profile the action belongs
@@ -217,6 +235,12 @@ impl ActionHandler for AliasHandler {
 
     fn runs_detached(&self) -> bool {
         self.target.runs_detached()
+    }
+
+    fn layout_navigation(&self, parameters: &ActionParameters) -> Option<LayoutNavigation> {
+        self.translate(parameters)
+            .ok()
+            .and_then(|parameters| self.target.layout_navigation(&parameters))
     }
 
     fn check(&self, parameters: &ActionParameters, profile: &Profile) -> Vec<String> {
@@ -466,6 +490,16 @@ impl ActionRegistry {
                 .map(ButtonState::sanitized)
                 .map_err(StateError::sanitized),
         )
+    }
+
+    /// What a key running `action_type` with `parameters` does between
+    /// layouts; see [`ActionHandler::layout_navigation`].
+    pub fn layout_navigation(
+        &self,
+        action_type: &ActionTypeId,
+        parameters: &ActionParameters,
+    ) -> Option<LayoutNavigation> {
+        self.handler(action_type)?.layout_navigation(parameters)
     }
 
     /// Whether `action_type` must not run on a thread that has to stay

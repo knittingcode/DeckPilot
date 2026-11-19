@@ -41,8 +41,8 @@ use std::collections::BTreeMap;
 use deckpilot_core::graph::{ActionEffect, NodeSpec, OutputSpec, ValueKind};
 use deckpilot_core::{
     ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, Capability,
-    DeckRequest, ExecutionContext, FeatureModule, HistoryMode, KeyFace, LayoutId, ModuleId,
-    ModuleManifest, PageId, ParameterError, ParameterKind, ParameterSpec, ParameterValue,
+    DeckRequest, ExecutionContext, FeatureModule, HistoryMode, KeyFace, LayoutId, LayoutNavigation,
+    ModuleId, ModuleManifest, PageId, ParameterError, ParameterKind, ParameterSpec, ParameterValue,
     Portability, ProfileId, ProfileTarget, Project,
 };
 
@@ -672,6 +672,15 @@ impl ActionHandler for SwitchLayout {
         &self.0
     }
 
+    fn layout_navigation(&self, parameters: &ActionParameters) -> Option<LayoutNavigation> {
+        match Self::request(parameters) {
+            Ok(DeckRequest::SwitchLayout { layout, .. }) => {
+                Some(LayoutNavigation::SwitchTo(layout))
+            }
+            _ => None,
+        }
+    }
+
     fn validate(&self, parameters: &ActionParameters) -> Vec<ParameterError> {
         match Self::request(parameters) {
             Ok(_) => Vec::new(),
@@ -735,6 +744,10 @@ impl Default for PreviousLayout {
 impl ActionHandler for PreviousLayout {
     fn definition(&self) -> &ActionType {
         &self.0
+    }
+
+    fn layout_navigation(&self, _parameters: &ActionParameters) -> Option<LayoutNavigation> {
+        Some(LayoutNavigation::Back)
     }
 
     fn execute(

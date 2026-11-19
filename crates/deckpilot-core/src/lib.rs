@@ -98,7 +98,7 @@ pub use project::{
     ActiveProjectContext, CycleDirection, Project, ProjectContextError, ProjectKey,
     ProjectStepError, ProjectSwitcher,
 };
-pub use registry::{ActionHandler, ActionRegistry, AliasHandler, RegistryError};
+pub use registry::{ActionHandler, ActionRegistry, AliasHandler, LayoutNavigation, RegistryError};
 pub use resource::{
     MachineConfig, MachineResourceBinding, ResolveError, ResourceKey, ResourceKind, ResourceRef,
 };

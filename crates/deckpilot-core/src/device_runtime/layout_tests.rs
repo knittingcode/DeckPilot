@@ -23,6 +23,15 @@ impl ActionHandler for Navigate {
         self.0.definition()
     }
 
+    fn layout_navigation(&self, parameters: &ActionParameters) -> Option<crate::LayoutNavigation> {
+        let message = parameters.text("message").unwrap_or_default();
+        if message == "back" {
+            return Some(crate::LayoutNavigation::Back);
+        }
+        let layout = message.trim_start_matches("switch:").split(':').next()?;
+        Some(crate::LayoutNavigation::SwitchTo(layout.parse().ok()?))
+    }
+
     fn execute(&self, parameters: &ActionParameters, _: &ExecutionContext<'_>) -> ActionResult {
         let message = parameters.text("message").unwrap_or_default();
         let request = if message == "back" {
@@ -400,4 +409,45 @@ fn layout_requests_need_a_device() {
     runtime.set_profile(Some(profile_with("Work", &set)), None);
     let result = runtime.run_action(set.actions[1].id).unwrap();
     assert_eq!(result.code.as_deref(), Some(NO_DEVICE));
+}
+
+#[test]
+fn switch_keys_show_their_layout_and_back_shows_when_it_cannot_go_back() {
+    let set = layout_set(&["Main", "Teams"]);
+    let mut profile = profile_with("Work", &set);
+    // Teams is not in this profile.
+    profile.layouts.truncate(1);
+    let mut runtime = runtime();
+    runtime.set_profile(Some(profile), None);
+    let deck = device("A");
+    connect(&mut runtime, &deck);
+    let faces = runtime.faces(&deck);
+    let face = |index: u16| {
+        faces
+            .iter()
+            .find(|(control, _)| *control == ControlId::Key { index })
+            .unwrap()
+            .1
+            .clone()
+    };
+    // Untitled switch keys show the layout's name, or that it is not here.
+    assert_eq!(face(0).title, "Main");
+    assert_eq!(face(1).style, FaceStyle::Notice);
+    assert_eq!(face(1).detail.as_deref(), Some("Not in this profile"));
+    // Nothing to go back to.
+    assert_eq!(face(14).style, FaceStyle::Notice);
+    assert_eq!(face(14).detail.as_deref(), Some(NO_PREVIOUS_LAYOUT));
+
+    // With a way back, Back is a normal key.
+    let set = layout_set(&["Main", "Teams"]);
+    runtime.set_profile(Some(profile_with("Work", &set)), None);
+    press(&mut runtime, &deck, 1);
+    let faces = runtime.faces(&deck);
+    let back = &faces
+        .iter()
+        .find(|(control, _)| *control == ControlId::Key { index: 14 })
+        .unwrap()
+        .1;
+    assert_eq!(back.style, FaceStyle::Action);
+    assert_eq!(back.detail, None);
 }

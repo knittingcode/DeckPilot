@@ -33,6 +33,10 @@ pub const NO_DEVICE: &str = "no-device";
 /// no longer exists).
 pub const LAYOUT_UNAVAILABLE: &str = "layout-unavailable";
 
+/// The detail of a *Back to previous layout* key with nowhere to go back
+/// to.
+pub const NO_PREVIOUS_LAYOUT: &str = "No previous layout";
+
 /// *Switch layout*: the layout is made for another device model.
 pub const LAYOUT_INCOMPATIBLE: &str = "layout-incompatible";
 
@@ -1001,7 +1005,7 @@ impl Runtime {
         let Some(page) = layout.page(page) else {
             return notice("No layout");
         };
-        page_faces(
+        let mut faces = page_faces(
             self.engine.registry(),
             layout,
             page.id,
@@ -1009,7 +1013,26 @@ impl Runtime {
             self.active_project(),
             &controls,
             Some(&model.capabilities),
-        )
+        );
+        // *Back to previous layout* with nowhere to go back to.
+        if self.layout_history(device).is_empty() {
+            for (control, face) in &mut faces {
+                let back = shown_binding(page, *control)
+                    .and_then(|binding| binding.target.action_id())
+                    .and_then(|action| profile.action(action))
+                    .and_then(|instance| {
+                        self.engine
+                            .registry()
+                            .layout_navigation(&instance.action_type, &instance.parameters)
+                    })
+                    == Some(crate::LayoutNavigation::Back);
+                if back && face.style != FaceStyle::Notice {
+                    face.style = FaceStyle::Notice;
+                    face.detail = Some(NO_PREVIOUS_LAYOUT.into());
+                }
+            }
+        }
+        faces
     }
 
     /// The bindings of the active profile's layouts that cannot run their
@@ -1424,12 +1447,24 @@ fn face_for(
             let Some(instance) = profile.action(*action) else {
                 return KeyFace::new(FaceStyle::Notice, "Missing");
             };
+            let parameters = instance.parameters.overlay(overrides);
+            // *Switch layout* without a label of its own is titled with
+            // the layout it shows; a layout the profile does not use is
+            // unavailable here.
+            let target = match registry.layout_navigation(&instance.action_type, &parameters) {
+                Some(crate::LayoutNavigation::SwitchTo(id)) => Some(profile.layout(id)),
+                _ => None,
+            };
             let template = binding
                 .label
                 .as_deref()
                 .or(instance.label.as_deref())
+                .or_else(|| target.flatten().map(|layout| layout.name.as_str()))
                 .unwrap_or(&instance.name);
             let label = render_label(template, &profile.name, project);
+            if target == Some(None) {
+                return KeyFace::new(FaceStyle::Notice, label).with_detail("Not in this profile");
+            }
             // The action's own icon, else its type's.
             let symbol = instance.icon.clone().or_else(|| {
                 registry
@@ -1441,7 +1476,7 @@ fn face_for(
                 .decorate_face(
                     &instance.action_type,
                     KeyFace::new(FaceStyle::Action, label.clone()).with_symbol(symbol),
-                    &instance.parameters.overlay(overrides),
+                    &parameters,
                     template,
                     project,
                 )

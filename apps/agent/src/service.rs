@@ -1769,6 +1769,7 @@ impl Agent {
                     state: status.state,
                     page,
                     source: self.options.backend.source(&status.device).into(),
+                    previous_layout: self.runtime.layout_history(&status.device).last().copied(),
                     id: status.device,
                 }
             })
