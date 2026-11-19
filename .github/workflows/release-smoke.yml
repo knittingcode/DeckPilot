@@ -67,7 +67,7 @@ env:
   # Pinned; installed with `cargo install --locked`.
   TAURI_DRIVER_VERSION: 2.1.0
   # The release a pull request's run tests.
-  PULL_REQUEST_TAG: v0.8.0
+  PULL_REQUEST_TAG: v0.8.1
   # Whether failed product checks fail the jobs (tools/release-smoke/common.sh).
   SMOKE_STRICT: ${{ github.event_name == 'workflow_dispatch' }}
 

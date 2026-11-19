@@ -22,6 +22,10 @@
 #   Library and the key inspector › closing the main window (the app ends,
 #   the agent keeps running) › reopening restores the window and the
 #   profile being edited.
+#
+# A failed step also lists every top-level window of the app, the hidden
+# ones too (EnumWindows), and whether each window's thread still answers
+# messages (IsHungAppWindow, WM_NULL): <label>-ui-windows.txt.
 
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms, System.Drawing
 Add-Type -Namespace SmokeUi -Name Native -MemberDefinition @'
@@ -29,6 +33,32 @@ Add-Type -Namespace SmokeUi -Name Native -MemberDefinition @'
 [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, System.IntPtr extra);
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr hwnd);
 [DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr hwnd, int cmd);
+[DllImport("user32.dll")] public static extern bool IsWindowVisible(System.IntPtr hwnd);
+[DllImport("user32.dll")] public static extern bool IsHungAppWindow(System.IntPtr hwnd);
+[DllImport("user32.dll")] public static extern System.IntPtr SendMessageTimeout(System.IntPtr hwnd, uint msg, System.IntPtr w, System.IntPtr l, uint flags, uint timeout, out System.IntPtr result);
+[DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, System.IntPtr param);
+[DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(System.IntPtr hwnd, out uint pid);
+[DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(System.IntPtr hwnd, System.Text.StringBuilder text, int max);
+[DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(System.IntPtr hwnd, System.Text.StringBuilder text, int max);
+delegate bool EnumProc(System.IntPtr hwnd, System.IntPtr param);
+// Every top-level window of a process, visible or not (UI Automation lists
+// only the visible ones): "hwnd|class|title|visible|thread".
+public static string[] TopLevel(uint processId) {
+  var found = new System.Collections.Generic.List<string>();
+  EnumWindows((hwnd, param) => {
+    uint owner;
+    uint thread = GetWindowThreadProcessId(hwnd, out owner);
+    if (owner == processId) {
+      var title = new System.Text.StringBuilder(256);
+      var cls = new System.Text.StringBuilder(256);
+      GetWindowText(hwnd, title, 256);
+      GetClassName(hwnd, cls, 256);
+      found.Add(hwnd.ToInt64() + "|" + cls + "|" + title + "|" + IsWindowVisible(hwnd) + "|" + thread);
+    }
+    return true;
+  }, System.IntPtr.Zero);
+  return found.ToArray();
+}
 '@
 
 $script:AE = [System.Windows.Automation.AutomationElement]
@@ -186,6 +216,30 @@ function Ui-SettingsWindow([int]$Seconds = $script:UiLong) {
   } $Seconds
 }
 
+# Whether the thread of a window pumps its messages: IsHungAppWindow (no
+# message retrieved for 5 s) and a WM_NULL round trip within 5 s.
+function Ui-Responds([IntPtr]$Hwnd) {
+  $result = [IntPtr]::Zero
+  # SMTO_ABORTIFHUNG (0x2)
+  $answered = [SmokeUi.Native]::SendMessageTimeout($Hwnd, 0, [IntPtr]::Zero, [IntPtr]::Zero, 0x2, 5000, [ref]$result) -ne [IntPtr]::Zero
+  return "IsHungAppWindow=$([SmokeUi.Native]::IsHungAppWindow($Hwnd)), WM_NULL answered within 5 s=$answered"
+}
+
+# All top-level windows of the app (also the hidden ones UIA does not list)
+# and whether their threads respond; written to <label>-ui-windows.txt.
+function Ui-WindowReport {
+  $d = Ui-Desktop
+  if (-not $d) { return 'deckpilot-desktop is not running' }
+  $lines = @([SmokeUi.Native]::TopLevel([uint32]$d.Id) | ForEach-Object {
+    $f = $_ -split '\|', 5
+    "hwnd $($f[0]) class '$($f[1])' title '$($f[2])' visible $($f[3]) thread $($f[4]); $(Ui-Responds ([IntPtr][long]$f[0]))"
+  })
+  $file = "$Label-ui-windows.txt"
+  Set-Content -Path (Join-Path $out $file) -Value $lines -Encoding utf8
+  $titled = @($lines | Where-Object { $_ -notmatch "title ''" })
+  return "$file ($($lines.Count) top-level windows of pid $($d.Id); titled: $($titled -join ' // '))"
+}
+
 # The Marketplace at its tabs (a plugin's details replace them).
 function Ui-Marketplace($Main) {
   $back = Ui-All $Main { (Ui-Type $_) -eq 'Button' -and (Ui-Name $_) -eq 'Back to plugins' } | Select-Object -First 1
@@ -319,7 +373,15 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
       $main = $state.main
       $settingsButton = Ui-Find $main 'the Settings button' { (Ui-Type $_) -eq 'Button' -and (Ui-Name $_) -like 'Settings*' }
       [void](Ui-Invoke $settingsButton)
-      $settings = Ui-SettingsWindow
+      $how = 'Invoke'
+      $settings = $null
+      try { $settings = Ui-SettingsWindow 15 } catch {}
+      if (-not $settings) {
+        # In case UIA's Invoke did not reach the button's click handler: a
+        # real click on it, then the full wait.
+        $how = "Invoke, then $(Ui-Click $main $settingsButton)"
+        $settings = Ui-SettingsWindow
+      }
       $state.settingsHwnd = $settings.Current.NativeWindowHandle
       [void](Ui-Button $settings 'Back to DeckPilot')
       [void](Ui-Invoke (Ui-Button $settings 'Plugins'))
@@ -330,7 +392,7 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
       $w = Ui-Pattern $settings ([System.Windows.Automation.WindowPattern]::Pattern)
       if ($w) { $w.Close() } else { [void](Ui-Invoke (Ui-Button $settings 'Back to DeckPilot')) }
       [void](Ui-Until 'the settings window to close' { $d = Ui-Desktop; -not ($d -and (Ui-Window $d.Id 'DeckPilot Settings')) })
-      "separate top-level window 'DeckPilot Settings' (hwnd $($state.settingsHwnd), main window hwnd $($main.Current.NativeWindowHandle)); Extensions > Plugins lists $($script:PluginName) v$($script:PluginVersion); closed; $shot"
+      "Settings button ($how) opened the separate top-level window 'DeckPilot Settings' (hwnd $($state.settingsHwnd), main window hwnd $($main.Current.NativeWindowHandle)); Extensions > Plugins lists $($script:PluginName) v$($script:PluginVersion); closed; $shot"
     }
     'enable with consent' = {
       $main = $state.main
@@ -470,7 +532,7 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
         $i = 0
         foreach ($w in (Ui-TopWindows $d.Id)) { $i++; $dump = Ui-Dump $w "$Label-ui-failure-tree-$i.tsv" }
       }
-      Record $step 'fail' "$($_.Exception.Message); $shot; UIA tree: $dump"
+      Record $step 'fail' "$($_.Exception.Message); $shot; UIA tree: $dump; windows: $(Ui-WindowReport)"
     }
   }
 }

@@ -368,6 +368,26 @@ func settingsWindow(_ timeout: TimeInterval = long) throws -> AXUIElement {
   }
 }
 
+/// The agent's menu bar item (an NSStatusItem of tray-icon).
+func agentMenuBarItem() throws -> (pid_t, AXUIElement, Int) {
+  guard let agent = agentPid() else { throw Failure("no deckpilot-agent process") }
+  let ax = AXUIElementCreateApplication(agent)
+  guard let extras = attr(ax, "AXExtrasMenuBar") else { throw Failure("the agent (pid \(agent)) has no AXExtrasMenuBar; its windows: \(statusWindows(agent).joined(separator: ", "))") }
+  let items = children(extras as! AXUIElement)
+  guard let item = items.first else { throw Failure("the agent's AXExtrasMenuBar has no item") }
+  return (agent, item, items.count)
+}
+
+/// Opens the agent's menu with a real click on its menu bar item. tray-icon
+/// shows the menu from the item's mouseDown handler (it attaches the menu
+/// only for that click), so AXPress, which only performs the button's
+/// action, opens nothing (run 44488294820).
+func openAgentMenu(_ item: AXUIElement) throws -> (AXUIElement, String) {
+  let how = try click(nil, item)
+  let menu = try until("the agent's menu after a click on its menu bar item", 10) { children(item).first { role($0) == kAXMenuRole as String } }
+  return (menu, how)
+}
+
 func isTab(_ e: AXUIElement, _ title: String) -> Bool {
   (role(e) == "AXRadioButton" || subrole(e) == "AXTabButton" || role(e) == "AXTab") && name(e).hasPrefix(title)
 }
@@ -434,21 +454,16 @@ let axSteps: [(String, () throws -> String)] = [
     return "\(seen.joined(separator: "; ")); \(title); rail: \(rail.isEmpty ? "labels not exposed" : rail.joined(separator: ", ")); all buttons: \(names.joined(separator: " | "))"
   }),
   ("menu bar item of the agent", {
-    guard let agent = agentPid() else { throw Failure("no deckpilot-agent process") }
-    let ax = AXUIElementCreateApplication(agent)
-    guard let extras = attr(ax, "AXExtrasMenuBar") else { throw Failure("the agent (pid \(agent)) has no AXExtrasMenuBar; its windows: \(statusWindows(agent).joined(separator: ", "))") }
-    let items = children(extras as! AXUIElement)
-    guard let item = items.first else { throw Failure("the agent's AXExtrasMenuBar has no item") }
+    let (agent, item, count) = try agentMenuBarItem()
     let itemName = [string(item, kAXTitleAttribute), string(item, kAXDescriptionAttribute), string(item, kAXHelpAttribute)].filter { !$0.isEmpty }.joined(separator: " / ")
-    try press(item)
-    let menu = try until("the agent's menu", 10) { children(item).first { role($0) == kAXMenuRole as String } }
+    let (menu, how) = try openAgentMenu(item)
     let entries = children(menu).map { string($0, kAXTitleAttribute) }.filter { !$0.isEmpty }
     let shot = screenshot("menu-bar-menu")
     AXUIElementPerformAction(menu, kAXCancelAction as CFString)
     escape()
     for want in ["Quit DeckPilot"] where !entries.contains(want) { throw Failure("menu without '\(want)': \(entries.joined(separator: " | "))") }
     guard entries.contains(where: { $0.hasPrefix("Open DeckPilot") }) else { throw Failure("menu without 'Open DeckPilot': \(entries.joined(separator: " | "))") }
-    return "deckpilot-agent pid \(agent): menu bar item '\(itemName)' (\(items.count) item(s)); its menu: \(entries.joined(separator: " | ")); \(shot)"
+    return "deckpilot-agent pid \(agent): menu bar item '\(itemName)' (\(count) item(s)), opened by a \(how); its menu: \(entries.joined(separator: " | ")); \(shot)"
   }),
   ("Marketplace lists the production catalog", {
     try marketplace(mainWindow)
@@ -593,11 +608,8 @@ let axSteps: [(String, () throws -> String)] = [
     return "before: \(before); after the close button: no on-screen window, policy \(policy(desktop)), lsappinfo \(lsType(desktop)), Dock: \(dock?.joined(separator: ", ") ?? "unreadable") (no DeckPilot); deckpilot-desktop pid \(desktop) and deckpilot-agent pid \(agent) running; \(screenshot("closed"))"
   }),
   ("reopening from the menu bar restores the window", {
-    guard let agent = agentPid() else { throw Failure("no agent") }
-    let ax = AXUIElementCreateApplication(agent)
-    guard let extras = attr(ax, "AXExtrasMenuBar"), let item = children(extras as! AXUIElement).first else { throw Failure("no menu bar item") }
-    try press(item)
-    let menu = try until("the agent's menu", 10) { children(item).first { role($0) == kAXMenuRole as String } }
+    let (_, item, _) = try agentMenuBarItem()
+    let (menu, _) = try openAgentMenu(item)
     let open = try until("'Open DeckPilot'", 10) { children(menu).first { string($0, kAXTitleAttribute).hasPrefix("Open DeckPilot") } }
     try press(open)
     let w = try main()
@@ -662,6 +674,10 @@ for (step, run) in axSteps {
     let shot = screenshot("failure-" + step.replacingOccurrences(of: "[^A-Za-z0-9]+", with: "-", options: .regularExpression))
     var dumps: [String] = []
     for (i, w) in windows(app).enumerated() { dumps.append(dump(w, "\(label)-ax-failure-tree-\(i + 1).tsv")) }
+    if let agent = agentPid(), let extras = attr(AXUIElementCreateApplication(agent), "AXExtrasMenuBar") {
+      dumps.append(dump(extras as! AXUIElement, "\(label)-ax-failure-agent-menu-bar.tsv"))
+      escape()
+    }
     record(step, "fail", "\(error); \(shot); AX tree: \(dumps.isEmpty ? "no window" : dumps.joined(separator: ", "))")
   }
 }
