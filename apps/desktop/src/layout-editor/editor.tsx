@@ -101,6 +101,8 @@ import { shortcutLabel } from "@/lib/shortcuts"
 import { useElementSize } from "./use-element-size"
 import { useIcons } from "./use-icons"
 import { useLayoutEditing } from "./use-layout-editing"
+import { LiveValuesNote } from "./live-values-note"
+import { useLiveKeyStates } from "./use-live-key-states"
 import { usePreviewFaces } from "./use-preview-faces"
 
 /**
@@ -153,7 +155,7 @@ export function LayoutEditor({
   onDirtyChange: (dirty: boolean) => void
   onSaved: () => void
 }) {
-  const { profiles, refresh } = useAppContext()
+  const { profiles, refresh, agent } = useAppContext()
   // Actions created by dropping a type from the catalog, until the
   // reloaded profile has them: they are named, drawn and reused at once.
   const [created, setCreated] = useState<ActionInstance[]>([])
@@ -211,12 +213,23 @@ export function LayoutEditor({
   const openSteps = workflows.find((w) => w.id === stepsOf)
   const profile = useMemo(() => ({ actions, workflows, projects }), [actions, workflows, projects])
   const library = useIcons(profileId)
+  // The page's actions whose keys may show live values: the agent reports
+  // their states, the same ones the device's keys show.
+  const pageActions = useMemo(
+    () =>
+      (findPage(draft, pageId)?.bindings ?? []).flatMap((b) =>
+        b.target.type === "action" ? [b.target.action] : [],
+      ),
+    [draft, pageId],
+  )
+  const liveStates = useLiveKeyStates(profileId, pageActions, agent)
   const { faces, images, incompatible } = usePreviewFaces(
     profileId,
     draft,
     pageId,
     previewProject,
     library.icons.map((i) => i.id).join(","),
+    liveStates.live,
   )
   const iconState: IconState = {
     ...library,
@@ -681,6 +694,7 @@ export function LayoutEditor({
                     onManage={() => {
                       setManagingPages(true)
                     }}
+                    status={<LiveValuesNote status={liveStates.status} live={liveStates.live} />}
                   />
                 </div>
               ) : (
