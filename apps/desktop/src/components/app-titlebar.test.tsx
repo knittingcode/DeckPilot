@@ -33,8 +33,6 @@ beforeAll(() => {
 
 afterEach(cleanup)
 
-const history = { canGoBack: true, canGoForward: false, back: vi.fn(), forward: vi.fn() }
-
 function Contribution({ config }: { config: TitlebarConfig }) {
   useTitlebar(config)
   return null
@@ -47,7 +45,6 @@ function Shell({ store, children }: { store: TitlebarStore; children?: React.Rea
         <AppTitlebar
           store={store}
           chrome={{ overlay: false, controlsInset: 0 }}
-          history={history}
           fallbackTitle="Loading page"
         />
         {children}
@@ -142,28 +139,24 @@ describe("app titlebar", () => {
     expect(screen.queryByRole("toolbar", { name: "Page actions" })).not.toBeInTheDocument()
   })
 
-  it("navigates back and forward, and has no sidebar toggle", async () => {
+  it("has no sidebar toggle and no back or forward", () => {
     render(<Shell store={new TitlebarStore()} />)
-    expect(screen.getByRole("button", { name: "Forward" })).toBeDisabled()
-    await userEvent.click(screen.getByRole("button", { name: "Back" }))
-    expect(history.back).toHaveBeenCalled()
-    // The rail is always collapsed: nothing in the toolbar toggles it.
-    expect(screen.queryByRole("button", { name: /Toggle Sidebar/i })).not.toBeInTheDocument()
+    for (const name of [/Toggle Sidebar/i, "Back", "Forward"]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument()
+    }
+    expect(screen.queryByRole("navigation", { name: "History" })).not.toBeInTheDocument()
     expect(document.querySelector("[data-slot=titlebar-sidebar-extension]")).toBeNull()
   })
 
-  it("has a fixed navigation region with only the history in it", () => {
+  it("leaves only room for the native window controls before the selectors", () => {
     render(<Shell store={new TitlebarStore()} />)
-    const region = document.querySelector("[data-slot=titlebar-navigation]") as HTMLElement
-    expect(Array.from(region.parentElement?.children ?? []).indexOf(region)).toBe(0)
-    expect(
-      within(region)
-        .getAllByRole("button")
-        .map((b) => b.getAttribute("aria-label")),
-    ).toEqual(["Back", "Forward"])
-    // Only tokens size the region (no gap left by the former toggle).
-    expect(region.className).toContain("w-(--titlebar-navigation-width)")
-    expect(region.className).not.toMatch(/sidebar|justify-end|transition/)
+    const inset = document.querySelector("[data-slot=titlebar-controls-inset]") as HTMLElement
+    // First in the toolbar, nothing in it, sized by the platform's inset
+    // alone (0 on Windows, Linux and in fullscreen).
+    expect(Array.from(inset.parentElement?.children ?? []).indexOf(inset)).toBe(0)
+    expect(inset).toBeEmptyDOMElement()
+    expect(inset).toHaveAttribute("aria-hidden", "true")
+    expect(inset.className).toBe("w-(--titlebar-controls-inset) shrink-0")
   })
 
   it("shows determinate progress", () => {

@@ -232,12 +232,13 @@ describe("main window shell", { timeout: 20_000 }, () => {
     expect(
       await screen.findByText(/System follows the light or dark/, undefined, { timeout: 5000 }),
     ).toBeInTheDocument()
-    // One navigation: the toolbar stays, the gear shows where we are, and the
-    // settings have no back or "Back to DeckPilot" of their own.
+    // One navigation: the toolbar stays, the gear shows where we are, the
+    // rail leads back; no back, forward or "Back to DeckPilot" anywhere.
     expect(screen.getByRole("banner", { name: "Toolbar" })).toBe(toolbar)
     expect(gearOf(toolbar)).toHaveAttribute("aria-pressed", "true")
-    expect(screen.queryByRole("button", { name: "Back to DeckPilot" })).not.toBeInTheDocument()
-    expect(screen.getAllByRole("button", { name: "Back" })).toHaveLength(1)
+    for (const name of ["Back to DeckPilot", "Back", "Forward"]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument()
+    }
     // The device editor is not on screen (it waits, hidden).
     expect(screen.queryByRole("heading", { name: "Device Editor" })).not.toBeInTheDocument()
     // No window was asked for, not even once.
@@ -252,7 +253,7 @@ describe("main window shell", { timeout: 20_000 }, () => {
     expect(api.openWindow).not.toHaveBeenCalled()
   })
 
-  it("goes back and forth between the editor and settings sections, keeping the editor as it was", async () => {
+  it("returns to the editor from the settings, the Marketplace and other pages, as it was", async () => {
     const { user, toolbar } = await renderShell()
     // An unsaved change in the editor: proof that it is the same editor later.
     const name = screen.getByRole("textbox", { name: "Layout name" })
@@ -266,32 +267,28 @@ describe("main window shell", { timeout: 20_000 }, () => {
     ).toBeInTheDocument()
     expect(localStorage.getItem("deckpilot.settings.page")).toBe("profiles")
 
-    // Back: the previous settings section; back again: the editor, as it was.
-    await user.click(within(toolbar).getByRole("button", { name: "Back" }))
-    expect(
-      await screen.findByText(/System follows the light or dark/, undefined, { timeout: 5000 }),
-    ).toBeInTheDocument()
-    await user.click(within(toolbar).getByRole("button", { name: "Back" }))
-    expect(await screen.findByRole("heading", { name: "Device Editor" })).toBeInTheDocument()
-    expect(screen.getByRole("textbox", { name: "Layout name" })).toHaveValue("Work Plus edited")
-    expect(screen.queryByRole("generic", { name: "Settings" })).not.toBeInTheDocument()
-    expect(gearOf(toolbar)).toHaveAttribute("aria-pressed", "false")
-
-    // Forward: the settings again, at the section shown there.
-    await user.click(within(toolbar).getByRole("button", { name: "Forward" }))
-    expect(
-      await screen.findByText(/System follows the light or dark/, undefined, { timeout: 5000 }),
-    ).toBeInTheDocument()
-    await user.click(within(toolbar).getByRole("button", { name: "Forward" }))
-    expect(
-      await screen.findByText("All profiles", undefined, { timeout: 5000 }),
-    ).toBeInTheDocument()
-
-    // The rail leads back to the editor; the gear then reopens the section
-    // shown last.
+    // The rail's Device Editor returns, with the device, profile and the
+    // unsaved change as they were.
     await user.click(screen.getByRole("button", { name: "Device Editor" }))
     expect(await screen.findByRole("heading", { name: "Device Editor" })).toBeInTheDocument()
     expect(screen.getByRole("textbox", { name: "Layout name" })).toHaveValue("Work Plus edited")
+    expect(screen.getByRole("button", { name: /^Device: Stream Deck \+/ })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /^Profile: Work/ })).toBeInTheDocument()
+    expect(screen.queryByRole("generic", { name: "Settings" })).not.toBeInTheDocument()
+    expect(gearOf(toolbar)).toHaveAttribute("aria-pressed", "false")
+
+    // From another workspace page, too.
+    await user.click(screen.getByRole("button", { name: "Workflows" }))
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Workflows" })).toHaveAttribute(
+        "aria-current",
+        "page",
+      )
+    })
+    await user.click(screen.getByRole("button", { name: "Device Editor" }))
+    expect(await screen.findByRole("heading", { name: "Device Editor" })).toBeInTheDocument()
+
+    // The gear reopens the section shown last.
     await user.click(gearOf(toolbar))
     const again = await screen.findByRole("generic", { name: "Settings" })
     expect(within(again).getByRole("button", { name: "Profiles" })).toHaveAttribute(
@@ -334,7 +331,7 @@ describe("main window shell", { timeout: 20_000 }, () => {
     expect(within(nav).getByText("No settings found")).toBeInTheDocument()
   })
 
-  it("is used with the keyboard alone: shortcut, sections, and back to the editor", async () => {
+  it("is used with the keyboard alone: shortcut, sections, and the rail back to the editor", async () => {
     const { user } = await renderShell()
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", metaKey: true }))
@@ -348,13 +345,9 @@ describe("main window shell", { timeout: 20_000 }, () => {
     expect(
       await screen.findByText("All profiles", undefined, { timeout: 5000 }),
     ).toBeInTheDocument()
-    // The history shortcut returns to the previous view.
-    // Back twice (Alt+← here; ⌘[ on macOS): Appearance, then the editor.
-    for (let i = 0; i < 2; i++) {
-      act(() => {
-        window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", altKey: true }))
-      })
-    }
+    // The rail's Device Editor is a focusable button too.
+    screen.getByRole("button", { name: "Device Editor" }).focus()
+    await user.keyboard("{Enter}")
     expect(await screen.findByRole("heading", { name: "Device Editor" })).toBeInTheDocument()
   })
 

@@ -204,12 +204,6 @@ function Studio() {
       navigate: navigation.navigate,
       openSettings: navigation.openSettings,
       closeSettings: navigation.closeSettings,
-      history: {
-        canGoBack: navigation.canGoBack,
-        canGoForward: navigation.canGoForward,
-        back: navigation.back,
-        forward: navigation.forward,
-      },
       modules,
       setModules: data.setModules,
       ...(data.pluginModules.length > 0 ? { pluginModules: data.pluginModules } : {}),
@@ -270,7 +264,6 @@ function Studio() {
                 <AppTitlebar
                   store={titlebar}
                   chrome={chrome}
-                  history={context.history}
                   fallbackTitle={fallbackTitle}
                   leading={
                     <>

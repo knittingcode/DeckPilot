@@ -2,10 +2,12 @@
  * Where the main window is: a workspace page (the device editor, dashboard,
  * marketplace, module and plugin pages) or a settings page
  * (`settings:<page>`). The settings are a view of the main window, in the
- * same history as the workspace pages.
+ * same list of locations as the workspace pages.
  *
- * Navigation keeps a browser-style history with back and forward. The model
- * is pure so that it can be tested without React.
+ * The state keeps the recent locations (there is no back and forward in
+ * the app any more): they say which workspace page the settings return to
+ * and which settings page they open at. The model is pure so that it can be
+ * tested without React.
  */
 
 /** Identifier of a settings page: a core page or `module:<module id>`. */
@@ -67,22 +69,6 @@ export function push(state: NavigationState, location: Location): NavigationStat
   if (same(current(state), location)) return state
   const entries = [...state.entries.slice(0, state.index + 1), location].slice(-HISTORY_LIMIT)
   return withWorkspace({ ...state, entries, index: entries.length - 1 })
-}
-
-export function canGoBack(state: NavigationState) {
-  return state.index > 0
-}
-
-export function canGoForward(state: NavigationState) {
-  return state.index < state.entries.length - 1
-}
-
-export function back(state: NavigationState): NavigationState {
-  return canGoBack(state) ? withWorkspace({ ...state, index: state.index - 1 }) : state
-}
-
-export function forward(state: NavigationState): NavigationState {
-  return canGoForward(state) ? withWorkspace({ ...state, index: state.index + 1 }) : state
 }
 
 /**

@@ -17,12 +17,15 @@ released either. 0.6.0 is the first version intended for publication.
 
 ### Changed
 
-- Settings open inside the main window instead of a window of their own.
-  The toolbar's back and forward buttons now move between the device
-  editor, the Marketplace, plugin views and settings sections in one
-  history, and the gear is highlighted while the settings are shown.
-  Settings reopen at the section shown last. The device editor keeps its
-  page, key, inspector and unsaved changes while the settings are open.
+- Settings open inside the main window instead of a window of their own,
+  and the gear is highlighted while they are shown. Settings reopen at the
+  section shown last. The device editor keeps its page, key, inspector and
+  unsaved changes while the settings are open.
+- The toolbar no longer has back and forward buttons, and ⌘[ / ⌘] (Alt+← /
+  Alt+→ on Windows and Linux) and the mouse's back and forward buttons no
+  longer navigate. The rail, the device and profile selectors, the
+  Marketplace, the settings and plugin entries lead to every view; the
+  rail's Device Editor returns to the editor from anywhere.
 - The navigation rail is always collapsed to icons, with each page's name
   as a tooltip and a clearer mark on the current page. The toolbar's sidebar
   toggle and the ⌘B / Ctrl+B shortcut are gone.

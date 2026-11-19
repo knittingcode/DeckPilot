@@ -191,7 +191,7 @@ describe("navigation hook", () => {
     localStorage.clear()
   })
 
-  it("opens the settings in the main window's history, with the keyboard, and goes back and forward", () => {
+  it("opens the settings in the main window with the keyboard, and leaves them for the page before", () => {
     const { result } = renderHook(() => useNavigation(() => true))
     // The device editor first.
     expect(result.current.location).toEqual({ mode: "workspace", page: "designer" })
@@ -205,14 +205,14 @@ describe("navigation hook", () => {
     expect(result.current.location).toEqual({ mode: "settings", page: "appearance" })
     // The workspace page they return to (and that stays mounted under them).
     expect(result.current.workspace).toBe("workflows")
+    // No back and forward: neither shortcuts nor mouse buttons move.
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", altKey: true }))
-    })
-    expect(result.current.location).toEqual({ mode: "workspace", page: "workflows" })
-    act(() => {
-      window.dispatchEvent(new MouseEvent("mouseup", { button: 4 }))
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "[", metaKey: true }))
+      window.dispatchEvent(new MouseEvent("mouseup", { button: 3 }))
     })
     expect(result.current.location).toEqual({ mode: "settings", page: "appearance" })
+    expect(result.current).not.toHaveProperty("back")
     act(() => {
       result.current.closeSettings()
     })
@@ -227,7 +227,6 @@ describe("navigation hook", () => {
     first.unmount()
     const second = renderHook(() => useNavigation(() => true))
     expect(second.result.current.location).toEqual({ mode: "workspace", page: "actions" })
-    expect(second.result.current.canGoBack).toBe(true)
   })
 
   it("opens settings pages, and pages that moved there, in the main window", () => {
@@ -293,6 +292,5 @@ describe("navigation hook", () => {
     exists = (location) => location.page !== "projects/projects"
     rerender({ check: exists })
     expect(result.current.location).toEqual({ mode: "workspace", page: "designer" })
-    expect(result.current.canGoBack).toBe(false)
   })
 })

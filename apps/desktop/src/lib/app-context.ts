@@ -22,17 +22,10 @@ export interface AppContextValue {
   setUpdates: (state: UpdateState) => void
   /** Opens a workspace page; settings pages open in the settings window. */
   navigate: (page: PageId) => void
-  /** Opens (or focuses) the settings window, at `page` or where it was left. */
+  /** Shows the settings in the main window, at `page` or where they were left. */
   openSettings: (page?: SettingsPageId) => void
   /** Leaves the settings for the workspace page that was open before. */
   closeSettings: () => void
-  /** Browser-style history of the main window. */
-  history: {
-    canGoBack: boolean
-    canGoForward: boolean
-    back: () => void
-    forward: () => void
-  }
   /** Registered feature modules and their state. */
   modules: ModuleInfo[]
   setModules: (modules: ModuleInfo[]) => void

@@ -231,9 +231,9 @@ the profile to edit while the device editor has unsaved changes.
 The main window has one toolbar (`AppTitlebar`), a slim navigation rail
 (`AppSidebar`, always collapsed to icons: each has its name as label and
 tooltip, the current page is marked; nothing expands it, there is no toggle
-and no ⌘B / Ctrl+B) and the page. The toolbar, left to right: the
-navigation region (back, forward), the device and
-profile selectors (`shell/toolbar.tsx`), the page's context, then plugin
+and no ⌘B / Ctrl+B) and the page. The toolbar, left to right: room for the
+native window controls (macOS only; nothing else), the device and profile
+selectors (`shell/toolbar.tsx`), the page's context, then plugin
 navigation entries (`shell/plugin-navigation.ts`; with a separator only when
 there are any), notifications, the Marketplace and the settings. The device
 selector lists connected devices (named by their descriptor) and the
@@ -242,16 +242,16 @@ layout of the editor are one shell-level selection
 (`shell/editor-selection.tsx`) that refuses to switch over unsaved layout
 changes.
 
-The view is a workspace page or the settings. Both are locations of one
-browser-style history (`lib/navigation.ts`, `hooks/use-navigation.ts`):
-back and forward (toolbar, ⌘[ ⌘] or Alt+← Alt+→, mouse buttons) move across
-the device editor, the Marketplace, plugin views and settings sections
-alike. The toolbar's gear (or ⌘, / Ctrl+,) opens the settings at the section
+The view is a workspace page or the settings, both locations of one model
+(`lib/navigation.ts`, `hooks/use-navigation.ts`) that keeps the current one
+across launches. There is no back and forward: the rail (its Device Editor
+leads back from anywhere), the selectors, the Marketplace, plugin entries
+and the gear reach every view. The toolbar's gear (or ⌘, / Ctrl+,) opens the settings at the section
 shown last (remembered across launches, `deckpilot.settings.page`), and is
 pressed while they are on screen; a section can be opened directly
 (`settings:security`). The settings sidebar (`SettingsSidebar`: sections and
 their search) sits beside the rail as part of the view, and the section
-fills the rest; the toolbar remains the only navigation. While the settings
+fills the rest. While the settings
 are on screen the workspace page under them stays mounted but hidden, so
 the device editor returns exactly as it was (page, key, inspector, unsaved
 changes, scroll position); its toolbar contributions wait in a separate
@@ -284,9 +284,10 @@ Platform differences live in `use-window-chrome.ts`:
   stay unchanged; the app titlebar is a toolbar below them.
 
 Sizes are tokens in `index.css` (`--titlebar-height`, `--titlebar-control`,
-`--titlebar-icon`, …). The navigation region (traffic-light safe area,
-back, forward) has a fixed width that only tokens and fullscreen decide.
-Native dialog windows (`ModalShell`) have no app titlebar.
+`--titlebar-icon`, …). Before the selectors the toolbar only leaves room
+for the macOS traffic lights (`--titlebar-controls-inset`, 0 in fullscreen
+and on Windows and Linux, where the window manager draws the controls
+above the toolbar). Native dialog windows (`ModalShell`) have no app titlebar.
 
 ### Status bar
 

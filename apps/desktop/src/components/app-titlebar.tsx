@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, ChevronDown, Ellipsis, Loader2 } from "lucide-react"
+import { ChevronDown, Ellipsis, Loader2 } from "lucide-react"
 import { Fragment } from "react"
 
 import { Button } from "@/components/ui/button"
@@ -14,7 +14,6 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { SHORTCUTS } from "@/hooks/use-navigation"
 import { useTitlebarState } from "@/hooks/use-titlebar"
 import { type WindowChrome, windowDragHandlers } from "@/hooks/use-window-chrome"
 import {
@@ -38,16 +37,9 @@ const TONES: Record<TitlebarTone, string> = {
   warning: "bg-amber-500",
 }
 
-export interface TitlebarHistory {
-  canGoBack: boolean
-  canGoForward: boolean
-  back: () => void
-  forward: () => void
-}
-
 /**
- * The toolbar of the main window: navigation (sidebar toggle, back and
- * forward), then `leading` (the device and profile selectors), the context
+ * The toolbar of the main window: room for the native window controls, then
+ * `leading` (the device and profile selectors), the context
  * of the current page — what it registered with `useTitlebar` — and
  * `trailing` (the app's own commands). It knows no page or module itself.
  * On macOS it is the window's titlebar.
@@ -55,17 +47,15 @@ export interface TitlebarHistory {
 export function AppTitlebar({
   store,
   chrome,
-  history,
   fallbackTitle,
   leading,
   trailing,
 }: {
   store: TitlebarStore
   chrome: WindowChrome
-  history: TitlebarHistory
   /** Shown until the page registers its own title, e.g. while it loads. */
   fallbackTitle: string
-  /** Shown after the navigation, before the page's context. */
+  /** Shown first (after the window controls), before the page's context. */
   leading?: React.ReactNode
   /** Rightmost elements: the app's commands (notifications, settings, …). */
   trailing?: React.ReactNode
@@ -84,40 +74,16 @@ export function AppTitlebar({
       {...windowDragHandlers(chrome)}
     >
       {/*
-        Fixed navigation region: the traffic-light safe area followed by the
-        history. Its width depends only on tokens and the window's fullscreen
-        state. The navigation rail is always collapsed to icons, so nothing
-        here toggles it.
+        Room for the native window controls (macOS traffic lights; none in
+        fullscreen and on Windows and Linux, where the window manager draws
+        them above the toolbar). Nothing else: the app is navigated with the
+        rail, the selectors and the commands at the right.
       */}
       <div
-        data-slot="titlebar-navigation"
-        className="flex w-(--titlebar-navigation-width) shrink-0 items-center gap-(--titlebar-gap) pr-(--titlebar-padding-x) pl-[calc(var(--titlebar-controls-inset)+var(--titlebar-padding-x))]"
-      >
-        <nav aria-label="History" className="flex items-center gap-(--titlebar-gap)">
-          <Button
-            variant="ghost"
-            size="icon"
-            className={CONTROL_ICON}
-            aria-label="Back"
-            title={`Back (${SHORTCUTS.back})`}
-            disabled={!history.canGoBack}
-            onClick={history.back}
-          >
-            <ChevronLeft />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className={CONTROL_ICON}
-            aria-label="Forward"
-            title={`Forward (${SHORTCUTS.forward})`}
-            disabled={!history.canGoForward}
-            onClick={history.forward}
-          >
-            <ChevronRight />
-          </Button>
-        </nav>
-      </div>
+        aria-hidden
+        data-slot="titlebar-controls-inset"
+        className="w-(--titlebar-controls-inset) shrink-0"
+      />
       {leading && (
         <div
           data-slot="titlebar-leading"
