@@ -19,7 +19,8 @@ and rewrites the profile documents (document version 6); see
 [Shared layouts](data-model.md#shared-layouts). Shared layouts need no
 protocol of their own (protocol 11 is the live key states of the device
 editor): the agent reports the layout each device shows in the existing
-`DeviceInfo.layout`, and *Switch layout* and *Back to previous layout* are
+`DeviceInfo.layout` and the optional `DeviceInfo.previousLayout`
+(older clients ignore it), and *Switch layout* and *Back to previous layout* are
 action types of the `deck` module, which need no new request. An app or
 agent of 0.6.0–0.8.1 refuses a schema 10 database before writing anything
 (“schema version 10 is newer than supported version 9”), as earlier

@@ -570,6 +570,15 @@ mapped to them.
   to the same page (the home page if it is gone).
 - *Back to previous layout* with an empty history does nothing and says so
   (“there is no previous layout”); it never falls back to another layout.
+  Its key shows that it cannot go back (“No previous layout”) while the
+  device has nothing to go back to; the app sees the layout Back would
+  return to in the device's status (`DeviceInfo.previousLayout`, an
+  optional field).
+- A *Switch layout* key without a label of its own is titled with the
+  layout it shows, so it follows a rename; one whose layout the profile
+  does not use says “Not in this profile”. Back shows the back arrow
+  (its type's icon). Labels and icons of the binding win, as for any key.
+  Action handlers declare this with `ActionHandler::layout_navigation`.
   Entries for layouts that were removed from the profile, deleted or are
   for another model are dropped, on a reload and when Back passes them.
 - **Persistence and lifecycle.** The layout each device switched to, per
