@@ -21,7 +21,7 @@
 #   to a temporary Applications folder and started with an isolated profile
 #   and a temporary default keychain. No WebDriver exists for WKWebView:
 #   the app is driven from OUTSIDE through the Accessibility API
-#   (tools/release-smoke/macos-ui.swift), with the Dock, the activation
+#   (tools/release-smoke/macos-ui/Sources/macos-ui/main.swift), with the Dock, the activation
 #   policy and the agent's menu bar item; a probe job records what the
 #   runner grants (Accessibility, screen recording) and changes nothing.
 #
@@ -375,7 +375,7 @@ jobs:
       - name: Build the accessibility driver
         if: always()
         run: |
-          swiftc -O -o "$SMOKE_WORK/macos-ui" tools/release-smoke/macos-ui.swift
+          swiftc -O -o "$SMOKE_WORK/macos-ui" tools/release-smoke/macos-ui/Sources/macos-ui/main.swift
           echo "SMOKE_AX_DRIVER=$SMOKE_WORK/macos-ui" >> "$GITHUB_ENV"
       - name: GUI through the Accessibility API against the production Marketplace
         if: always()
@@ -414,7 +414,7 @@ jobs:
       - name: Probe
         run: |
           mkdir -p "$RUNNER_TEMP/smoke/out"
-          swiftc -O -o "$RUNNER_TEMP/macos-ui" tools/release-smoke/macos-ui.swift
+          swiftc -O -o "$RUNNER_TEMP/macos-ui" tools/release-smoke/macos-ui/Sources/macos-ui/main.swift
           "$RUNNER_TEMP/macos-ui" --probe --label runner --out "$RUNNER_TEMP/smoke/out"
       - name: Upload
         if: always()
