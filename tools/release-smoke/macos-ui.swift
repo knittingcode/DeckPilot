@@ -527,7 +527,15 @@ let axSteps: [(String, () throws -> String)] = [
     let item = all(list).first { (role($0) == "AXGroup" || role($0) == "AXListItem" || subrole($0) == "AXListItem") && hasText($0, pluginName) && first($0, { isButton($0) && name($0) == "Uninstall" }) != nil }
     guard let item, let own = first(item, { isButton($0) && name($0) == "Uninstall" }) else { throw Failure("no Uninstall button next to \(pluginName) in the installed list") }
     try press(own)
-    let dialog = try until("the confirmation") { () -> AXUIElement? in
+    // The alert dialog "Uninstall <name>?" is modal: the page behind it,
+    // the list's own Uninstall button too, leaves the AX tree while it is
+    // open (run 44539186747), so its button is looked up inside the dialog.
+    let dialog = try until("the confirmation dialog 'Uninstall \(pluginName)?'") { () -> AXUIElement? in
+      if let box = first(mainWindow, { subrole($0).hasSuffix("Dialog") && name($0) == "Uninstall \(pluginName)?" }),
+        let confirm = first(box, { isButton($0) && name($0) == "Uninstall" })
+      {
+        return confirm
+      }
       let buttons = all(mainWindow).filter { isButton($0) && name($0) == "Uninstall" }
       return buttons.count > before ? buttons.last : nil
     }

@@ -13,7 +13,9 @@
 # element found by name (never fixed coordinates).
 #
 # Steps (each recorded as "<label>: UIA <step>"; the first failure stops
-# the flow and the rest are recorded as not reached):
+# the flow and the rest are recorded as not reached, except after a failed
+# settings window: the app is restarted and the steps that do not need
+# that window still run):
 #   main window › toolbar (Marketplace, Settings, device and profile
 #   selectors, the rail) › agent and its tray icon › Marketplace lists the
 #   production catalog › install Memory with consent › the settings window
@@ -425,8 +427,14 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
       if (-not $button) { throw "no Uninstall button in the '$($script:PluginName)' item of the installed list ($(@($buttons).Count) Uninstall buttons in the window)" }
       [void](Ui-Invoke $button)
       $confirmShot = Ui-Shot 'uninstall-confirm'
-      # The confirmation dialog's button comes after the list's in the tree.
-      $dialogButton = Ui-Until 'the confirmation' {
+      # The alert dialog "Uninstall <name>?" is modal: the page behind it
+      # can leave the accessibility tree while it is open (as it does on
+      # macOS, run 44539186747), so its button is looked up inside the
+      # dialog; else it is the Uninstall button that came after the list's.
+      $dialogButton = Ui-Until "the confirmation dialog 'Uninstall $($script:PluginName)?'" {
+        $box = Ui-All $main { (Ui-Name $_) -eq "Uninstall $($script:PluginName)?" -and (Ui-Type $_) -notin 'Text', 'Header' } | Select-Object -First 1
+        $own = if ($box) { Ui-All $box { (Ui-Type $_) -eq 'Button' -and (Ui-Name $_) -eq 'Uninstall' } | Select-Object -First 1 }
+        if ($own) { return $own }
         $all = @(Ui-All $main { (Ui-Type $_) -eq 'Button' -and (Ui-Name $_) -eq 'Uninstall' })
         if ($all.Count -gt @($buttons).Count) { $all[-1] }
       }
@@ -512,19 +520,39 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
       "started again: window 'DeckPilot' at $rect ($same); profile selector '$(Ui-Name $profile)'; device selector '$(Ui-Name $device)'; $(Ui-Shot 'reopened')"
     }
   }
+  # What a step needs besides the main window: a failed step stops the
+  # steps that need it. A failed Settings step alone does not stop the
+  # steps that never use the settings window: the app is restarted (the
+  # agent and the profile stay) and they run, so a defect of that window
+  # does not hide the rest of the app.
+  $needs = @{
+    'profile created in Settings' = 'Settings opens its own window, Plugins lists it'
+    'Device Editor, Action Library and key inspector' = 'profile created in Settings'
+    'reopening restores the window and the profile' = 'profile created in Settings'
+  }
+  $restartable = @('Settings opens its own window, Plugins lists it')
   $failed = $null
+  $skipped = @{}
+  $restarted = $null
   foreach ($name in $steps.Keys) {
     $step = "${Label}: UIA $name"
     if ($failed) { Record $step 'not-covered' "not reached: '$failed' failed"; continue }
+    $need = $needs[$name]
+    if ($need -and $skipped.ContainsKey($need)) {
+      $why = if ($skipped[$need] -eq 'failed') { 'failed' } else { 'was not covered' }
+      $skipped[$name] = 'not covered'
+      Record $step 'not-covered' "needs '$need', which $why"
+      continue
+    }
     try {
       $evidence = & $steps[$name]
+      if ($restarted) { $evidence = "($restarted) $evidence"; $restarted = $null }
       if ($name -eq 'plugin toolbar entries') {
         Record $step 'not-covered' "no production plugin contributes toolbar entries (contributes.navigation) to show; with $($script:PluginName) enabled: $($state.navEvidence)"
       } else {
         Record $step 'pass' $evidence
       }
     } catch {
-      $failed = $name
       $shot = Ui-Shot ("failure-" + ($name -replace '[^A-Za-z0-9]+', '-'))
       $dump = 'no window to dump'
       $d = Ui-Desktop
@@ -533,6 +561,17 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
         foreach ($w in (Ui-TopWindows $d.Id)) { $i++; $dump = Ui-Dump $w "$Label-ui-failure-tree-$i.tsv" }
       }
       Record $step 'fail' "$($_.Exception.Message); $shot; UIA tree: $dump; windows: $(Ui-WindowReport)"
+      if ($name -notin $restartable) { $failed = $name; continue }
+      $skipped[$name] = 'failed'
+      try {
+        $old = Ui-Desktop
+        if ($old) { Stop-Process -Id $old.Id -Force; [void]$old.WaitForExit(15000) }
+        $script:Desktop = Start-WithEnv $script:Exe $script:Envs
+        $state.main = Ui-MainWindow
+        $restarted = "deckpilot-desktop pid $(if ($old) { $old.Id } else { '?' }) ended after the failed step '$name' and started again as pid $($script:Desktop.Id)"
+      } catch {
+        $failed = "$name (and the restart after it: $($_.Exception.Message))"
+      }
     }
   }
 }
