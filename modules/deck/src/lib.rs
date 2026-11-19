@@ -616,7 +616,7 @@ impl SwitchLayout {
             deprecated: false,
             controls: Some(deckpilot_core::ActionControls::keys()),
             node: NodeSpec {
-                icon: Some("layout-grid".into()),
+                icon: Some("layout-template".into()),
                 outputs: vec![
                     output("layoutId", "Layout id"),
                     output("layoutName", "Layout"),
@@ -899,7 +899,9 @@ mod tests {
                 SWITCH_PROFILE,
                 BRIGHTNESS,
                 RANDOM,
-                MULTI_SWITCH
+                MULTI_SWITCH,
+                SWITCH_LAYOUT,
+                PREVIOUS_LAYOUT
             ]
         );
         assert!(ids.iter().all(|id| id.starts_with("deck.")));
@@ -929,6 +931,58 @@ mod tests {
     }
 
     #[test]
+    fn layout_actions_ask_the_runtime_by_layout_id() {
+        let layout = deckpilot_core::LayoutId::new();
+        let page = deckpilot_core::PageId::new();
+        let switch = run(
+            &SwitchLayout::new(),
+            &ActionParameters::new()
+                .with(LAYOUT, ParameterValue::Text(layout.to_string()))
+                .with(PAGE, ParameterValue::Text(page.to_string()))
+                .with(HISTORY, ParameterValue::Choice(HISTORY_REPLACE.into())),
+            &granted(),
+        );
+        assert_eq!(
+            switch.deck_request(),
+            Some(DeckRequest::SwitchLayout {
+                layout,
+                page: Some(page),
+                history: HistoryMode::Replace,
+            })
+        );
+        // The defaults: the home page, and Back returns.
+        let plain = run(
+            &SwitchLayout::new(),
+            &ActionParameters::new().with(LAYOUT, ParameterValue::Text(layout.to_string())),
+            &granted(),
+        );
+        assert_eq!(
+            plain.deck_request(),
+            Some(DeckRequest::SwitchLayout {
+                layout,
+                page: None,
+                history: HistoryMode::Push,
+            })
+        );
+        // A name is not an id.
+        let named = ActionParameters::new().with(LAYOUT, ParameterValue::Text("Main".into()));
+        assert_eq!(SwitchLayout::new().validate(&named).len(), 1);
+        let back = run(&PreviousLayout::new(), &ActionParameters::new(), &granted());
+        assert_eq!(back.deck_request(), Some(DeckRequest::PreviousLayout));
+        // Keys only: not dials or touch strips.
+        for handler in [
+            &SwitchLayout::new() as &dyn ActionHandler,
+            &PreviousLayout::new(),
+        ] {
+            assert_eq!(
+                handler.definition().controls,
+                Some(deckpilot_core::ActionControls::keys())
+            );
+            assert_eq!(handler.definition().category, "Navigation");
+        }
+    }
+
+    #[test]
     fn nothing_is_asked_without_the_capability() {
         let nothing = BTreeSet::new();
         for handler in DeckModule::new().action_handlers(&ActionParameters::new()) {
@@ -946,6 +1000,11 @@ mod tests {
                         "action:{}",
                         deckpilot_core::ActionInstanceId::new()
                     )),
+                )
+            } else if handler.definition().id.as_str() == SWITCH_LAYOUT {
+                ActionParameters::new().with(
+                    LAYOUT,
+                    ParameterValue::Text(deckpilot_core::LayoutId::new().to_string()),
                 )
             } else {
                 ActionParameters::new()

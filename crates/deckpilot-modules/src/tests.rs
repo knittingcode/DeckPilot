@@ -77,6 +77,8 @@ fn builtin_modules_register_with_namespaced_action_types() {
             "deck.brightness",
             "deck.random",
             "deck.multi-switch",
+            "deck.switch-layout",
+            "deck.previous-layout",
             "docker.status",
             "docker.containers",
             "docker.compose-status",

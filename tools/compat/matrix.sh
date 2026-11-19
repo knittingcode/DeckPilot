@@ -12,6 +12,11 @@
 #
 # Prints one line per case and exits non-zero if any case fails. Nothing is
 # published and nothing outside <work dir> and the old worktree is written.
+#
+# With OLD_BIN and NEW_BIN set (directories holding deckpilot-agent and
+# deckpilot-dev of <old tag> and of this commit, built beforehand, e.g. in
+# slots of tools/dev/target-slot.sh), nothing is built and no worktree is
+# created; <old tag> then only names the old version in the output.
 set -euo pipefail
 
 OLD_TAG=${1:-v0.5.0-2}
@@ -39,6 +44,9 @@ result() {
   [ "$2" = ok ] || failures=$((failures + 1))
 }
 
+if [ -n "${OLD_BIN:-}" ] && [ -n "${NEW_BIN:-}" ]; then
+  log "using prebuilt binaries: $OLD_BIN and $NEW_BIN"
+else
 if [ ! -f "$OLD_TREE/Cargo.toml" ]; then
   # A build cache may already have restored the old tree's target folder;
   # it is kept aside while the worktree is created.
@@ -58,6 +66,7 @@ log "building this commit"
 (cd "$ROOT" && cargo build --locked -q -p deckpilot-agent -p deckpilot-dev)
 OLD_BIN="$OLD_TREE/target/debug"
 NEW_BIN="$ROOT/target/debug"
+fi
 OLD_VERSION=$("$OLD_BIN/deckpilot-agent" --version | awk '{print $NF}')
 NEW_VERSION=$("$NEW_BIN/deckpilot-agent" --version | awk '{print $NF}')
 
