@@ -11,7 +11,7 @@ page says what happens then and how it is tested.
 | Build | App/agent version | IPC protocol | Database schema |
 | ----- | ----------------- | ------------ | --------------- |
 | Tag `v0.5.0-2` (signed draft test build, never published) | 0.5.0-2 | 4 | 5 |
-| Releases 0.6.0, 0.7.0 and 0.8.0 | 0.6.0, 0.7.0, 0.8.0 | 10 | 9 |
+| Releases 0.6.0, 0.7.0, 0.8.0 and 0.8.1 | 0.6.0, 0.7.0, 0.8.0, 0.8.1 | 10 | 9 |
 | Current main | see `Cargo.toml` | 10 | 9 |
 
 DeckPilot 0.5.0 was never published. Its two draft prereleases (0.5.0-1
