@@ -9,15 +9,23 @@ import type { ControlFace, DeviceLayout, KeyFace, LivePreview } from "@/lib/type
  * appearance and icons), debounced while editing. With `live`, keys show
  * the live states the agent reported (`useLiveKeyStates`), drawn by the
  * same renderer as the device's keys.
+ *
+ * Labels follow the profile's active project, as on the device; the editor
+ * has no project of its own (projects are an optional module).
+ *
+ * `keyPixels` is the width the editor shows a key at in device pixels (its
+ * CSS width times the display's pixel ratio): the renderer draws the
+ * images at that size, so they are not scaled up from the device's own
+ * 72 pixels or so and stay sharp. `null`: the device's size.
  */
 export function usePreviewFaces(
   profileId: string,
   draft: DeviceLayout,
   pageId: string,
-  project: string | null,
   /** Changes when the profile's icons change, so previews pick them up. */
   iconsVersion: string,
   live: LivePreview | null = null,
+  keyPixels: number | null = null,
 ) {
   const [preview, setPreview] = useState({
     faces: new Map<string, KeyFace>(),
@@ -28,7 +36,7 @@ export function usePreviewFaces(
   useEffect(() => {
     let cancelled = false
     const timer = setTimeout(() => {
-      api.previewLayout(profileId, draft, pageId, project, true, live).then(
+      api.previewLayout(profileId, draft, pageId, null, true, live, keyPixels).then(
         (result) => {
           if (cancelled) return
           setPreview({
@@ -50,6 +58,6 @@ export function usePreviewFaces(
       cancelled = true
       clearTimeout(timer)
     }
-  }, [profileId, draft, pageId, project, iconsVersion, live])
+  }, [profileId, draft, pageId, iconsVersion, live, keyPixels])
   return preview
 }

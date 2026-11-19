@@ -16,6 +16,12 @@
   --titlebar-gap: 0.25rem;
   --titlebar-padding-x: 0.75rem;
 
+  /* The device editor's Action Library (layout-editor/library-dock.tsx):
+     one fixed width, always beside the editor (below it in windows
+     narrower than the main window's minimum width). */
+  --library-width: 18rem;
+  --library-stacked-height: 40vh;
+
   /* Main window status bar (components/status-bar.tsx). The layout uses
      --statusbar-height, which is the size where the bar is shown and 0
      elsewhere (dialog windows). */

@@ -168,7 +168,9 @@ describe("appearance editor", () => {
         "data:image/png;base64,key0-#000000",
       )
     })
-    expect(api.previewLayout).toHaveBeenCalledWith("p", layout, "home", null, true, null)
+    // Drawn for the size the key is shown at: 72 CSS px less its border, at
+    // a pixel ratio of 1 here.
+    expect(api.previewLayout).toHaveBeenCalledWith("p", layout, "home", null, true, null, 70)
 
     await user.click(control("Key 2"))
     const background = within(panel().getByRole("group", { name: "Background swatches" }))

@@ -124,7 +124,10 @@ function Control({
   const interactive = Boolean(props.onSelect)
   const face = props.faces?.get(key)
   const unavailable = props.unavailable?.get(key)
-  const image = unavailable === undefined ? props.images?.get(key) : undefined
+  // Empty keys are drawn by the app (the key's own LCD tone, in either
+  // theme) rather than as the device's black image.
+  const image =
+    unavailable === undefined && face?.style !== "empty" ? props.images?.get(key) : undefined
   const described = props.summaries?.get(key) ?? (shape === "dial" ? props.captions?.get(key) : "")
   const summary = unavailable && described ? `${described} (${unavailable})` : described
   const refusal =
@@ -185,8 +188,16 @@ function Control({
           </span>
         </span>
       ) : image ? (
-        // The key as the device draws it, edge to edge; the button carries the name.
-        <img src={image} alt="" draggable={false} className="size-full object-cover" />
+        // The key as the device draws it, edge to edge; the button carries
+        // the name. Drawn at the size it is shown at on this display
+        // (`keyPixels` of the preview), so the browser does not scale it up.
+        <img
+          src={image}
+          alt=""
+          draggable={false}
+          data-slot="key-image"
+          className="size-full object-cover"
+        />
       ) : (
         <FaceTile
           face={
@@ -222,7 +233,10 @@ export function DeviceCanvas(props: CanvasProps) {
   const container = useRef<HTMLDivElement>(null)
   const unit = keyUnit(size, props.keySize)
   // The touch strip and the dials span the key grid, as on the hardware.
-  const width = `calc(var(--key) * ${gridWidth(geometry)})`
+  const width =
+    props.keySize !== undefined && props.keySize > 0
+      ? `${geometry.columns * props.keySize + (geometry.columns - 1) * Math.round(props.keySize * KEY_GAP)}px`
+      : `calc(var(--key) * ${gridWidth(geometry)})`
   const first = keys[0]?.control ?? touchZones[0] ?? encoders[0]
   const stop = focused ?? first
   const isStop = (control: ControlId) => (stop ? sameControl(stop, control) : false)
@@ -240,7 +254,13 @@ export function DeviceCanvas(props: CanvasProps) {
       ?.focus()
   }
 
-  const gap = `calc(var(--key) * ${KEY_GAP})`
+  // Whole pixels when the key size is known, so keys (and their images)
+  // start on pixel boundaries instead of being resampled between them.
+  const measure = (keys: number) =>
+    props.keySize !== undefined && props.keySize > 0
+      ? `${Math.round(props.keySize * keys)}px`
+      : `calc(var(--key) * ${keys})`
+  const gap = measure(KEY_GAP)
   return (
     <div
       ref={container}
@@ -251,8 +271,8 @@ export function DeviceCanvas(props: CanvasProps) {
         {
           "--key": unit,
           "--key-radius": `calc(var(--key) * 0.14)`,
-          gap: `calc(var(--key) * ${KEY_GAP * 1.5})`,
-          padding: `calc(var(--key) * ${BODY_PADDING})`,
+          gap: measure(KEY_GAP * 1.5),
+          padding: measure(BODY_PADDING),
         } as CSSProperties
       }
       role="group"

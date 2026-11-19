@@ -14,9 +14,12 @@ vi.mock("@/lib/api", async () => (await import("@/test/api-mock")).apiModule)
 vi.mock("sonner", async () => (await import("@/test/toast")).sonnerModule)
 // The real module (with `AppContext`, which the variable picker reads), but a
 // fixed `useAppContext` for the editor.
+// The Work Session module is enabled unless a test turns it off.
+const enabledModules = vi.hoisted(() => ({ workSession: true }))
 vi.mock("@/lib/app-context", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/app-context")>()),
-  useActionModules: () => [],
+  useActionModules: () =>
+    enabledModules.workSession ? [{ id: "work-session", enabled: true, actionTypes: [] }] : [],
   useAppContext: () => ({
     profiles: { activeProfileId: null, profiles: [] },
     refresh: vi.fn(),
@@ -335,6 +338,20 @@ describe("gesture editor", () => {
     // No action instance stands in for the session.
     expect(api.createAction).not.toHaveBeenCalled()
     expect(api.updateAction).not.toHaveBeenCalled()
+  })
+
+  it("offers no Work Session controller without the Work Session module", async () => {
+    enabledModules.workSession = false
+    try {
+      const user = renderEditor()
+      await user.click(key("Key 3"))
+      await user.click(row("Single click (immediate)"))
+      expect(await screen.findByRole("option", { name: "Mail" })).toBeInTheDocument()
+      expect(screen.queryByRole("option", { name: "Work Session controller" })).toBeNull()
+      await user.keyboard("{Escape}")
+    } finally {
+      enabledModules.workSession = true
+    }
   })
 
   it("asks before a pressed key becomes a Work Session controller", async () => {

@@ -40,16 +40,24 @@ export function FaceTile({
         : style === "workflow"
           ? ListOrdered
           : null
-  // Sized from the key (`--key` of the device canvas), with a floor for
-  // the smallest previews.
-  const glyph = "size-[max(14px,calc(var(--key,4rem)*0.34))] shrink-0 opacity-90"
+  // Sized from the key (`--key` of the device canvas) in the proportions
+  // the device's renderer uses (deckpilot-render): the icon about two
+  // fifths of the key above a title, a little over half without one; a
+  // floor for the smallest previews.
+  const titled = Boolean(face?.title || face?.detail)
+  const glyph = cn(
+    "shrink-0",
+    titled
+      ? "size-[max(14px,calc(var(--key,4rem)*0.42))]"
+      : "size-[max(16px,calc(var(--key,4rem)*0.54))]",
+  )
   return (
     <div
       data-slot="key-face"
       data-face={style}
       data-unavailable={unavailable || undefined}
       className={cn(
-        "flex size-full flex-col items-center justify-center gap-[calc(var(--key,4rem)*0.05)] overflow-hidden p-[calc(var(--key,4rem)*0.08)] text-center",
+        "flex size-full min-w-0 flex-col items-center justify-center gap-[calc(var(--key,4rem)*0.06)] overflow-hidden p-[calc(var(--key,4rem)*0.07)] text-center",
         STYLE[style],
         face?.highlighted && "ring-2 ring-sky-400 ring-inset",
         unavailable && "opacity-50",
@@ -66,15 +74,20 @@ export function FaceTile({
       {face?.title && (
         <span
           className={cn(
-            "max-w-full text-[length:max(9px,calc(var(--key,4rem)*0.13))] leading-tight font-medium break-words",
-            compact ? "w-full truncate" : "line-clamp-2 text-device-key-muted",
+            "max-w-full text-[length:max(9px,calc(var(--key,4rem)*0.13))] leading-[1.2] font-medium [overflow-wrap:anywhere]",
+            compact ? "w-full truncate" : "line-clamp-2",
           )}
         >
           {face.title}
         </span>
       )}
       {face?.detail && (
-        <span className="text-[length:max(8px,calc(var(--key,4rem)*0.11))] leading-none text-sky-300">
+        <span
+          className={cn(
+            "max-w-full truncate text-[length:max(8px,calc(var(--key,4rem)*0.13))] leading-[1.2] font-semibold",
+            face.highlighted ? "text-sky-300" : "text-device-key-muted",
+          )}
+        >
           {face.detail}
         </span>
       )}

@@ -1,7 +1,8 @@
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { useAsync } from "@/hooks/use-async"
+import type { EditorPlace } from "@/layout-editor/use-layout-editing"
 import { api } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
 import type { DeviceId } from "@/lib/types"
@@ -108,6 +109,13 @@ export function EditorSelectionProvider({
 
   const isDirty = useCallback(() => dirtyRef.current, [dirtyRef])
 
+  // Read when an editor mounts, written as it changes: no re-render.
+  const places = useRef(new Map<string, EditorPlace>())
+  const place = useCallback((layout: string) => places.current.get(layout), [])
+  const rememberPlace = useCallback((layout: string, where: EditorPlace) => {
+    places.current.set(layout, where)
+  }, [])
+
   const value = useMemo<EditorSelection>(
     () => ({
       models,
@@ -122,6 +130,8 @@ export function EditorSelectionProvider({
       setDirty,
       guard,
       isDirty,
+      place,
+      rememberPlace,
     }),
     [
       models,
@@ -136,6 +146,8 @@ export function EditorSelectionProvider({
       setDirty,
       guard,
       isDirty,
+      place,
+      rememberPlace,
     ],
   )
   return <EditorSelectionContext value={value}>{children}</EditorSelectionContext>

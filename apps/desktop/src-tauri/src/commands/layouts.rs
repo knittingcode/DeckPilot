@@ -204,7 +204,8 @@ pub struct ControlFace {
     control: ControlId,
     face: KeyFace,
     /// With `render`: the key as the device shows it (appearance, icon,
-    /// title), as a PNG `data:` URL at the model's image size. `None` for
+    /// title), as a PNG `data:` URL at the model's image size, or at the
+    /// size the preview asked for (`key_pixels`). `None` for
     /// controls without a display.
     #[serde(skip_serializing_if = "Option::is_none")]
     image: Option<String>,
@@ -235,6 +236,49 @@ fn image_size(
         ControlId::Encoder { .. } => None,
     }?;
     Some((spec.width, spec.height))
+}
+
+/// Smallest and largest key width a preview may ask for, in pixels.
+pub const PREVIEW_KEY_PIXELS: (u32, u32) = (16, 512);
+
+/// The size a preview draws `control` at. The device's own image size
+/// (`native`) without `key_pixels`; with it, the native size scaled so that
+/// a key is `key_pixels` wide (the width the app shows a key at, in device
+/// pixels: CSS size times the display's pixel ratio), and every other
+/// display (touch-strip zones) by the same factor. The face is laid out by
+/// the same rules at every size, so the preview shows what the device shows,
+/// only drawn for the screen instead of scaled up from the device's pixels.
+fn preview_size(
+    capabilities: &deckpilot_device::DeviceCapabilities,
+    native: (u32, u32),
+    key_pixels: Option<u32>,
+) -> (u32, u32) {
+    let Some(requested) = key_pixels else {
+        return native;
+    };
+    let Some(key_width) = capabilities
+        .keys
+        .and_then(|k| k.image)
+        .map(|spec| spec.width)
+        .or_else(|| {
+            capabilities
+                .touch
+                .as_ref()
+                .and_then(|t| t.image)
+                .map(|spec| spec.height)
+        })
+        .filter(|width| *width > 0)
+    else {
+        return native;
+    };
+    let requested = requested.clamp(PREVIEW_KEY_PIXELS.0, PREVIEW_KEY_PIXELS.1);
+    let scale = |side: u32| {
+        let scaled = u64::from(side) * u64::from(requested) / u64::from(key_width);
+        u32::try_from(scaled)
+            .unwrap_or(u32::MAX)
+            .clamp(1, PREVIEW_KEY_PIXELS.1 * 4)
+    };
+    (scale(native.0), scale(native.1))
 }
 
 /// Live key states for a preview, as the agent reported them
@@ -273,10 +317,12 @@ fn with_live_state(
 }
 
 /// What every control of a (possibly unsaved) layout page shows for a given
-/// project, without a device and without running any action. With
-/// `render`, each face also comes as the image the device would show,
-/// drawn by the agent's renderer. With `live`, keys show the live states
-/// the agent reported for them (`watch_key_states`).
+/// project (`None`: the profile's active project, as on the device),
+/// without a device and without running any action. With `render`, each
+/// face also comes as the image the device would show, drawn by the
+/// agent's renderer: at the device's own size, or with `key_pixels` at the
+/// size the app shows it ([`preview_size`]). With `live`, keys show the
+/// live states the agent reported for them (`watch_key_states`).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // Tauri passes each argument by name.
 pub fn preview_layout(
@@ -287,6 +333,7 @@ pub fn preview_layout(
     project_id: Option<ProjectId>,
     render: Option<bool>,
     live: Option<LivePreview>,
+    key_pixels: Option<u32>,
 ) -> CommandResult<Vec<ControlFace>> {
     let store = state.store()?;
     let profile = load_profile(&store, profile_id)?;
@@ -329,7 +376,8 @@ pub fn preview_layout(
             None => face,
         };
         let image = icons.as_ref().and_then(|icons| {
-            let (width, height) = image_size(&model.capabilities, control)?;
+            let native = image_size(&model.capabilities, control)?;
+            let (width, height) = preview_size(&model.capabilities, native, key_pixels);
             let frame = deckpilot_render::render_with(&face, width, height, icons);
             let png = deckpilot_render::frame_png(&frame)?;
             Some(deckpilot_core::IconData::new(png).data_url())
@@ -634,5 +682,36 @@ mod tests {
         .unwrap();
         assert_eq!(reported["incompatible"], serde_json::json!(["why"]));
         assert_eq!(reported["id"], plain["id"]);
+    }
+}
+
+#[cfg(test)]
+mod preview_size_tests {
+    use deckpilot_device::models;
+
+    use super::*;
+
+    #[test]
+    fn previews_are_drawn_at_the_size_they_are_shown() {
+        let plus = models::stream_deck_plus().capabilities;
+        let key = image_size(&plus, ControlId::Key { index: 0 }).unwrap();
+        let zone = image_size(&plus, ControlId::TouchZone { index: 0 }).unwrap();
+        assert_eq!((key, zone), ((120, 120), (200, 100)));
+        // The device's own size without a request: what the device gets.
+        assert_eq!(preview_size(&plus, key, None), (120, 120));
+        assert_eq!(preview_size(&plus, zone, None), (200, 100));
+        // A key shown 96 CSS px wide on a 2x display; zones scale alike.
+        assert_eq!(preview_size(&plus, key, Some(192)), (192, 192));
+        assert_eq!(preview_size(&plus, zone, Some(192)), (320, 160));
+        // Smaller than the device, e.g. a small window on a 1x display.
+        assert_eq!(preview_size(&plus, key, Some(60)), (60, 60));
+        // Clamped.
+        assert_eq!(preview_size(&plus, key, Some(0)), (16, 16));
+        assert_eq!(preview_size(&plus, key, Some(u32::MAX)), (512, 512));
+        // A model without displays keeps its (absent) size.
+        let mut none = plus;
+        none.keys = None;
+        none.touch = None;
+        assert_eq!(preview_size(&none, (10, 10), Some(200)), (10, 10));
     }
 }

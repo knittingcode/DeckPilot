@@ -2520,6 +2520,42 @@ fn icons_are_imported_shown_previewed_and_deleted() {
     let plain = h.ok("preview_layout", args(Value::Null));
     assert!(plain[0].get("image").is_none());
 
+    // Without `keyPixels` the image has the device's own size (72 x 72 on
+    // an MK.2); with it, the size the app shows the key at (CSS pixels
+    // times the display's pixel ratio), drawn at that size rather than
+    // scaled up. The imported icon is kept at every size.
+    let png_size = |url: &Value| {
+        use base64::Engine as _;
+        let data = url
+            .as_str()
+            .unwrap()
+            .strip_prefix("data:image/png;base64,")
+            .unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .unwrap();
+        deckpilot_core::appearance::png_dimensions(&bytes).unwrap()
+    };
+    let pixels = |key_pixels: Value| {
+        h.ok(
+            "preview_layout",
+            json!({ "profileId": profile_id, "layout": saved, "pageId": page, "projectId": null,
+                "render": true, "keyPixels": key_pixels }),
+        )
+    };
+    assert_eq!(png_size(&faces[0]["image"]), (72, 72));
+    assert_eq!(png_size(&pixels(Value::Null)[0]["image"]), (72, 72));
+    let sharp = pixels(json!(204));
+    assert_eq!(png_size(&sharp[0]["image"]), (204, 204));
+    assert_eq!(png_size(&sharp[1]["image"]), (204, 204), "empty keys too");
+    assert_eq!(
+        sharp[0]["face"], faces[0]["face"],
+        "the same face at every size"
+    );
+    // Out-of-range requests are clamped.
+    assert_eq!(png_size(&pixels(json!(4))[0]["image"]), (16, 16));
+    assert_eq!(png_size(&pixels(json!(100_000))[0]["image"]), (512, 512));
+
     // With the live states the agent reported, the key shows its state as
     // the device does; stale states are marked; other keys are unchanged.
     let live = |connected: bool, snapshot: Value| {

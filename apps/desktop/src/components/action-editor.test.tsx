@@ -98,6 +98,30 @@ function renderEditor(
 }
 
 describe("ActionEditor", () => {
+  it("mentions project placeholders only with the Projects module", () => {
+    const hint = /to show the active project on the key/
+    // Projects not installed.
+    renderEditor(null)
+    expect(screen.queryByText(hint)).not.toBeInTheDocument()
+    expect(screen.getByLabelText("Name")).not.toHaveAttribute(
+      "placeholder",
+      expect.stringMatching(/project/i),
+    )
+    cleanup()
+    // Installed but disabled.
+    renderEditor(null, 0, [
+      module("general", "General", [logType]),
+      module("projects", "Projects", [], false),
+    ])
+    expect(screen.queryByText(hint)).not.toBeInTheDocument()
+    cleanup()
+    renderEditor(null, 0, [
+      module("general", "General", [logType]),
+      module("projects", "Projects", []),
+    ])
+    expect(screen.getByText(hint)).toBeInTheDocument()
+  })
+
   beforeEach(() => {
     resetApi()
   })

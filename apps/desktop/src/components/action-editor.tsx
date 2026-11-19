@@ -95,6 +95,7 @@ export function ActionEditor({
   // available now.
   const offered = (m: ModuleInfo | undefined) =>
     creatableTypes(m?.actionTypes ?? []).filter((t) => !m || !pluginTypeUnavailable(m, t.id))
+  const projectsEnabled = modules.some((m) => m.id === "projects" && m.enabled)
   const usable = modules.filter((m) => m.enabled && m.supported && offered(m).length > 0)
   const chosenType = action?.actionType ?? initialType
   const availability = chosenType ? typeAvailability(modules, chosenType) : undefined
@@ -285,7 +286,7 @@ export function ActionEditor({
             onChange={(e) => {
               setName(e.target.value)
             }}
-            placeholder="Git Status — Active Project"
+            placeholder="Open Terminal"
           />
           {submitted && nameMissing && <p className="text-xs text-destructive">Enter a name.</p>}
         </div>
@@ -306,9 +307,12 @@ export function ActionEditor({
           }}
           placeholder="Defaults to the name"
         />
-        <p className="text-xs text-muted-foreground">
-          Use {"{project.key}"} or {"{project.name}"} to show the active project on the key.
-        </p>
+        {/* Project placeholders come with the Projects module. */}
+        {projectsEnabled && (
+          <p className="text-xs text-muted-foreground">
+            Use {"{project.key}"} or {"{project.name}"} to show the active project on the key.
+          </p>
+        )}
       </div>
 
       <div className="grid gap-2">

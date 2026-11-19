@@ -35,6 +35,13 @@ import {
   type Selection,
 } from "./editing"
 
+/** Where the editor is in a layout: kept by the shell while it is not on screen. */
+export interface EditorPlace {
+  pageId: string
+  trail: string[]
+  selection: Selection
+}
+
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`
 
 /**
@@ -49,9 +56,18 @@ export function useLayoutEditing(
    * dropping prefer such triggers (docs/device-controls.md).
    */
   accepts?: (control: ControlId, target: BindingTarget, trigger: Trigger) => boolean,
+  /**
+   * Where the editor was in this layout when it was last on screen (the
+   * shell keeps it while other views are): the open page, how it was
+   * reached and the selection. A page that no longer exists opens the home
+   * page.
+   */
+  initial?: EditorPlace,
 ) {
   const [state, setState] = useState(() => history(saved))
-  const [openPage, setOpenPage] = useState(saved.homePage)
+  const [openPage, setOpenPage] = useState(() =>
+    initial && findPage(saved, initial.pageId) ? initial.pageId : saved.homePage,
+  )
   // The stored layout the draft is compared with. Page commands (reorder,
   // move, copy) save on the backend and hand back the stored layout before
   // the `saved` prop catches up.
@@ -61,8 +77,11 @@ export function useLayoutEditing(
     setSavedProp(saved)
     setBaseline(saved)
   }
-  const [trail, setTrail] = useState<string[]>([])
-  const [selection, setSelection] = useState<Selection>(emptySelection)
+  const restored = initial !== undefined && findPage(saved, initial.pageId) !== undefined
+  const [trail, setTrail] = useState<string[]>(() => (restored ? initial.trail : []))
+  const [selection, setSelection] = useState<Selection>(() =>
+    restored ? initial.selection : emptySelection,
+  )
   const [clipboard, setClipboard] = useState<Clipboard | null>(null)
   // The page "Delete page" asked about, until it is confirmed or cancelled.
   const [deleting, setDeleting] = useState<string | null>(null)

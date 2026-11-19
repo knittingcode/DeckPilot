@@ -28,14 +28,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { displayPixels, useDevicePixelRatio } from "@/hooks/use-device-pixel-ratio"
 import { IS_MAC } from "@/hooks/use-navigation"
 import { api, errorMessage } from "@/lib/api"
 import { appliedByAgent, toastSaved } from "@/lib/agent-reload"
@@ -66,6 +59,7 @@ import {
   switchableLayouts,
 } from "@/lib/layout-navigation"
 import { StepEditor } from "@/pages/workflow-steps"
+import { useOptionalEditorSelection } from "@/shell/editor-selection-context"
 import type {
   ActionInstance,
   ActionType,
@@ -249,13 +243,23 @@ export function LayoutEditor({
     const type = typeOfTarget(target)
     return type ? whyNotForTrigger(type, model, control, trigger) : null
   }
+  // Where the editor was in this layout, when it comes back from another
+  // view (the shell keeps it; nothing outside the shell).
+  const shell = useOptionalEditorSelection()
+  const placeKey = `${profileId}:${saved.id}`
+  const [initialPlace] = useState(() => shell?.place(placeKey))
   const editing = useLayoutEditing(
     model,
     saved,
     (control, target, trigger) => incompatibleFor(control, target, trigger) === null,
+    initialPlace,
   )
   const { draft, pageId, selected, selection, commands } = editing
-  const [previewProject, setPreviewProject] = useState<string | null>(view.activeProjectId)
+  const rememberPlace = shell?.rememberPlace
+  const trail = editing.trail
+  useEffect(() => {
+    rememberPlace?.(placeKey, { pageId, trail, selection })
+  }, [rememberPlace, placeKey, pageId, trail, selection])
   const [errors, setErrors] = useState<string[]>([])
   const dirty = JSON.stringify(draft) !== JSON.stringify(editing.baseline)
   const { projects } = view.profile
@@ -283,13 +287,33 @@ export function LayoutEditor({
     [draft, pageId],
   )
   const liveStates = useLiveKeyStates(profileId, pageActions, agent)
+  // The preview fills the width of its workspace and at most about half
+  // the editor's height, so the inspector stays in view below it.
+  const workspace = useRef<HTMLDivElement>(null)
+  const main = useRef<HTMLDivElement>(null)
+  const space = useElementSize(workspace)
+  const editorSpace = useElementSize(main)
+  const unit = space
+    ? keySize(
+        {
+          // Less the padding around the device.
+          width: space.width - 16,
+          height: editorSpace ? editorSpace.height * 0.55 : undefined,
+        },
+        deviceGeometry(model),
+      )
+    : KEY_SIZE.fallback
+  // Key images are drawn for the size they are shown at (inside the key's
+  // 1px border) on this display, never scaled up from the device's pixels.
+  const pixelRatio = useDevicePixelRatio()
+  const keyPixels = displayPixels(unit - 2, pixelRatio)
   const { faces, images, incompatible } = usePreviewFaces(
     profileId,
     draft,
     pageId,
-    previewProject,
     library.icons.map((i) => i.id).join(","),
     liveStates.live,
+    keyPixels,
   )
   const iconState: IconState = {
     ...library,
@@ -516,7 +540,9 @@ export function LayoutEditor({
     }
     return map
   }, [pageBindings, actions])
-  const previewed = projects.find((p) => p.id === previewProject)
+  // Labels such as {project.key} show the profile's active project, as on
+  // the device; nothing to choose here (projects are an optional module).
+  const previewed = projects.find((p) => p.id === view.activeProjectId)
   const summaries = useMemo(() => {
     const position = pagePosition(draft, pageId)
     const render = (text: string) =>
@@ -606,22 +632,6 @@ export function LayoutEditor({
     }
   }
 
-  // The preview fills the width of its workspace and at most about half
-  // the editor's height, so the inspector stays in view below it.
-  const workspace = useRef<HTMLDivElement>(null)
-  const main = useRef<HTMLDivElement>(null)
-  const space = useElementSize(workspace)
-  const editorSpace = useElementSize(main)
-  const unit = space
-    ? keySize(
-        {
-          // Less the padding around the device.
-          width: space.width - 16,
-          height: editorSpace ? editorSpace.height * 0.55 : undefined,
-        },
-        deviceGeometry(model),
-      )
-    : KEY_SIZE.fallback
   const [managingPages, setManagingPages] = useState(false)
 
   const folder = selection.focus ? folderOf(draft, pageId, selection.focus) : undefined
@@ -643,7 +653,7 @@ export function LayoutEditor({
         drops onto the device (centre) and onto the gestures of the
         inspector (below the device).
       */}
-      <div data-slot="device-editor" className="relative flex min-h-0 flex-1">
+      <div data-slot="device-editor" className="relative flex min-h-0 flex-1 max-[859px]:flex-col">
         <div
           ref={main}
           data-slot="device-editor-main"
@@ -800,30 +810,6 @@ export function LayoutEditor({
                   free key. To choose the key, drag “Back” from the library onto a control.
                 </p>
               )}
-              <div className="flex flex-wrap items-center gap-2 text-sm">
-                <Label htmlFor="preview-project">Preview with project</Label>
-                <Select
-                  value={previewProject ?? "none"}
-                  onValueChange={(value) => {
-                    setPreviewProject(value === "none" ? null : value)
-                  }}
-                >
-                  <SelectTrigger id="preview-project" className="h-8 w-40">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">No project</SelectItem>
-                    {projects.map((p) => (
-                      <SelectItem key={p.id} value={p.id}>
-                        {p.key}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <span className="text-xs text-muted-foreground">
-                  Labels such as {"{project.key}"} follow the selected project.
-                </span>
-              </div>
             </CardContent>
           </Card>
 

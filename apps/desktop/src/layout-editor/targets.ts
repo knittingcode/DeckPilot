@@ -128,13 +128,18 @@ export function unavailableTarget(groups: TargetGroup[], value: string): string 
   return undefined
 }
 
+/** The module that runs the Work Session controller. */
+export const WORK_SESSION_MODULE = "work-session"
+
 /**
  * Targets offered only on gesture rows (single click, double click, long
  * press), after `targetGroups`: the Work Session controller, a stateful key
  * with the machine's default rules. It needs no action instance; the agent
  * asks the work session for the operation its state and the gesture pick.
  */
-export function gestureOnlyGroups(): TargetGroup[] {
+export function gestureOnlyGroups(workSession = true): TargetGroup[] {
+  // Only while the Work Session module is there to run it.
+  if (!workSession) return []
   const target: BindingTarget = { type: "stateful", machine: "workSession" }
   return [
     {
