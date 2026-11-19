@@ -28,7 +28,6 @@ export function appContext(overrides: Partial<AppContextValue> = {}): AppContext
     navigate: vi.fn(),
     openSettings: vi.fn(),
     closeSettings: vi.fn(),
-    history: { canGoBack: false, canGoForward: false, back: vi.fn(), forward: vi.fn() },
     modules: [],
     setModules: vi.fn(),
     ...overrides,

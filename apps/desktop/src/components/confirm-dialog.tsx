@@ -12,16 +12,24 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 
-/** Asks before a destructive (or otherwise significant) action. */
+/**
+ * Asks before a destructive (or otherwise significant) action. Opened by
+ * its `trigger`, or controlled with `open` and `onOpenChange`, e.g. from a
+ * menu item.
+ */
 export function ConfirmDialog({
   trigger,
+  open,
+  onOpenChange,
   title,
   description,
   confirmLabel = "Delete",
   destructive = true,
   onConfirm,
 }: {
-  trigger: ReactNode
+  trigger?: ReactNode
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
   title: string
   description: ReactNode
   confirmLabel?: string
@@ -29,8 +37,8 @@ export function ConfirmDialog({
   onConfirm: () => void
 }) {
   return (
-    <AlertDialog>
-      <AlertDialogTrigger asChild>{trigger}</AlertDialogTrigger>
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      {trigger && <AlertDialogTrigger asChild>{trigger}</AlertDialogTrigger>}
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>

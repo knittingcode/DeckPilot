@@ -5,7 +5,7 @@ import { toast } from "sonner"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { EmptyState, ErrorNotice, Loading } from "@/components/page"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Panel, SettingsSection } from "@/components/settings-layout"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -101,30 +101,27 @@ export function SharedVariablesSettings() {
         shared variables, a value set for a project wins over the profile&apos;s, which wins over
         the global one.
       </p>
-      <Card>
-        <CardHeader className="gap-3">
-          <div className="flex items-center justify-between gap-2">
-            <CardTitle>Variables</CardTitle>
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => {
-                setSelected(NEW)
-              }}
-            >
-              <Plus /> New variable
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent className="grid gap-3">
-          {variables.length === 0 && (
-            <EmptyState title="No shared variables yet">
-              Create one to use the same value in several actions and workflows.
-            </EmptyState>
-          )}
-          <VariablesTable shared={variables} selected={selected} onEdit={setSelected} />
-        </CardContent>
-      </Card>
+      <SettingsSection
+        title="Variables"
+        actions={
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => {
+              setSelected(NEW)
+            }}
+          >
+            <Plus /> New variable
+          </Button>
+        }
+      >
+        {variables.length === 0 && (
+          <EmptyState variant="plain" title="No shared variables yet">
+            Create one to use the same value in several actions and workflows.
+          </EmptyState>
+        )}
+        <VariablesTable shared={variables} selected={selected} onEdit={setSelected} />
+      </SettingsSection>
 
       {(current ?? selected === NEW) && (
         <VariableEditor
@@ -376,237 +373,234 @@ function VariableEditor({
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{saved ? `shared.${saved.key}` : "New variable"}</CardTitle>
-        {saved?.module && <CardDescription>Declared by the {saved.module} module</CardDescription>}
-      </CardHeader>
-      <CardContent className="grid gap-6">
-        <form className="grid gap-4" onSubmit={(e) => void save(e)} noValidate>
-          {error && <ErrorNotice error={error} />}
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="grid gap-2">
-              <Label htmlFor="variable-key">Key</Label>
-              <Input
-                id="variable-key"
-                value={key}
-                readOnly={Boolean(saved)}
-                placeholder="paths.root"
-                aria-invalid={submitted && Boolean(keyError)}
-                onChange={(e) => {
-                  setKey(e.target.value)
-                }}
-              />
-              {submitted && keyError ? (
-                <p className="text-xs text-destructive">{keyError}</p>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  Referenced as {`{{ shared.${(saved?.key ?? key) || "<key>"} }}`}
-                  {saved ? "; the key cannot change." : ""}
-                </p>
-              )}
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="variable-label">Label</Label>
-              <Input
-                id="variable-label"
-                value={label}
-                placeholder="Optional"
-                onChange={(e) => {
-                  setLabel(e.target.value)
-                }}
-              />
-            </div>
+    <Panel
+      title={saved ? `shared.${saved.key}` : "New variable"}
+      description={saved?.module && `Declared by the ${saved.module} module`}
+    >
+      <form className="grid gap-4" onSubmit={(e) => void save(e)} noValidate>
+        {error && <ErrorNotice error={error} />}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-2">
+            <Label htmlFor="variable-key">Key</Label>
+            <Input
+              id="variable-key"
+              value={key}
+              readOnly={Boolean(saved)}
+              placeholder="paths.root"
+              aria-invalid={submitted && Boolean(keyError)}
+              onChange={(e) => {
+                setKey(e.target.value)
+              }}
+            />
+            {submitted && keyError ? (
+              <p className="text-xs text-destructive">{keyError}</p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Referenced as {`{{ shared.${(saved?.key ?? key) || "<key>"} }}`}
+                {saved ? "; the key cannot change." : ""}
+              </p>
+            )}
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="variable-description">Description</Label>
-            <Textarea
-              id="variable-description"
-              rows={2}
-              value={description}
+            <Label htmlFor="variable-label">Label</Label>
+            <Input
+              id="variable-label"
+              value={label}
               placeholder="Optional"
               onChange={(e) => {
-                setDescription(e.target.value)
+                setLabel(e.target.value)
               }}
             />
           </div>
-          <div className="grid gap-4 sm:grid-cols-2">
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="variable-description">Description</Label>
+          <Textarea
+            id="variable-description"
+            rows={2}
+            value={description}
+            placeholder="Optional"
+            onChange={(e) => {
+              setDescription(e.target.value)
+            }}
+          />
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-2">
+            <Label htmlFor="variable-type">Type</Label>
+            <Select
+              value={valueType.type}
+              disabled={Boolean(saved)}
+              onValueChange={(type) => {
+                const next = { type } as VariableType
+                setValueType(next)
+                setDefaultDraft(emptyDraft(next))
+                if (type === "secretRef") setSensitive(false)
+              }}
+            >
+              <SelectTrigger id="variable-type" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {VALUE_TYPES.map((t) => (
+                  <SelectItem key={t.type} value={t.type}>
+                    {t.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {valueType.type === "secretRef" && (
+              <p className="text-xs text-muted-foreground">
+                Holds the name of a stored credential. The secret stays in the credential store and
+                is never shown here.
+              </p>
+            )}
+          </div>
+          {valueType.type === "resource" && (
             <div className="grid gap-2">
-              <Label htmlFor="variable-type">Type</Label>
+              <Label htmlFor="variable-resource-kind">Resource kind</Label>
               <Select
-                value={valueType.type}
+                value={valueType.kind ?? "any"}
                 disabled={Boolean(saved)}
-                onValueChange={(type) => {
-                  const next = { type } as VariableType
-                  setValueType(next)
-                  setDefaultDraft(emptyDraft(next))
-                  if (type === "secretRef") setSensitive(false)
+                onValueChange={(kind) => {
+                  setValueType(
+                    kind === "any"
+                      ? { type: "resource" }
+                      : { type: "resource", kind: kind as ResourceKind },
+                  )
                 }}
               >
-                <SelectTrigger id="variable-type" className="w-full">
+                <SelectTrigger id="variable-resource-kind" className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {VALUE_TYPES.map((t) => (
-                    <SelectItem key={t.type} value={t.type}>
-                      {t.label}
+                  <SelectItem value="any">Any kind</SelectItem>
+                  {RESOURCE_KINDS.map((k) => (
+                    <SelectItem key={k.kind} value={k.kind}>
+                      {k.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              {valueType.type === "secretRef" && (
-                <p className="text-xs text-muted-foreground">
-                  Holds the name of a stored credential. The secret stays in the credential store
-                  and is never shown here.
-                </p>
-              )}
             </div>
-            {valueType.type === "resource" && (
-              <div className="grid gap-2">
-                <Label htmlFor="variable-resource-kind">Resource kind</Label>
-                <Select
-                  value={valueType.kind ?? "any"}
-                  disabled={Boolean(saved)}
-                  onValueChange={(kind) => {
-                    setValueType(
-                      kind === "any"
-                        ? { type: "resource" }
-                        : { type: "resource", kind: kind as ResourceKind },
-                    )
-                  }}
-                >
-                  <SelectTrigger id="variable-resource-kind" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="any">Any kind</SelectItem>
-                    {RESOURCE_KINDS.map((k) => (
-                      <SelectItem key={k.kind} value={k.kind}>
-                        {k.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-          </div>
-          <fieldset className="grid gap-2">
-            <legend className="text-sm font-medium">Scopes</legend>
-            {STORED_SCOPES.map((s) => (
-              <label key={s.scope} className="flex items-center gap-2 text-sm">
-                <Checkbox
-                  checked={scopes.includes(s.scope)}
-                  onCheckedChange={(checked) => {
-                    setScopes((current) =>
-                      checked === true
-                        ? [...current.filter((c) => c !== s.scope), s.scope]
-                        : current.filter((c) => c !== s.scope),
-                    )
-                  }}
-                />
-                {s.label}
-                <span className="text-xs text-muted-foreground">{s.hint}</span>
-              </label>
-            ))}
-            {submitted && scopeError && <p className="text-xs text-destructive">{scopeError}</p>}
-          </fieldset>
-          {valueType.type !== "secretRef" && (
-            <div className="flex items-center gap-2">
-              <Switch
-                id="variable-sensitive"
-                checked={sensitive}
+          )}
+        </div>
+        <fieldset className="grid gap-2">
+          <legend className="text-sm font-medium">Scopes</legend>
+          {STORED_SCOPES.map((s) => (
+            <label key={s.scope} className="flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={scopes.includes(s.scope)}
                 onCheckedChange={(checked) => {
-                  setSensitive(checked)
-                  if (checked) setHasDefault(false)
+                  setScopes((current) =>
+                    checked === true
+                      ? [...current.filter((c) => c !== s.scope), s.scope]
+                      : current.filter((c) => c !== s.scope),
+                  )
                 }}
               />
-              <Label htmlFor="variable-sensitive">Sensitive</Label>
-              <span className="text-xs text-muted-foreground">
-                Values are never shown again, in logs or in history.
-              </span>
-            </div>
-          )}
-          {!sensitive && (
-            <div className="grid gap-2">
-              <label className="flex items-center gap-2 text-sm">
-                <Checkbox
-                  checked={hasDefault}
-                  onCheckedChange={(checked) => {
-                    setHasDefault(checked === true)
-                  }}
-                />
-                Default value, used where no scope has one
-              </label>
-              {hasDefault && (
-                <ValueInput
-                  id="variable-default"
-                  label="Default value"
-                  type={valueType}
-                  sensitive={false}
-                  draft={defaultDraft}
-                  projects={projects}
-                  profiles={profiles}
-                  credentials={credentials}
-                  onChange={setDefaultDraft}
-                />
-              )}
-              {submitted && defaultError && (
-                <p className="text-xs text-destructive">{defaultError}</p>
-              )}
-            </div>
-          )}
-          <div className="flex flex-wrap gap-2">
-            <Button type="submit">
-              <Save /> {saved ? "Save" : "Create variable"}
-            </Button>
-            {saved && (
-              <ConfirmDialog
-                trigger={
-                  <Button type="button" variant="ghost" disabled={uses.length > 0}>
-                    <Trash2 /> Delete
-                  </Button>
-                }
-                title={`Delete “shared.${saved.key}”?`}
-                description="The variable and all its values are removed. This cannot be undone."
-                onConfirm={() => void remove()}
-              />
-            )}
-          </div>
-        </form>
-
-        {variable && (
-          <>
-            <Values
-              variable={{ ...variable, definition: { ...variable.definition, ...definitionNow } }}
-              profileId={profileId}
-              projects={projects}
-              profiles={profiles}
-              credentials={credentials}
-              onChanged={() => {
-                onSaved(variable.definition.key)
+              {s.label}
+              <span className="text-xs text-muted-foreground">{s.hint}</span>
+            </label>
+          ))}
+          {submitted && scopeError && <p className="text-xs text-destructive">{scopeError}</p>}
+        </fieldset>
+        {valueType.type !== "secretRef" && (
+          <div className="flex items-center gap-2">
+            <Switch
+              id="variable-sensitive"
+              checked={sensitive}
+              onCheckedChange={(checked) => {
+                setSensitive(checked)
+                if (checked) setHasDefault(false)
               }}
             />
-            <div className="grid gap-2">
-              <h3 className="text-sm font-medium">Used in</h3>
-              {references.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Not used by any action or workflow.</p>
-              ) : (
-                <>
-                  <ul className="grid gap-1 text-sm text-muted-foreground" aria-label="Usages">
-                    {references.map((reference, index) => (
-                      <li key={index}>{describeVariableReference(reference)}</li>
-                    ))}
-                  </ul>
-                  <p className="text-xs text-muted-foreground">
-                    Remove these references before deleting the variable.
-                  </p>
-                </>
-              )}
-            </div>
-          </>
+            <Label htmlFor="variable-sensitive">Sensitive</Label>
+            <span className="text-xs text-muted-foreground">
+              Values are never shown again, in logs or in history.
+            </span>
+          </div>
         )}
-      </CardContent>
-    </Card>
+        {!sensitive && (
+          <div className="grid gap-2">
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={hasDefault}
+                onCheckedChange={(checked) => {
+                  setHasDefault(checked === true)
+                }}
+              />
+              Default value, used where no scope has one
+            </label>
+            {hasDefault && (
+              <ValueInput
+                id="variable-default"
+                label="Default value"
+                type={valueType}
+                sensitive={false}
+                draft={defaultDraft}
+                projects={projects}
+                profiles={profiles}
+                credentials={credentials}
+                onChange={setDefaultDraft}
+              />
+            )}
+            {submitted && defaultError && (
+              <p className="text-xs text-destructive">{defaultError}</p>
+            )}
+          </div>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit">
+            <Save /> {saved ? "Save" : "Create variable"}
+          </Button>
+          {saved && (
+            <ConfirmDialog
+              trigger={
+                <Button type="button" variant="ghost" disabled={uses.length > 0}>
+                  <Trash2 /> Delete
+                </Button>
+              }
+              title={`Delete “shared.${saved.key}”?`}
+              description="The variable and all its values are removed. This cannot be undone."
+              onConfirm={() => void remove()}
+            />
+          )}
+        </div>
+      </form>
+
+      {variable && (
+        <>
+          <Values
+            variable={{ ...variable, definition: { ...variable.definition, ...definitionNow } }}
+            profileId={profileId}
+            projects={projects}
+            profiles={profiles}
+            credentials={credentials}
+            onChanged={() => {
+              onSaved(variable.definition.key)
+            }}
+          />
+          <div className="grid gap-2">
+            <h4 className="text-sm font-medium">Used in</h4>
+            {references.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Not used by any action or workflow.</p>
+            ) : (
+              <>
+                <ul className="grid gap-1 text-sm text-muted-foreground" aria-label="Usages">
+                  {references.map((reference, index) => (
+                    <li key={index}>{describeVariableReference(reference)}</li>
+                  ))}
+                </ul>
+                <p className="text-xs text-muted-foreground">
+                  Remove these references before deleting the variable.
+                </p>
+              </>
+            )}
+          </div>
+        </>
+      )}
+    </Panel>
   )
 }
 
@@ -673,7 +667,7 @@ function Values({
 
   return (
     <div className="grid gap-2">
-      <h3 className="text-sm font-medium">Values</h3>
+      <h4 className="text-sm font-medium">Values</h4>
       {slots.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           {profileId

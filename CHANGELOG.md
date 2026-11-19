@@ -17,11 +17,58 @@ released either. 0.6.0 is the first version intended for publication.
 
 ### Changed
 
+- Settings open inside the main window instead of a window of their own,
+  and the gear is highlighted while they are shown. Settings reopen at the
+  section shown last. The device editor keeps its page, key, inspector and
+  unsaved changes while the settings are open.
+- The toolbar no longer has back and forward buttons, and ⌘[ / ⌘] (Alt+← /
+  Alt+→ on Windows and Linux) and the mouse's back and forward buttons no
+  longer navigate. The rail, the device and profile selectors, the
+  Marketplace, the settings and plugin entries lead to every view; the
+  rail's Device Editor returns to the editor from anywhere.
+- Settings and the app's pages use a quieter desktop layout: section
+  headings, setting rows with the control on the right, hairline separators
+  and inline status instead of cards, shadows and large padding. Controls
+  move under their label in narrow windows.
+- Settings › Profiles lists profiles in a compact table (name, last
+  modified, status, actions) with Make active and a menu for rename,
+  duplicate and delete; the profile being edited shows its description and
+  counts as a short details list.
+- The Dashboard, Action Library, Workflows, Projects, Work Session,
+  Variables and the plugin Marketplace (catalog, plugin details, installed
+  plugins, updates) follow the same layout.
+- The settings sidebar is more compact and starts with its search; each
+  settings page shows its title and description at the top.
+- Scrollbars are thin and quiet everywhere: a 6-pixel thumb on a
+  transparent track that darkens while the pointer is over the scrolling
+  area and more while it is dragged. High-contrast modes use the system's
+  colours.
+- The navigation rail is always collapsed to icons, with each page's name
+  as a tooltip and a clearer mark on the current page. The toolbar's sidebar
+  toggle and the ⌘B / Ctrl+B shortcut are gone.
 - The encrypted storage now uses SQLCipher 4.20 (through rusqlite 0.42),
   previously 4.19. The file format and key derivation settings are
   unchanged, so existing databases open as before. The compatibility test
   opens a database written by 0.8.0 with the new build, and a database
   written by the new build with 0.8.0.
+- Keys on the device and in the editor's preview are drawn with the Inter
+  font instead of the pixel font, and show their action's icon above the
+  title (the icon the app shows for it; an imported icon still replaces
+  it). Polish letters keep working.
+- The device editor's preview is centred and scales with the window. Page
+  navigation (previous, page, next, add page) sits directly under it;
+  renaming, deleting, the page tree and Move or Copy are in Manage pages.
+- The editor's Action Library uses compact rows with category headings; a
+  drag shows the action's icon and name.
+- System monitor keys show their value under the title: `23%`,
+  `12.4/32 GiB`, `↓ 2.1 MB/s` / `↑ 340 kB/s`, `68% used`.
+
+### Added
+
+- The editor's preview shows live values (e.g. CPU usage) as the device
+  does, read by the agent; it says when values are stale or unavailable.
+  IPC protocol 11 (`watchKeyStates`); older agents and apps keep working
+  without it.
 
 ### Fixed
 
@@ -29,6 +76,11 @@ released either. 0.6.0 is the first version intended for publication.
   (export, import, logs), was created but never shown, so Settings could not
   be opened and no profile could be created. Opening a window no longer
   blocks the thread the window needs.
+
+### Security
+
+- Key fonts are read with skrifa (maintained) rather than ttf-parser
+  (unmaintained, RUSTSEC-2026-0192).
 
 ## [0.8.1] - 2026-11-19
 

@@ -6,8 +6,11 @@
 //
 // The application shell of 0.8.0 and later: main window (toolbar) ›
 // Marketplace › Discover › Memory (deckpilot.memory) › Install with consent
-// › the settings window (its own window) › Extensions › Plugins lists it ›
-// back in the main window: Installed › Enable with consent › Uninstall.
+// › Settings › Extensions › Plugins lists it › back in the main window:
+// Installed › Enable with consent › Uninstall. Up to 0.8.1 the settings are
+// a window of their own ("Back to DeckPilot" returns); later releases show
+// them in the main window (back with the toolbar). Both are accepted, and
+// the step says which one the release has.
 // The selectors are those of apps/desktop/src-tauri/tests/marketplace_gui.rs.
 // Each step is recorded in <out>/results.tsv (see common.sh); a step that
 // fails stops the flow, the rest are recorded as not reached. A session
@@ -79,6 +82,8 @@ const SETTINGS = "//header[@aria-label='Toolbar']//button[starts-with(@aria-labe
 const MARKETPLACE = "//header[@aria-label='Toolbar']//button[@aria-label='Marketplace']"
 /** The identifier of the settings window (apps/desktop/src-tauri/src/windows.rs). */
 const SETTINGS_WINDOW = "app.settings"
+/** The settings as a view of the main window (releases after 0.8.1): their sidebar. */
+const SETTINGS_VIEW = "//*[@data-slot='sidebar' and @aria-label='Settings']"
 
 async function findAll(xpath) {
   const found = await call("POST", s("elements"), { using: "xpath", value: xpath })
@@ -299,33 +304,53 @@ const steps = [
     },
   ],
   [
-    "Settings window > Extensions > Plugins lists Memory",
+    "Settings > Extensions > Plugins lists Memory",
     async () => {
       await switchTo(mainHandle)
       const before = new Set(await handles())
       await click(SETTINGS)
-      const settings = await until(
-        "the settings window",
+      // Either the main window shows the settings, or (up to 0.8.1) a
+      // settings window appears.
+      const where = await until(
+        "the settings",
         async () => {
+          await switchTo(mainHandle)
+          if (await visible(SETTINGS_VIEW)) return { handle: mainHandle }
           for (const handle of await handles()) {
             if (handle === mainHandle) continue
             await switchTo(handle)
-            if ((await windowId()) === SETTINGS_WINDOW) return handle
+            if ((await windowId()) === SETTINGS_WINDOW) return { handle }
           }
           await switchTo(mainHandle)
           return null
         },
         LONG,
       )
-      await wait(button("Back to DeckPilot"))
+      const inMain = where.handle === mainHandle
+      if (inMain) {
+        const windows = (await handles()).length
+        if (windows !== before.size)
+          throw new Error(
+            `the settings opened in the main window, but ${windows - before.size} more window(s) appeared`,
+          )
+      } else {
+        await wait(button("Back to DeckPilot"))
+      }
       await click(button("Plugins"))
       const row = await wait(`${installedItem}//span[normalize-space(.)='v${VERSION}']`)
       await execute("arguments[0].scrollIntoView({block: 'center'});", [{ [ELEMENT]: row }])
       const shot = await screenshot("settings-plugins")
-      await click(button("Back to DeckPilot"))
-      await switchTo(mainHandle)
+      if (inMain) {
+        await click(MARKETPLACE)
+      } else {
+        await click(button("Back to DeckPilot"))
+        await switchTo(mainHandle)
+      }
       await wait(MARKETPLACE)
-      return `settings window ${before.has(settings) ? "(already open)" : "opened"} as its own window (${SETTINGS_WINDOW}); Extensions > Plugins lists ${NAME} v${VERSION}; back to the main window; ${shot}`
+      const how = inMain
+        ? "settings shown in the main window (no other window)"
+        : `settings window ${before.has(where.handle) ? "(already open)" : "opened"} as its own window (${SETTINGS_WINDOW})`
+      return `${how}; Extensions > Plugins lists ${NAME} v${VERSION}; back to the main window; ${shot}`
     },
   ],
   [

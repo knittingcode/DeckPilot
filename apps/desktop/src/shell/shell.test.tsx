@@ -2,7 +2,7 @@
 import "@testing-library/jest-dom/vitest"
 
 // The main window as a whole: the toolbar, the rail, the device editor as
-// the default view, and the settings in their own window.
+// the default view, and the settings as a view of the same window.
 
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -62,6 +62,7 @@ function layoutOf(id: string, model: string, name: string): DeviceLayout {
 function profileView(id: string, name: string): ProfileView {
   return {
     activeProjectId: null,
+    issues: [],
     profile: {
       id,
       name,
@@ -116,6 +117,13 @@ beforeEach(() => {
 })
 
 afterEach(cleanup)
+
+/** The toolbar's settings button (the settings' breadcrumb is also a "Settings" button). */
+function gearOf(toolbar: HTMLElement) {
+  return within(within(toolbar).getByRole("group", { name: "App" })).getByRole("button", {
+    name: "Settings",
+  })
+}
 
 async function renderShell() {
   const user = userEvent.setup()
@@ -206,43 +214,197 @@ describe("main window shell", { timeout: 20_000 }, () => {
     expect(screen.getByRole("textbox", { name: "Layout name" })).toHaveValue("Home Plus edited")
   })
 
-  it("opens the settings window from the toolbar, the keyboard and other windows", async () => {
-    const { user } = await renderShell()
-    await user.click(screen.getByRole("button", { name: "Settings" }))
-    expect(api.openWindow).toHaveBeenLastCalledWith("app.settings", undefined)
+  it("opens the settings inside the main window, never in a window of their own", async () => {
+    const { user, toolbar } = await renderShell()
+    const gear = gearOf(toolbar)
+    expect(gear).toHaveAttribute("aria-pressed", "false")
+    await user.click(gear)
 
-    act(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", ctrlKey: true }))
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", metaKey: true }))
-    })
-    expect(api.openWindow).toHaveBeenCalledTimes(2)
-
-    // "Manage profiles…" leads to Settings › Profiles.
-    await user.click(screen.getByRole("button", { name: /^Profile:/ }))
-    await user.click(screen.getByRole("menuitem", { name: "Manage profiles…" }))
-    expect(api.openWindow).toHaveBeenLastCalledWith("app.settings", "profiles")
-
-    // Another window asks for a settings page.
-    act(() => {
-      emitBackend(NAVIGATE_EVENT, "settings:security")
-    })
-    expect(api.openWindow).toHaveBeenLastCalledWith("app.settings", "security")
-    // The editor stays open meanwhile.
-    expect(screen.getByRole("heading", { name: "Device Editor" })).toBeInTheDocument()
-  })
-
-  it("keeps the other workspace pages in the rail", async () => {
-    const { user } = await renderShell()
-    const rail = screen.getByRole("button", { name: "Toggle Sidebar" })
-    await user.click(rail)
-    expect(localStorage.getItem("deckpilot.rail")).toBe("expanded")
-    for (const name of ["Device Editor", "Dashboard", "Action Library", "Workflows"]) {
-      expect(screen.getAllByRole("button", { name }).length).toBeGreaterThan(0)
+    const nav = await screen.findByRole("generic", { name: "Settings" })
+    expect(nav).toHaveAttribute("data-slot", "sidebar")
+    for (const name of ["Appearance", "Profiles", "Updates", "Devices", "Background Agent"]) {
+      expect(within(nav).getByRole("button", { name })).toBeInTheDocument()
     }
-    expect(screen.getByRole("button", { name: "Device Editor" })).toHaveAttribute(
+    expect(within(nav).getByRole("button", { name: "Appearance" })).toHaveAttribute(
       "aria-current",
       "page",
     )
+    expect(
+      await screen.findByText(/System follows the light or dark/, undefined, { timeout: 5000 }),
+    ).toBeInTheDocument()
+    // One navigation: the toolbar stays, the gear shows where we are, the
+    // rail leads back; no back, forward or "Back to DeckPilot" anywhere.
+    expect(screen.getByRole("banner", { name: "Toolbar" })).toBe(toolbar)
+    expect(gearOf(toolbar)).toHaveAttribute("aria-pressed", "true")
+    for (const name of ["Back to DeckPilot", "Back", "Forward"]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument()
+    }
+    // The device editor is not on screen (it waits, hidden).
+    expect(screen.queryByRole("heading", { name: "Device Editor" })).not.toBeInTheDocument()
+    // No window was asked for, not even once.
+    expect(api.openWindow).not.toHaveBeenCalled()
+
+    // Opening them again changes nothing.
+    await user.click(gearOf(toolbar))
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", ctrlKey: true }))
+    })
+    expect(screen.getAllByRole("generic", { name: "Settings" })).toHaveLength(1)
+    expect(api.openWindow).not.toHaveBeenCalled()
+  })
+
+  it("returns to the editor from the settings, the Marketplace and other pages, as it was", async () => {
+    const { user, toolbar } = await renderShell()
+    // An unsaved change in the editor: proof that it is the same editor later.
+    const name = screen.getByRole("textbox", { name: "Layout name" })
+    await user.type(name, " edited")
+
+    await user.click(gearOf(toolbar))
+    const nav = await screen.findByRole("generic", { name: "Settings" })
+    await user.click(within(nav).getByRole("button", { name: "Profiles" }))
+    expect(
+      await screen.findByText("All profiles", undefined, { timeout: 5000 }),
+    ).toBeInTheDocument()
+    expect(localStorage.getItem("deckpilot.settings.page")).toBe("profiles")
+
+    // The rail's Device Editor returns, with the device, profile and the
+    // unsaved change as they were.
+    await user.click(screen.getByRole("button", { name: "Device Editor" }))
+    expect(await screen.findByRole("heading", { name: "Device Editor" })).toBeInTheDocument()
+    expect(screen.getByRole("textbox", { name: "Layout name" })).toHaveValue("Work Plus edited")
+    expect(screen.getByRole("button", { name: /^Device: Stream Deck \+/ })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /^Profile: Work/ })).toBeInTheDocument()
+    expect(screen.queryByRole("generic", { name: "Settings" })).not.toBeInTheDocument()
+    expect(gearOf(toolbar)).toHaveAttribute("aria-pressed", "false")
+
+    // From another workspace page, too.
+    await user.click(screen.getByRole("button", { name: "Workflows" }))
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Workflows" })).toHaveAttribute(
+        "aria-current",
+        "page",
+      )
+    })
+    await user.click(screen.getByRole("button", { name: "Device Editor" }))
+    expect(await screen.findByRole("heading", { name: "Device Editor" })).toBeInTheDocument()
+
+    // The gear reopens the section shown last.
+    await user.click(gearOf(toolbar))
+    const again = await screen.findByRole("generic", { name: "Settings" })
+    expect(within(again).getByRole("button", { name: "Profiles" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    )
+  })
+
+  it("opens settings sections asked for by menus and other windows, and searches them", async () => {
+    const { user } = await renderShell()
+    // "Manage profiles…" leads to Settings › Profiles, in this window.
+    await user.click(screen.getByRole("button", { name: /^Profile:/ }))
+    await user.click(screen.getByRole("menuitem", { name: "Manage profiles…" }))
+    expect(
+      await screen.findByText("All profiles", undefined, { timeout: 5000 }),
+    ).toBeInTheDocument()
+
+    // Another window (or the agent, through the app) asks for a section.
+    act(() => {
+      emitBackend(NAVIGATE_EVENT, "settings:security")
+    })
+    const nav = await screen.findByRole("generic", { name: "Settings" })
+    await waitFor(() => {
+      expect(within(nav).getByRole("button", { name: "Security" })).toHaveAttribute(
+        "aria-current",
+        "page",
+      )
+    })
+    expect(api.openWindow).not.toHaveBeenCalled()
+
+    // The search narrows the sections, and says when nothing matches.
+    await user.type(within(nav).getByRole("searchbox", { name: "Search settings" }), "upd")
+    expect(within(nav).getByRole("button", { name: "Updates" })).toBeInTheDocument()
+    expect(within(nav).queryByRole("button", { name: "Profiles" })).not.toBeInTheDocument()
+    await user.clear(within(nav).getByRole("searchbox", { name: "Search settings" }))
+    await user.type(
+      within(nav).getByRole("searchbox", { name: "Search settings" }),
+      "nothing like this",
+    )
+    expect(within(nav).getByText("No settings found")).toBeInTheDocument()
+  })
+
+  it("is used with the keyboard alone: shortcut, sections, and the rail back to the editor", async () => {
+    const { user } = await renderShell()
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", metaKey: true }))
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", ctrlKey: true }))
+    })
+    const nav = await screen.findByRole("generic", { name: "Settings" })
+    // Every section is a focusable button, reached with Tab, chosen with Enter.
+    const profiles = within(nav).getByRole("button", { name: "Profiles" })
+    profiles.focus()
+    await user.keyboard("{Enter}")
+    expect(
+      await screen.findByText("All profiles", undefined, { timeout: 5000 }),
+    ).toBeInTheDocument()
+    // The rail's Device Editor is a focusable button too.
+    screen.getByRole("button", { name: "Device Editor" }).focus()
+    await user.keyboard("{Enter}")
+    expect(await screen.findByRole("heading", { name: "Device Editor" })).toBeInTheDocument()
+  })
+
+  it("switches the theme from the settings without leaving the window", async () => {
+    const { user, toolbar } = await renderShell()
+    await user.click(gearOf(toolbar))
+    const dark = await screen.findByRole("radio", { name: "Dark" }, { timeout: 5000 })
+    await user.click(dark)
+    expect(document.documentElement).toHaveClass("dark")
+    await user.click(screen.getByRole("radio", { name: "Light" }))
+    expect(document.documentElement).not.toHaveClass("dark")
+    expect(api.openWindow).not.toHaveBeenCalled()
+  })
+
+  it("keeps the workspace pages in a rail that is always collapsed to icons", async () => {
+    localStorage.setItem("deckpilot.rail", "expanded") // from an earlier version
+    const { user } = await renderShell()
+    const rail = screen.getByRole("generic", { name: "Workspace" }).closest("[data-state]")
+    expect(rail).toHaveAttribute("data-state", "collapsed")
+    expect(rail).toHaveAttribute("data-collapsible", "icon")
+    // The earlier version's choice is neither honoured nor kept.
+    expect(localStorage.getItem("deckpilot.rail")).toBeNull()
+    // No toggle, and ⌘B / Ctrl+B do nothing.
+    expect(screen.queryByRole("button", { name: /Toggle Sidebar/i })).not.toBeInTheDocument()
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "b", metaKey: true }))
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "b", ctrlKey: true }))
+    })
+    expect(rail).toHaveAttribute("data-state", "collapsed")
+
+    // Every page has its name as label (and tooltip); the current one is marked.
+    for (const name of ["Device Editor", "Dashboard", "Action Library", "Workflows"]) {
+      expect(screen.getAllByRole("button", { name }).length).toBeGreaterThan(0)
+    }
+    const editor = screen.getByRole("button", { name: "Device Editor" })
+    expect(editor).toHaveAttribute("aria-current", "page")
+    expect(editor).toHaveAttribute("data-active", "true")
+    await user.hover(editor)
+    expect(await screen.findByRole("tooltip", { name: "Device Editor" })).toBeInTheDocument()
+
+    // The same rail beside the settings, with nothing marked.
+    await user.click(gearOf(screen.getByRole("banner", { name: "Toolbar" })))
+    await screen.findByRole("generic", { name: "Settings" })
+    expect(rail).toHaveAttribute("data-state", "collapsed")
+    expect(screen.getByRole("button", { name: "Device Editor" })).not.toHaveAttribute(
+      "aria-current",
+    )
+    // Keyboard: the rail's buttons are reachable and work with Enter.
+    screen.getByRole("button", { name: "Workflows" }).focus()
+    await user.keyboard("{Enter}")
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Workflows" })).toHaveAttribute(
+        "aria-current",
+        "page",
+      )
+    })
+    expect(rail).toHaveAttribute("data-state", "collapsed")
   })
 
   it("shows notifications from the toolbar with the number of unread ones", async () => {

@@ -11,6 +11,7 @@ import type {
   CatalogFilter,
   ControlFace,
   IconInfo,
+  LivePreview,
   PageChange,
   PageTree,
   CredentialInfo,
@@ -292,7 +293,24 @@ export const api = {
     pageId: string,
     projectId: string | null,
     render?: boolean,
-  ) => invoke<ControlFace[]>("preview_layout", { profileId, layout, pageId, projectId, render }),
+    /** Live key states the agent reported (`watchKeyStates`). */
+    live?: LivePreview | null,
+  ) =>
+    invoke<ControlFace[]>("preview_layout", {
+      profileId,
+      layout,
+      pageId,
+      projectId,
+      render,
+      live: live ?? null,
+    }),
+  /**
+   * Watches the agent's live states of these actions' keys, replacing the
+   * previous watch; none stops. Returns the watch's number, which its
+   * `key-states` events carry (layout-editor/use-live-key-states.ts).
+   */
+  watchKeyStates: (profileId: string, actions: string[]) =>
+    invoke<number>("watch_key_states", { profileId, actions }),
   pageTree: (layout: DeviceLayout) => invoke<PageTree>("page_tree", { layout }),
   reorderPages: (profileId: string, layoutId: string, order: string[]) =>
     invoke<DeviceLayout>("reorder_pages", { profileId, layoutId, order }),
@@ -368,8 +386,6 @@ export function isAuthenticationRequired(error: unknown): boolean {
 export const CONFIGURATION_CHANGED_EVENT = "deckpilot://configuration-changed"
 /** Asks the main window to show a page (payload: the page id). */
 export const NAVIGATE_EVENT = "deckpilot://navigate"
-/** Asks an open workspace window (the settings) for a page (payload: the page id). */
-export const WORKSPACE_PAGE_EVENT = "deckpilot://workspace-page"
 
 /** Sent to every window when the configuration was locked or unlocked. */
 export const SECURITY_CHANGED_EVENT = "deckpilot://security-changed"

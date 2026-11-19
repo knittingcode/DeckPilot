@@ -3,7 +3,7 @@ import { useState } from "react"
 import { toast } from "sonner"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
+import { InlineStatus } from "@/components/settings-layout"
 import { Button } from "@/components/ui/button"
 import { api } from "@/lib/api"
 import { toastFailure } from "@/lib/failure"
@@ -11,13 +11,14 @@ import { useAppContext } from "@/lib/app-context"
 import { describeLayout } from "@/lib/format"
 import type { AgentCapability, DeviceInfo } from "@/lib/types"
 
+/** The agent's state as an inline status: running, stopped or being checked. */
 export function AgentBadge() {
   const { agent } = useAppContext()
-  if (!agent) return <Badge variant="outline">Checking…</Badge>
+  if (!agent) return <InlineStatus>Checking…</InlineStatus>
   return agent.running ? (
-    <Badge className="bg-emerald-600 text-white">Running</Badge>
+    <InlineStatus tone="positive">Running</InlineStatus>
   ) : (
-    <Badge variant="destructive">Stopped</Badge>
+    <InlineStatus tone="negative">Stopped</InlineStatus>
   )
 }
 
@@ -40,7 +41,7 @@ export function AgentStopped() {
   }
 
   return (
-    <div className="grid gap-3">
+    <div className="grid gap-2 py-3">
       <p className="text-sm text-muted-foreground">
         The background agent handles devices and runs actions. It keeps running when this window is
         closed.
@@ -204,21 +205,24 @@ export function RefreshDevicesButton() {
 export function DeviceRow({ device, action }: { device: DeviceInfo; action?: React.ReactNode }) {
   const connected = device.state === "connected"
   const layout = device.layout
+  // A row of a list: separated from its neighbours by the list, not boxed.
   return (
-    <div className="grid gap-1 rounded-lg border p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-medium">{device.modelName}</span>
+    <div data-slot="device-row" className="grid gap-0.5 py-2.5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="text-sm font-medium">{device.modelName}</span>
         <span className="font-mono text-xs text-muted-foreground select-text">
           {device.id.serial}
         </span>
-        <Badge variant={connected ? "default" : "outline"}>
+        <InlineStatus tone={connected ? "positive" : "neutral"}>
           {connected ? "Connected" : "Disconnected"}
-        </Badge>
-        <Badge variant="secondary">{device.source === "mock" ? "Simulated" : "USB"}</Badge>
+        </InlineStatus>
+        <span className="text-caption text-muted-foreground">
+          {device.source === "mock" ? "Simulated" : "USB"}
+        </span>
         <div className="flex-1" />
         {action}
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p className="text-caption text-muted-foreground">
         {describeLayout(layout)}
         {connected && device.page && ` · showing page “${device.page}”`}
       </p>

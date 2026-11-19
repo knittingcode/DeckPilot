@@ -23,9 +23,9 @@
     "state": "Failed"
   },
   "frames": {
-    "Key { index: 0 }": "72x72 7bd2214d410ee5a5",
-    "Key { index: 1 }": "72x72 cb2e81ed9b963215",
-    "Key { index: 2 }": "72x72 686baad33868e53d"
+    "Key { index: 0 }": "72x72 7a5a00f972688119",
+    "Key { index: 1 }": "72x72 ce01e83c21aae699",
+    "Key { index: 2 }": "72x72 72bef468305d5e76"
   },
   "keyOverride": "Failed: parameter `message`: {{ system.work.session.state }} has no value (no value is set)",
   "modulesDisabled": {

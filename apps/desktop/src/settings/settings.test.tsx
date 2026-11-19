@@ -114,11 +114,12 @@ describe("settings registry", () => {
 })
 
 describe("settings sidebar", () => {
-  it("lists the categories, searches and returns to the main window", async () => {
+  it("lists the categories, marks the current one and searches", async () => {
     const value = context([projects, general])
     renderWith(value, <SettingsSidebar current="security" />)
     expect(screen.getByText("Security & Data")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Security" })).toHaveAttribute("data-active", "true")
+    expect(screen.getByRole("button", { name: "Security" })).toHaveAttribute("aria-current", "page")
     // The module's own settings page.
     await userEvent.click(screen.getByRole("button", { name: "Projects" }))
     expect(value.openSettings).toHaveBeenCalledWith("module:projects")
@@ -128,8 +129,10 @@ describe("settings sidebar", () => {
     expect(screen.queryByRole("button", { name: "Appearance" })).not.toBeInTheDocument()
     expect(screen.queryByText("Hardware")).not.toBeInTheDocument()
 
-    await userEvent.click(screen.getByRole("button", { name: "Back to DeckPilot" }))
-    expect(value.closeSettings).toHaveBeenCalled()
+    // One navigation: the main window's toolbar has back, forward and the
+    // way out; the sidebar has none of its own.
+    expect(screen.queryByRole("button", { name: "Back to DeckPilot" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Back" })).not.toBeInTheDocument()
   })
 })
 
@@ -184,9 +187,12 @@ describe("modules page", () => {
 })
 
 describe("navigation hook", () => {
-  it("opens the settings window with the keyboard and goes back with keyboard and mouse", () => {
-    const openSettings = vi.fn()
-    const { result } = renderHook(() => useNavigation(() => true, openSettings))
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it("opens the settings in the main window with the keyboard, and leaves them for the page before", () => {
+    const { result } = renderHook(() => useNavigation(() => true))
     // The device editor first.
     expect(result.current.location).toEqual({ mode: "workspace", page: "designer" })
     act(() => {
@@ -195,33 +201,36 @@ describe("navigation hook", () => {
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", ctrlKey: true }))
     })
-    expect(openSettings).toHaveBeenCalledWith(undefined)
-    // The settings are not part of the main window's history.
-    expect(result.current.location).toEqual({ mode: "workspace", page: "workflows" })
+    // The settings are a location of the main window, at the default page.
+    expect(result.current.location).toEqual({ mode: "settings", page: "appearance" })
+    // The workspace page they return to (and that stays mounted under them).
+    expect(result.current.workspace).toBe("workflows")
+    // No back and forward: neither shortcuts nor mouse buttons move.
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", altKey: true }))
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "[", metaKey: true }))
+      window.dispatchEvent(new MouseEvent("mouseup", { button: 3 }))
     })
-    expect(result.current.location).toEqual({ mode: "workspace", page: "designer" })
+    expect(result.current.location).toEqual({ mode: "settings", page: "appearance" })
+    expect(result.current).not.toHaveProperty("back")
     act(() => {
-      window.dispatchEvent(new MouseEvent("mouseup", { button: 4 }))
+      result.current.closeSettings()
     })
     expect(result.current.location).toEqual({ mode: "workspace", page: "workflows" })
   })
 
   it("restores the location of the last session", () => {
-    const first = renderHook(() => useNavigation(() => true, vi.fn()))
+    const first = renderHook(() => useNavigation(() => true))
     act(() => {
       first.result.current.navigate("actions")
     })
     first.unmount()
-    const second = renderHook(() => useNavigation(() => true, vi.fn()))
+    const second = renderHook(() => useNavigation(() => true))
     expect(second.result.current.location).toEqual({ mode: "workspace", page: "actions" })
-    expect(second.result.current.canGoBack).toBe(true)
   })
 
-  it("opens settings pages, and pages that moved there, in the settings window", () => {
-    const openSettings = vi.fn()
-    const { result } = renderHook(() => useNavigation(() => true, openSettings))
+  it("opens settings pages, and pages that moved there, in the main window", () => {
+    const { result } = renderHook(() => useNavigation(() => true))
     act(() => {
       result.current.navigate("dashboard")
     })
@@ -235,18 +244,46 @@ describe("navigation hook", () => {
       act(() => {
         result.current.navigate(reference)
       })
-      expect(openSettings).toHaveBeenLastCalledWith(page)
+      expect(result.current.location).toEqual({ mode: "settings", page })
     }
     act(() => {
       result.current.go({ mode: "settings", page: "updates" })
     })
-    expect(openSettings).toHaveBeenLastCalledWith("updates")
-    expect(result.current.location).toEqual({ mode: "workspace", page: "dashboard" })
+    expect(result.current.location).toEqual({ mode: "settings", page: "updates" })
+    expect(result.current.workspace).toBe("dashboard")
+  })
+
+  it("returns to the settings page shown last, also in a later session", () => {
+    const first = renderHook(() => useNavigation(() => true))
+    act(() => {
+      first.result.current.openSettings("security")
+    })
+    act(() => {
+      first.result.current.navigate("designer")
+    })
+    act(() => {
+      first.result.current.openSettings()
+    })
+    expect(first.result.current.location).toEqual({ mode: "settings", page: "security" })
+    first.unmount()
+    // A new history (e.g. it was cleared) still opens where the user was.
+    localStorage.removeItem("deckpilot.navigation")
+    const second = renderHook(() => useNavigation(() => true))
+    expect(second.result.current.location).toEqual({ mode: "workspace", page: "designer" })
+    act(() => {
+      second.result.current.openSettings()
+    })
+    expect(second.result.current.location).toEqual({ mode: "settings", page: "security" })
+    // An explicit page wins.
+    act(() => {
+      second.result.current.openSettings("devices")
+    })
+    expect(second.result.current.location).toEqual({ mode: "settings", page: "devices" })
   })
 
   it("leaves pages that disappear, e.g. of a disabled module", () => {
     let exists: (location: { page: string }) => boolean = () => true
-    const { result, rerender } = renderHook(({ check }) => useNavigation(check, vi.fn()), {
+    const { result, rerender } = renderHook(({ check }) => useNavigation(check), {
       initialProps: { check: exists },
     })
     act(() => {
@@ -255,6 +292,5 @@ describe("navigation hook", () => {
     exists = (location) => location.page !== "projects/projects"
     rerender({ check: exists })
     expect(result.current.location).toEqual({ mode: "workspace", page: "designer" })
-    expect(result.current.canGoBack).toBe(false)
   })
 })

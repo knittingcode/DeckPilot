@@ -9,12 +9,9 @@ configuration app instead of the agent's IPC alone. One scenario
 | UI | `tests/marketplace_gui.rs` | Linux, Windows | the built app (debug, `VITE_DECKPILOT_PLUGINS=1`) driven over WebDriver by `tauri-driver` (WebKitWebDriver on Linux, msedgedriver on Windows); the app starts the agent itself |
 | Command layer | `src/marketplace_e2e.rs` | macOS, Linux, Windows | the app's commands through Tauri's mock runtime, with the frontend's argument names; the test starts the agent |
 
-**The macOS GUI is not driven here**: there is no WebDriver for WKWebView. On
+**The macOS GUI is not driven**: there is no WebDriver for WKWebView. On
 macOS the scenario runs at the command layer only: the same commands, the
-same agent, IPC, storage and sandbox, without the webview. The *published*
-macOS and Windows apps are driven from outside through the operating
-system's accessibility layer by the release smoke test
-([release-validation.md](../release-validation.md#6-release-smoke-the-published-release)).
+same agent, IPC, storage and sandbox, without the webview.
 
 Both use a real agent built with `plugins,test-hooks`, the real sandboxed
 plugin host, the sample plugin (`plugins/examples/hello-weather`, packaged
@@ -54,7 +51,7 @@ the test). The report is `<artifacts>/<driver>-steps.txt`.
 | 9 | Execute the action | UI (Run in Installed) and agent IPC (key presses on the simulated MK.2) |
 | 10 | Execute it in a workflow | app IPC (`save_workflow`, `start_workflow`) |
 | 11 | Verify the results | app IPC, the canned HTTP log |
-| 12 | Restart the agent and the app | UI on Linux and Windows: toolbar › Settings opens the settings window, the test switches to it: Background Agent › Stop agent; the app is closed and started again, which starts the agent. On Windows the test then starts and unlocks the agent as in step 1. (Until `open_window` became an async command, the settings window never appeared on Windows; the test used `stop_agent` over app IPC there and blamed msedgedriver.) |
+| 12 | Restart the agent and the app | UI on Linux and Windows: toolbar › Settings (a view of the main window; the test checks that no other window appears) › Background Agent › Stop agent; the app is closed and started again, which starts the agent. On Windows the test then starts and unlocks the agent as in step 1 |
 | 13 | Verify persistence | app IPC, agent IPC, `plugins.db` |
 | 14 | Update to 1.1.0 (adds `notifications`) | UI (Updates › Check for updates › Update, consent dialog) |
 | 15 | Verify state migration (storage, settings, credential, grants) | app IPC, `plugins.db` |

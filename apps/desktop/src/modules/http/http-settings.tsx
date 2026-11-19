@@ -4,7 +4,7 @@ import { toast } from "sonner"
 
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { SettingsSection } from "@/components/settings-layout"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { api } from "@/lib/api"
@@ -41,32 +41,21 @@ function Credentials() {
     })
   }, [])
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Credentials</CardTitle>
-        <CardDescription>
-          Tokens and passwords that requests use by their name. They are stored encrypted on this
-          computer only: never in a workflow, never in an export, and never shown again after
-          saving.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid max-w-xl gap-4">
-        {credentials === null ? null : credentials.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No credentials are stored.</p>
-        ) : (
-          <ul className="grid gap-2" aria-label="Stored credentials">
-            {credentials.map((credential) => (
-              <CredentialRow
-                key={credential.id}
-                credential={credential}
-                onChange={setCredentials}
-              />
-            ))}
-          </ul>
-        )}
-        <NewCredential existing={credentials ?? []} onChange={setCredentials} />
-      </CardContent>
-    </Card>
+    <SettingsSection
+      title="Credentials"
+      description="Tokens and passwords that requests use by their name. They are stored encrypted on this computer only: never in a workflow, never in an export, and never shown again after saving."
+    >
+      {credentials === null ? null : credentials.length === 0 ? (
+        <p className="border-y py-3 text-sm text-muted-foreground">No credentials are stored.</p>
+      ) : (
+        <ul className="grid divide-y border-y" aria-label="Stored credentials">
+          {credentials.map((credential) => (
+            <CredentialRow key={credential.id} credential={credential} onChange={setCredentials} />
+          ))}
+        </ul>
+      )}
+      <NewCredential existing={credentials ?? []} onChange={setCredentials} />
+    </SettingsSection>
   )
 }
 
@@ -80,7 +69,7 @@ function CredentialRow({
   const [secret, setSecret] = useState("")
   const [replacing, setReplacing] = useState(false)
   return (
-    <li className="grid gap-2 rounded-md border px-3 py-2">
+    <li className="grid gap-2 py-2">
       <div className="flex min-w-0 items-center gap-2">
         <KeyRound className="size-4 shrink-0 text-muted-foreground" aria-hidden />
         <code className="truncate font-mono text-sm">{credential.id}</code>
@@ -89,7 +78,7 @@ function CredentialRow({
         </span>
         <Button
           variant="ghost"
-          size="sm"
+          size="xs"
           onClick={() => {
             setReplacing(!replacing)
           }}
@@ -98,7 +87,12 @@ function CredentialRow({
         </Button>
         <ConfirmDialog
           trigger={
-            <Button variant="ghost" size="icon" aria-label={`Delete ${credential.id}`}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="size-7"
+              aria-label={`Delete ${credential.id}`}
+            >
               <Trash2 className="size-4" />
             </Button>
           }
@@ -161,7 +155,7 @@ function NewCredential({
   const taken = existing.some((c) => c.id === id)
   return (
     <form
-      className="grid gap-3 border-t pt-4"
+      className="grid max-w-xl gap-3 pt-2"
       onSubmit={(event) => {
         event.preventDefault()
         api.setCredential(id, description, secret).then(
@@ -178,7 +172,7 @@ function NewCredential({
         )
       }}
     >
-      <h3 className="text-sm font-medium">Add a credential</h3>
+      <h4 className="text-sm font-medium">Add a credential</h4>
       <div className="grid gap-2">
         <Label htmlFor="credential-id">Name</Label>
         <Input

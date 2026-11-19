@@ -641,7 +641,7 @@ As built (W3):
   (machine, state × gesture → operation) with validation.
 - **Work Session page** (module page `work-session`, W6,
   `apps/desktop/src/modules/work-session/**`):
-  - Status card with live state, elapsed time, project, the last
+  - Current session section with live state, elapsed time, project, the last
     verification with details, and notices with **Clear**. **State only:
     no Start, Verify or Finish buttons** (D11). The session is operated
     from its key.

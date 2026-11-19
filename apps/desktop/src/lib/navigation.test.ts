@@ -2,12 +2,8 @@ import { describe, expect, it } from "vitest"
 
 import {
   HISTORY_LIMIT,
-  back,
-  canGoBack,
-  canGoForward,
   closeSettings,
   current,
-  forward,
   initialNavigation,
   loadNavigation,
   locationOf,
@@ -40,36 +36,28 @@ describe("navigation", () => {
     expect(current(state)).toEqual(workspace("workflows"))
   })
 
-  it("goes back and forward like a browser, across both modes", () => {
+  it("keeps a bounded list of recent locations, the newest current", () => {
     let state = push(initialNavigation(), workspace("actions"))
     state = openSettings(state, "updates")
-    state = back(state)
-    expect(current(state)).toEqual(workspace("actions"))
-    expect(canGoForward(state)).toBe(true)
-    state = forward(state)
     expect(current(state)).toEqual(settings("updates"))
-    expect(canGoForward(state)).toBe(false)
-
-    // A new page discards the forward history.
-    state = back(back(state))
-    // The device editor is where the main window starts.
-    expect(current(state)).toEqual(workspace("designer"))
-    expect(canGoBack(state)).toBe(false)
-    state = push(state, workspace("profiles"))
-    expect(canGoForward(state)).toBe(false)
-    expect(state.entries).toHaveLength(2)
+    // Opening the location on screen again changes nothing.
+    expect(push(state, settings("updates"))).toBe(state)
+    expect(state.entries).toEqual([
+      workspace("designer"),
+      workspace("actions"),
+      settings("updates"),
+    ])
+    for (let i = 0; i < HISTORY_LIMIT + 5; i++) state = push(state, workspace(`page-${i % 2}`))
+    expect(state.entries).toHaveLength(HISTORY_LIMIT)
+    expect(state.index).toBe(HISTORY_LIMIT - 1)
   })
 
-  it("remembers the workspace page while moving through settings history", () => {
-    let state = push(initialNavigation(), workspace("models"))
+  it("remembers the workspace page under the settings across sections", () => {
+    let state = push(initialNavigation(), workspace("dashboard"))
     state = openSettings(state, "devices")
-    state = push(state, workspace("designer"))
     state = openSettings(state, "agent")
-    // Back into the earlier settings visit: closing returns to the page before it.
-    state = back(back(state))
-    expect(current(state)).toEqual(settings("devices"))
-    expect(closeSettings(state).workspace).toBe("models")
-    expect(current(closeSettings(state))).toEqual(workspace("models"))
+    expect(state.workspace).toBe("dashboard")
+    expect(current(closeSettings(state))).toEqual(workspace("dashboard"))
   })
 
   it("reopens settings where they were left", () => {

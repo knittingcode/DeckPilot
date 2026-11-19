@@ -1,5 +1,5 @@
-import { Fingerprint, KeyRound, LockKeyhole, ShieldCheck, TriangleAlert } from "lucide-react"
-import { type ReactNode, useState } from "react"
+import { Fingerprint, KeyRound, LockKeyhole, TriangleAlert } from "lucide-react"
+import { useState } from "react"
 import { toast } from "sonner"
 
 import { isCancelled, useSensitive } from "@/lib/sensitive"
@@ -9,10 +9,15 @@ import { ErrorNotice } from "@/components/page"
 import { NewPasswordFields, PasswordField } from "@/components/password-field"
 import { newPasswordReady } from "@/lib/passwords"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
+import {
+  InlineStatus,
+  Property,
+  PropertyList,
+  SettingsGroup,
+  SettingsRow,
+  SettingsSection,
+} from "@/components/settings-layout"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
@@ -20,7 +25,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Separator } from "@/components/ui/separator"
 import { api } from "@/lib/api"
 import { failureMessage, toastFailure } from "@/lib/failure"
 import { useSecurity } from "@/lib/security-context"
@@ -62,46 +66,16 @@ function reportError(what: string) {
 export function SecurityCard() {
   const { view } = useSecurity()
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <ShieldCheck className="size-4" /> Security
-        </CardTitle>
-        <CardDescription>
-          Your configuration is always encrypted on this computer (SQLCipher, AES-256). These
-          settings decide how its key is protected and when DeckPilot asks who you are.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-6">
-        {view.legacyCopies.length > 0 && <LegacyCopies />}
-        <UnlockMethod />
-        <Separator />
-        <Policy />
-        <SystemAuthentication />
-        <Separator />
-        <Recovery />
-      </CardContent>
-    </Card>
-  )
-}
-
-function Section({
-  title,
-  description,
-  children,
-}: {
-  title: string
-  description?: ReactNode
-  children?: ReactNode
-}) {
-  return (
-    <section className="grid gap-3">
-      <div className="grid gap-1">
-        <h3 className="text-sm font-medium">{title}</h3>
-        {description && <p className="text-sm text-muted-foreground">{description}</p>}
-      </div>
-      {children}
-    </section>
+    <>
+      <p className="text-sm text-muted-foreground">
+        Your configuration is always encrypted on this computer (SQLCipher, AES-256). These settings
+        decide how its key is protected and when DeckPilot asks who you are.
+      </p>
+      {view.legacyCopies.length > 0 && <LegacyCopies />}
+      <UnlockMethod />
+      <Policy />
+      <Recovery />
+    </>
   )
 }
 
@@ -111,61 +85,73 @@ function UnlockMethod() {
   const system = view.protection === "systemManaged"
   const [choosePassword, setChoosePassword] = useState(false)
   return (
-    <Section
-      title="Unlock method"
-      description={
-        system ? (
-          <>
-            A random key kept in the <strong>{view.keyStore}</strong> and unlocked by your login.
-            DeckPilot opens without a password, also after restarts and updates.
-          </>
-        ) : (
-          <>
-            A key derived from your DeckPilot password (Argon2id). The password is not stored; you
-            enter it after each restart of the computer.
-          </>
-        )
-      }
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="secondary">
-          {system ? <KeyRound /> : <LockKeyhole />}
-          {system ? `System key · ${view.keyStore}` : "Password"}
-        </Badge>
-        {system ? (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setChoosePassword(true)
-            }}
-          >
-            Use a password instead…
-          </Button>
-        ) : (
-          <ConfirmDialog
-            trigger={
-              <Button variant="outline" size="sm">
-                Use the system key instead…
-              </Button>
-            }
-            title={`Keep the key in the ${view.keyStore}?`}
-            description={`DeckPilot creates a new random key, stores it in the ${view.keyStore} and re-encrypts the configuration with it. Your password is no longer needed. If storing the key fails, nothing changes.`}
-            confirmLabel="Use the system key"
-            destructive={false}
-            onConfirm={() => {
-              sensitive(() => api.useSystemKey(), "change how the configuration is protected").then(
-                (next) => {
+    <SettingsSection title="Unlock method">
+      <SettingsGroup>
+        <SettingsRow
+          label={
+            <span className="flex items-center gap-2">
+              {system ? (
+                <KeyRound className="size-4 text-muted-foreground" />
+              ) : (
+                <LockKeyhole className="size-4 text-muted-foreground" />
+              )}
+              {system ? `System key · ${view.keyStore}` : "Password"}
+            </span>
+          }
+          description={
+            system ? (
+              <>
+                A random key kept in the <strong>{view.keyStore}</strong> and unlocked by your
+                login. DeckPilot opens without a password, also after restarts and updates.
+              </>
+            ) : (
+              <>
+                A key derived from your DeckPilot password (Argon2id). The password is not stored;
+                you enter it after each restart of the computer.
+              </>
+            )
+          }
+        >
+          {system ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setChoosePassword(true)
+              }}
+            >
+              Use a password instead…
+            </Button>
+          ) : (
+            <ConfirmDialog
+              trigger={
+                <Button variant="outline" size="sm">
+                  Use the system key instead…
+                </Button>
+              }
+              title={`Keep the key in the ${view.keyStore}?`}
+              description={`DeckPilot creates a new random key, stores it in the ${view.keyStore} and re-encrypts the configuration with it. Your password is no longer needed. If storing the key fails, nothing changes.`}
+              confirmLabel="Use the system key"
+              destructive={false}
+              onConfirm={() => {
+                sensitive(
+                  () => api.useSystemKey(),
+                  "change how the configuration is protected",
+                ).then((next) => {
                   setView(next)
                   toast.success(`The key is now kept in the ${view.keyStore}`)
-                },
-                reportError("The protection was not changed"),
-              )
-            }}
-          />
+                }, reportError("The protection was not changed"))
+              }}
+            />
+          )}
+        </SettingsRow>
+        <SystemAuthentication />
+        {!system && (
+          <div className="py-3">
+            <ChangePassword />
+          </div>
         )}
-      </div>
-      {!system && <ChangePassword />}
+      </SettingsGroup>
       {choosePassword && (
         <ChoosePasswordDialog
           onClose={() => {
@@ -173,7 +159,7 @@ function UnlockMethod() {
           }}
         />
       )}
-    </Section>
+    </SettingsSection>
   )
 }
 
@@ -254,7 +240,7 @@ function Policy() {
     )
   }
   return (
-    <Section
+    <SettingsSection
       title="Locking and authentication"
       description={
         verifiable
@@ -262,9 +248,18 @@ function Policy() {
           : "These options need a DeckPilot password or system authentication, which this computer does not offer with the system key."
       }
     >
-      <div className="grid max-w-md gap-4">
-        <div className="grid gap-2">
-          <Label htmlFor="auto-lock">Lock automatically</Label>
+      <SettingsGroup>
+        <SettingsRow
+          label="Lock automatically"
+          htmlFor="auto-lock"
+          description={
+            <>
+              While locked, your Stream Deck shows &quot;Locked&quot; and runs no actions.
+              {!view.screenLockDetection &&
+                " Locking with the screen is not available: DeckPilot cannot detect the screen lock on this computer."}
+            </>
+          }
+        >
           <Select
             value={policy.autoLock}
             disabled={!verifiable}
@@ -272,7 +267,7 @@ function Policy() {
               save({ ...policy, autoLock: value as AutoLock })
             }}
           >
-            <SelectTrigger id="auto-lock" className="w-full">
+            <SelectTrigger id="auto-lock" size="sm" className="w-80 max-w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -287,14 +282,12 @@ function Policy() {
               ))}
             </SelectContent>
           </Select>
-          <p className="text-xs text-muted-foreground">
-            While locked, your Stream Deck shows &quot;Locked&quot; and runs no actions.
-            {!view.screenLockDetection &&
-              " Locking with the screen is not available: DeckPilot cannot detect the screen lock on this computer."}
-          </p>
-        </div>
-        <div className="grid gap-2">
-          <Label htmlFor="reauthentication">Ask for authentication</Label>
+        </SettingsRow>
+        <SettingsRow
+          label="Ask for authentication"
+          htmlFor="reauthentication"
+          description="Sensitive operations — exports, changes to encryption, passwords and these settings, deleting the unencrypted copy — always ask. Switching profiles or projects, device actions and workflows never do."
+        >
           <Select
             value={policy.reauthentication}
             disabled={!verifiable}
@@ -302,7 +295,7 @@ function Policy() {
               save({ ...policy, reauthentication: value as Reauthentication })
             }}
           >
-            <SelectTrigger id="reauthentication" className="w-full">
+            <SelectTrigger id="reauthentication" size="sm" className="w-80 max-w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -313,34 +306,30 @@ function Policy() {
               ))}
             </SelectContent>
           </Select>
-          <p className="text-xs text-muted-foreground">
-            Sensitive operations — exports, changes to encryption, passwords and these settings,
-            deleting the unencrypted copy — always ask. Switching profiles or projects, device
-            actions and workflows never do.
-          </p>
-        </div>
-      </div>
-      {verifiable && <LockNow />}
-    </Section>
+        </SettingsRow>
+        {verifiable && <LockNow />}
+      </SettingsGroup>
+    </SettingsSection>
   )
 }
 
 function LockNow() {
   const { setView } = useSecurity()
   return (
-    <div className="flex flex-wrap items-center gap-3">
+    <SettingsRow
+      label="Lock now"
+      description="Stops actions on your Stream Deck until you unlock DeckPilot again."
+    >
       <Button
         variant="outline"
+        size="sm"
         onClick={() => {
           api.lock().then(setView, reportError("DeckPilot was not locked"))
         }}
       >
         <LockKeyhole /> Lock now
       </Button>
-      <p className="text-xs text-muted-foreground">
-        Stops actions on your Stream Deck until you unlock DeckPilot again.
-      </p>
-    </div>
+    </SettingsRow>
   )
 }
 
@@ -351,15 +340,21 @@ function SystemAuthentication() {
   if (view.verification === "touchId" || view.verification === "devicePassword") {
     const touchId = view.verification === "touchId"
     return (
-      <Alert>
-        <Fingerprint />
-        <AlertTitle>{touchId ? "Touch ID" : "System authentication"}</AlertTitle>
-        <AlertDescription>
-          {touchId
+      <SettingsRow
+        label={
+          <span className="flex items-center gap-2">
+            <Fingerprint className="size-4 text-muted-foreground" />
+            {touchId ? "Touch ID" : "System authentication"}
+          </span>
+        }
+        description={
+          touchId
             ? "Touch ID (or your login password) unlocks DeckPilot after it was locked and confirms sensitive operations. macOS checks it; DeckPilot never sees your fingerprint or password."
-            : "Your login password unlocks DeckPilot after it was locked and confirms sensitive operations. The operating system checks it."}
-        </AlertDescription>
-      </Alert>
+            : "Your login password unlocks DeckPilot after it was locked and confirms sensitive operations. The operating system checks it."
+        }
+      >
+        <InlineStatus tone="positive">Available</InlineStatus>
+      </SettingsRow>
     )
   }
   return null
@@ -368,19 +363,24 @@ function SystemAuthentication() {
 function Recovery() {
   const { view } = useSecurity()
   return (
-    <Section title="Backup and recovery">
-      <p className="text-sm text-muted-foreground">
-        {view.protection === "systemManaged"
-          ? `The key in the ${view.keyStore} protects the configuration on this computer only. It is not a backup: if your user account, the ${view.keyStore} or this computer is lost or reset, the configuration cannot be opened.`
-          : "There is no way to recover a forgotten password."}{" "}
-        Keep an <strong>encrypted export</strong> (below) as your backup; it has its own password
-        and can be imported on any computer.
-      </p>
-      <p className="text-xs text-muted-foreground">
-        Encrypted backups made before database upgrades:{" "}
-        <span className="font-mono break-all select-text">{view.backupDir}</span>
-      </p>
-    </Section>
+    <SettingsSection
+      title="Backup and recovery"
+      description={
+        <>
+          {view.protection === "systemManaged"
+            ? `The key in the ${view.keyStore} protects the configuration on this computer only. It is not a backup: if your user account, the ${view.keyStore} or this computer is lost or reset, the configuration cannot be opened.`
+            : "There is no way to recover a forgotten password."}{" "}
+          Keep an <strong>encrypted export</strong> (Backup &amp; Restore) as your backup; it has
+          its own password and can be imported on any computer.
+        </>
+      }
+    >
+      <PropertyList className="border-t pt-3">
+        <Property label="Backups before upgrades" mono>
+          {view.backupDir}
+        </Property>
+      </PropertyList>
+    </SettingsSection>
   )
 }
 
@@ -465,7 +465,7 @@ function ChangePassword() {
   }
   return (
     <form className="grid max-w-md gap-3" onSubmit={submit}>
-      <h4 className="text-sm font-medium">Change password</h4>
+      <h4 className="text-sm leading-5 font-medium">Change password</h4>
       {error && <ErrorNotice error={error} />}
       <PasswordField
         id="current-password"

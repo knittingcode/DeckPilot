@@ -1591,6 +1591,7 @@ fn configuration_round_trips_through_an_encrypted_export() {
 #[test]
 fn native_windows_are_opened_by_identifier_and_reused() {
     use crate::windows::{self, WindowRegistry};
+    use tauri::Listener;
     let h = Harness::new();
     let app = h.window.app_handle().clone();
     let count = || app.webview_windows().len();
@@ -1662,32 +1663,47 @@ fn native_windows_are_opened_by_identifier_and_reused() {
     assert!(registry.spec(&label).is_none());
     assert_eq!(registry.open_labels().len(), 1);
 
-    // The settings: a workspace window, opened at a page and reused for
-    // the next one. They are never sized to their content.
-    h.ok(
-        "open_window",
-        json!({ "id": "app.settings", "page": "security" }),
-    );
-    let settings_label = windows::label_for("app.settings");
-    let settings = app
-        .get_webview_window(&settings_label)
-        .expect("settings window created");
+    // The settings are a view of the main window. A request for them, at
+    // any page, shows the main window there and never creates a window.
+    let pages = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let seen = pages.clone();
+    let listener = app.listen_any(windows::NAVIGATE_EVENT, move |event| {
+        let page: String = serde_json::from_str(event.payload()).unwrap();
+        seen.lock().unwrap().push(page);
+    });
     let windows_open = count();
-    h.ok(
-        "open_window",
-        json!({ "id": "app.settings", "page": "module:projects" }),
+    for page in [
+        json!("security"),
+        json!("module:projects"),
+        json!("../index.html"),
+        Value::Null,
+    ] {
+        h.ok("open_window", json!({ "id": "app.settings", "page": page }));
+    }
+    assert_eq!(count(), windows_open, "no settings window");
+    assert!(
+        app.get_webview_window(&windows::label_for("app.settings"))
+            .is_none()
     );
-    // A page that is no page reference is ignored, not refused.
-    h.ok(
-        "open_window",
-        json!({ "id": "app.settings", "page": "../index.html" }),
+    app.unlisten(listener);
+    assert_eq!(
+        *pages.lock().unwrap(),
+        [
+            "settings:security",
+            "settings:module:projects",
+            "settings",
+            "settings"
+        ],
+        "a page that is no page reference opens the settings as they were"
     );
-    assert_eq!(count(), windows_open, "one settings window");
-    let before_fit = settings.inner_size().unwrap();
-    let fitted = windows::fit(&settings, (200.0, 100.0), (200.0, 100.0)).unwrap();
-    assert_eq!(settings.inner_size().unwrap(), before_fit, "not resized");
-    assert_ne!(fitted, (200.0, 100.0), "not sized to its content");
-    windows::closed(&app, &settings_label, true);
+    // Like before, the settings need the open configuration.
+    h.ok("lock", json!({}));
+    assert!(
+        h.error("open_window", json!({ "id": "app.settings" }))
+            .contains("locked")
+    );
+    h.unlock();
+    assert_eq!(count(), windows_open);
 }
 
 // System-managed keys and sensitive operations. The agent's credential store
@@ -2503,6 +2519,29 @@ fn icons_are_imported_shown_previewed_and_deleted() {
     assert!(faces[1]["image"].is_string());
     let plain = h.ok("preview_layout", args(Value::Null));
     assert!(plain[0].get("image").is_none());
+
+    // With the live states the agent reported, the key shows its state as
+    // the device does; stale states are marked; other keys are unchanged.
+    let live = |connected: bool, snapshot: Value| {
+        json!({ "profileId": profile_id, "layout": saved, "pageId": page, "projectId": null,
+            "render": true, "live": { "connected": connected, "states": [
+                { "action": action["id"], "snapshot": snapshot }
+            ] } })
+    };
+    let ready = json!({ "type": "ready", "state": { "detail": "23%", "indicator": "warning" } });
+    let current = h.ok("preview_layout", live(true, ready.clone()));
+    assert_eq!(current[0]["face"]["detail"], "23%");
+    assert_eq!(current[0]["face"]["indicator"], "warning");
+    assert_ne!(current[0]["image"], faces[0]["image"]);
+    assert_eq!(current[1]["image"], faces[1]["image"]);
+    let stale = h.ok("preview_layout", live(false, ready));
+    assert_eq!(stale[0]["face"]["detail"], "23%");
+    assert_eq!(stale[0]["face"]["indicator"], "unknown");
+    let unknown = h.ok("preview_layout", live(false, json!({ "type": "loading" })));
+    assert_eq!(unknown[0]["face"]["detail"], "\u{2014}");
+    let loading = h.ok("preview_layout", live(true, json!({ "type": "loading" })));
+    assert_eq!(loading[0]["face"]["indicator"], "loading");
+    assert!(loading[0]["face"].get("detail").is_none());
 
     // An icon in use stays.
     assert!(

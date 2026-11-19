@@ -7,7 +7,7 @@ import { EmptyState, ErrorNotice, Loading, Page } from "@/components/page"
 import { RequireProfile } from "@/components/require-profile"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Panel } from "@/components/settings-layout"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -169,14 +169,20 @@ function Library({
   }
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(18rem,24rem)_1fr]">
-      <Card className="xl:max-h-[calc(100vh-7rem)] xl:overflow-hidden">
-        <CardHeader className="gap-3">
-          <CardTitle>Actions</CardTitle>
+    <div className="grid gap-6 lg:grid-cols-[minmax(14rem,18rem)_1fr]">
+      <div
+        role="group"
+        aria-labelledby="action-list-title"
+        className="grid content-start gap-3 lg:sticky lg:top-0 lg:max-h-[calc(100vh-8rem)] lg:grid-rows-[auto_1fr]"
+      >
+        <div className="grid gap-2">
+          <h2 id="action-list-title" className="text-sm leading-6 font-semibold">
+            Actions
+          </h2>
           <div className="relative">
-            <Search className="absolute top-2.5 left-2 size-4 text-muted-foreground" />
+            <Search className="absolute top-1/2 left-2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              className="pl-8"
+              className="h-8 pl-8"
               ref={searchRef}
               placeholder="Search actions"
               aria-label="Search actions"
@@ -187,7 +193,7 @@ function Library({
             />
           </div>
           <Select value={category} onValueChange={setCategory}>
-            <SelectTrigger className="w-full" aria-label="Filter by category">
+            <SelectTrigger size="sm" className="w-full" aria-label="Filter by category">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -199,10 +205,13 @@ function Library({
               ))}
             </SelectContent>
           </Select>
-        </CardHeader>
-        <CardContent className="grid gap-4 xl:overflow-y-auto">
+        </div>
+        <div className="-mx-2 grid content-start gap-3 border-t px-2 pt-3 lg:overflow-y-auto">
           {view.profile.actions.length === 0 && (
-            <EmptyState title={plugin ? `No actions of ${plugin.name} yet` : "No actions yet"}>
+            <EmptyState
+              variant="plain"
+              title={plugin ? `No actions of ${plugin.name} yet` : "No actions yet"}
+            >
               Actions you create appear here, ready for workflows and device keys.
             </EmptyState>
           )}
@@ -251,107 +260,97 @@ function Library({
               })}
             </section>
           ))}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {current ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>{current.name}</CardTitle>
-            <CardDescription>
-              {typeOf(current.actionType)?.name ?? current.actionType}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ActionEditor
-              key={current.id}
-              profileId={profileId}
-              modules={modules}
-              projects={view.profile.projects}
-              workflows={view.profile.workflows}
-              action={current}
-              references={actionReferences(view.profile, current.id)}
-              candidates={profileView.profile.actions}
-              canRun={canRun}
-              onSaved={changed}
-              onDeleted={() => {
-                setSelected(null)
-                changed()
-              }}
-              onOpenReference={openReference}
-            />
-          </CardContent>
-        </Card>
+        <Panel
+          className="content-start"
+          title={current.name}
+          description={typeOf(current.actionType)?.name ?? current.actionType}
+        >
+          <ActionEditor
+            key={current.id}
+            profileId={profileId}
+            modules={modules}
+            projects={view.profile.projects}
+            workflows={view.profile.workflows}
+            action={current}
+            references={actionReferences(view.profile, current.id)}
+            candidates={profileView.profile.actions}
+            canRun={canRun}
+            onSaved={changed}
+            onDeleted={() => {
+              setSelected(null)
+              changed()
+            }}
+            onOpenReference={openReference}
+          />
+        </Panel>
       ) : creating && newType ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>New action</CardTitle>
-            <CardDescription>Step 2 of 2: name it and set its parameters</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ActionEditor
-              key={`new:${newType}`}
-              profileId={profileId}
-              modules={modules}
-              projects={view.profile.projects}
-              workflows={view.profile.workflows}
-              action={null}
-              initialType={newType}
-              references={[]}
-              candidates={profileView.profile.actions}
-              canRun={false}
-              onSaved={(action) => {
-                setNewType(null)
-                changed(action)
-              }}
-              onDeleted={() => {
-                setSelected(null)
-              }}
-              onChangeType={() => {
-                setNewType(null)
-              }}
-            />
-          </CardContent>
-        </Card>
+        <Panel
+          className="content-start"
+          title="New action"
+          description="Step 2 of 2: name it and set its parameters"
+        >
+          <ActionEditor
+            key={`new:${newType}`}
+            profileId={profileId}
+            modules={modules}
+            projects={view.profile.projects}
+            workflows={view.profile.workflows}
+            action={null}
+            initialType={newType}
+            references={[]}
+            candidates={profileView.profile.actions}
+            canRun={false}
+            onSaved={(action) => {
+              setNewType(null)
+              changed(action)
+            }}
+            onDeleted={() => {
+              setSelected(null)
+            }}
+            onChangeType={() => {
+              setNewType(null)
+            }}
+          />
+        </Panel>
       ) : creating ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>New action</CardTitle>
-            <CardDescription>Step 1 of 2: choose what the action does</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ActionTypeChooser
-              modules={modules}
-              onChoose={(type) => {
-                setNewType(type.id)
-              }}
-              onOpenModules={() => {
-                openSettings("modules")
-              }}
-            />
-          </CardContent>
-        </Card>
+        <Panel
+          className="content-start"
+          title="New action"
+          description="Step 1 of 2: choose what the action does"
+        >
+          <ActionTypeChooser
+            modules={modules}
+            onChoose={(type) => {
+              setNewType(type.id)
+            }}
+            onOpenModules={() => {
+              openSettings("modules")
+            }}
+          />
+        </Panel>
       ) : (
-        <Card>
-          <CardContent>
-            {view.profile.actions.length === 0 ? (
-              <EmptyState title="Create your first action">
-                <p>
-                  An action is one thing DeckPilot does, such as running a command or opening a URL.
-                  Choose a type from your modules, give it a name and set its parameters. Then put
-                  it on a device key or into a workflow.
-                </p>
-                <Button type="button" className="mt-3" onClick={startNew}>
-                  <Plus /> Create action
-                </Button>
-              </EmptyState>
-            ) : (
-              <EmptyState title="No action selected">
-                Choose an action on the left, or create a new one.
-              </EmptyState>
-            )}
-          </CardContent>
-        </Card>
+        <div className="grid content-start">
+          {view.profile.actions.length === 0 ? (
+            <EmptyState title="Create your first action">
+              <p>
+                An action is one thing DeckPilot does, such as running a command or opening a URL.
+                Choose a type from your modules, give it a name and set its parameters. Then put it
+                on a device key or into a workflow.
+              </p>
+              <Button type="button" className="mt-3" onClick={startNew}>
+                <Plus /> Create action
+              </Button>
+            </EmptyState>
+          ) : (
+            <EmptyState title="No action selected">
+              Choose an action on the left, or create a new one.
+            </EmptyState>
+          )}
+        </div>
       )}
     </div>
   )

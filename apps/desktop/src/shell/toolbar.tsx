@@ -352,6 +352,7 @@ export function ToolbarEnd({
   marketplace,
   marketplaceOpen = false,
   onMarketplace,
+  settingsOpen = false,
 }: {
   plugins: PluginNavigationItem[]
   /** The plugin entry whose view is open (its `navigationKey`). */
@@ -362,6 +363,8 @@ export function ToolbarEnd({
   marketplace: boolean
   marketplaceOpen?: boolean
   onMarketplace: () => void
+  /** The settings are the view on screen. */
+  settingsOpen?: boolean
 }) {
   const { updates, openSettings } = useAppContext()
   const stores = useStatus()
@@ -394,8 +397,9 @@ export function ToolbarEnd({
       <Button
         variant="ghost"
         size="icon"
-        className={cn(CONTROL_ICON, "relative")}
+        className={cn(CONTROL_ICON, "relative", settingsOpen && "bg-accent text-accent-foreground")}
         aria-label={settingsLabel}
+        aria-pressed={settingsOpen}
         title={`${settingsLabel} (${SHORTCUTS.settings})`}
         onClick={() => {
           openSettings(updateAvailable ? "updates" : undefined)

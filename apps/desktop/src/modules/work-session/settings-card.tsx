@@ -3,7 +3,7 @@ import { toast } from "sonner"
 
 import { ErrorNotice, Loading } from "@/components/page"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { SettingsSection } from "@/components/settings-layout"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -46,15 +46,16 @@ export function SettingsCard({
   onSaved: (settings: WorkSessionSettings) => void
 }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Settings</CardTitle>
-        <CardDescription>
+    <SettingsSection
+      title="Settings"
+      description={
+        <>
           For sessions started while this profile is active. Saving withdraws an approval to finish,
           so a session that is ready to finish needs a new end check.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
+        </>
+      }
+    >
+      <div className="grid gap-3">
         {settings.status === "loading" ? (
           <Loading />
         ) : settings.status === "error" ? (
@@ -74,8 +75,8 @@ export function SettingsCard({
             onSaved={onSaved}
           />
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsSection>
   )
 }
 

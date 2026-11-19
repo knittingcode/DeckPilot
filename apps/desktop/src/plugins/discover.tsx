@@ -63,12 +63,12 @@ function Classification({ classes }: { classes: Classes }) {
     },
   ]
   return (
-    <section aria-label="What DeckPilot includes" className="rounded-xl border p-3">
-      <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[max-content_1fr]">
+    <section aria-label="What DeckPilot includes" className="border-y py-2.5">
+      <dl className="grid gap-x-6 gap-y-1 text-caption sm:grid-cols-[max-content_1fr]">
         {rows.map((row) => (
           <div key={row.title} className="contents">
-            <dt className="font-medium">{row.title}</dt>
-            <dd className="text-muted-foreground">{row.text}</dd>
+            <dt className="text-muted-foreground">{row.title}</dt>
+            <dd>{row.text}</dd>
           </div>
         ))}
       </dl>
@@ -132,7 +132,7 @@ export function DiscoverView({
       <>
         {overview}
         {toolbar}
-        <EmptyState title="No plugins to show">
+        <EmptyState variant="plain" title="No plugins to show">
           {snapshot.registryError
             ? "The registry could not be read."
             : !snapshot.registry
@@ -155,7 +155,7 @@ export function DiscoverView({
           type="search"
           placeholder="Search plugins"
           aria-label="Search plugins"
-          className="pl-8"
+          className="h-8 pl-8"
           value={query}
           onChange={(e) => {
             setQuery(e.target.value)
@@ -181,40 +181,40 @@ export function DiscoverView({
         </div>
       )}
       {shown.length === 0 ? (
-        <EmptyState title="No plugins found">
+        <EmptyState variant="plain" title="No plugins found">
           {category === null
             ? "No plugin matches your search."
             : `No plugin in ${categoryLabel(category)} matches your search.`}
         </EmptyState>
       ) : (
-        <ul className="grid gap-3 sm:grid-cols-2" aria-label="Plugins">
+        <ul className="grid divide-y border-y" aria-label="Plugins">
           {shown.map((item) => {
             const offered = offeredVersion(item)
             const blocked = installability(item)
             const versionShown =
               offered ?? [...item.versions].sort((a, b) => compareSemver(b.version, a.version))[0]
             return (
-              <li key={item.id} className="rounded-xl border bg-card">
+              <li key={item.id} className="py-1">
                 <button
                   type="button"
-                  className="flex h-full w-full items-start gap-3 rounded-xl p-4 text-left outline-none hover:bg-accent/40 focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  className="flex w-full items-start gap-3 rounded-md px-2 py-2.5 text-left outline-none hover:bg-muted/60 focus-visible:ring-[3px] focus-visible:ring-ring/50"
                   aria-describedby={`plugin-${item.id}-summary`}
                   onClick={() => {
                     actions.openDetails(item.id)
                   }}
                 >
                   <PluginIcon muted={!offered && !item.installed} src={icons.get(item.id)} />
-                  <span className="grid min-w-0 flex-1 gap-1">
-                    <span className="font-medium">{item.name}</span>
+                  <span className="grid min-w-0 flex-1 gap-0.5">
+                    <span className="text-sm font-medium">{item.name}</span>
                     <PublisherLine publisher={item.publisher} info={item.publisherInfo} />
                     <span
                       id={`plugin-${item.id}-summary`}
-                      className="text-sm text-muted-foreground"
+                      className="text-caption text-muted-foreground"
                     >
                       {item.summary}
                     </span>
                     {versionShown && <Compatibility version={versionShown} />}
-                    <span className="flex flex-wrap gap-1">
+                    <span className="mt-1 flex flex-wrap gap-1">
                       {item.latest && <Badge variant="outline">Latest {item.latest}</Badge>}
                       {item.installed ? (
                         <>

@@ -30,6 +30,14 @@ export function formatTimestamp(seconds: number): string {
   return new Date(seconds * 1000).toLocaleString()
 }
 
+/** Date and time without seconds, e.g. "Nov 18, 2026, 1:30 PM": for table columns. */
+export function formatShortTimestamp(seconds: number): string {
+  return new Date(seconds * 1000).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  })
+}
+
 export function describeLayout(status: LayoutStatus): string {
   switch (status.type) {
     case "noProfile":

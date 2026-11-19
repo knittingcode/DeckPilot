@@ -57,6 +57,13 @@ pub struct KeyFace {
     pub badge: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub series: Option<Vec<u8>>,
+    /// The key's icon by name from the UI icon set (the action's icon, else
+    /// its type's; a folder, Back or workflow icon for those keys). The
+    /// renderer draws it as the key's main mark unless the binding has its
+    /// own icon or the state a glyph; a name it does not know is drawn as
+    /// its fallback icon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
 }
 
 impl KeyFace {
@@ -74,6 +81,7 @@ impl KeyFace {
             glyph: None,
             badge: None,
             series: None,
+            symbol: None,
         }
     }
 
@@ -91,7 +99,15 @@ impl KeyFace {
             glyph: None,
             badge: None,
             series: None,
+            symbol: None,
         }
+    }
+
+    /// The face with `symbol` as its icon name (see [`KeyFace::symbol`]).
+    #[must_use]
+    pub fn with_symbol(mut self, symbol: Option<impl Into<String>>) -> Self {
+        self.symbol = symbol.map(Into::into);
+        self
     }
 
     #[must_use]

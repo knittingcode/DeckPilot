@@ -1,43 +1,38 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 
 import {
   type Location,
   type NavigationState,
-  back,
   browserStorage,
-  canGoBack,
-  canGoForward,
+  closeSettings,
   current,
-  forward,
   initialNavigation,
   loadNavigation,
   locationOf,
+  openSettings,
   push,
   sanitize,
   saveNavigation,
 } from "@/lib/navigation"
+import { rememberSettingsPage, rememberedSettingsPage } from "@/settings/remembered-page"
 
 export const IS_MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent)
 
-/** Keyboard shortcuts of the history, as shown in tooltips. */
-export const SHORTCUTS = IS_MAC
-  ? { back: "⌘[", forward: "⌘]", settings: "⌘,", sidebar: "⌘B" }
-  : { back: "Alt+←", forward: "Alt+→", settings: "Ctrl+,", sidebar: "Ctrl+B" }
+/** Keyboard shortcuts of the main window, as shown in tooltips. */
+export const SHORTCUTS = IS_MAC ? { settings: "⌘," } : { settings: "Ctrl+," }
 
 /**
- * The navigation of the main window: history, persistence across launches,
- * keyboard shortcuts and the back and forward mouse buttons. `exists` tells
- * which workspace pages are valid; others are removed from the history, for
+ * The navigation of the main window: the current location, kept across
+ * launches, and the settings shortcut. There is no back and forward: the
+ * rail, the selectors and the toolbar's commands lead everywhere. `exists`
+ * tells which locations are valid; others are dropped, for
  * example after a module was disabled.
  *
- * The settings are a window of their own: locations in them (`settings:…`,
- * and pages that moved there such as `profiles`) go to `openSettings`
- * instead of the history.
+ * The settings are a view of the main window: their pages are locations in
+ * the same history as the workspace pages. Opening the settings without a
+ * page returns to the settings page shown last, also across launches.
  */
-export function useNavigation(
-  exists: ((location: Location) => boolean) | null,
-  openSettings: (page?: string) => void,
-) {
+export function useNavigation(exists: ((location: Location) => boolean) | null) {
   const [stored, setStored] = useState<NavigationState>(
     () => loadNavigation(browserStorage()) ?? initialNavigation(),
   )
@@ -45,15 +40,15 @@ export function useNavigation(
   // Locations that stopped existing are dropped when the state is used,
   // and before every change.
   const existsRef = useRef(exists)
-  const settingsRef = useRef(openSettings)
   useEffect(() => {
     existsRef.current = exists
-    settingsRef.current = openSettings
-  }, [exists, openSettings])
+  }, [exists])
   const valid = useMemo(() => (exists ? sanitize(stored, exists) : stored), [stored, exists])
 
   useEffect(() => {
     saveNavigation(browserStorage(), valid)
+    const location = current(valid)
+    if (location.mode === "settings") rememberSettingsPage(browserStorage(), location.page)
   }, [valid])
 
   const actions = useMemo(() => {
@@ -64,10 +59,6 @@ export function useNavigation(
       })
     }
     const go = (location: Location) => {
-      if (location.mode === "settings") {
-        settingsRef.current(location.page)
-        return
-      }
       setState((previous) => push(previous, location))
     }
     return {
@@ -77,68 +68,34 @@ export function useNavigation(
       },
       go,
       openSettings: (page?: string) => {
-        settingsRef.current(page)
+        const remembered = rememberedSettingsPage(browserStorage())
+        setState((previous) => openSettings(previous, page, remembered))
       },
-      back: () => {
-        setState(back)
-      },
-      forward: () => {
-        setState(forward)
+      closeSettings: () => {
+        setState(closeSettings)
       },
     }
   }, [])
 
-  const onKey = useCallback(
-    (event: KeyboardEvent) => {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
       const command = IS_MAC ? event.metaKey : event.ctrlKey
       if (command && !event.shiftKey && !event.altKey && event.key === ",") {
         event.preventDefault()
         actions.openSettings()
-      } else if (IS_MAC && event.metaKey && !event.shiftKey && !event.altKey) {
-        if (event.key === "[") {
-          event.preventDefault()
-          actions.back()
-        } else if (event.key === "]") {
-          event.preventDefault()
-          actions.forward()
-        }
-      } else if (!IS_MAC && event.altKey && !event.ctrlKey && !event.metaKey) {
-        if (event.key === "ArrowLeft") {
-          event.preventDefault()
-          actions.back()
-        } else if (event.key === "ArrowRight") {
-          event.preventDefault()
-          actions.forward()
-        }
-      }
-    },
-    [actions],
-  )
-
-  useEffect(() => {
-    // The back and forward buttons of a mouse.
-    const onMouse = (event: MouseEvent) => {
-      if (event.button === 3) {
-        event.preventDefault()
-        actions.back()
-      } else if (event.button === 4) {
-        event.preventDefault()
-        actions.forward()
       }
     }
     window.addEventListener("keydown", onKey)
-    window.addEventListener("mouseup", onMouse)
     return () => {
       window.removeEventListener("keydown", onKey)
-      window.removeEventListener("mouseup", onMouse)
     }
-  }, [onKey, actions])
+  }, [actions])
 
   return useMemo(
     () => ({
       location: current(valid),
-      canGoBack: canGoBack(valid),
-      canGoForward: canGoForward(valid),
+      /** The workspace page settings return to (and that stays mounted under them). */
+      workspace: valid.workspace,
       ...actions,
     }),
     [valid, actions],

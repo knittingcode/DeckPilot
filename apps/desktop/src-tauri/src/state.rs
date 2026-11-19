@@ -60,6 +60,8 @@ pub struct AppState {
     pub presence: Arc<dyn PresenceCheck>,
     /// When the user last authenticated for a sensitive operation.
     authorized_at: Mutex<Option<Instant>>,
+    /// The layout editor's watch of live key states.
+    pub key_watch: crate::commands::key_states::KeyStateWatch,
 }
 
 /// What the agent reported about the database's protection.
@@ -117,6 +119,7 @@ impl AppState {
             launch: Mutex::new(None),
             presence,
             authorized_at: Mutex::new(None),
+            key_watch: crate::commands::key_states::KeyStateWatch::default(),
         })
     }
 

@@ -35,13 +35,12 @@ Not every action works on every control. An action says whether it runs from a k
 
 ## Pages and folders
 
-A layout is a tree of pages. The page bar shows the pages as tabs, the path to the current page and **Page N of M**.
+A layout is a tree of pages. Under the device preview, **Previous page** and **Next page** step through the top-level pages (the pages the device's Next page and Previous page keys move along), the page number between them opens a list of every page, and **Add page** adds a top-level page and shows it. Inside a folder, the path to it and **Back** are shown there too.
 
-- Type a name in **New folder** to add a page.
-- A folder is opened by a key bound to **Open** and the page's name. A folder without a **Back** key gets one automatically on its first free key.
-- **Page name** renames a page and **Delete page** removes it. Neither is offered for the home page.
+- A folder is opened by a key bound to **Open** and the page's name; double-click such a key to open the folder. A folder without a **Back** key gets one automatically on its first free key.
+- **Manage pages** opens the page settings: **Page name** renames a page and **Delete page** removes it (neither is offered for the home page), and inside a folder you choose whether it closes after a key runs.
 
-The page tree panel moves pages up and down, and **Move or copy** puts a page at the top level, inside another page, or into another layout. These are unavailable while you have unsaved changes: save or revert first.
+The page tree in **Manage pages** moves pages up and down, and **Move or copy** puts a page at the top level, inside another page, or into another layout. These are unavailable while you have unsaved changes: save or revert first.
 
 ## How a key looks
 
@@ -55,9 +54,11 @@ Select a key that has something assigned and use the appearance settings:
 
 ### Icons
 
-**Import icon** accepts PNG or JPEG files of up to 2 MiB. Icons are scaled to at most 256 pixels and stored in the profile, which holds up to 64 of them. Fit an icon with **Fit**, **Fill** or **Crop**. An icon that is in use cannot be deleted. DeckPilot has no bundled icon set: the library is what you import.
+**Import icon** accepts PNG or JPEG files of up to 2 MiB. Icons are scaled to at most 256 pixels and stored in the profile, which holds up to 64 of them. Fit an icon with **Fit**, **Fill** or **Crop**. An icon that is in use cannot be deleted. The icon library is what you import. A key without an imported icon shows its action's icon (the one the app shows for the action); an imported icon replaces it.
 
 **Preview with project** shows the keys as they look for a given project, for example with the project's key in a label.
+
+The preview shows each key as the device does, drawn by the same renderer: the action's icon, the title and, for keys with a live value such as **CPU usage**, the current value as the agent reads it for the device. The values come from the agent, only for the active profile and while the agent runs; a line under the page navigation says when they are not current.
 
 ## Saving, undo and shortcuts
 

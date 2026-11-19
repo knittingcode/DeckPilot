@@ -1,0 +1,134 @@
+/*
+ * Scrollbars of the whole app: thin, quiet, transparent track; darker while
+ * the pointer is over the scrolling element or the thumb, darkest while it
+ * is dragged. Native scrolling throughout (no script, no custom scroll
+ * containers); only the look changes.
+ *
+ * Engines: WKWebView (macOS), WebView2 (Windows, Chromium) and WebKitGTK
+ * (Linux) all style `::-webkit-scrollbar`. Chromium ignores those rules as
+ * soon as the standard `scrollbar-width` / `scrollbar-color` are set, so the
+ * standard properties are only used where `::-webkit-scrollbar` does not
+ * exist (Firefox-like engines), where width and hover cannot be finer.
+ *
+ * The scrollbar is wider than the thumb that is drawn: a transparent border
+ * keeps a usable hit target around a 6 px thumb, and the width never
+ * changes on hover, so content does not move. Styling the scrollbar makes
+ * WebKit draw classic (always present) scrollbars, the same on every
+ * platform; macOS's overlay scrollbars are not imitated.
+ *
+ * Scrollbar pseudo-elements cannot be animated in WebKit or Chromium, so
+ * state changes are immediate (and nothing moves for reduced motion).
+ */
+
+:root {
+  /* Drawn thumb, and the scrollbar's full width (its hit target). */
+  --scrollbar-thumb-size: 6px;
+  --scrollbar-size: 10px;
+  --scrollbar-thumb: oklch(0 0 0 / 0.2);
+  --scrollbar-thumb-hover: oklch(0 0 0 / 0.38);
+  --scrollbar-thumb-active: oklch(0 0 0 / 0.5);
+}
+
+.dark {
+  --scrollbar-thumb: oklch(1 0 0 / 0.18);
+  --scrollbar-thumb-hover: oklch(1 0 0 / 0.34);
+  --scrollbar-thumb-active: oklch(1 0 0 / 0.46);
+}
+
+::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+  background: transparent;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-track-piece,
+::-webkit-scrollbar-corner {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+::-webkit-scrollbar-thumb {
+  /* The border is transparent: the thumb is drawn thinner than the bar. */
+  border: calc((var(--scrollbar-size) - var(--scrollbar-thumb-size)) / 2) solid transparent;
+  border-radius: 999px;
+  background-color: var(--scrollbar-thumb);
+  background-clip: padding-box;
+  box-shadow: none;
+  min-height: 32px;
+  min-width: 32px;
+}
+
+/* The pointer over the scrolling element (or the thumb itself). */
+:hover::-webkit-scrollbar-thumb,
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-thumb-active);
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+
+  :hover {
+    scrollbar-color: var(--scrollbar-thumb-hover) transparent;
+  }
+}
+
+/* Radix ScrollArea (components/ui/scroll-area.tsx) draws its own bar: same look. */
+[data-slot="scroll-area-thumb"] {
+  background-color: var(--scrollbar-thumb);
+}
+
+[data-slot="scroll-area-scrollbar"]:hover [data-slot="scroll-area-thumb"] {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+/* High contrast: the system's colours, clearly visible. */
+@media (forced-colors: active) {
+  ::-webkit-scrollbar-thumb,
+  :hover::-webkit-scrollbar-thumb,
+  ::-webkit-scrollbar-thumb:active {
+    background-color: CanvasText;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: Canvas;
+  }
+
+  [data-slot="scroll-area-thumb"] {
+    background-color: CanvasText;
+  }
+
+  @supports not selector(::-webkit-scrollbar) {
+    * {
+      scrollbar-color: CanvasText Canvas;
+    }
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --scrollbar-thumb: oklch(0 0 0 / 0.45);
+    --scrollbar-thumb-hover: oklch(0 0 0 / 0.6);
+    --scrollbar-thumb-active: oklch(0 0 0 / 0.72);
+  }
+
+  .dark {
+    --scrollbar-thumb: oklch(1 0 0 / 0.45);
+    --scrollbar-thumb-hover: oklch(1 0 0 / 0.6);
+    --scrollbar-thumb-active: oklch(1 0 0 / 0.72);
+  }
+}

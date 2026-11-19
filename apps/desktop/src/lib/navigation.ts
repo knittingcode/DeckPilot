@@ -1,12 +1,13 @@
 /**
  * Where the main window is: a workspace page (the device editor, dashboard,
- * module pages). Settings pages are locations too (`settings:<page>`), but
- * they open in the settings window; the main window keeps only workspace
- * pages in its history (see `useNavigation`). The settings-mode functions
- * below remain for page references from other windows and older versions.
+ * marketplace, module and plugin pages) or a settings page
+ * (`settings:<page>`). The settings are a view of the main window, in the
+ * same list of locations as the workspace pages.
  *
- * Navigation keeps a browser-style history with back and forward. The model
- * is pure so that it can be tested without React.
+ * The state keeps the recent locations (there is no back and forward in
+ * the app any more): they say which workspace page the settings return to
+ * and which settings page they open at. The model is pure so that it can be
+ * tested without React.
  */
 
 /** Identifier of a settings page: a core page or `module:<module id>`. */
@@ -70,31 +71,22 @@ export function push(state: NavigationState, location: Location): NavigationStat
   return withWorkspace({ ...state, entries, index: entries.length - 1 })
 }
 
-export function canGoBack(state: NavigationState) {
-  return state.index > 0
-}
-
-export function canGoForward(state: NavigationState) {
-  return state.index < state.entries.length - 1
-}
-
-export function back(state: NavigationState): NavigationState {
-  return canGoBack(state) ? withWorkspace({ ...state, index: state.index - 1 }) : state
-}
-
-export function forward(state: NavigationState): NavigationState {
-  return canGoForward(state) ? withWorkspace({ ...state, index: state.index + 1 }) : state
-}
-
-/** Opens settings; without a page, the settings page that was open last. */
-export function openSettings(state: NavigationState, page?: SettingsPageId): NavigationState {
+/**
+ * Opens settings; without a page, the settings page that was open last in
+ * this history, else `remembered` (the one open last in an earlier session).
+ */
+export function openSettings(
+  state: NavigationState,
+  page?: SettingsPageId,
+  remembered: SettingsPageId = DEFAULT_SETTINGS_PAGE,
+): NavigationState {
   const target =
     page ??
     state.entries
       .slice(0, state.index + 1)
       .reverse()
       .find((entry) => entry.mode === "settings")?.page ??
-    DEFAULT_SETTINGS_PAGE
+    remembered
   return push(state, { mode: "settings", page: target })
 }
 

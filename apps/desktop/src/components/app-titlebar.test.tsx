@@ -33,8 +33,6 @@ beforeAll(() => {
 
 afterEach(cleanup)
 
-const history = { canGoBack: true, canGoForward: false, back: vi.fn(), forward: vi.fn() }
-
 function Contribution({ config }: { config: TitlebarConfig }) {
   useTitlebar(config)
   return null
@@ -47,7 +45,6 @@ function Shell({ store, children }: { store: TitlebarStore; children?: React.Rea
         <AppTitlebar
           store={store}
           chrome={{ overlay: false, controlsInset: 0 }}
-          history={history}
           fallbackTitle="Loading page"
         />
         {children}
@@ -142,48 +139,24 @@ describe("app titlebar", () => {
     expect(screen.queryByRole("toolbar", { name: "Page actions" })).not.toBeInTheDocument()
   })
 
-  it("navigates back and toggles the sidebar", async () => {
+  it("has no sidebar toggle and no back or forward", () => {
     render(<Shell store={new TitlebarStore()} />)
-    expect(screen.getByRole("button", { name: "Forward" })).toBeDisabled()
-    await userEvent.click(screen.getByRole("button", { name: "Back" }))
-    expect(history.back).toHaveBeenCalled()
-    const toggle = screen.getByRole("button", { name: /Toggle Sidebar/i })
-    const wrapper = document.querySelector("[data-slot=sidebar-wrapper]")
-    expect(wrapper).toBeInTheDocument()
-    await userEvent.click(toggle)
-    expect(screen.getByRole("button", { name: /Toggle Sidebar/i })).toBeInTheDocument()
+    for (const name of [/Toggle Sidebar/i, "Back", "Forward"]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument()
+    }
+    expect(screen.queryByRole("navigation", { name: "History" })).not.toBeInTheDocument()
+    expect(document.querySelector("[data-slot=titlebar-sidebar-extension]")).toBeNull()
   })
 
-  it("keeps the navigation controls in place when the sidebar collapses", async () => {
+  it("leaves only room for the native window controls before the selectors", () => {
     render(<Shell store={new TitlebarStore()} />)
-    const region = () =>
-      document.querySelector<HTMLElement>("[data-slot=titlebar-navigation]") as HTMLElement
-    const snapshot = () => ({
-      element: region(),
-      className: region().className,
-      index: Array.from(region().parentElement?.children ?? []).indexOf(region()),
-      controls: within(region())
-        .getAllByRole("button")
-        .map((b) => b.getAttribute("aria-label") ?? b.textContent),
-    })
-    const expanded = snapshot()
-    expect(expanded.index).toBe(0)
-    expect(expanded.controls).toEqual(["Toggle Sidebar", "Back", "Forward"])
-    // Only tokens size the region; nothing that depends on the sidebar.
-    expect(expanded.className).toContain("w-(--titlebar-navigation-width)")
-    expect(expanded.className).not.toMatch(/sidebar-width|justify-end|transition/)
-
-    await userEvent.click(screen.getByRole("button", { name: /Toggle Sidebar/i }))
-    const collapsed = snapshot()
-    expect(collapsed.element).toBe(expanded.element)
-    expect(collapsed.index).toBe(expanded.index)
-    expect(collapsed.controls).toEqual(expanded.controls)
-    // The background follows the sidebar; size and position do not.
-    expect(collapsed.className.replace("bg-sidebar", "").trim()).toBe(
-      expanded.className.replace("bg-sidebar", "").trim(),
-    )
-    const extension = document.querySelector("[data-slot=titlebar-sidebar-extension]")
-    expect(extension).toHaveClass("w-0")
+    const inset = document.querySelector("[data-slot=titlebar-controls-inset]") as HTMLElement
+    // First in the toolbar, nothing in it, sized by the platform's inset
+    // alone (0 on Windows, Linux and in fullscreen).
+    expect(Array.from(inset.parentElement?.children ?? []).indexOf(inset)).toBe(0)
+    expect(inset).toBeEmptyDOMElement()
+    expect(inset).toHaveAttribute("aria-hidden", "true")
+    expect(inset.className).toBe("w-(--titlebar-controls-inset) shrink-0")
   })
 
   it("shows determinate progress", () => {

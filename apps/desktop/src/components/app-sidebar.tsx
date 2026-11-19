@@ -41,15 +41,17 @@ const RAIL_GROUPS: NavGroup[] = [
 ]
 
 /**
- * The slim navigation rail of the main window: icons with tooltips while
- * collapsed (the default), labels while expanded. Toggled from the toolbar
- * or with the sidebar shortcut.
+ * The slim navigation rail of the main window, always collapsed to icons
+ * (the provider in `App.tsx` keeps it closed; nothing expands it). Each icon
+ * has its name as accessible label and as tooltip; the page on screen is
+ * marked with a fill and a bar at the rail's edge, and `aria-current`.
  */
 export function AppSidebar({
   current,
   onNavigate,
 }: {
-  current: PageId
+  /** The workspace page on screen; none while the settings are. */
+  current: PageId | null
   onNavigate: (page: PageId) => void
 }) {
   const { modules } = useAppContext()
@@ -69,6 +71,7 @@ export function AppSidebar({
                   <SidebarMenuItem key={item.id}>
                     <SidebarMenuButton
                       isActive={current === item.id}
+                      className="relative data-[active=true]:before:absolute data-[active=true]:before:inset-y-1.5 data-[active=true]:before:left-0 data-[active=true]:before:w-0.5 data-[active=true]:before:rounded-full data-[active=true]:before:bg-sidebar-primary"
                       aria-current={current === item.id ? "page" : undefined}
                       tooltip={item.label}
                       onClick={() => {

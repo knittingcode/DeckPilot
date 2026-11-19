@@ -5,7 +5,7 @@ import { ErrorNotice, Loading, Page } from "@/components/page"
 import { RequireProfile } from "@/components/require-profile"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { SettingsSection } from "@/components/settings-layout"
 import { useAsync } from "@/hooks/use-async"
 import { useEditingProfile } from "@/hooks/use-profile"
 import { api } from "@/lib/api"
@@ -87,7 +87,7 @@ function Workspace({
     return project ? `${project.key} · ${project.name}` : "Project of another profile"
   }
   return (
-    <>
+    <div className="mx-auto grid w-full max-w-3xl gap-8">
       <StatusCard
         snapshot={snapshot}
         format={current.elapsedFormat}
@@ -106,7 +106,7 @@ function Workspace({
       )}
       <AssignCard />
       <HistoryCard reloadKey={reloadKey} projectName={projectName} />
-    </>
+    </div>
   )
 }
 
@@ -114,14 +114,11 @@ function Workspace({
 function AssignCard() {
   const { navigate } = useAppContext()
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Work Session key</CardTitle>
-        <CardDescription>
-          Any key can control the work session; no action is created for it.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-3 text-sm">
+    <SettingsSection
+      title="Work Session key"
+      description="Any key can control the work session; no action is created for it."
+    >
+      <div className="grid gap-3 text-sm">
         <ol className="grid list-decimal gap-1 pl-5">
           <li>Open the Layout Designer and select a key.</li>
           <li>
@@ -146,7 +143,7 @@ function AssignCard() {
             Open Layout Designer
           </Button>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsSection>
   )
 }

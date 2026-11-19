@@ -221,7 +221,9 @@ fn face(title: &str, detail: Option<&str>, indicator: Option<Indicator>) -> KeyF
     KeyFace {
         detail: detail.map(str::to_owned),
         indicator,
-        ..KeyFace::new(FaceStyle::Action, title).with_appearance(Some(&appearance()))
+        ..KeyFace::new(FaceStyle::Action, title)
+            .with_symbol(Some(deckpilot_core::device_runtime::symbols::WORK_SESSION))
+            .with_appearance(Some(&appearance()))
     }
 }
 
@@ -316,7 +318,8 @@ async fn a_page_switch_or_a_disconnect_stops_the_redraws() {
     // The folder does not show the work session key: nothing is due, and
     // a minute passes without a redraw.
     f.mock.tap(&f.device, FOLDER);
-    let back = KeyFace::new(FaceStyle::Back, "Back");
+    let back = KeyFace::new(FaceStyle::Back, "Back")
+        .with_symbol(Some(deckpilot_core::device_runtime::symbols::BACK));
     let shown = f.wait_face(&back, None);
     assert_eq!(agent.handle.work_session_face_due().await, None);
     f.jump.by(MINUTE);
