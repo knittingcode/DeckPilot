@@ -26,6 +26,10 @@ released either. 0.6.0 is the first version intended for publication.
   longer navigate. The rail, the device and profile selectors, the
   Marketplace, the settings and plugin entries lead to every view; the
   rail's Device Editor returns to the editor from anywhere.
+- Scrollbars are thin and quiet everywhere: a 6-pixel thumb on a
+  transparent track that darkens while the pointer is over the scrolling
+  area and more while it is dragged. High-contrast modes use the system's
+  colours.
 - The navigation rail is always collapsed to icons, with each page's name
   as a tooltip and a clearer mark on the current page. The toolbar's sidebar
   toggle and the ⌘B / Ctrl+B shortcut are gone.
