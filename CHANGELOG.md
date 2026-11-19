@@ -23,6 +23,13 @@ released either. 0.6.0 is the first version intended for publication.
   opens a database written by 0.8.0 with the new build, and a database
   written by the new build with 0.8.0.
 
+### Fixed
+
+- Windows: the settings window, and any other window opened from the app
+  (export, import, logs), was created but never shown, so Settings could not
+  be opened and no profile could be created. Opening a window no longer
+  blocks the thread the window needs.
+
 ## [0.8.1] - 2026-11-19
 
 ### Security
