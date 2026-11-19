@@ -183,19 +183,24 @@ export function removeBinding(
 /**
  * The first supported trigger that is still free on a control. A control
  * that already uses gestures gets a gesture (never a raw edge, which would
- * mix both kinds), falling back to replacing its click.
+ * mix both kinds), falling back to replacing its click. With `accepts`,
+ * triggers it accepts come first (e.g. those the dropped action can run
+ * from, docs/device-controls.md).
  */
 export function defaultTrigger(
   model: DeviceModel,
   layout: DeviceLayout,
   pageId: string,
   control: ControlId,
+  accepts?: (trigger: Trigger) => boolean,
 ): Trigger | undefined {
   const used = bindingsFor(layout, pageId, control)
   const supported = supportedTriggers(model, control)
-  const triggers = used.some((b) => isGestureTrigger(b.trigger))
+  const all = used.some((b) => isGestureTrigger(b.trigger))
     ? [...GESTURE_TRIGGERS, ...supported.filter((t) => t.type !== "press" && t.type !== "release")]
     : supported
+  const accepted = accepts ? all.filter(accepts) : all
+  const triggers = accepted.length > 0 ? accepted : all
   return triggers.find((t) => !used.some((b) => sameTrigger(b.trigger, t))) ?? triggers[0]
 }
 

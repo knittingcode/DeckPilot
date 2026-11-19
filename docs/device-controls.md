@@ -2,10 +2,9 @@
 
 Which physical controls an action can be bound to, how DeckPilot decides
 whether a binding can run, and what every layer does with one that cannot.
-*Design record*: the contract of the device-capability redesign. Sections
-1 to 3 are implemented; sections 4 and 5 (the plugin manifest and the
-app's shell) are planned and listed here so the types already fit them.
-Where the code differs, the code and its tests win.
+*Design record*: the contract of the device-capability redesign. Every
+section is implemented. Where the code differs, the code and its tests
+win.
 
 ## 1. Control model (`deckpilot-device`)
 
@@ -235,10 +234,43 @@ Status: implemented. The agent provides plugin API 1.3 (`PLUGIN_API` in
   any failure so the app shows a fallback icon). The toolbar itself comes
   with the app shell (section 5).
 
-## 5. App shell (planned)
+## 5. App shell
 
-The device editor will show incompatible actions disabled, with the
-reason ("Requires a dial. The selected Stream Deck MK.2 key supports press
-actions only."), refuse a drop on an incompatible control and offer a
-compatible-only filter, using `ActionType.controls` and the
-`preview_layout` reasons above.
+Status: implemented in the device editor and the toolbar
+(`apps/desktop/src/lib/compatibility.ts`, `layout-editor/`,
+`shell/plugin-navigation.ts`). The app mirrors the rules of section 2 only
+to explain and to disable what the backend would refuse; `save_layout`
+stays the authority.
+
+- **Library.** With one control selected, entries (profile actions and
+  catalog types) that cannot go on it at all are shown disabled with the
+  reason, e.g. "Requires a dial. The selected Stream Deck MK.2 key
+  supports press actions only." (`controlKindUnsupported`), or "Requires a
+  press on a dial. The selected Knob Box dial supports turn actions only."
+  (no input the action takes is one the control has). **Compatible only**
+  hides them (`deckpilot.editor.compatibleOnly`, local storage).
+- **Drops.** A drop that would bind an action to a control it cannot run
+  from (also a moved control's bindings) is refused: nothing changes, the
+  control shows `data-drop="rejected"` with a red outline, the reason is
+  in a toast and announced (dnd-kit announcements and a live region). A
+  compatible drop picks the first free trigger the action can run from.
+- **Inspector.** Each trigger's choices disable actions incompatible with
+  it ("(not on this control)"), from the reason variants: "Does not react
+  to double click on a dial. On a dial it reacts to press, turn right, turn
+  left and click." (`inputUnsupportedByAction`), "The selected … dial has
+  no press; it supports turn actions only." (`inputUnsupportedByControl`).
+  A stored incompatible binding (`preview_layout` `incompatible`) shows
+  "Not run from this control: <reason> It stays assigned but is not run."
+- **Save.** A refusal shows the backend's reason with the trigger named
+  as in the editor; bindings kept by `save_layout` (`incompatible`) are
+  listed in a warning.
+- **Plugin toolbar entries.** `list_plugin_navigation` (read again on
+  plugin events), in the user's order (`deckpilot.toolbar.pluginOrder`),
+  at most four in the toolbar and the rest under "More plugin views" (all
+  of them in a narrow window). Icons come from `get_plugin_navigation_icon`
+  for the current theme and are shown only through `<img>` when they are
+  a base64 `data:` URL of PNG, WebP or SVG; anything else shows the app's
+  own icon. An entry opens `plugin-view/<plugin>/<entry>`, a view the app
+  draws for the kind (`variables`: the variables table under the plugin's
+  namespace; `actions`: the Action Library with the plugin's actions;
+  `settings`: its configuration form). Unknown kinds have no entry.

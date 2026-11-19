@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { GestureEditor } from "@/components/gesture-editor/gesture-editor"
+import { IncompatibleNote } from "@/components/incompatible-note"
 import { DEFAULT_TIMINGS, controlIssues } from "@/components/gesture-editor/model"
 import {
   acceptsGestures,
@@ -37,6 +38,7 @@ import type {
   DeviceModel,
   GestureTimings,
   Profile,
+  Trigger,
 } from "@/lib/types"
 
 import {
@@ -76,6 +78,16 @@ interface InspectorProps {
   resolveDrop?: (dragged: unknown) => Promise<BindingTarget | null> | BindingTarget | null
   /** Opens the steps of a Multi Action a gesture runs. */
   onEditWorkflow?: (workflow: string) => void
+  /**
+   * Why `target` cannot run from `control` for `trigger`, in words; `null`
+   * when it can. Such targets are offered disabled with the reason.
+   */
+  incompatible?: (control: ControlId, target: BindingTarget, trigger: Trigger) => string | null
+  /**
+   * Bindings of the focused control that are kept although their action
+   * cannot run from it, with the reason (`preview_layout`).
+   */
+  notRun?: { trigger: Trigger; reason: string }[]
 }
 
 /** Settings of the selected control, or a summary of a multi-selection. */
@@ -147,6 +159,8 @@ function ControlInspector({
   issues = [],
   resolveDrop,
   onEditWorkflow,
+  incompatible,
+  notRun = [],
 }: InspectorProps & { control: ControlId }) {
   const bindings = bindingsFor(draft, pageId, control)
   const gestures = acceptsGestures(model, control)
@@ -156,6 +170,9 @@ function ControlInspector({
   )
   const page = findPage(draft, pageId)
   const controlMessages = page ? controlIssues(issues, page, control) : []
+  const why = incompatible
+    ? (target: BindingTarget, trigger: Trigger) => incompatible(control, target, trigger)
+    : undefined
   return (
     <Card className="h-fit">
       <CardHeader className="flex flex-row items-center gap-2">
@@ -182,6 +199,8 @@ function ControlInspector({
             onChange={onChange}
             resolveDrop={resolveDrop}
             onEditWorkflow={onEditWorkflow}
+            incompatible={why}
+            notRun={notRun}
           />
         )}
         {!gestures && controlMessages.length > 0 && (
@@ -222,16 +241,22 @@ function ControlInspector({
                   {groups.map((group) => (
                     <SelectGroup key={group.label}>
                       <SelectLabel>{group.label}</SelectLabel>
-                      {group.options.map((option) => (
-                        <SelectItem
-                          key={option.value}
-                          value={option.value}
-                          disabled={option.unavailable !== undefined}
-                        >
-                          {option.label}
-                          {option.unavailable !== undefined && " (unavailable)"}
-                        </SelectItem>
-                      ))}
+                      {group.options.map((option) => {
+                        const reason = why?.(option.target, trigger) ?? undefined
+                        return (
+                          <SelectItem
+                            key={option.value}
+                            value={option.value}
+                            disabled={option.unavailable !== undefined || reason !== undefined}
+                            title={reason}
+                          >
+                            {option.label}
+                            {option.unavailable !== undefined
+                              ? " (unavailable)"
+                              : reason !== undefined && " (not on this control)"}
+                          </SelectItem>
+                        )
+                      })}
                     </SelectGroup>
                   ))}
                 </SelectContent>
@@ -239,6 +264,13 @@ function ControlInspector({
               <UnavailableNote
                 reason={
                   binding ? unavailableTarget(groups, encodeTarget(binding.target)) : undefined
+                }
+              />
+              <IncompatibleNote
+                reason={
+                  binding
+                    ? notRun.find((n) => sameTrigger(n.trigger, binding.trigger))?.reason
+                    : undefined
                 }
               />
               {binding && (

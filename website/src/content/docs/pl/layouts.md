@@ -24,6 +24,15 @@ Edytor składa się z trzech części: obszaru urządzenia pośrodku, panelu wł
 
 Menu kontekstowe zawiera też polecenia Copy, Cut, Paste, Duplicate i Clear. To, co klawisz robi po pojedynczym kliknięciu, podwójnym kliknięciu i długim naciśnięciu, opisuje strona [Gesty](../gestures/).
 
+## Które akcje pasują do którego elementu
+
+Nie każda akcja działa na każdym elemencie urządzenia. Akcja określa, czy uruchamia ją klawisz, pokrętło czy strefa dotykowa, i jakie zdarzenie: naciśnięcie, obrót, dotknięcie. Większość akcji działa tylko na klawiszach; Next page, Previous page, Brightness oraz akcje przełączania projektów działają też na pokrętle. Akcje wtyczek działają na klawiszach, chyba że wtyczka określa inaczej.
+
+- Gdy zaznaczony jest jeden element, biblioteka pokazuje, co do niego pasuje. Akcje, które nie pasują, pozostają widoczne, ale wyszarzone, z powodem, na przykład *Requires a dial. The selected Stream Deck MK.2 key supports press actions only.* Przełącznik **Compatible only** je ukrywa; wybór jest zapamiętywany.
+- Upuszczenie akcji na element, z którego nie może się uruchomić, zostaje odrzucone: element dostaje czerwoną obwódkę, powód jest wyświetlany i odczytywany przez czytnik ekranu, a nic nie zostaje przypisane.
+- W panelu właściwości każde zdarzenie (kliknięcie, obrót w prawo, dotknięcie) proponuje tylko akcje, które mogą się z niego uruchomić; pozostałe są oznaczone **(not on this control)**.
+- Przypisanie zapisane wcześniej albo zaimportowane, które nie może działać na swoim elemencie, zostaje zachowane bez zmian, ale nie jest uruchamiane. Panel właściwości podaje powód (**Not run from this control: …**), a zapisywanie wymienia takie przypisania. Zadziała znowu, gdy pojawi się zgodna akcja albo urządzenie. Nowe takie przypisanie zapisywanie odrzuca, podając powód.
+
 ## Strony i foldery
 
 Układ ma postać drzewa stron. Pasek stron pokazuje strony jako karty, ścieżkę do bieżącej strony oraz napis **Page N of M**.

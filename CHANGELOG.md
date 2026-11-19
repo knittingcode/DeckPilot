@@ -15,6 +15,8 @@ released either. 0.6.0 is the first version intended for publication.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-18
+
 ### Added
 
 - System monitor keys. The System module has four new read-only actions,
@@ -47,6 +49,21 @@ released either. 0.6.0 is the first version intended for publication.
   `javascript:` links, style imports or entities. The agent re-checks and
   sanitizes them each time it serves one, and the app shows them only as
   images, with its own icon when there is none to show.
+- The Device Editor explains which actions fit the selected control. In
+  the Action Library, actions that cannot run from it stay visible but
+  disabled, with the reason ("Requires a dial. The selected Stream Deck
+  MK.2 key supports press actions only."), and **Compatible only** hides
+  them. Dropping such an action on a control is refused, shown on the
+  control and announced; the inspector offers each trigger only the
+  actions that can run from it, says why a saved binding is kept but not
+  run, and a refused save names the trigger as the editor does.
+- Toolbar entries of enabled plugins, left of the notifications: each
+  opens a view DeckPilot draws, the plugin's live variables, its actions
+  in the Action Library or its settings. Their icons are shown only as
+  images (DeckPilot's own icon when there is none), more than fit are
+  under *More plugin views*, the order can be changed from an entry's
+  context menu and is kept on this computer, and they go away when the
+  plugin is disabled or uninstalled.
 
 ### Changed
 

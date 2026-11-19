@@ -38,12 +38,27 @@ export function ActionsPage() {
   )
 }
 
-function ActionLibrary() {
+/** A plugin whose actions the library shows alone (its toolbar view). */
+export interface LibraryPlugin {
+  id: string
+  name: string
+}
+
+/**
+ * The Action Library of the profile being edited, without a page around
+ * it; with `plugin`, only that plugin's actions (a plugin's "actions"
+ * view, drawn by the app).
+ */
+export function ActionLibraryView({ plugin }: { plugin?: LibraryPlugin }) {
+  return <RequireProfile>{() => <ActionLibrary plugin={plugin} />}</RequireProfile>
+}
+
+function ActionLibrary({ plugin }: { plugin?: LibraryPlugin }) {
   const { state, reload, profileId } = useEditingProfile()
   if (state.status === "loading") return <Loading />
   if (state.status === "error") return <ErrorNotice error={state.error} />
   if (!profileId) return null
-  return <Library view={state.data} profileId={profileId} reload={reload} />
+  return <Library view={state.data} profileId={profileId} reload={reload} plugin={plugin} />
 }
 
 /**
@@ -53,14 +68,32 @@ function ActionLibrary() {
  * and parameters.
  */
 function Library({
-  view,
+  view: profileView,
   profileId,
   reload,
+  plugin,
 }: {
   view: ProfileView
   profileId: string
   reload: () => void
+  plugin?: LibraryPlugin
 }) {
+  // A plugin's view: its actions only (types `<plugin id>.<action>`).
+  const view = useMemo(
+    () =>
+      plugin
+        ? {
+            ...profileView,
+            profile: {
+              ...profileView.profile,
+              actions: profileView.profile.actions.filter((a) =>
+                a.actionType.startsWith(`${plugin.id}.`),
+              ),
+            },
+          }
+        : profileView,
+    [profileView, plugin],
+  )
   const { profiles, agent, refresh, navigate, openSettings } = useAppContext()
   // Built-in modules and, in builds with plugins, the installed plugins.
   const modules = useActionModules()
@@ -169,7 +202,7 @@ function Library({
         </CardHeader>
         <CardContent className="grid gap-4 xl:overflow-y-auto">
           {view.profile.actions.length === 0 && (
-            <EmptyState title="No actions yet">
+            <EmptyState title={plugin ? `No actions of ${plugin.name} yet` : "No actions yet"}>
               Actions you create appear here, ready for workflows and device keys.
             </EmptyState>
           )}
@@ -238,7 +271,7 @@ function Library({
               workflows={view.profile.workflows}
               action={current}
               references={actionReferences(view.profile, current.id)}
-              candidates={view.profile.actions}
+              candidates={profileView.profile.actions}
               canRun={canRun}
               onSaved={changed}
               onDeleted={() => {
@@ -265,7 +298,7 @@ function Library({
               action={null}
               initialType={newType}
               references={[]}
-              candidates={view.profile.actions}
+              candidates={profileView.profile.actions}
               canRun={false}
               onSaved={(action) => {
                 setNewType(null)
