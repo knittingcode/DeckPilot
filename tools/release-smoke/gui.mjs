@@ -1,13 +1,8 @@
-// Drives the INSTALLED release app over W3C WebDriver (HTTP, Node's
-// built-in fetch, no dependencies) against the production plugin
-// Marketplace:
+// Drives the INSTALLED release app through tauri-driver (W3C WebDriver over
+// HTTP, Node's built-in fetch, no dependencies) against the production
+// plugin Marketplace:
 //
-//   node tools/release-smoke/gui.mjs --port <driver port> --app <executable> --label <label> --out <dir> [--attach <host:port>]
-//
-// Linux: tauri-driver (WebKitWebDriver) starts the app. Windows (--attach):
-// windows.ps1 starts the app with a DevTools port for WebView2 and
-// msedgedriver attaches to it (release builds ignore the debugging port
-// and profile msedgedriver hands a webview it launches itself).
+//   node tools/release-smoke/gui.mjs --port <tauri-driver port> --app <executable> --label <label> --out <dir>
 //
 // The application shell of 0.8.0 and later: main window (toolbar) ›
 // Marketplace › Discover › Memory (deckpilot.memory) › Install with consent
@@ -27,7 +22,7 @@ const args = Object.fromEntries(
     return pairs
   }, []),
 )
-const { port, app, label, out, attach } = args
+const { port, app, label, out } = args
 const platform = process.env.SMOKE_PLATFORM ?? "unknown"
 const ELEMENT = "element-6066-11e4-a52e-4f735466cecf"
 const PLUGIN = "deckpilot.memory"
@@ -324,7 +319,8 @@ const steps = [
       )
       await wait(button("Back to DeckPilot"))
       await click(button("Plugins"))
-      await wait(`${installedItem}//span[normalize-space(.)='v${VERSION}']`)
+      const row = await wait(`${installedItem}//span[normalize-space(.)='v${VERSION}']`)
+      await execute("arguments[0].scrollIntoView({block: 'center'});", [{ [ELEMENT]: row }])
       const shot = await screenshot("settings-plugins")
       await click(button("Back to DeckPilot"))
       await switchTo(mainHandle)
@@ -375,27 +371,21 @@ const steps = [
 async function main() {
   try {
     const created = await call("POST", "/session", {
-      capabilities: {
-        alwaysMatch: attach
-          ? // msedgedriver attaches to the app's WebView2 (windows.ps1).
-            { browserName: "webview2", "ms:edgeOptions": { debuggerAddress: attach } }
-          : { "tauri:options": { application: app } },
-      },
+      capabilities: { alwaysMatch: { "tauri:options": { application: app } } },
     })
     session = created.sessionId
     if (!session) throw new Error(`no session id: ${JSON.stringify(created)}`)
     await call("POST", s("timeouts"), { script: 120_000, pageLoad: 120_000, implicit: 0 })
-    record(
-      "WebDriver session on the release build",
-      "pass",
-      `session ${session} for ${app}${attach ? ` (attached to its WebView2 at ${attach})` : ""}`,
-    )
+    record("WebDriver session on the release build", "pass", `session ${session} for ${app}`)
   } catch (e) {
     // Windows: msedgedriver hands WebView2 its debugging port through
-    // WEBVIEW2_* variables, which only debug builds apply
-    // (apps/desktop/src-tauri/src/windows.rs, for_webdriver).
+    // WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, which WebView2 ignores when the
+    // app passes browser arguments of its own (wry's defaults); only debug
+    // builds merge the variable in (apps/desktop/src-tauri/src/windows.rs,
+    // for_webdriver). The AdditionalBrowserArguments registry override is
+    // ignored the same way (checked against 0.8.0).
     const why = /DevToolsActivePort/.test(e.message)
-      ? " (release builds do not apply msedgedriver's WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS/WEBVIEW2_USER_DATA_FOLDER: windows::for_webdriver is debug-only, so the webview never opens its debugging port)"
+      ? " (release builds pass their own WebView2 browser arguments, so WebView2 ignores msedgedriver's WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS (--remote-debugging-port) and the webview never opens its debugging port; windows::for_webdriver, which merges it in, is debug-only)"
       : ""
     record(
       "WebDriver session on the release build",

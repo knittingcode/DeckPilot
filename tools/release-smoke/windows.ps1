@@ -5,7 +5,7 @@
 #   windows.ps1 install-nsis  <label> <setup.exe>  silent install (/S)
 #   windows.ps1 uninstall-nsis <label>
 #   windows.ps1 launch        <label>              first launch with an isolated profile
-#   windows.ps1 gui           <label>              msedgedriver attached to the app's WebView2, gui.mjs
+#   windows.ps1 gui           <label>              tauri-driver + msedgedriver, gui.mjs
 #
 # install-* write the installation directory to $env:SMOKE_WORK\<label>.dir
 # and to GITHUB_ENV as SMOKE_INSTALL_DIR. Results go to
@@ -269,54 +269,28 @@ switch ($Command) {
     }
   }
   'gui' {
-    # Release builds keep their own WebView2 profile and arguments, so a
-    # webview msedgedriver (through tauri-driver) launches never opens the
-    # debugging port it waits for (DevToolsActivePort). Instead the app is
-    # started with a DevTools port for WebView2 and msedgedriver attaches
-    # to it (debuggerAddress), as Microsoft documents for WebView2 apps.
     $dir = Get-Content $dirFile -ErrorAction Stop
     $exe = Join-Path $dir 'deckpilot-desktop.exe'
     $p = New-Profile "$Label-gui"
     $envs = Profile-Env $p
     $before = @(DeckPilot-Credentials)
     $listener = [System.Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0); $listener.Start(); $port = $listener.LocalEndpoint.Port; $listener.Stop()
-    $listener = [System.Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0); $listener.Start(); $cdp = $listener.LocalEndpoint.Port; $listener.Stop()
-    $arguments = "--remote-debugging-port=$cdp"
-    $envs['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'] = $arguments
-    # The loader's registry override for this executable, besides the
-    # variable; removed afterwards.
-    $policy = 'HKCU:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
-    New-Item -Path $policy -Force | Out-Null
-    New-ItemProperty -Path $policy -Name 'deckpilot-desktop.exe' -Value $arguments -PropertyType String -Force | Out-Null
-    $app = Start-WithEnv $exe $envs
-    $version = $null
-    for ($i = 0; $i -lt 240 -and -not $version; $i++) {
-      try { $version = Invoke-RestMethod "http://127.0.0.1:$cdp/json/version" -TimeoutSec 2 } catch { Start-Sleep -Milliseconds 500 }
+    $listener = [System.Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0); $listener.Start(); $native = $listener.LocalEndpoint.Port; $listener.Stop()
+    $driverArgs = @('--port', "$port", '--native-port', "$native")
+    if ($env:NATIVE_DRIVER) { $driverArgs += @('--native-driver', $env:NATIVE_DRIVER) }
+    $log = Join-Path $out "$Label-tauri-driver.log"
+    $envs['RUST_LOG'] = 'info'
+    $server = Start-Process -FilePath $env:TAURI_DRIVER -ArgumentList $driverArgs -PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError "$log.err" -Environment $envs
+    $up = $false
+    for ($i = 0; $i -lt 120 -and -not $up; $i++) {
+      try { Invoke-RestMethod "http://127.0.0.1:$port/status" -TimeoutSec 2 | Out-Null; $up = $true } catch { Start-Sleep -Milliseconds 500 }
     }
-    Remove-ItemProperty -Path $policy -Name 'deckpilot-desktop.exe' -ErrorAction SilentlyContinue
-    $log = Join-Path $out "$Label-msedgedriver.log"
-    if (-not $version) {
-      $ports = @(Get-ChildItem -Path $p -Recurse -Filter DevToolsActivePort -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
-      $running = if ($app.HasExited) { "exited with $($app.ExitCode)" } else { 'running' }
-      # The arguments WebView2 actually got: its browser process's command line.
-      $browser = @(Get-CimInstance Win32_Process -Filter "Name = 'msedgewebview2.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -notmatch '--type=' } | ForEach-Object { $_.CommandLine -replace '\s+--', ' --' })
-      $browser | ForEach-Object { Write-Host "WebView2 browser process: $_" }
-      $flags = if ($browser) { (($browser[0] -split ' ') | Where-Object { $_ -like '--*' -and $_ -notlike '--user-data-dir*' -and $_ -notlike '--embedded-browser-webview*' -and $_ -notlike '--webview-exe*' }) -join ' ' } else { 'no WebView2 browser process' }
-      Record "${Label}: GUI WebDriver session on the release build" 'not-covered' "the installed release build opened no WebView2 DevTools port within 120 s: it ignores WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS and the AdditionalBrowserArguments registry override ($arguments) because it passes its own browser arguments (wry), and launched by msedgedriver it ignores the profile and port msedgedriver sets (apps/desktop/src-tauri/src/windows.rs, for_webdriver is debug-only) (app $running; DevToolsActivePort files: $(if ($ports) { $ports -join ', ' } else { 'none' }); WebView2 browser flags: $flags)"
+    if (-not $up) {
+      Record "${Label}: GUI tauri-driver" 'not-covered' "tauri-driver did not answer on port ${port}: $(Get-Content "$log.err" -Tail 5 -ErrorAction SilentlyContinue)"
     } else {
-      Write-Host "WebView2 DevTools on port ${cdp}: $($version.Browser)"
-      $server = Start-Process -FilePath $env:NATIVE_DRIVER -ArgumentList @("--port=$port") -PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError "$log.err"
-      $up = $false
-      for ($i = 0; $i -lt 120 -and -not $up; $i++) {
-        try { Invoke-RestMethod "http://127.0.0.1:$port/status" -TimeoutSec 2 | Out-Null; $up = $true } catch { Start-Sleep -Milliseconds 500 }
-      }
-      if (-not $up) {
-        Record "${Label}: GUI msedgedriver" 'error' "msedgedriver did not answer on port ${port}: $(Get-Content "$log.err" -Tail 5 -ErrorAction SilentlyContinue)"
-      } else {
-        node (Join-Path $PSScriptRoot 'gui.mjs') --port "$port" --attach "127.0.0.1:$cdp" --app "$exe" --label "$Label" --out "$out" 2>&1 | Tee-Object -FilePath (Join-Path $out "$Label-gui.log")
-      }
-      Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+      node (Join-Path $PSScriptRoot 'gui.mjs') --port "$port" --app "$exe" --label "$Label" --out "$out" 2>&1 | Tee-Object -FilePath (Join-Path $out "$Label-gui.log")
     }
+    Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
     Get-Process msedgedriver -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     [void](Stop-DeckPilot)
     New-Item -ItemType Directory -Force -Path (Join-Path $out "$Label-gui-agent-logs") | Out-Null
