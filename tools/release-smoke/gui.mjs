@@ -251,10 +251,16 @@ const steps = [
     "main window",
     async () => {
       mainHandle = await mainWindow(LONG)
-      await wait("//header[@aria-label='Toolbar']//h1[normalize-space(.)='Device Editor']")
+      // Up to 0.8.1 the toolbar shows the page title "Device Editor"; later
+      // the editor has no title there, only a visually hidden heading.
+      const titled = "//header[@aria-label='Toolbar']//h1[normalize-space(.)='Device Editor']"
+      await wait(`${titled} | //main//h1[normalize-space(.)='Device Editor']`)
+      const editor = (await visible(titled))
+        ? "UI up to 0.8.1: page title 'Device Editor' in the toolbar"
+        : "new UI: no title in the toolbar, the editor's heading 'Device Editor'"
       await wait(SETTINGS)
       const status = await invoke("agent_status", {})
-      return `main window shown (toolbar with Marketplace and Settings, Device Editor); agent_status: ${JSON.stringify(status).slice(0, 300)}; ${await screenshot("main")}`
+      return `main window shown (toolbar with Marketplace and Settings; ${editor}); agent_status: ${JSON.stringify(status).slice(0, 300)}; ${await screenshot("main")}`
     },
   ],
   [
@@ -327,30 +333,56 @@ const steps = [
         LONG,
       )
       const inMain = where.handle === mainHandle
+      let pressed = ""
       if (inMain) {
+        await sleep(2000)
         const windows = (await handles()).length
         if (windows !== before.size)
           throw new Error(
             `the settings opened in the main window, but ${windows - before.size} more window(s) appeared`,
           )
+        await switchTo(mainHandle)
+        if (await visible(button("Back to DeckPilot")))
+          throw new Error("the settings view has a 'Back to DeckPilot' button")
+        pressed = await execute(
+          "return arguments[0].getAttribute('aria-pressed')",
+          [{ [ELEMENT]: await wait(SETTINGS) }],
+        )
+        if (pressed !== "true")
+          throw new Error(`the Settings button is not pressed in the settings (aria-pressed ${pressed})`)
       } else {
         await wait(button("Back to DeckPilot"))
       }
-      await click(button("Plugins"))
+      // In the main window the Plugins entry of the settings' sidebar (the
+      // workspace page under the settings is hidden).
+      await click(inMain ? `${SETTINGS_VIEW}${button("Plugins")}` : button("Plugins"))
       const row = await wait(`${installedItem}//span[normalize-space(.)='v${VERSION}']`)
       await execute("arguments[0].scrollIntoView({block: 'center'});", [{ [ELEMENT]: row }])
       const shot = await screenshot("settings-plugins")
+      let back = "back to the main window"
       if (inMain) {
+        // The toolbar's Marketplace leaves the settings; the Marketplace
+        // (Memory's details) waited under them and comes back as it was.
         await click(MARKETPLACE)
+        await until("the settings view to close", async () => !(await visible(SETTINGS_VIEW)), WAIT)
+        const status = await until(`the Marketplace as it was: Installed ${VERSION}`, async () => {
+          const t = await text("//section[@aria-label='Install status']")
+          return t.includes(`Installed ${VERSION}`) ? t : null
+        }, WAIT)
+        const after = await execute("return arguments[0].getAttribute('aria-pressed')", [
+          { [ELEMENT]: await wait(SETTINGS) },
+        ])
+        if (after === "true") throw new Error("the Settings button stays pressed after leaving the settings")
+        back = `the toolbar's Marketplace left them: the Marketplace is back as it was (install status '${status.trim()}'), Settings aria-pressed ${after}`
       } else {
         await click(button("Back to DeckPilot"))
         await switchTo(mainHandle)
       }
       await wait(MARKETPLACE)
       const how = inMain
-        ? "settings shown in the main window (no other window)"
-        : `settings window ${before.has(where.handle) ? "(already open)" : "opened"} as its own window (${SETTINGS_WINDOW})`
-      return `${how}; Extensions > Plugins lists ${NAME} v${VERSION}; back to the main window; ${shot}`
+        ? `new UI: settings shown in the main window (${SETTINGS_VIEW}; no other window, no 'Back to DeckPilot', Settings aria-pressed ${pressed})`
+        : `UI up to 0.8.1: settings window ${before.has(where.handle) ? "(already open)" : "opened"} as its own window (${SETTINGS_WINDOW})`
+      return `${how}; Extensions > Plugins lists ${NAME} v${VERSION}; ${back}; ${shot}`
     },
   ],
   [
