@@ -1,0 +1,116 @@
+{
+  "plugin": {
+    "name": "Projekty",
+    "description": "Projekty profilu, ich zasoby na tym komputerze i akcje przełączające między nimi: ekran Projekty, aktywny projekt na pasku stanu i na pulpicie."
+  },
+  "permissions": {
+    "projectContext": "Odczytuje projekty profilu i przełącza aktywny projekt po naciśnięciu klawisza projektu. Inne akcje działają wtedy na wybranym projekcie.",
+    "resources": "Wyszukuje zasoby projektu na tym komputerze, z folderem lub plikiem, do którego są przypisane, dla akcji zasobów.",
+    "profile": "Odczytuje aktywny projekt i projekt wskazany w akcji.",
+    "hostViews": "Pokazuje własny ekran Projekty DeckPilota, aktywny projekt na pasku stanu i jego kartę na pulpicie."
+  },
+  "category": "Projekty",
+  "actions": {
+    "cycle": {
+      "name": "Przełączaj projekty",
+      "description": "Aktywuje następny lub poprzedni projekt profilu."
+    },
+    "select": {
+      "name": "Wybierz projekt",
+      "description": "Aktywuje projekt profilu. Bez projektu podaje bieżący."
+    },
+    "current": {
+      "name": "Bieżący projekt",
+      "description": "Podaje bieżący projekt profilu."
+    },
+    "repository": {
+      "name": "Repozytorium projektu",
+      "description": "Wyszukuje repozytorium projektu na tym komputerze."
+    },
+    "documentation": {
+      "name": "Dokumentacja projektu",
+      "description": "Wyszukuje dokumentację projektu na tym komputerze."
+    },
+    "resolve-resource": {
+      "name": "Wyszukaj zasób projektu",
+      "description": "Wyszukuje nazwany zasób projektu na tym komputerze."
+    },
+    "next": {
+      "name": "Następny projekt",
+      "description": "Aktywuje następny projekt profilu."
+    },
+    "previous": {
+      "name": "Poprzedni projekt",
+      "description": "Aktywuje poprzedni projekt profilu."
+    },
+    "active": {
+      "name": "Pobierz aktywny projekt",
+      "description": "Podaje aktywny projekt profilu."
+    }
+  },
+  "params": {
+    "direction": {
+      "label": "Kierunek",
+      "description": "Następny lub poprzedni projekt w kolejności profilu. To, czy końce się zawijają, jest ustawieniem wtyczki Projekty."
+    },
+    "projectId": {
+      "label": "Projekt",
+      "description": "Zostaw „Bieżący projekt”, aby użyć projektu, który jest aktywny."
+    },
+    "resource": {
+      "label": "Zasób",
+      "description": "Nazwa zasobu w projekcie, na przykład repository lub docs."
+    }
+  },
+  "outputs": {
+    "projectId": "Id projektu",
+    "projectKey": "Klucz projektu",
+    "projectName": "Nazwa projektu",
+    "profileId": "Id profilu",
+    "resource": "Nazwa zasobu",
+    "resourceKey": "Klucz zasobu",
+    "kind": "Rodzaj zasobu",
+    "value": "Wartość na tym komputerze"
+  },
+  "settings": {
+    "wrapAround": {
+      "label": "Zawijanie",
+      "description": "Następny po ostatnim projekcie wybiera pierwszy i odwrotnie."
+    }
+  },
+  "variables": {
+    "id": {
+      "name": "Id projektu",
+      "description": "Id projektu w kontekście"
+    },
+    "key": {
+      "name": "Klucz projektu",
+      "description": "Klucz projektu w kontekście"
+    },
+    "name": {
+      "name": "Nazwa projektu",
+      "description": "Nazwa projektu w kontekście"
+    }
+  },
+  "navigation": {
+    "projects": "Projekty"
+  },
+  "errors": {
+    "no-projects": "Ten profil nie ma projektów.",
+    "at-last-project": "To już ostatni projekt.",
+    "at-first-project": "To już pierwszy projekt.",
+    "project-not-in-profile": "Projekt nie należy do aktywnego profilu.",
+    "projects-off": "Kontekst projektu jest niedostępny."
+  },
+  "messages": {
+    "only-project": "{{key}} to jedyny projekt",
+    "switched": "przełączono na {{key}}",
+    "selected": "wybrano {{key}}",
+    "is-active": "{{key}} jest aktywny",
+    "current": "{{key}} ({{name}})",
+    "no-active-project": "żaden projekt nie jest aktywny",
+    "not-in-profile": "projekt nie należy do aktywnego profilu",
+    "no-resource": "nie skonfigurowano zasobu",
+    "resolved": "{{key}} {{role}}: {{value}}"
+  }
+}

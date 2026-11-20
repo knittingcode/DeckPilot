@@ -1,0 +1,155 @@
+{
+  "outputs": {
+    "project": "Projekt Compose",
+    "projectKey": "Projekt",
+    "available": "Dostępny",
+    "reason": "Dlaczego niedostępny",
+    "clientVersion": "Wersja klienta",
+    "serverVersion": "Wersja silnika",
+    "serverOs": "System silnika",
+    "composeVersion": "Wersja Compose",
+    "context": "Kontekst Dockera",
+    "count": "Kontenery",
+    "running": "Działające",
+    "names": "Nazwy",
+    "containers": "Kontenery (nazwa, stan, obraz, status)",
+    "stopped": "Niedziałające",
+    "allRunning": "Wszystkie działają",
+    "composeContainers": "Kontenery (usługa, stan, obraz, status)",
+    "output": "Wynik Compose",
+    "logs": "Logi",
+    "lineCount": "Wiersze",
+    "truncated": "Obcięte"
+  },
+  "params": {
+    "context": {
+      "label": "Kontekst Dockera",
+      "description": "Musi być kontekstem, w którym Docker tu działa (przypisanego środowiska Dockera lub ustawienia Dockera w DeckPilocie). Puste: ten kontekst."
+    },
+    "environment": {
+      "label": "Środowisko Dockera",
+      "description": "Zasób środowiska Dockera (używany jest jego kontekst) lub folder. Puste: projekt Compose akcji lub projektu."
+    },
+    "all": {
+      "label": "Także zatrzymane",
+      "description": "Wyłączone: tylko działające kontenery."
+    },
+    "name": {
+      "label": "Nazwa zawiera",
+      "description": "Tylko kontenery, których nazwa to zawiera."
+    },
+    "compose": {
+      "label": "Projekt Compose",
+      "description": "Zasób przypisany do pliku Compose lub jego folderu. Puste: zasób compose projektu."
+    },
+    "projectId": {
+      "label": "Projekt",
+      "description": "Czyj zasób compose, gdy żaden nie jest wybrany. Puste: bieżący projekt przepływu."
+    },
+    "projectName": {
+      "label": "Nazwa projektu Compose",
+      "description": "Nieobsługiwane przez wtyczkę: Compose używa projektu przypisanego folderu lub pliku. Zostaw puste."
+    },
+    "services": {
+      "item": "Usługa",
+      "label": "Usługi",
+      "description": "Po jednej w wierszu. Puste: wszystkie usługi projektu."
+    },
+    "removeOrphans": {
+      "label": "Usuń osierocone kontenery",
+      "description": "Usuwa też kontenery usług, których nie ma już w pliku Compose."
+    },
+    "container": {
+      "label": "Kontener",
+      "description": "Nazwa lub identyfikator kontenera. Albo zostaw puste i wybierz usługę Compose."
+    },
+    "service": {
+      "label": "Usługa Compose",
+      "description": "Usługa poniższego projektu Compose."
+    },
+    "lines": {
+      "label": "Wiersze",
+      "description": "Ostatnie wiersze logu (odczytywanych jest najwyżej 1000)."
+    },
+    "since": {
+      "label": "Od",
+      "description": "np. 10m, 2h lub znacznik czasu. Puste: bez ograniczenia."
+    }
+  },
+  "actions": {
+    "status": {
+      "name": "Stan Dockera",
+      "description": "Czy Docker jest zainstalowany, a jego silnik osiągalny w kontekście, z wersjami klienta, silnika i Compose. Kończy się powodzeniem, gdy Docker jest niedostępny; mówi o tym `available`, a `reason` dlaczego."
+    },
+    "containers": {
+      "name": "Kontenery",
+      "description": "Kontenery kontekstu: nazwy, stany, obrazy i status."
+    },
+    "compose-status": {
+      "name": "Stan Compose",
+      "description": "Kontenery projektu Compose i czy działają."
+    },
+    "compose-up": {
+      "name": "Compose up",
+      "description": "Uruchamia projekt Compose w tle (up --detach). Wymaga zgody wtyczki Docker na uruchamianie, zatrzymywanie i restartowanie kontenerów."
+    },
+    "compose-down": {
+      "name": "Compose down",
+      "description": "Zatrzymuje i usuwa kontenery i sieci projektu Compose. Wolumeny i obrazy zostają. Wymaga zgody wtyczki Docker na uruchamianie, zatrzymywanie i restartowanie kontenerów."
+    },
+    "compose-restart": {
+      "name": "Compose restart",
+      "description": "Restartuje usługi projektu Compose. Wymaga zgody wtyczki Docker na uruchamianie, zatrzymywanie i restartowanie kontenerów."
+    },
+    "logs": {
+      "name": "Logi kontenera",
+      "description": "Ostatnie wiersze logu kontenera lub usługi Compose, do 64 KiB. Nigdy nie śledzi logu."
+    }
+  },
+  "category": "Docker",
+  "plugin": {
+    "name": "Docker",
+    "description": "Dostępność Dockera, kontenery, projekty Compose i logi, w przypisanym kontekście Dockera."
+  },
+  "dependencies": {
+    "projects": "Bez parametru projektu Compose akcje używają zasobu compose projektu przepływu; bez Projektów nie ma projektu i działają tylko klawisze z wybranym projektem Compose lub środowiskiem Dockera."
+  },
+  "permissions": {
+    "tools": "Uruchamia Twój własny docker w przypisanych środowiskach Dockera i folderach Compose, aby odczytać dostępność Dockera, kontenery, stan projektu Compose i ostatnie wiersze logu (docker context show, version, ps, logs, compose ps i logs). Z osobną zgodą na uruchamianie, zatrzymywanie i restartowanie kontenerów akcje Compose up, down i restart zmieniają Twoje projekty Compose, tylko gdy uruchomisz je Ty lub Twoja sesja pracy; down nigdy nie usuwa wolumenów ani obrazów.",
+    "resources": "Używa przypisanych na tym komputerze folderów i plików Compose oraz środowisk Dockera, po nazwie; wtyczka nigdy nie widzi ich ścieżek.",
+    "profile": "Odczytuje klucz aktywnego projektu, aby podać, do którego projektu należy projekt Compose.",
+    "device": "Pokazuje na klawiszach, czy Docker jest dostępny, ile kontenerów działa i czy projekt Compose działa, tak jak zastał to ostatni przebieg."
+  },
+  "settings": {
+    "composeRole": {
+      "label": "Zasób Compose",
+      "description": "Zasób projektu z plikiem Compose lub jego folderem, używany, gdy akcja żadnego nie wskazuje."
+    },
+    "timeoutSeconds": {
+      "label": "Limit czasu zmian Compose (s)",
+      "description": "Własny limit DeckPilota dla zmian nadal obowiązuje."
+    }
+  },
+  "errors": {
+    "docker-not-found": "Nie znaleziono Dockera na tym komputerze.",
+    "daemon-unavailable": "Nie można połączyć się z silnikiem Dockera kontekstu.",
+    "permission-denied": "Silnik odmówił dostępu (np. brak członkostwa w grupie docker).",
+    "context-not-found": "Kontekst Dockera nie istnieje.",
+    "compose-unavailable": "docker compose (Compose v2) nie jest zainstalowany.",
+    "compose-file-not-found": "Nie znaleziono pliku Compose projektu.",
+    "not-found": "Kontener, usługa lub zasób nie istnieje.",
+    "invalid-name": "Nazwa kontekstu, kontenera, usługi lub projektu jest nieprawidłowa.",
+    "changes-disabled": "Uruchamianie i zatrzymywanie kontenerów nie jest dozwolone dla wtyczki Docker.",
+    "project-not-in-profile": "Projekt nie należy do tego profilu.",
+    "docker-failed": "Docker zgłosił błąd.",
+    "not-user-initiated": "Kontenery są uruchamiane i zatrzymywane tylko w przebiegach uruchomionych przez Ciebie lub Twoją sesję pracy.",
+    "context-unsupported": "Akcja wskazuje inny kontekst Dockera niż ten, w którym Docker tu działa.",
+    "project-name-unsupported": "Nazwy projektu Compose nie można wybrać dla akcji.",
+    "docker-environment-missing": "Żadne środowisko Dockera, projekt Compose ani zasób projektu nie wskazuje, gdzie działa Docker.",
+    "cancelled": "Przebieg został zatrzymany.",
+    "resource-unbound": "Zasób nie jest przypisany na tym komputerze.",
+    "resource-role-missing": "Projekt nie określa zasobu Compose.",
+    "resource-kind-mismatch": "Zasób nie jest folderem, plikiem Compose ani środowiskiem Dockera.",
+    "resource-missing": "Zasób nie istnieje w tym profilu."
+  }
+}

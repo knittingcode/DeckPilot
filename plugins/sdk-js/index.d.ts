@@ -270,7 +270,7 @@ export interface ActionContext<M extends ManifestShape = Manifest> extends BaseC
 // (docs/marketplace/module-migration.md §7; first-party bundled plugins only)
 // ---------------------------------------------------------------------------
 
-export type ResourceKind = "directory" | "file" | "application" | "dockerEnvironment"
+export type ResourceKind = "directory" | "file" | "application" | "dockerEnvironment" | "url"
 
 /** An opaque handle, valid for this invocation only. Never a path. */
 export interface ResourceHandle {

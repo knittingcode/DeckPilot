@@ -1,0 +1,116 @@
+{
+  "plugin": {
+    "name": "Obszar roboczy",
+    "description": "Otwiera repozytorium lub pliki projektu w edytorze i jego strony w przeglądarce, z zasobów przypisanych na tym komputerze."
+  },
+  "dependencies": {
+    "projects": "Akcja Otwórz obszar roboczy projektu otwiera zasoby aktywnego projektu; bez Projektów nie ma aktywnego projektu."
+  },
+  "permissions": {
+    "resources": "Po naciśnięciu klawisza otwiera foldery i pliki przypisane na tym komputerze w przypisanym edytorze, a strony projektu w przeglądarce.",
+    "openUrl": "Po naciśnięciu klawisza otwiera w przeglądarce strony internetowe wpisane w akcji Otwórz strony.",
+    "profile": "Odczytuje klucz aktywnego projektu, aby podać, który projekt został otwarty."
+  },
+  "category": "Obszar roboczy",
+  "actions": {
+    "open-in-editor": {
+      "name": "Otwórz w edytorze",
+      "description": "Otwiera repozytorium projektu lub plik przypisany na tym komputerze, w podanym wierszu, w edytorze."
+    },
+    "open-urls": {
+      "name": "Otwórz strony",
+      "description": "Otwiera do dziesięciu stron internetowych (http, https) w domyślnej przeglądarce."
+    },
+    "open-project": {
+      "name": "Otwórz obszar roboczy projektu",
+      "description": "Otwiera repozytorium bieżącego projektu w jego edytorze, dokumentację i inne strony, z zasobów projektu. Brakujące są zgłaszane."
+    }
+  },
+  "params": {
+    "application": {
+      "label": "Edytor",
+      "description": "Zasób aplikacji: edytor (przypisz jego narzędzie wiersza poleceń, np. /usr/local/bin/code, aby otwierać w wierszu w edytorze uruchomionym już w macOS)."
+    },
+    "editor": {
+      "label": "Rodzaj edytora",
+      "description": "Jak przekazać wiersz: vscode i cursor (--goto plik:wiersz), jetbrains (--line N plik), zed i sublime (plik:wiersz). other otwiera plik bez wiersza."
+    },
+    "location": {
+      "label": "Folder lub plik",
+      "description": "Zasób folderu lub pliku. Puste: repozytorium projektu."
+    },
+    "path": {
+      "label": "Plik",
+      "description": "Wtyczka jeszcze tego nie obsługuje: przypisz plik jako zasób i wybierz go jako folder lub plik."
+    },
+    "line": { "label": "Wiersz", "description": "Wymaga pliku." },
+    "column": { "label": "Kolumna", "description": "Wymaga wiersza." },
+    "urls": {
+      "label": "Strony",
+      "description": "Jeden adres http lub https w wierszu, najwyżej 10.",
+      "item": "Strona"
+    },
+    "browser": {
+      "label": "Przeglądarka",
+      "description": "Zasób aplikacji. Na razie strony otwierają się w domyślnej przeglądarce."
+    },
+    "editorRole": {
+      "label": "Zasób edytora",
+      "description": "Zasób projektu, który jest edytorem (aplikacja)."
+    },
+    "repositoryRole": {
+      "label": "Zasób repozytorium",
+      "description": "Zasób projektu, który jest repozytorium (folder). Puste: pomiń."
+    },
+    "docsRole": {
+      "label": "Zasób dokumentacji",
+      "description": "Strona (URL) lub folder. Puste: pomiń."
+    },
+    "urlRoles": {
+      "label": "Inne strony",
+      "description": "Zasoby projektu, które są stronami, jedna nazwa w wierszu, np. dashboard, najwyżej 10.",
+      "item": "Zasób"
+    }
+  },
+  "outputs": {
+    "path": "Otwarto",
+    "application": "Edytor",
+    "located": "Otwarto w wierszu",
+    "opened": "Otwarte",
+    "failed": "Nieotwarte",
+    "urls": "Otwarte strony",
+    "projectKey": "Projekt",
+    "openedCount": "Otwarte",
+    "openedRoles": "Otwarte zasoby",
+    "missingCount": "Brakujące",
+    "missing": "Brakujące zasoby i powód"
+  },
+  "errors": {
+    "invalid-position": "Wiersz lub kolumna poza zakresem albo podane bez pliku.",
+    "no-urls": "Brak strony do otwarcia.",
+    "too-many-urls": "Więcej stron, niż można otworzyć naraz.",
+    "nothing-opened": "Nie udało się otworzyć niczego z projektu.",
+    "path-not-supported": "Wtyczka nie może jeszcze otworzyć pliku wewnątrz folderu."
+  },
+  "messages": {
+    "opened-in": "otwarto {{path}} w {{application}}",
+    "line-needs-file": "wiersz wymaga pliku, nie folderu",
+    "column-needs-line": "kolumna wymaga wiersza",
+    "position-range": "wiersz i kolumna mają wartość od 1 do 1000000",
+    "path-not-supported": "nie można jeszcze otworzyć pliku wewnątrz folderu: przypisz plik jako zasób i wybierz go jako folder lub plik",
+    "no-urls": "brak strony do otwarcia",
+    "too-many-urls": "naraz można otworzyć najwyżej 10 stron",
+    "too-many-roles": "najwyżej 10 innych stron",
+    "not-web": "„{{url}}” musi być adresem http lub https",
+    "opened-pages": "otwarte strony: {{count}}",
+    "opened-pages-failed": "otwarte strony: {{count}}; nieotwarte: {{failed}}",
+    "default-browser": " (w domyślnej przeglądarce)",
+    "no-active-project": "żaden projekt nie jest aktywny",
+    "nothing-chosen": "nie wybrano zasobów",
+    "nothing-opened": "nie udało się otworzyć niczego z {{project}}: {{why}}",
+    "opened-project": "otwarto {{roles}} z {{project}}",
+    "opened-project-missing": "otwarto {{roles}} z {{project}}; brakuje: {{missing}}",
+    "not-a-folder": "nie jest folderem",
+    "not-an-application": "{{role}} nie jest aplikacją"
+  }
+}

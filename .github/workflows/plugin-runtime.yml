@@ -85,7 +85,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Clippy (wasm guest crates)
-        run: cargo clippy --locked -p deckpilot-plugin-guest -p deckpilot-test-guest -p deckpilot-plugin-sdk -p deckpilot-sdk-test-guest -p hello-weather -p hello-world -p developer-tools -p deckpilot-github -p deckpilot-gitlab -p deckpilot-jira -p deckpilot-notifications --target wasm32-unknown-unknown -- -D warnings
+        run: cargo clippy --locked -p deckpilot-plugin-guest -p deckpilot-test-guest -p deckpilot-plugin-sdk -p deckpilot-sdk-test-guest -p hello-weather -p hello-world -p developer-tools -p deckpilot-docker -p deckpilot-git -p deckpilot-github -p deckpilot-gitlab -p deckpilot-jira -p deckpilot-notifications -p deckpilot-projects -p deckpilot-workflows -p deckpilot-workspace --target wasm32-unknown-unknown -- -D warnings
       - name: Test
         run: cargo test --locked --no-fail-fast -- --nocapture
       # The host as a Developer ID package signs it (hardened runtime): with

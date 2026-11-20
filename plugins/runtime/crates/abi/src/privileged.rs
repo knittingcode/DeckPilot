@@ -48,6 +48,11 @@ pub enum ResourceKind {
     File,
     Application,
     DockerEnvironment,
+    /// A web address the user bound (a project's URL role). Only
+    /// `resource.resolve` by role yields it, and only `resource.open`
+    /// opens it, in the default browser (X4); the guest never sees the
+    /// address.
+    Url,
 }
 
 /// `resource.resolve`: one handle for an action parameter or a role of

@@ -397,6 +397,7 @@ enum RateClass {
     ToolRun,
     ToolModify,
     ResourceOpen,
+    OpenUrlParam,
     ProjectSwitch,
 }
 
@@ -499,6 +500,18 @@ impl Broker {
         self.write_grants().remove(plugin);
     }
 
+    /// The plugin's **current** grant of `tool` (plugin API 1.9, X3), read
+    /// per call: the agent checks it while a `tool.run` process runs and
+    /// stops the process once the grant (or the sub-grant it used) is
+    /// revoked.
+    pub fn tool_grant(
+        &self,
+        plugin: &PluginId,
+        tool: deckpilot_plugin_abi::privileged::Tool,
+    ) -> Option<ToolGrant> {
+        self.grants(plugin)?.tool(tool)
+    }
+
     /// A session for the plugin whose host process the caller spawned. The
     /// session is the plugin's identity for every later decision.
     pub fn session(&self, plugin: PluginId) -> Session {
@@ -551,6 +564,7 @@ impl Broker {
             RateClass::ToolRun => self.inner.limits.tool_run,
             RateClass::ToolModify => self.inner.limits.tool_modify,
             RateClass::ResourceOpen => self.inner.limits.resource_open,
+            RateClass::OpenUrlParam => self.inner.limits.open_url_param,
             RateClass::ProjectSwitch => self.inner.limits.project_switch,
         };
         let now = self.inner.clock.now();
@@ -582,7 +596,7 @@ impl Broker {
         &self,
         plugin: &PluginId,
         op: &'static str,
-        target: Option<&Origin>,
+        target: Option<String>,
         decision: &Decision,
     ) {
         let seq = {
@@ -595,13 +609,32 @@ impl Broker {
             at_ms: self.inner.clock.wall_ms(),
             plugin: plugin.clone(),
             op,
-            target: target.map(Origin::to_string),
+            target,
             decision: match decision {
                 Decision::Allow(_) => AuditDecision::Allowed,
                 Decision::Deny(r) => AuditDecision::Denied(*r),
             },
         });
     }
+}
+
+/// What the audit names of a `tool.run`: the tool and its subcommand
+/// (`git status`, `docker compose up`), never another argument. A
+/// subcommand that is not a plain word (an option, or text a plugin made
+/// up) is `?`, so nothing a plugin passes reaches the log verbatim.
+fn tool_target(run: &ToolRun) -> String {
+    let plain = |word: &str| {
+        !word.is_empty()
+            && word.len() <= 32
+            && word
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    };
+    let subcommand = run
+        .subcommand()
+        .filter(|s| s.split(' ').all(plain))
+        .unwrap_or_else(|| "?".to_owned());
+    format!("{} {subcommand}", run.tool.as_str())
 }
 
 /// One plugin's view of the broker, bound to its channel.
@@ -635,8 +668,12 @@ impl Session {
         context: Option<&RunContext>,
     ) -> Decision {
         let (decision, target) = self.decide(request, context);
+        let target = match request {
+            CapabilityRequest::ToolRun(run) => Some(tool_target(run)),
+            _ => target.as_ref().map(Origin::to_string),
+        };
         self.broker
-            .audit(&self.plugin, request.op(), target.as_ref(), &decision);
+            .audit(&self.plugin, request.op(), target, &decision);
         decision
     }
 
@@ -681,8 +718,12 @@ impl Session {
         hop: u32,
     ) -> Decision {
         let (decision, target) = self.decide_redirect(previous, location, hop);
-        self.broker
-            .audit(&self.plugin, "http.redirect", target.as_ref(), &decision);
+        self.broker.audit(
+            &self.plugin,
+            "http.redirect",
+            target.as_ref().map(Origin::to_string),
+            &decision,
+        );
         decision
     }
 
@@ -983,7 +1024,7 @@ impl Session {
                     deny(DenyReason::NotGranted)
                 } else if !user {
                     deny(DenyReason::PrivilegedNotUserInitiated)
-                } else if !b.take(&self.plugin, RateClass::OpenUrl)
+                } else if !b.take(&self.plugin, RateClass::OpenUrlParam)
                     || !b.take(&self.plugin, RateClass::OpenUrlWindow)
                 {
                     deny(DenyReason::RateLimited)

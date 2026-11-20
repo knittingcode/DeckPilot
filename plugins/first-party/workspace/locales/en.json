@@ -1,0 +1,116 @@
+{
+  "plugin": {
+    "name": "Workspace",
+    "description": "Opens a project's repository or files in an editor and its pages in the browser, from resources bound on this computer."
+  },
+  "dependencies": {
+    "projects": "Open project workspace opens the active project's resources; without Projects there is no active project."
+  },
+  "permissions": {
+    "resources": "Opens the folders and files you bound on this computer in the editor you bound, and a project's pages in the browser, when you press a key.",
+    "openUrl": "Opens the web pages you typed into an Open pages action in the browser, when you press a key.",
+    "profile": "Reads the active project's key to report which project was opened."
+  },
+  "category": "Workspace",
+  "actions": {
+    "open-in-editor": {
+      "name": "Open in editor",
+      "description": "Opens the project's repository, or a file bound on this computer at a line, in an editor."
+    },
+    "open-urls": {
+      "name": "Open pages",
+      "description": "Opens up to ten web pages (http, https) in the default browser."
+    },
+    "open-project": {
+      "name": "Open project workspace",
+      "description": "Opens the current project's repository in its editor, its documentation and other pages, from the project's resources. Missing ones are reported."
+    }
+  },
+  "params": {
+    "application": {
+      "label": "Editor",
+      "description": "An application resource: the editor (bind its command-line tool, e.g. /usr/local/bin/code, to open at a line in an editor that is already running on macOS)."
+    },
+    "editor": {
+      "label": "Editor kind",
+      "description": "How to pass a line: vscode and cursor (--goto file:line), jetbrains (--line N file), zed and sublime (file:line). other opens the file without a line."
+    },
+    "location": {
+      "label": "Folder or file",
+      "description": "A folder or file resource. Empty: the project's repository."
+    },
+    "path": {
+      "label": "File",
+      "description": "Not supported by the plugin yet: bind the file as a resource and choose it as Folder or file."
+    },
+    "line": { "label": "Line", "description": "Needs a file." },
+    "column": { "label": "Column", "description": "Needs a line." },
+    "urls": {
+      "label": "Pages",
+      "description": "One http or https address per line, at most 10.",
+      "item": "Page"
+    },
+    "browser": {
+      "label": "Browser",
+      "description": "An application resource. Pages open in the default browser for now."
+    },
+    "editorRole": {
+      "label": "Editor resource",
+      "description": "The project resource that is the editor (an application)."
+    },
+    "repositoryRole": {
+      "label": "Repository resource",
+      "description": "The project resource that is the repository (a folder). Empty: skip."
+    },
+    "docsRole": {
+      "label": "Documentation resource",
+      "description": "A page (URL) or folder. Empty: skip."
+    },
+    "urlRoles": {
+      "label": "Other pages",
+      "description": "Project resources that are pages, one name per line, e.g. dashboard, at most 10.",
+      "item": "Resource"
+    }
+  },
+  "outputs": {
+    "path": "Opened",
+    "application": "Editor",
+    "located": "Opened at the line",
+    "opened": "Opened",
+    "failed": "Not opened",
+    "urls": "Pages opened",
+    "projectKey": "Project",
+    "openedCount": "Opened",
+    "openedRoles": "Opened resources",
+    "missingCount": "Missing",
+    "missing": "Missing resources and why"
+  },
+  "errors": {
+    "invalid-position": "A line or column is out of range, or given without a file.",
+    "no-urls": "No page to open.",
+    "too-many-urls": "More pages than can be opened at once.",
+    "nothing-opened": "Nothing of the project could be opened.",
+    "path-not-supported": "A file inside a folder cannot be opened by the plugin yet."
+  },
+  "messages": {
+    "opened-in": "opened {{path}} in {{application}}",
+    "line-needs-file": "a line needs a file, not a folder",
+    "column-needs-line": "a column needs a line",
+    "position-range": "a line and column are from 1 to 1000000",
+    "path-not-supported": "a file inside a folder cannot be opened yet: bind the file as a resource and choose it as the folder or file",
+    "no-urls": "no page to open",
+    "too-many-urls": "at most 10 pages can be opened at once",
+    "too-many-roles": "at most 10 other pages",
+    "not-web": "“{{url}}” must be an http or https address",
+    "opened-pages": "opened {{count}} pages",
+    "opened-pages-failed": "opened {{count}} pages; {{failed}} could not be opened",
+    "default-browser": " (in the default browser)",
+    "no-active-project": "no project is active",
+    "nothing-chosen": "no resources were chosen",
+    "nothing-opened": "nothing of {{project}} could be opened: {{why}}",
+    "opened-project": "opened {{roles}} of {{project}}",
+    "opened-project-missing": "opened {{roles}} of {{project}}; missing: {{missing}}",
+    "not-a-folder": "is not a folder",
+    "not-an-application": "{{role}} is not an application"
+  }
+}

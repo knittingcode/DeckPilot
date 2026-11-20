@@ -1,0 +1,682 @@
+{
+  "$schema": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json",
+  "manifestVersion": 1,
+  "id": "deckpilot.projects",
+  "name": "t:plugin.name",
+  "version": "0.1.0",
+  "publisher": {
+    "id": "deckpilot",
+    "name": "DeckPilot",
+    "url": "https://github.com/knittingcode/deckpilot"
+  },
+  "description": "t:plugin.description",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/knittingcode/deckpilot",
+    "directory": "plugins/first-party/projects"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "projects",
+    "context",
+    "switcher"
+  ],
+  "categories": [
+    "productivity"
+  ],
+  "engines": {
+    "deckpilot": ">=0.10.0 <1.0.0",
+    "pluginApi": "^1.9",
+    "sdk": "0.1.0"
+  },
+  "runtime": {
+    "kind": "wasm",
+    "abi": 1
+  },
+  "entry": "src/lib.rs",
+  "icons": {
+    "128": "assets/icon-128.png"
+  },
+  "defaultLocale": "en",
+  "locales": [
+    "en",
+    "pl"
+  ],
+  "permissions": [
+    {
+      "kind": "projectContext",
+      "select": true,
+      "justification": "t:permissions.projectContext"
+    },
+    {
+      "kind": "resources",
+      "paths": true,
+      "justification": "t:permissions.resources"
+    },
+    {
+      "kind": "profile",
+      "read": [
+        "project"
+      ],
+      "justification": "t:permissions.profile"
+    },
+    {
+      "kind": "hostViews",
+      "justification": "t:permissions.hostViews"
+    }
+  ],
+  "contributes": {
+    "actions": [
+      {
+        "id": "cycle",
+        "name": "t:actions.cycle.name",
+        "description": "t:actions.cycle.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "direction",
+            "label": "t:params.direction.label",
+            "description": "t:params.direction.description",
+            "required": false,
+            "kind": {
+              "type": "choice",
+              "options": [
+                "next",
+                "previous"
+              ]
+            },
+            "default": {
+              "type": "choice",
+              "value": "next"
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "folder",
+          "outputs": [
+            {
+              "key": "projectId",
+              "label": "t:outputs.projectId",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": true
+            },
+            {
+              "key": "projectName",
+              "label": "t:outputs.projectName",
+              "kind": "text",
+              "always": true
+            }
+          ],
+          "timeoutMs": 5000,
+          "retrySafe": false,
+          "idempotent": false,
+          "cancellable": false,
+          "effect": "modifies"
+        },
+        "controls": {
+          "key": [
+            "click",
+            "double-click",
+            "long-press",
+            "press",
+            "release"
+          ],
+          "encoder": [
+            "click",
+            "press",
+            "rotate-clockwise",
+            "rotate-counter-clockwise"
+          ]
+        }
+      },
+      {
+        "id": "select",
+        "name": "t:actions.select.name",
+        "description": "t:actions.select.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "projectId",
+            "label": "t:params.projectId.label",
+            "description": "t:params.projectId.description",
+            "required": false,
+            "kind": {
+              "type": "project"
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "folder",
+          "outputs": [
+            {
+              "key": "projectId",
+              "label": "t:outputs.projectId",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": true
+            },
+            {
+              "key": "projectName",
+              "label": "t:outputs.projectName",
+              "kind": "text",
+              "always": true
+            }
+          ],
+          "timeoutMs": 5000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": false,
+          "effect": "modifies"
+        }
+      },
+      {
+        "id": "current",
+        "name": "t:actions.current.name",
+        "description": "t:actions.current.description",
+        "category": "t:category",
+        "parameters": [],
+        "node": {
+          "version": 1,
+          "icon": "folder",
+          "outputs": [
+            {
+              "key": "projectId",
+              "label": "t:outputs.projectId",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": true
+            },
+            {
+              "key": "projectName",
+              "label": "t:outputs.projectName",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "profileId",
+              "label": "t:outputs.profileId",
+              "kind": "text",
+              "always": false
+            }
+          ],
+          "timeoutMs": 5000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": false,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "repository",
+        "name": "t:actions.repository.name",
+        "description": "t:actions.repository.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "projectId",
+            "label": "t:params.projectId.label",
+            "description": "t:params.projectId.description",
+            "required": false,
+            "kind": {
+              "type": "project"
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "folder",
+          "outputs": [
+            {
+              "key": "projectId",
+              "label": "t:outputs.projectId",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": true
+            },
+            {
+              "key": "projectName",
+              "label": "t:outputs.projectName",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "resource",
+              "label": "t:outputs.resource",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "resourceKey",
+              "label": "t:outputs.resourceKey",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "kind",
+              "label": "t:outputs.kind",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "value",
+              "label": "t:outputs.value",
+              "kind": "text",
+              "always": true
+            }
+          ],
+          "timeoutMs": 5000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": false,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "documentation",
+        "name": "t:actions.documentation.name",
+        "description": "t:actions.documentation.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "projectId",
+            "label": "t:params.projectId.label",
+            "description": "t:params.projectId.description",
+            "required": false,
+            "kind": {
+              "type": "project"
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "folder",
+          "outputs": [
+            {
+              "key": "projectId",
+              "label": "t:outputs.projectId",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": true
+            },
+            {
+              "key": "projectName",
+              "label": "t:outputs.projectName",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "resource",
+              "label": "t:outputs.resource",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "resourceKey",
+              "label": "t:outputs.resourceKey",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "kind",
+              "label": "t:outputs.kind",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "value",
+              "label": "t:outputs.value",
+              "kind": "text",
+              "always": true
+            }
+          ],
+          "timeoutMs": 5000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": false,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "resolve-resource",
+        "name": "t:actions.resolve-resource.name",
+        "description": "t:actions.resolve-resource.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "projectId",
+            "label": "t:params.projectId.label",
+            "description": "t:params.projectId.description",
+            "required": false,
+            "kind": {
+              "type": "project"
+            }
+          },
+          {
+            "key": "resource",
+            "label": "t:params.resource.label",
+            "description": "t:params.resource.description",
+            "required": true,
+            "kind": {
+              "type": "text",
+              "multiline": false,
+              "maxLength": 64
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "folder",
+          "outputs": [
+            {
+              "key": "projectId",
+              "label": "t:outputs.projectId",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": true
+            },
+            {
+              "key": "projectName",
+              "label": "t:outputs.projectName",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "resource",
+              "label": "t:outputs.resource",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "resourceKey",
+              "label": "t:outputs.resourceKey",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "kind",
+              "label": "t:outputs.kind",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "value",
+              "label": "t:outputs.value",
+              "kind": "text",
+              "always": true
+            }
+          ],
+          "timeoutMs": 5000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": false,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "next",
+        "name": "t:actions.next.name",
+        "description": "t:actions.next.description",
+        "category": "t:category",
+        "parameters": [],
+        "node": {
+          "version": 1,
+          "icon": "folder",
+          "outputs": [
+            {
+              "key": "projectId",
+              "label": "t:outputs.projectId",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": true
+            },
+            {
+              "key": "projectName",
+              "label": "t:outputs.projectName",
+              "kind": "text",
+              "always": true
+            }
+          ],
+          "timeoutMs": 5000,
+          "retrySafe": false,
+          "idempotent": false,
+          "cancellable": false,
+          "effect": "modifies"
+        },
+        "controls": {
+          "key": [
+            "click",
+            "double-click",
+            "long-press",
+            "press",
+            "release"
+          ],
+          "encoder": [
+            "click",
+            "press",
+            "rotate-clockwise",
+            "rotate-counter-clockwise"
+          ]
+        },
+        "deprecated": true,
+        "replacedBy": "cycle"
+      },
+      {
+        "id": "previous",
+        "name": "t:actions.previous.name",
+        "description": "t:actions.previous.description",
+        "category": "t:category",
+        "parameters": [],
+        "node": {
+          "version": 1,
+          "icon": "folder",
+          "outputs": [
+            {
+              "key": "projectId",
+              "label": "t:outputs.projectId",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": true
+            },
+            {
+              "key": "projectName",
+              "label": "t:outputs.projectName",
+              "kind": "text",
+              "always": true
+            }
+          ],
+          "timeoutMs": 5000,
+          "retrySafe": false,
+          "idempotent": false,
+          "cancellable": false,
+          "effect": "modifies"
+        },
+        "controls": {
+          "key": [
+            "click",
+            "double-click",
+            "long-press",
+            "press",
+            "release"
+          ],
+          "encoder": [
+            "click",
+            "press",
+            "rotate-clockwise",
+            "rotate-counter-clockwise"
+          ]
+        },
+        "deprecated": true,
+        "replacedBy": "cycle"
+      },
+      {
+        "id": "active",
+        "name": "t:actions.active.name",
+        "description": "t:actions.active.description",
+        "category": "t:category",
+        "parameters": [],
+        "node": {
+          "version": 1,
+          "icon": "folder",
+          "outputs": [
+            {
+              "key": "projectId",
+              "label": "t:outputs.projectId",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": true
+            },
+            {
+              "key": "projectName",
+              "label": "t:outputs.projectName",
+              "kind": "text",
+              "always": true
+            }
+          ],
+          "timeoutMs": 5000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": false,
+          "effect": "readOnly"
+        },
+        "deprecated": true,
+        "replacedBy": "current"
+      }
+    ],
+    "settings": {
+      "portabilityVersion": 1,
+      "fields": [
+        {
+          "key": "wrapAround",
+          "label": "t:settings.wrapAround.label",
+          "description": "t:settings.wrapAround.description",
+          "required": true,
+          "kind": {
+            "type": "boolean"
+          },
+          "default": {
+            "type": "boolean",
+            "value": true
+          },
+          "portability": "portable"
+        }
+      ]
+    },
+    "variables": [
+      {
+        "id": "current.id",
+        "name": "t:variables.id.name",
+        "description": "t:variables.id.description",
+        "valueType": {
+          "type": "string"
+        },
+        "scope": "project",
+        "requires": [
+          "project"
+        ],
+        "source": "host:project.id"
+      },
+      {
+        "id": "current.key",
+        "name": "t:variables.key.name",
+        "description": "t:variables.key.description",
+        "valueType": {
+          "type": "string"
+        },
+        "scope": "project",
+        "requires": [
+          "project"
+        ],
+        "source": "host:project.key"
+      },
+      {
+        "id": "current.name",
+        "name": "t:variables.name.name",
+        "description": "t:variables.name.description",
+        "valueType": {
+          "type": "string"
+        },
+        "scope": "project",
+        "requires": [
+          "project"
+        ],
+        "source": "host:project.name"
+      }
+    ],
+    "navigation": [
+      {
+        "id": "projects",
+        "label": "t:navigation.projects",
+        "icon": "assets/icon-128.png",
+        "view": "projects"
+      }
+    ],
+    "views": [
+      {
+        "id": "projects",
+        "kind": "projects",
+        "context": "profile"
+      }
+    ],
+    "statusItems": [
+      "activeProject"
+    ],
+    "dashboardCards": [
+      "activeProject"
+    ],
+    "errorCodes": {
+      "no-projects": "t:errors.no-projects",
+      "at-last-project": "t:errors.at-last-project",
+      "at-first-project": "t:errors.at-first-project",
+      "project-not-in-profile": "t:errors.project-not-in-profile",
+      "projects-off": "t:errors.projects-off"
+    }
+  }
+}

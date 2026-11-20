@@ -184,6 +184,19 @@ jobs:
       # older build on the same data.
       - name: Notifications plugin end to end
         run: cargo test -p deckpilot-agent --features plugins --test plugins_notifications --locked -- --nocapture
+      # Plugin API 1.9's first-party plugins through the real host
+      # operations: resource handles and a recording launcher (Workspace),
+      # the project context and host-published variables (Projects), and
+      # the host views (Workflows, Projects).
+      - name: Workspace, Projects and Workflows plugins end to end
+        run: cargo test -p deckpilot-agent --features plugins --test plugins_workspace --test plugins_projects --test plugins_workflows --locked -- --nocapture
+      # deckpilot.git and deckpilot.docker through the real `tool.run`:
+      # a fake git and a fake docker first on the agent's PATH print the
+      # built-in tests' recorded output; consent, sub-grants and the
+      # user-started rule for Compose changes (Unix only).
+      - name: Git and Docker plugins end to end
+        if: runner.os != 'Windows'
+        run: cargo test -p deckpilot-agent --features plugins --test plugins_git --test plugins_docker --locked -- --nocapture
       # The bundle layout as the release builds it (and
       # DECKPILOT_RELEASE_PLUGINS=1 locally), with the test fixture: built twice from clean
       # target directories (reproducible on this platform), the agent
@@ -197,7 +210,7 @@ jobs:
           # against an agent compiled with their pins.
           plugins/first-party/build.sh --out "$RUNNER_TEMP/bundle-release"
           jq -c '[.plugins[] | {id, class}]' "$RUNNER_TEMP/bundle-release/bundled/pins.json" | tr -d '\r' > "$RUNNER_TEMP/release-set.json"
-          echo '[{"id":"deckpilot.github","class":"migration"},{"id":"deckpilot.gitlab","class":"migration"},{"id":"deckpilot.jira","class":"migration"},{"id":"deckpilot.notifications","class":"default"}]' | diff - "$RUNNER_TEMP/release-set.json"
+          echo '[{"id":"deckpilot.github","class":"migration"},{"id":"deckpilot.gitlab","class":"migration"},{"id":"deckpilot.jira","class":"migration"},{"id":"deckpilot.notifications","class":"default"},{"id":"deckpilot.projects","class":"migration"},{"id":"deckpilot.workflows","class":"default"},{"id":"deckpilot.workspace","class":"migration"}]' | diff - "$RUNNER_TEMP/release-set.json"
           for run in a b; do
             plugins/first-party/build.sh --test-fixtures --out "$RUNNER_TEMP/bundle-$run" --target-dir "$RUNNER_TEMP/first-party-$run"
           done

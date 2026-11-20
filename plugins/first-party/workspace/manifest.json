@@ -1,0 +1,401 @@
+{
+  "$schema": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json",
+  "manifestVersion": 1,
+  "id": "deckpilot.workspace",
+  "name": "t:plugin.name",
+  "version": "0.1.0",
+  "publisher": {
+    "id": "deckpilot",
+    "name": "DeckPilot",
+    "url": "https://github.com/knittingcode/deckpilot"
+  },
+  "description": "t:plugin.description",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/knittingcode/deckpilot",
+    "directory": "plugins/first-party/workspace"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "workspace",
+    "editor",
+    "projects"
+  ],
+  "categories": [
+    "developer-tools"
+  ],
+  "engines": {
+    "deckpilot": ">=0.10.0 <1.0.0",
+    "pluginApi": "^1.9",
+    "sdk": "0.1.0"
+  },
+  "runtime": {
+    "kind": "wasm",
+    "abi": 1
+  },
+  "entry": "src/lib.rs",
+  "icons": {
+    "128": "assets/icon-128.png"
+  },
+  "defaultLocale": "en",
+  "locales": [
+    "en",
+    "pl"
+  ],
+  "dependencies": [
+    {
+      "id": "deckpilot.projects",
+      "version": ">=0.1.0 <1.0.0",
+      "optional": true,
+      "justification": "t:dependencies.projects"
+    }
+  ],
+  "permissions": [
+    {
+      "kind": "resources",
+      "open": true,
+      "justification": "t:permissions.resources"
+    },
+    {
+      "kind": "openUrl",
+      "hosts": [],
+      "fromParams": true,
+      "justification": "t:permissions.openUrl"
+    },
+    {
+      "kind": "profile",
+      "read": [
+        "project"
+      ],
+      "justification": "t:permissions.profile"
+    }
+  ],
+  "contributes": {
+    "actions": [
+      {
+        "id": "open-in-editor",
+        "name": "t:actions.open-in-editor.name",
+        "description": "t:actions.open-in-editor.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "application",
+            "label": "t:params.application.label",
+            "description": "t:params.application.description",
+            "required": true,
+            "kind": {
+              "type": "resource",
+              "kinds": [
+                "application"
+              ]
+            }
+          },
+          {
+            "key": "editor",
+            "label": "t:params.editor.label",
+            "description": "t:params.editor.description",
+            "required": false,
+            "kind": {
+              "type": "choice",
+              "options": [
+                "vscode",
+                "cursor",
+                "jetbrains",
+                "zed",
+                "sublime",
+                "other"
+              ]
+            },
+            "default": {
+              "type": "choice",
+              "value": "other"
+            }
+          },
+          {
+            "key": "location",
+            "label": "t:params.location.label",
+            "description": "t:params.location.description",
+            "required": false,
+            "kind": {
+              "type": "resource",
+              "kinds": [
+                "directory",
+                "file"
+              ]
+            }
+          },
+          {
+            "key": "path",
+            "label": "t:params.path.label",
+            "description": "t:params.path.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "multiline": false,
+              "maxLength": 1024
+            }
+          },
+          {
+            "key": "line",
+            "label": "t:params.line.label",
+            "description": "t:params.line.description",
+            "required": false,
+            "kind": {
+              "type": "integer",
+              "min": 1,
+              "max": 1000000
+            }
+          },
+          {
+            "key": "column",
+            "label": "t:params.column.label",
+            "description": "t:params.column.description",
+            "required": false,
+            "kind": {
+              "type": "integer",
+              "min": 1,
+              "max": 1000000
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "code",
+          "outputs": [
+            {
+              "key": "path",
+              "label": "t:outputs.path",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "application",
+              "label": "t:outputs.application",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "located",
+              "label": "t:outputs.located",
+              "kind": "boolean",
+              "always": true
+            }
+          ],
+          "timeoutMs": 15000,
+          "retrySafe": true,
+          "idempotent": false,
+          "cancellable": false,
+          "effect": "opens"
+        }
+      },
+      {
+        "id": "open-urls",
+        "name": "t:actions.open-urls.name",
+        "description": "t:actions.open-urls.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "urls",
+            "label": "t:params.urls.label",
+            "description": "t:params.urls.description",
+            "required": true,
+            "kind": {
+              "type": "lines",
+              "itemLabel": "t:params.urls.item",
+              "maxItems": 10,
+              "maxLength": 2048
+            }
+          },
+          {
+            "key": "browser",
+            "label": "t:params.browser.label",
+            "description": "t:params.browser.description",
+            "required": false,
+            "kind": {
+              "type": "resource",
+              "kinds": [
+                "application"
+              ]
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "globe",
+          "outputs": [
+            {
+              "key": "opened",
+              "label": "t:outputs.opened",
+              "kind": "integer",
+              "always": true
+            },
+            {
+              "key": "failed",
+              "label": "t:outputs.failed",
+              "kind": "integer",
+              "always": true
+            },
+            {
+              "key": "urls",
+              "label": "t:outputs.urls",
+              "kind": "text",
+              "always": true,
+              "sensitive": true
+            }
+          ],
+          "timeoutMs": 15000,
+          "retrySafe": true,
+          "idempotent": false,
+          "cancellable": false,
+          "effect": "opens"
+        }
+      },
+      {
+        "id": "open-project",
+        "name": "t:actions.open-project.name",
+        "description": "t:actions.open-project.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "editor",
+            "label": "t:params.editor.label",
+            "description": "t:params.editor.description",
+            "required": false,
+            "kind": {
+              "type": "choice",
+              "options": [
+                "vscode",
+                "cursor",
+                "jetbrains",
+                "zed",
+                "sublime",
+                "other"
+              ]
+            },
+            "default": {
+              "type": "choice",
+              "value": "other"
+            }
+          },
+          {
+            "key": "editorRole",
+            "label": "t:params.editorRole.label",
+            "description": "t:params.editorRole.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "multiline": false,
+              "maxLength": 64
+            },
+            "default": {
+              "type": "text",
+              "value": "editor"
+            }
+          },
+          {
+            "key": "repositoryRole",
+            "label": "t:params.repositoryRole.label",
+            "description": "t:params.repositoryRole.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "multiline": false,
+              "maxLength": 64
+            },
+            "default": {
+              "type": "text",
+              "value": "repository"
+            }
+          },
+          {
+            "key": "docsRole",
+            "label": "t:params.docsRole.label",
+            "description": "t:params.docsRole.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "multiline": false,
+              "maxLength": 64
+            },
+            "default": {
+              "type": "text",
+              "value": "docs"
+            }
+          },
+          {
+            "key": "urlRoles",
+            "label": "t:params.urlRoles.label",
+            "description": "t:params.urlRoles.description",
+            "required": false,
+            "kind": {
+              "type": "lines",
+              "itemLabel": "t:params.urlRoles.item",
+              "maxItems": 10,
+              "maxLength": 64
+            }
+          },
+          {
+            "key": "browser",
+            "label": "t:params.browser.label",
+            "description": "t:params.browser.description",
+            "required": false,
+            "kind": {
+              "type": "resource",
+              "kinds": [
+                "application"
+              ]
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "app-window",
+          "outputs": [
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": true
+            },
+            {
+              "key": "opened",
+              "label": "t:outputs.openedCount",
+              "kind": "integer",
+              "always": true
+            },
+            {
+              "key": "openedRoles",
+              "label": "t:outputs.openedRoles",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "missingCount",
+              "label": "t:outputs.missingCount",
+              "kind": "integer",
+              "always": true
+            },
+            {
+              "key": "missing",
+              "label": "t:outputs.missing",
+              "kind": "text",
+              "always": true
+            }
+          ],
+          "timeoutMs": 15000,
+          "retrySafe": true,
+          "idempotent": false,
+          "cancellable": false,
+          "effect": "opens"
+        }
+      }
+    ],
+    "errorCodes": {
+      "invalid-position": "t:errors.invalid-position",
+      "no-urls": "t:errors.no-urls",
+      "too-many-urls": "t:errors.too-many-urls",
+      "nothing-opened": "t:errors.nothing-opened",
+      "path-not-supported": "t:errors.path-not-supported"
+    }
+  }
+}

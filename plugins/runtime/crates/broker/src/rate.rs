@@ -99,9 +99,15 @@ pub struct RateLimits {
     pub tool_run: Rate,
     /// `tool.run` with `tools:docker:modify` (X3c): 6 per minute.
     pub tool_modify: Rate,
-    /// `resource.open` (X4): 1 per second.
+    /// `resource.open` (X4): 1 per second, with a burst of 5 (its
+    /// per-invocation cap), so `open-project` can open its editor, docs
+    /// and pages at once.
     pub resource_open: Rate,
-    /// `project.select` and `project.cycle` (X6): 2 per second.
+    /// `url.openParam` (X5): 1 per 2 s, with a burst of 10 (its
+    /// per-invocation cap); `open_url_window` applies as well.
+    pub open_url_param: Rate,
+    /// `project.select` and `project.cycle` (X6): 2 per second without a
+    /// burst, so a second switch within 500 ms is throttled.
     pub project_switch: Rate,
 }
 
@@ -121,8 +127,9 @@ impl Default for RateLimits {
             dialog: Rate::new(6, Duration::from_secs(60)),
             tool_run: Rate::new(20, Duration::from_secs(1)),
             tool_modify: Rate::new(6, Duration::from_secs(60)),
-            resource_open: Rate::new(1, Duration::from_secs(1)),
-            project_switch: Rate::new(2, Duration::from_secs(1)),
+            resource_open: Rate::new(5, Duration::from_secs(5)),
+            open_url_param: Rate::new(10, Duration::from_secs(20)),
+            project_switch: Rate::new(1, Duration::from_millis(500)),
         }
     }
 }

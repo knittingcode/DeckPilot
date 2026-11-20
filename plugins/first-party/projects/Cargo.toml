@@ -1,0 +1,33 @@
+# deckpilot.projects: the first-party Projects plugin, the user-facing
+# part of the built-in `projects` module (docs/marketplace/module-migration.md
+# §7 X6-X8, WP-B4): the project actions, `wrapAround`, the host-published
+# variables `current.*`, and the app's Projects screen, status item and
+# dashboard card. The project data model and its tables stay in the core.
+# Bundled with class `migration` (plugins/first-party/bundled.json); not
+# routed until its alias block and migration plan land (WP-C1).
+#
+# A member of the plugins/runtime workspace (shared Cargo.lock and the
+# `guest` profile), built for wasm32-unknown-unknown; the rlib crate type
+# lets its native unit tests run with plain `cargo test`.
+[package]
+name = "deckpilot-projects"
+description = "DeckPilot's first-party Projects plugin: switch and inspect the active project"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+publish = false
+workspace = "../../runtime"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+deckpilot-plugin-sdk.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+jsonschema.workspace = true
+
+[lints]
+workspace = true

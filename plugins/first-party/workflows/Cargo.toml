@@ -1,0 +1,32 @@
+# deckpilot.workflows: the first-party Workflows plugin
+# (docs/marketplace/module-migration.md §7 X8, WP-B5). A manifest-only
+# guest without actions: it activates the app's own Workflows screen and
+# its navigation entry (`hostViews`). The workflow engine, its bindings
+# and its execution IPC stay in the core. Bundled with class `default`
+# (plugins/first-party/bundled.json): seeded on every computer.
+#
+# A member of the plugins/runtime workspace (shared Cargo.lock and the
+# `guest` profile), built for wasm32-unknown-unknown; the rlib crate type
+# lets its native unit tests run with plain `cargo test`.
+[package]
+name = "deckpilot-workflows"
+description = "DeckPilot's first-party Workflows plugin: the app's Workflows screen"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+publish = false
+workspace = "../../runtime"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+deckpilot-plugin-sdk.workspace = true
+
+[dev-dependencies]
+jsonschema.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

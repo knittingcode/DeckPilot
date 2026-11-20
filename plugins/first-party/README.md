@@ -25,6 +25,8 @@ pipeline does not package plugins at all (see "Packaging" below).
 | Path | What |
 | --- | --- |
 | `bundled.json` | The plugins a release bundles: `{"path": "<dir>", "class": "default" \| "migration"}` |
+| `docker/` | `deckpilot.docker`, class `migration` (plugin API 1.9): the replacement of the built-in `docker` module over `tool.run` and resource handles, not routed until WP-C1; [docker/README.md](docker/README.md) lists the differences; checked by its unit tests and `apps/agent/tests/plugins_docker.rs` |
+| `git/` | `deckpilot.git`, class `migration` (plugin API 1.9): the replacement of the built-in `git` module over `tool.run` and resource handles, not routed until WP-C1; [git/README.md](git/README.md) lists the differences; checked by its unit tests and `apps/agent/tests/plugins_git.rs` |
 | `github/` | `deckpilot.github`, class `migration`: the replacement of the built-in `github` module, checked against it by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_github.rs` |
 | `gitlab/` | `deckpilot.gitlab`, class `migration`: the replacement of the built-in `gitlab` module, for GitLab.com or a self-managed GitLab the user enters and allows; checked against the built-in by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_gitlab.rs` |
 | `jira/` | `deckpilot.jira`, class `migration`: the replacement of the built-in `jira` module, for the Jira Cloud site or Data Center the user enters and allows (it has no host of its own); checked against the built-in by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_jira.rs` |

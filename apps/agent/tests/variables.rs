@@ -512,6 +512,7 @@ async fn context_changes_are_announced_to_new_clients_only() {
             profile: s.work.id,
             project: Some(cmr),
             source: ProjectSource::Application,
+            plugin: None,
         }
     );
 

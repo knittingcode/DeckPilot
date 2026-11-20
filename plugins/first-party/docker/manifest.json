@@ -1,0 +1,952 @@
+{
+  "$schema": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json",
+  "manifestVersion": 1,
+  "id": "deckpilot.docker",
+  "name": "t:plugin.name",
+  "version": "0.1.0",
+  "publisher": {
+    "id": "deckpilot",
+    "name": "DeckPilot",
+    "url": "https://github.com/knittingcode/deckpilot"
+  },
+  "description": "t:plugin.description",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/knittingcode/deckpilot",
+    "directory": "plugins/first-party/docker"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "docker",
+    "compose",
+    "containers",
+    "logs"
+  ],
+  "categories": [
+    "developer-tools"
+  ],
+  "engines": {
+    "deckpilot": ">=0.9.0 <1.0.0",
+    "pluginApi": "^1.9",
+    "sdk": "0.1.0"
+  },
+  "runtime": {
+    "kind": "wasm",
+    "abi": 1
+  },
+  "entry": "src/lib.rs",
+  "icons": {
+    "128": "assets/icon-128.png"
+  },
+  "defaultLocale": "en",
+  "locales": [
+    "en",
+    "pl"
+  ],
+  "dependencies": [
+    {
+      "id": "deckpilot.projects",
+      "version": ">=0.1.0 <1.0.0",
+      "optional": true,
+      "justification": "t:dependencies.projects"
+    }
+  ],
+  "permissions": [
+    {
+      "kind": "tools",
+      "tools": [
+        {
+          "executable": "docker",
+          "subcommands": [
+            {
+              "name": "context show"
+            },
+            {
+              "name": "version",
+              "options": [
+                "--format"
+              ]
+            },
+            {
+              "name": "compose version",
+              "options": [
+                "--short"
+              ]
+            },
+            {
+              "name": "ps",
+              "options": [
+                "--no-trunc",
+                "--format",
+                "--all",
+                "--filter"
+              ]
+            },
+            {
+              "name": "compose ps",
+              "options": [
+                "--format",
+                "--all"
+              ]
+            },
+            {
+              "name": "compose logs",
+              "options": [
+                "--tail",
+                "--since",
+                "--no-color"
+              ]
+            },
+            {
+              "name": "logs",
+              "options": [
+                "--tail",
+                "--since"
+              ]
+            },
+            {
+              "name": "compose up",
+              "options": [
+                "--detach"
+              ]
+            },
+            {
+              "name": "compose down",
+              "options": [
+                "--remove-orphans"
+              ]
+            },
+            {
+              "name": "compose restart"
+            }
+          ],
+          "modify": true
+        }
+      ],
+      "justification": "t:permissions.tools"
+    },
+    {
+      "kind": "resources",
+      "justification": "t:permissions.resources"
+    },
+    {
+      "kind": "profile",
+      "read": [
+        "project"
+      ],
+      "justification": "t:permissions.profile"
+    },
+    {
+      "kind": "device",
+      "state": true,
+      "justification": "t:permissions.device"
+    }
+  ],
+  "contributes": {
+    "actions": [
+      {
+        "id": "status",
+        "name": "t:actions.status.name",
+        "description": "t:actions.status.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "context",
+            "label": "t:params.context.label",
+            "description": "t:params.context.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "maxLength": 128
+            }
+          },
+          {
+            "key": "environment",
+            "label": "t:params.environment.label",
+            "description": "t:params.environment.description",
+            "required": false,
+            "kind": {
+              "type": "resource",
+              "kinds": [
+                "dockerEnvironment",
+                "directory"
+              ]
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "container",
+          "outputs": [
+            {
+              "key": "available",
+              "label": "t:outputs.available",
+              "kind": "boolean",
+              "always": true
+            },
+            {
+              "key": "reason",
+              "label": "t:outputs.reason",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "clientVersion",
+              "label": "t:outputs.clientVersion",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "serverVersion",
+              "label": "t:outputs.serverVersion",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "serverOs",
+              "label": "t:outputs.serverOs",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "composeVersion",
+              "label": "t:outputs.composeVersion",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "context",
+              "label": "t:outputs.context",
+              "kind": "text",
+              "always": false
+            }
+          ],
+          "timeoutMs": 60000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "readOnly"
+        },
+        "state": {
+          "refresh": "every",
+          "intervalSeconds": 5
+        }
+      },
+      {
+        "id": "containers",
+        "name": "t:actions.containers.name",
+        "description": "t:actions.containers.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "all",
+            "label": "t:params.all.label",
+            "description": "t:params.all.description",
+            "required": false,
+            "kind": {
+              "type": "boolean"
+            },
+            "default": {
+              "type": "boolean",
+              "value": false
+            }
+          },
+          {
+            "key": "name",
+            "label": "t:params.name.label",
+            "description": "t:params.name.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "maxLength": 128
+            }
+          },
+          {
+            "key": "context",
+            "label": "t:params.context.label",
+            "description": "t:params.context.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "maxLength": 128
+            }
+          },
+          {
+            "key": "environment",
+            "label": "t:params.environment.label",
+            "description": "t:params.environment.description",
+            "required": false,
+            "kind": {
+              "type": "resource",
+              "kinds": [
+                "dockerEnvironment",
+                "directory"
+              ]
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "server",
+          "outputs": [
+            {
+              "key": "count",
+              "label": "t:outputs.count",
+              "kind": "integer",
+              "always": true
+            },
+            {
+              "key": "running",
+              "label": "t:outputs.running",
+              "kind": "integer",
+              "always": true
+            },
+            {
+              "key": "names",
+              "label": "t:outputs.names",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "containers",
+              "label": "t:outputs.containers",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "context",
+              "label": "t:outputs.context",
+              "kind": "text",
+              "always": true
+            }
+          ],
+          "timeoutMs": 30000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "readOnly"
+        },
+        "state": {
+          "refresh": "every",
+          "intervalSeconds": 5
+        }
+      },
+      {
+        "id": "compose-status",
+        "name": "t:actions.compose-status.name",
+        "description": "t:actions.compose-status.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "compose",
+            "label": "t:params.compose.label",
+            "description": "t:params.compose.description",
+            "required": false,
+            "kind": {
+              "type": "resource",
+              "kinds": [
+                "directory",
+                "file"
+              ]
+            }
+          },
+          {
+            "key": "projectId",
+            "label": "t:params.projectId.label",
+            "description": "t:params.projectId.description",
+            "required": false,
+            "kind": {
+              "type": "project"
+            }
+          },
+          {
+            "key": "projectName",
+            "label": "t:params.projectName.label",
+            "description": "t:params.projectName.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "maxLength": 64
+            }
+          },
+          {
+            "key": "context",
+            "label": "t:params.context.label",
+            "description": "t:params.context.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "maxLength": 128
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "list-checks",
+          "outputs": [
+            {
+              "key": "services",
+              "label": "t:outputs.count",
+              "kind": "integer",
+              "always": true
+            },
+            {
+              "key": "running",
+              "label": "t:outputs.running",
+              "kind": "integer",
+              "always": true
+            },
+            {
+              "key": "stopped",
+              "label": "t:outputs.stopped",
+              "kind": "integer",
+              "always": true
+            },
+            {
+              "key": "allRunning",
+              "label": "t:outputs.allRunning",
+              "kind": "boolean",
+              "always": true
+            },
+            {
+              "key": "containers",
+              "label": "t:outputs.composeContainers",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "project",
+              "label": "t:outputs.project",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": false
+            },
+            {
+              "key": "context",
+              "label": "t:outputs.context",
+              "kind": "text",
+              "always": true
+            }
+          ],
+          "timeoutMs": 30000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "readOnly"
+        },
+        "state": {
+          "refresh": "every",
+          "intervalSeconds": 5
+        }
+      },
+      {
+        "id": "compose-up",
+        "name": "t:actions.compose-up.name",
+        "description": "t:actions.compose-up.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "compose",
+            "label": "t:params.compose.label",
+            "description": "t:params.compose.description",
+            "required": false,
+            "kind": {
+              "type": "resource",
+              "kinds": [
+                "directory",
+                "file"
+              ]
+            }
+          },
+          {
+            "key": "projectId",
+            "label": "t:params.projectId.label",
+            "description": "t:params.projectId.description",
+            "required": false,
+            "kind": {
+              "type": "project"
+            }
+          },
+          {
+            "key": "projectName",
+            "label": "t:params.projectName.label",
+            "description": "t:params.projectName.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "maxLength": 64
+            }
+          },
+          {
+            "key": "context",
+            "label": "t:params.context.label",
+            "description": "t:params.context.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "maxLength": 128
+            }
+          },
+          {
+            "key": "services",
+            "label": "t:params.services.label",
+            "description": "t:params.services.description",
+            "required": false,
+            "kind": {
+              "type": "lines",
+              "itemLabel": "t:params.services.item",
+              "maxItems": 50,
+              "maxLength": 128
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "play",
+          "outputs": [
+            {
+              "key": "output",
+              "label": "t:outputs.output",
+              "kind": "text",
+              "always": true,
+              "sensitive": true
+            },
+            {
+              "key": "project",
+              "label": "t:outputs.project",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": false
+            },
+            {
+              "key": "context",
+              "label": "t:outputs.context",
+              "kind": "text",
+              "always": true
+            }
+          ],
+          "timeoutMs": 600000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "modifies"
+        }
+      },
+      {
+        "id": "compose-down",
+        "name": "t:actions.compose-down.name",
+        "description": "t:actions.compose-down.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "compose",
+            "label": "t:params.compose.label",
+            "description": "t:params.compose.description",
+            "required": false,
+            "kind": {
+              "type": "resource",
+              "kinds": [
+                "directory",
+                "file"
+              ]
+            }
+          },
+          {
+            "key": "projectId",
+            "label": "t:params.projectId.label",
+            "description": "t:params.projectId.description",
+            "required": false,
+            "kind": {
+              "type": "project"
+            }
+          },
+          {
+            "key": "projectName",
+            "label": "t:params.projectName.label",
+            "description": "t:params.projectName.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "maxLength": 64
+            }
+          },
+          {
+            "key": "context",
+            "label": "t:params.context.label",
+            "description": "t:params.context.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "maxLength": 128
+            }
+          },
+          {
+            "key": "removeOrphans",
+            "label": "t:params.removeOrphans.label",
+            "description": "t:params.removeOrphans.description",
+            "required": false,
+            "kind": {
+              "type": "boolean"
+            },
+            "default": {
+              "type": "boolean",
+              "value": false
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "power",
+          "outputs": [
+            {
+              "key": "output",
+              "label": "t:outputs.output",
+              "kind": "text",
+              "always": true,
+              "sensitive": true
+            },
+            {
+              "key": "project",
+              "label": "t:outputs.project",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": false
+            },
+            {
+              "key": "context",
+              "label": "t:outputs.context",
+              "kind": "text",
+              "always": true
+            }
+          ],
+          "timeoutMs": 600000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "modifies"
+        }
+      },
+      {
+        "id": "compose-restart",
+        "name": "t:actions.compose-restart.name",
+        "description": "t:actions.compose-restart.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "compose",
+            "label": "t:params.compose.label",
+            "description": "t:params.compose.description",
+            "required": false,
+            "kind": {
+              "type": "resource",
+              "kinds": [
+                "directory",
+                "file"
+              ]
+            }
+          },
+          {
+            "key": "projectId",
+            "label": "t:params.projectId.label",
+            "description": "t:params.projectId.description",
+            "required": false,
+            "kind": {
+              "type": "project"
+            }
+          },
+          {
+            "key": "projectName",
+            "label": "t:params.projectName.label",
+            "description": "t:params.projectName.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "maxLength": 64
+            }
+          },
+          {
+            "key": "context",
+            "label": "t:params.context.label",
+            "description": "t:params.context.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "maxLength": 128
+            }
+          },
+          {
+            "key": "services",
+            "label": "t:params.services.label",
+            "description": "t:params.services.description",
+            "required": false,
+            "kind": {
+              "type": "lines",
+              "itemLabel": "t:params.services.item",
+              "maxItems": 50,
+              "maxLength": 128
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "refresh-cw",
+          "outputs": [
+            {
+              "key": "output",
+              "label": "t:outputs.output",
+              "kind": "text",
+              "always": true,
+              "sensitive": true
+            },
+            {
+              "key": "project",
+              "label": "t:outputs.project",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": false
+            },
+            {
+              "key": "context",
+              "label": "t:outputs.context",
+              "kind": "text",
+              "always": true
+            }
+          ],
+          "timeoutMs": 600000,
+          "retrySafe": true,
+          "idempotent": false,
+          "cancellable": true,
+          "effect": "modifies"
+        }
+      },
+      {
+        "id": "logs",
+        "name": "t:actions.logs.name",
+        "description": "t:actions.logs.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "container",
+            "label": "t:params.container.label",
+            "description": "t:params.container.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "maxLength": 128
+            }
+          },
+          {
+            "key": "service",
+            "label": "t:params.service.label",
+            "description": "t:params.service.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "maxLength": 128
+            }
+          },
+          {
+            "key": "lines",
+            "label": "t:params.lines.label",
+            "description": "t:params.lines.description",
+            "required": false,
+            "kind": {
+              "type": "integer",
+              "min": 1,
+              "max": 2000
+            },
+            "default": {
+              "type": "integer",
+              "value": 100
+            }
+          },
+          {
+            "key": "since",
+            "label": "t:params.since.label",
+            "description": "t:params.since.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "maxLength": 40
+            }
+          },
+          {
+            "key": "compose",
+            "label": "t:params.compose.label",
+            "description": "t:params.compose.description",
+            "required": false,
+            "kind": {
+              "type": "resource",
+              "kinds": [
+                "directory",
+                "file"
+              ]
+            }
+          },
+          {
+            "key": "projectId",
+            "label": "t:params.projectId.label",
+            "description": "t:params.projectId.description",
+            "required": false,
+            "kind": {
+              "type": "project"
+            }
+          },
+          {
+            "key": "projectName",
+            "label": "t:params.projectName.label",
+            "description": "t:params.projectName.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "maxLength": 64
+            }
+          },
+          {
+            "key": "context",
+            "label": "t:params.context.label",
+            "description": "t:params.context.description",
+            "required": false,
+            "kind": {
+              "type": "text",
+              "maxLength": 128
+            }
+          },
+          {
+            "key": "environment",
+            "label": "t:params.environment.label",
+            "description": "t:params.environment.description",
+            "required": false,
+            "kind": {
+              "type": "resource",
+              "kinds": [
+                "dockerEnvironment",
+                "directory"
+              ]
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "file-text",
+          "outputs": [
+            {
+              "key": "logs",
+              "label": "t:outputs.logs",
+              "kind": "text",
+              "always": true,
+              "sensitive": true
+            },
+            {
+              "key": "lineCount",
+              "label": "t:outputs.lineCount",
+              "kind": "integer",
+              "always": true
+            },
+            {
+              "key": "truncated",
+              "label": "t:outputs.truncated",
+              "kind": "boolean",
+              "always": true
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": false
+            },
+            {
+              "key": "context",
+              "label": "t:outputs.context",
+              "kind": "text",
+              "always": true
+            }
+          ],
+          "timeoutMs": 60000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "readOnly"
+        }
+      }
+    ],
+    "settings": {
+      "portabilityVersion": 1,
+      "fields": [
+        {
+          "key": "composeRole",
+          "label": "t:settings.composeRole.label",
+          "description": "t:settings.composeRole.description",
+          "required": true,
+          "kind": {
+            "type": "text",
+            "maxLength": 64
+          },
+          "default": {
+            "type": "text",
+            "value": "compose"
+          },
+          "portability": "portable"
+        },
+        {
+          "key": "timeoutSeconds",
+          "label": "t:settings.timeoutSeconds.label",
+          "description": "t:settings.timeoutSeconds.description",
+          "required": true,
+          "kind": {
+            "type": "integer",
+            "min": 10,
+            "max": 1800
+          },
+          "default": {
+            "type": "integer",
+            "value": 300
+          },
+          "portability": "portable"
+        }
+      ]
+    },
+    "errorCodes": {
+      "docker-not-found": "t:errors.docker-not-found",
+      "daemon-unavailable": "t:errors.daemon-unavailable",
+      "permission-denied": "t:errors.permission-denied",
+      "context-not-found": "t:errors.context-not-found",
+      "compose-unavailable": "t:errors.compose-unavailable",
+      "compose-file-not-found": "t:errors.compose-file-not-found",
+      "not-found": "t:errors.not-found",
+      "invalid-name": "t:errors.invalid-name",
+      "changes-disabled": "t:errors.changes-disabled",
+      "project-not-in-profile": "t:errors.project-not-in-profile",
+      "docker-failed": "t:errors.docker-failed",
+      "not-user-initiated": "t:errors.not-user-initiated",
+      "context-unsupported": "t:errors.context-unsupported",
+      "project-name-unsupported": "t:errors.project-name-unsupported",
+      "docker-environment-missing": "t:errors.docker-environment-missing",
+      "cancelled": "t:errors.cancelled",
+      "resource-unbound": "t:errors.resource-unbound",
+      "resource-role-missing": "t:errors.resource-role-missing",
+      "resource-kind-mismatch": "t:errors.resource-kind-mismatch",
+      "resource-missing": "t:errors.resource-missing"
+    }
+  }
+}

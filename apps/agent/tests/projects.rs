@@ -339,3 +339,88 @@ async fn projects_changed_underneath_the_active_one() {
     deck.wait_active(None).await;
     deck.agent.shutdown().await;
 }
+
+/// Plugin API 1.9's project operations as the agent answers them (the
+/// broker and the executor allowed them before): a select by a plugin is
+/// applied, persisted and announced as the plugin's, only the active
+/// profile's projects are known, and with the Projects feature off there is
+/// no project context.
+#[cfg(all(feature = "plugins", feature = "test-hooks"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_plugin_switches_the_project_only_while_a_provider_is_active() {
+    use deckpilot_core::ModuleSettings;
+
+    const PLUGIN: &str = "deckpilot.projects";
+    let deck = start(&["SHOP", "CRM"]).await;
+    let (shop, crm) = (deck.profile.projects[0].id, deck.profile.projects[1].id);
+    let handle = &deck.agent.handle;
+    let mut events = deck.agent.events().await;
+
+    let target = crm.to_string();
+    assert_eq!(
+        handle.plugin_project(PLUGIN, "select", Some(&target)).await,
+        Ok(Some(target.clone()))
+    );
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    loop {
+        let event = tokio::time::timeout_at(deadline, events.next_event())
+            .await
+            .expect("no projectChanged event")
+            .unwrap();
+        if let AgentEvent::ProjectChanged {
+            project, plugin, ..
+        } = event
+        {
+            assert_eq!(project, Some(crm));
+            assert_eq!(plugin.as_deref(), Some(PLUGIN));
+            break;
+        }
+    }
+    deck.wait_active(Some(crm)).await;
+    assert_eq!(deck.stored(deck.profile.id), Some(crm));
+    assert_eq!(
+        handle.plugin_project(PLUGIN, "current", None).await,
+        Ok(Some(target))
+    );
+    assert_eq!(
+        handle.plugin_project(PLUGIN, "cycle", Some("next")).await,
+        Ok(Some(shop.to_string()))
+    );
+    // Only projects of the active profile.
+    let other = ProjectId::new().to_string();
+    assert_eq!(
+        handle.plugin_project(PLUGIN, "select", Some(&other)).await,
+        Err("not-found".to_owned())
+    );
+
+    // Projects off: no provider, no project context.
+    deck.agent
+        .store()
+        .set_module_state(
+            &deckpilot_modules::projects::module_id(),
+            &ModuleSettings {
+                enabled: false,
+                config: ActionParameters::new(),
+            },
+        )
+        .unwrap();
+    deck.agent
+        .request(Request::ReloadConfiguration)
+        .await
+        .unwrap();
+    for op in ["current", "list", "select", "cycle"] {
+        assert_eq!(
+            handle
+                .plugin_project(PLUGIN, op, Some(&crm.to_string()))
+                .await,
+            Err("projects-off".to_owned()),
+            "{op}"
+        );
+    }
+    // The profile read still answers, without a project.
+    assert_eq!(
+        handle.plugin_project(PLUGIN, "profile", None).await,
+        Ok(None)
+    );
+    deck.agent.shutdown().await;
+}

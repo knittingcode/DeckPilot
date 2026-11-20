@@ -119,7 +119,19 @@ fn every_op_is_denied_by_default() {
     // Each denial is audited under its operation, never with a value.
     let ops: Vec<&str> = audit.records().iter().map(|r| r.op).collect();
     assert!(ops.contains(&"tool.run") && ops.contains(&"project.select"));
-    assert!(audit.records().iter().all(|r| r.target.is_none()));
+    // `tool.run` names its tool and subcommand, nothing else.
+    for record in audit.records() {
+        match record.op {
+            "tool.run" => assert!(
+                record
+                    .target
+                    .as_deref()
+                    .is_some_and(|t| t.starts_with("git ") || t.starts_with("docker ")),
+                "{record:?}"
+            ),
+            _ => assert_eq!(record.target, None, "{record:?}"),
+        }
+    }
 
     // A plugin without grants at all.
     let broker = Broker::new(
@@ -326,14 +338,14 @@ fn rates_and_revocation_apply_on_the_next_call() {
         r#"[{"kind":"resources","open":true},{"kind":"projectContext","select":true},
             {"kind":"tool","tool":"docker","modify":true}]"#,
     );
-    assert!(s.authorize_in(&open(), Some(&user())).is_allowed());
+    // resource.open: a burst of 5 (one open-project), then 1 per second.
+    for _ in 0..5 {
+        assert!(s.authorize_in(&open(), Some(&user())).is_allowed());
+    }
     assert_eq!(denial(&s, &open(), &user()), Some(DenyReason::RateLimited));
+    // One project switch per 500 ms (X6: 2 per second without a burst).
     assert!(s.authorize_in(&select(), Some(&user())).is_allowed());
-    assert!(s.authorize_in(&cycle(), Some(&user())).is_allowed());
-    assert_eq!(
-        denial(&s, &select(), &user()),
-        Some(DenyReason::RateLimited)
-    );
+    assert_eq!(denial(&s, &cycle(), &user()), Some(DenyReason::RateLimited));
     for _ in 0..6 {
         assert!(
             s.authorize_in(&run(Tool::Docker, &["restart", "web"]), Some(&user()))
@@ -436,4 +448,103 @@ fn none_of_them_runs_inside_a_state_call() {
             request.op()
         );
     }
+}
+
+#[test]
+fn a_second_project_switch_within_500_ms_is_throttled() {
+    // X6: 2 per second without a burst.
+    let clock = Arc::new(ManualClock::default());
+    let broker = Broker::new(
+        Arc::new(MemoryAudit::new(100)),
+        clock.clone(),
+        RateLimits::default(),
+    );
+    let plugin = PluginId::new("deckpilot.projects").unwrap();
+    broker
+        .set_grants(
+            &plugin,
+            &ApprovedPermissions::from_json(r#"[{"kind":"projectContext","select":true}]"#)
+                .unwrap(),
+        )
+        .unwrap();
+    let s = broker.session(plugin);
+    assert!(s.authorize_in(&select(), Some(&user())).is_allowed());
+    clock.advance(std::time::Duration::from_millis(400));
+    assert_eq!(denial(&s, &cycle(), &user()), Some(DenyReason::RateLimited));
+    clock.advance(std::time::Duration::from_millis(100));
+    assert!(s.authorize_in(&cycle(), Some(&user())).is_allowed());
+}
+
+/// A denied `tool.run` is audited with its tool and subcommand (I3 of the
+/// review), never with another argument; a subcommand that is not a plain
+/// word is `?`.
+#[test]
+fn tool_run_denials_name_the_tool_and_subcommand_only() {
+    let (_, s, audit) = session(r#"[{"kind":"tool","tool":"git"}]"#);
+    let cases: [(Tool, &[&str], &str); 5] = [
+        (
+            Tool::Git,
+            &["ls-remote", "--", "origin", "secret-ref"],
+            "git ls-remote",
+        ),
+        (
+            Tool::Docker,
+            &["compose", "up", "--detach", "secret-service"],
+            "docker compose up",
+        ),
+        (
+            Tool::Git,
+            &["-c", "core.sshCommand=secret", "status"],
+            "git ?",
+        ),
+        (Tool::Docker, &["SECRET$(id)", "x"], "docker ?"),
+        (
+            Tool::Docker,
+            &["ps", "--filter", "name=secret"],
+            "docker ps",
+        ),
+    ];
+    for (tool, args, _) in &cases {
+        assert!(denial(&s, &run(*tool, args), &user()).is_some(), "{args:?}");
+    }
+    let targets: Vec<String> = audit
+        .records()
+        .iter()
+        .filter(|r| r.op == "tool.run")
+        .filter_map(|r| r.target.clone())
+        .collect();
+    let expected: Vec<&str> = cases.iter().map(|(_, _, t)| *t).collect();
+    assert_eq!(targets, expected);
+    assert!(
+        targets
+            .iter()
+            .all(|t| !t.contains("secret") && !t.contains("SECRET"))
+    );
+}
+
+#[test]
+fn url_open_param_allows_one_runs_pages_then_one_per_2_s() {
+    let clock = Arc::new(ManualClock::default());
+    let broker = Broker::new(
+        Arc::new(MemoryAudit::new(100)),
+        clock.clone(),
+        RateLimits::default(),
+    );
+    let plugin = PluginId::new("deckpilot.workspace").unwrap();
+    broker
+        .set_grants(
+            &plugin,
+            &ApprovedPermissions::from_json(r#"[{"kind":"openUrlFromParams"}]"#).unwrap(),
+        )
+        .unwrap();
+    let s = broker.session(plugin);
+    for _ in 0..10 {
+        assert!(s.authorize_in(&open_param(), Some(&user())).is_allowed());
+    }
+    assert_eq!(
+        denial(&s, &open_param(), &user()),
+        Some(DenyReason::RateLimited)
+    );
+    clock.advance(std::time::Duration::from_secs(2));
+    assert!(s.authorize_in(&open_param(), Some(&user())).is_allowed());
 }

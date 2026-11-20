@@ -1,0 +1,32 @@
+# deckpilot.workspace: the first-party Workspace plugin, the replacement of
+# the built-in `workspace` module (docs/marketplace/module-migration.md §7,
+# WP-B3). It opens bound folders and files in a bound editor and pages in
+# the browser through plugin API 1.9's `resource.open` and `url.openParam`.
+# Bundled with class `migration` (plugins/first-party/bundled.json); not
+# routed until its alias block and migration plan land (WP-C1).
+#
+# A member of the plugins/runtime workspace (shared Cargo.lock and the
+# `guest` profile), built for wasm32-unknown-unknown; the rlib crate type
+# lets its native unit tests run with plain `cargo test`.
+[package]
+name = "deckpilot-workspace"
+description = "DeckPilot's first-party Workspace plugin: a project's repository in an editor and its pages in the browser"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+publish = false
+workspace = "../../runtime"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+deckpilot-plugin-sdk.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+jsonschema.workspace = true
+
+[lints]
+workspace = true
