@@ -15,6 +15,221 @@ released either. 0.6.0 is the first version intended for publication.
 
 ## [Unreleased]
 
+### Added
+
+- Live preview on the device: while the Device Editor shows a layout of
+  the active profile, the selected device shows **and runs** the unsaved
+  draft (titles, icons, colours, text appearance, gestures, action
+  parameters, folders, pages), drawn by the same renderer as the Canvas;
+  nothing is saved until Save, and other devices on the same layout keep
+  the saved one. Navigation follows both ways: a double-click on a folder,
+  Back, a page or a layout key moves the device (never running anything),
+  and the device's own folder keys, protected Back, page keys, layout
+  switches, Back to previous layout and Auto Exit move the editor. Save
+  keeps the device where it is without redrawing it; Revert and Undo go to
+  the nearest page that is still there. Closing the editor, the window or
+  the app, or the app crashing, leaves the device on the saved
+  configuration; after an agent restart the draft is sent again. Leaving
+  the Device Editor, closing the window and quitting ask first over
+  unsaved changes. IPC protocol 16 (capability `livePreview`); with an
+  older agent the editor says that changes reach the device when saved.
+
+- One key header and title editor for every key with a display (actions,
+  Multi Actions, plugin actions, layout navigation and folder keys; the
+  folder's protected Back key stays without one): at the top of the
+  Inspector the key's live preview (the image the Canvas shows; clicking
+  it opens the icon menu, never runs the key), its visible title (for a
+  folder key apart from the folder's name) and background. The **T▾**
+  button next to the title opens the title appearance popover: Show title,
+  Top / Middle / Bottom, Reset, font, size in px, bold / italic /
+  underline, text colour and the text layout (wrap, single line, auto fit,
+  marquee). Every change shows on the Canvas at once and is an undo step;
+  opening it changes nothing; Reset clears the overrides and never writes
+  the device's defaults. The icon menu chooses from the profile's icon
+  library, imports a PNG or JPEG file, pastes one from the clipboard (the
+  WebView's clipboard; other formats are refused with a message) and
+  removes the key's own icon. New optional appearance fields `fontFamily`
+  (only fonts built into the renderer: Inter), `bold` (Inter SemiBold),
+  `italic` (a 10° slant measured with its overhang) and `underline` (the
+  font's underline), drawn by the renderer for the device and the preview
+  alike; layouts without them look exactly as before
+  (`docs/key-text.md`, "Title appearance").
+- Plugin API 1.8: an action's `title` suggests a default title, says the
+  title is dynamic, suggests a position and lists the parts of the look
+  the editor offers; a title the user wrote now beats a plugin's dynamic
+  title (`docs/marketplace/sdk/manifest.md`, "Titles").
+
+- Restoring DeckPilot's own plugins (IPC protocol 15, capability and
+  plugin runtime feature `restoreBundled`): Settings › Plugins › Installed
+  lists the bundled plugins you uninstalled under *Removed DeckPilot
+  plugins*, each with **Restore**, which installs the copy that comes with
+  DeckPilot again (checked against the pins compiled into the agent, and
+  the app's code seal on macOS, before anything changes), clears your
+  earlier removal and brings back the settings and credentials you kept;
+  a module that moved to the plugin runs on it again. A broken bundled
+  plugin gets **Reinstall**, which replaces its files with that copy and
+  keeps its settings, credentials and permission choices. The refusal of a
+  plan that needs a removed bundled plugin now names this action. Older
+  apps and agents are unaffected.
+
+- A protected system Back key in folders: on every page inside a folder
+  the first key with a display (key 0, top left) is DeckPilot's own Back,
+  drawn and run by the agent (also with every plugin disabled) with one
+  core vector icon (`crates/deckpilot-render/assets/icons/folder-back.svg`,
+  no title), returning exactly one folder level. Nothing can be bound,
+  moved, dropped, pasted or cleared there, in the editor and when a layout
+  is saved; it is left out of multi-selection operations, and its menu
+  offers only *Go back* and *Test*. Models whose keys have no display keep
+  the host's navigation (`docs/data-model.md`, "The protected Back key").
+- Auto Exit for folders (`autoExit`, 1–3600 s, off by default), set in the
+  Inspector of the key that opens the folder: the agent leaves the folder
+  one level up that long after a device entered it, also with the app
+  closed. Moving within the folder does not restart it; leaving, another
+  layout or profile, locking and disconnecting cancel it; every device
+  counts on its own; nothing is stored.
+- Database schema 11: migration 11 marks existing folders `reserved` when
+  their first key is free or already goes back, and `legacy` (Back stays on
+  the first free key, nothing moves, a migration note says how to change
+  it) when it runs something else. "Move Back to the first key" in the
+  editor moves that action to the first free key. Encrypted backup first,
+  no binding lost; imports of older exports get the same rule.
+
+- The Device Editor's interactive preview, backend half
+  (`docs/editor-navigation-and-simulation.md`). Action types may declare
+  `editorNavigation` (`folder.open`, `folder.back`, `page.next`,
+  `page.previous`, `layout.switch`, `layout.back`, with the parameter that
+  holds the target): the deck's *Next page*, *Previous page*, *Switch
+  layout* and *Back to previous layout* do, and plugins may in their
+  manifest (plugin API 1.7), as data only that the editor maps to its own
+  navigation without calling the plugin. Preview faces say what pressing a
+  key does to the view, the automatic Back key of a folder page included.
+- Simulated presses (IPC protocol 14, capability `simulateInput`): the app
+  can press a key of a connected device (single, double or long) through
+  the agent's own gesture engine and dispatch, with the key's timings, on a
+  lane separate from the device's physical keys and without writing
+  anything to the device but the key images the action changes. Refused
+  while locked and unless the device shows the profile, layout and page
+  the app shows. It is not a user-initiated run (plugin dialogs and
+  `url.open` stay refused), and a press that may change something outside
+  DeckPilot (a command, a Docker change, an HTTP request other than GET, a
+  plugin action that modifies, a workflow with such a step) runs only after
+  the user confirmed it; the computer's settings and plugin permissions
+  still apply. New Tauri command `simulate_press`.
+
+- Plugin localization (plugin API 1.6, IPC protocol 13): a plugin package
+  may carry translations as `locales/<tag>.json` (declared in the
+  manifest's new `locales`, with `defaultLocale`), signed and pinned with
+  the package's other files and checked at install (JSON objects of plain
+  strings, at most 64 KiB and 32 files, no markup). Manifest texts may name
+  keys as `"t:key.path"`; they are shown in the app's language with a fixed
+  fallback (tag, its language, the plugin's default, English, then a label
+  from the key), and plugin dialogs may use keys too. The Rust SDK has
+  `Context::locale` and `Context::t` (with interpolation and plurals) and
+  `MockHost::localized` (`docs/marketplace/sdk/localization.md`). A plugin
+  reaches only its own translations.
+- The agent follows the app's language: the app sends it with the new
+  `setLocale` request (protocol 13, capability `locale`); the texts the
+  agent draws on keys (*Back*, *Folder*, *Unavailable*, the default names
+  of the deck actions such as *Next page*) and the tray menu are in English
+  or Polish, and only the keys showing such texts are redrawn when the
+  language changes; titles the user wrote never change. Plugin names,
+  actions and settings update live. An app or agent of protocol 12 keeps
+  working in English.
+
+- Plugin dialogs (plugin API 1.5): a plugin with the new `dialogs`
+  permission (medium tier) can ask DeckPilot to show a standard
+  confirmation, alert, form or selection dialog and gets the user's answer,
+  checked by the agent against the request. Dialogs open only in an action
+  the user started, show the plugin's name, never DeckPilot's lock or shield
+  icons, always have Cancel, and have no secret fields. At most one per
+  plugin is open and six are shown a minute; disabling, updating or
+  uninstalling the plugin closes its dialog. The Rust SDK has
+  `Context::dialog` (`docs/marketplace/sdk/dialogs.md`).
+
+- Text modes for key titles: in the device editor's Inspector, a key's
+  Text appearance chooses **Wrap** (word boundaries, explicit line breaks,
+  a maximum number of lines ending with “…”), **Single line** (cut with
+  “…” or clipped, never smaller), **Auto fit** (shrinks only as needed, down
+  to a minimum, on one or several lines; says when it does not fit even
+  then) or **Marquee** (scrolls a title that is too wide, with pauses at
+  both ends, at a chosen speed), plus a text size in points and left,
+  centre or right alignment. One layout implementation in the shared
+  renderer serves the preview and the devices, at every key size; templates
+  and plugin labels are resolved before they are fitted, so plugins get the
+  modes without changes. Scrolling keys animate only on the shown page of a
+  connected device, at most 15 frames a second, without writing unchanged
+  frames, and stand still in the preview when the system reduces motion
+  (`docs/key-text.md`). Existing layouts keep their wrapped titles.
+
+- Database schema 12: folder keys are core navigation controls. A key
+  that opens a folder of its page has exactly one binding, a press that
+  opens the folder at once (no gestures); saving, importing and the agent
+  enforce it (`invalid.folderControl.*`). Migration 12 (encrypted backup
+  first) keeps such keys opening and moves their other bindings to the
+  layout's recovered list with a migration note; the key's Inspector shows
+  only the folder's settings and "Recovered gestures (n)" with *Move to a
+  free key* and *Discard*. Imports of older exports get the same rule with
+  a warning (`docs/data-model.md`, "Folder controls").
+
+- A shared **Icon Library** and **Background Library** for every
+  configurable key. The Icon Library has 471 built-in Lucide icons in 19
+  categories (offline, searchable, drawn by the keys' renderer, so the key
+  looks as its tile), your imported icons (My Icons) and plugins' icons. The
+  Background Library starts with Transparent, Black and White, then solid
+  colours (any custom colour), built-in gradients, your images and plugins'
+  backgrounds. Keys store only the asset's id; gradients and images are
+  rasterised for the device. A key whose plugin asset is unavailable keeps
+  it, draws the device default (no icon of its own) and draws it again
+  once the plugin is back.
+- Plugins can contribute icons and backgrounds (plugin API 1.8,
+  `contributes.visualAssets`): PNG icons, PNG or JPEG images and gradients,
+  packaged, signed and checked like every other package file; no plugin
+  code runs for them.
+
+### Changed
+
+- The key header: clicking the key preview opens one menu with an **Icon**
+  and a **Background** section (library, import, paste, remove; background
+  library, custom colour, reset to the device default); the Background row
+  under the title is gone. **Show title** is a switch under the title
+  instead of a checkbox in the title popover.
+- A folder key's title is the folder's name: renamed in the key header,
+  shown on the key, in the breadcrumbs and the Page Navigator; the separate
+  folder name field is gone. A folder key title that differed from its
+  folder's name is kept (schema 13 migration, after the encrypted backup,
+  and imports) and offered as the folder's name or discarded.
+
+- Keys that set no colours take their device model's defaults, the same
+  for every kind of key: on the Stream Deck MK.2 (and XL and +) a
+  transparent background on the black display and white text. Action,
+  workflow, folder, Back and notice keys no longer get a dark tint of their
+  own; a live state's accent colour and colours you chose are unchanged.
+  The device and the editor's previews draw the same colours, and the
+  editor's colour fields and contrast hint show the model's defaults. A
+  key's background can now be set to **Transparent**, which versions up to
+  0.9.0 cannot read.
+
+- The device editor's Inspector shows only real settings: it is empty when
+  nothing is selected and for a folder's protected Back key, has no
+  instruction paragraphs, and leaves out actions a control cannot run
+  instead of listing them disabled.
+
+- A key title containing a line break now breaks there.
+- The IPC protocol is version 12: plugin dialogs, sent only to an app that
+  announces the `pluginDialogs` feature. Apps and agents of protocol 11 work
+  with it unchanged.
+
+### Fixed
+
+- *Choose from icon library…* showed only the icons imported into the
+  profile, so on a new installation it was empty: the library had no
+  built-in collection and plugins' icons were never listed.
+- The preview's **Test action** no longer says the device shows another
+  page while it shows the editor's page (it compared the page's name with
+  its id).
+- An icon imported (or deleted) in the editor now reaches the device's keys
+  at once: the agent reloads the configuration.
+
 ## [0.9.0] - 2026-11-20
 
 ### Changed

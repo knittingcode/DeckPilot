@@ -135,7 +135,11 @@ bound on this machine, kind mismatch.
   (`control`, optional `doubleClickMs` 150–1000, optional `longPressMs`
   300–5000; unset values use this computer's defaults, setting
   `gestures.defaults`, 300 and 700 ms), optional `autoReturn` (see
-  [Pages and folders](#pages-and-folders); omitted when off).
+  [Pages and folders](#pages-and-folders); omitted when off), optional
+  `back: { position: "reserved" | "legacy" }` and optional
+  `autoExit: { enabled, seconds }` (see
+  [The protected Back key](#the-protected-back-key) and
+  [Auto Exit](#auto-exit); omitted when unset).
 - **ControlBinding** – `control`, `trigger` (`press`, `release`,
   `rotateClockwise`, `rotateCounterClockwise`, `touch { gesture }`, `click`,
   `doubleClick`, `longPress`), `target` (`action { action, overrides? }`,
@@ -235,6 +239,164 @@ layouts keep loading, saving and importing. For such a page the runtime
 shows an automatic Back key on its first free key (lowest key index
 without a binding; `DeviceLayout::automatic_back`) — never on a bound key;
 the layout preview shows it too.
+
+### The protected Back key
+
+Every page inside a folder (a page with a `parent`, stored or inferred;
+never the home page or another top-level page) has a way back one folder
+level. Since schema 11 it is a **protected system control** on a fixed key:
+
+- **The rule** (`deckpilot_core::reserved_back_control`, mirrored by the
+  editor's `src/lib/folder-back.ts`): the first key with a display in the
+  model's ordered controls — key 0, top left on a rectangular grid. Never
+  a dial or a touch strip. A model whose keys have no display has no
+  reserved key; its folders rely on the host's navigation (the editor's
+  page navigation and Back, Back bindings, *Back to previous layout*).
+- **The model**: a folder page's `back.position` is `reserved` (the
+  protected key) or `legacy` (the behaviour from before: an automatic Back
+  on the first free key when the page has no way back of its own). New
+  folders store `reserved` and `autoExit` switched off. A folder page
+  without `back` (pages moved into a folder, imports from older exports)
+  behaves as `legacy` until it is saved, when it gets a setting by the
+  migration rule below (`DeviceLayout::assign_folder_backs`).
+- **Core-owned**: the key is not a binding. The agent draws and runs it
+  (also with every plugin disabled): a press goes back one folder level
+  through the device's page stack (Home → Tools → Docker: Docker → Tools →
+  Home), exactly as a Back binding does. It takes no gestures (raw press),
+  and whatever is stored on it never runs. Its face is the core vector icon
+  `crates/deckpilot-render/assets/icons/folder-back.svg` (symbol
+  `folder-back`, `device_runtime::system_back_face`), white on black,
+  centred, without a title; the editor's fallback face imports the same
+  file, and its accessible name is "Back"/"Wstecz". Swapping the icon is
+  replacing that one file. Layout Back keys and *Back to previous layout*
+  keep their own icons. Preview faces mark it
+  `navigation: { operation: "folder.back", automatic: true, system: true }`;
+  `page_tree` nodes carry it as `systemBack`.
+- **Protection**: saving refuses any binding other than Back on the
+  reserved key of a `reserved` folder page (`ReservedBack`); importing
+  keeps such a binding with a warning. The editor never assigns, moves,
+  swaps, pastes, duplicates, drops, creates a folder on or clears that key,
+  excludes it from every multi-selection operation, offers only *Go back*
+  and *Test* in its menu, and shows it like any other key (no badge); its
+  Inspector is empty.
+- **Moving Back to the first key** (`DeviceLayout::move_back_to_reserved`,
+  the editor's `moveBackToReservedKey`): for a `legacy` folder, moves what
+  the reserved key runs (its bindings other than Back, with its gesture
+  timings) to the page's first free key with a display and makes the page
+  `reserved`; refused, changing nothing, when no key is free.
+
+**Migration 11** gives every folder page of every stored layout its setting,
+without losing anything: when the reserved key binds nothing or only Back,
+`reserved` (those Back bindings, and explicit Back bindings elsewhere on the
+page, are kept unchanged); when it runs anything else, `legacy` (nothing
+moves) with a migration note naming the layout and folder. Shared layouts
+are migrated once for every profile that uses them; nested folders page by
+page; layouts of models the build does not know are left as they are.
+Saving in the editor and importing apply the same rule to pages that have
+no setting yet.
+
+### Folder controls
+
+A **folder control** (folder key) is DeckPilot's own navigation control,
+not a configurable key (`deckpilot_core::folder_control`, mirrored by the
+editor's `src/lib/folder-control.ts`):
+
+- **The rule.** A key `K` on page `P` is a folder control when one of its
+  bindings is `openPage` to a page `F` whose folder in the page tree
+  (stored `parent`, or inferred for layouts without `explicitTree`) is `P`.
+  Only page and control ids decide it — never names, labels or icons. If
+  several bindings of the key open folders of `P`, the `press` one wins,
+  then `click`, then the first. Dials and touch zones are never folder
+  controls (their page bindings stay ordinary), and neither is a key that
+  opens a top-level page or a page of another folder.
+- **The shape.** Exactly one binding, `press` → `openPage(F)`, without a
+  `label` of its own (its appearance is free): the key's title is `F`'s
+  name (schema 13, [key-text.md](key-text.md#folder-names)). A title it had
+  before that differs from the name is kept in `recovered` with the reason
+  `folderLabel` (the binding as it was) until the user uses it as the
+  folder's name or discards it. The press opens at once, as folder keys
+  always did; there are no gesture delays and no other trigger.
+- **Core-owned.** The agent treats the key as a raw press that opens `F`,
+  whatever else may be stored on it (`Runtime::folder_control`; gestures,
+  stateful bindings and releases on it never run). Simulated presses
+  (`simulatePress`) go the same way and need no confirmation. Plugins
+  cannot bind to it: manifests declare control kinds and inputs, never a
+  control of a layout, and no plugin host operation edits layouts.
+- **Validation** (`DeviceLayout::validate`, used by profile saves, imports
+  and the app's `save_layout`): another binding on a folder control
+  (`FolderControlBindings`, code `invalid.folderControl.extraBinding`), its
+  `openPage` on another trigger (`FolderControlTrigger`,
+  `invalid.folderControl.trigger`). `save_layout` also refuses, against the
+  stored version (`DeviceLayout::folder_control_edits`), a folder control
+  whose `openPage` was replaced while its folder is still a folder of the
+  page and no key opens it (`invalid.folderControl.replaced`; clearing the
+  key, moving or swapping it, deleting or moving the folder stay allowed),
+  and recovered entries that are not stored unchanged
+  (`invalid.folderControl.recovered`). Gesture timings of folder keys are
+  dropped on save. The errors carry `key` (number as shown) and `folder`.
+- **The editor** shows only the folder's settings in the key's Inspector
+  (open folder, name, Auto Exit, Move Back for a legacy folder, recovered
+  gestures, the key's look); it never assigns, pastes or drops a Library
+  entry onto a folder key (the drop is refused with the usual feedback),
+  never puts a folder next to what a key runs, leaves folder keys out of
+  multi-selection assignments, and offers no *Configure* or *Assign* and
+  only *Single press* under *Test* in their menu.
+
+**Recovered bindings.** `layout.recovered` (optional, not stored when
+empty) lists what folder keys of older layouts had besides their `openPage`:
+
+```json
+"recovered": [{
+  "page": "<page id>", "control": {"kind": "key", "index": 1},
+  "folder": "<folder page id>",
+  "bindings": [{"control": {"kind": "key", "index": 1}, "trigger": {"type": "doubleClick"}, "target": {"type": "action", "action": "<id>"}}],
+  "gestures": {"control": {"kind": "key", "index": 1}, "longPressMs": 900},
+  "reason": "folderControl"
+}]
+```
+
+Entries are stored and exported with the layout (their actions and icons
+stay with it: `bound_actions`, `shown_icons`), follow copies
+(`remap_layout`), and never run. The folder key's Inspector shows
+"Recovered gestures (n)" with *Move to a free key*
+(`DeviceLayout::restore_recovered`: the page's first key with a display
+that binds nothing and is not the reserved Back; refused when there is
+none) and *Discard* (after the shared destructive confirmation). Entries of
+pages that no longer exist are pruned on save.
+`DeviceLayout::normalize_folder_controls` produces them: it keeps the
+`openPage` (moved to `press`), moves the key's other bindings and gesture
+timings into the key's entry, stores an inferred tree first so no page
+moves, and changes nothing in a layout without such keys (idempotent).
+**Migration 12** runs it on every stored layout (shared layouts once,
+nested folders page by page, no device model needed) with one migration
+note per key; importing runs it too and reports a warning instead of
+refusing the import.
+
+### Auto Exit
+
+`autoExit: { enabled, seconds }` (whole seconds, 1–3600; new folders store
+`{ enabled: false, seconds: 10 }`; `InvalidAutoExit` otherwise) makes a
+folder page leave itself. It is set in the Inspector of the key that opens
+the folder. The countdown is the agent's (`deckpilot_core::FolderTimers`,
+run by the agent's loop, so it works with the app closed):
+
+- It starts when a device **enters** the folder — the page it shows comes
+  to be the folder page or a page inside it from outside, by any
+  navigation — and is measured from entering. Moving between pages of the
+  same folder (into a folder inside it and back) does not restart it;
+  entering again after leaving starts it anew.
+- Leaving the folder by hand, another layout or profile, locking and
+  disconnecting cancel it. A device that reconnects, and an agent that
+  restarts, start none (only entering does); deadlines are never stored.
+- When it ends, the device leaves the folder exactly as Back from the folder
+  page does: it shows the folder's parent, one folder level (folders opened
+  inside it close with it). Each entry has its own generation: an exit
+  whose entry was left or entered again does nothing. Every device (and so
+  every device showing a shared layout) has its own countdowns.
+- Switching Auto Exit off while a device is inside cancels its countdown;
+  switching it on takes effect from the next entry. The move is shown and
+  published as after a key press (key images, the device's page in the
+  agent's status), so the editor's live view follows.
 
 **Navigation.** Opening a page pushes it on the device's page stack. Back
 goes to the current page's folder (also when the page was opened directly
@@ -353,7 +515,8 @@ above.
 ### Key appearance
 
 `ControlBinding.appearance` is optional, and so is every field in it; unset
-fields keep the look of the key's style. Bindings without it (all layouts
+colours are the device model's defaults (below), the same for every kind of
+key, and other unset fields have the defaults in the table. Bindings without it (all layouts
 written before it existed) serialize exactly as before.
 
 ```json
@@ -363,17 +526,44 @@ written before it existed) serialize exactly as before.
   "fontSize": "large",
   "titleAlign": "bottom",
   "showTitle": true,
-  "icon": { "id": "<icon id>", "fit": "crop" }
+  "icon": { "id": "<icon id>", "fit": "crop" },
+  "text": { "mode": "autoFit", "size": 14, "minSize": 8 }
 }
 ```
 
 | Field | Values | Default |
 | ----- | ------ | ------- |
-| `background`, `textColor` | `#rrggbb` (either case; stored lower case) | the style's colours |
+| `background` | `#rrggbb` (either case; stored lower case) or `transparent` (the display shows through) | the model's `keyBackground` |
+| `textColor` | `#rrggbb` (either case; stored lower case) | the model's `textColor` |
 | `fontSize` | `small`, `medium`, `large`: 13 %, 15.5 % and 19 % of the key's shorter side (about 9, 11 and 14 px on a 72 px key) | `medium` |
 | `titleAlign` | `top`, `middle`, `bottom`; `middle` draws no icon above the title | `bottom` under an icon (the key's own or the binding's); `middle` without |
 | `showTitle` | `false` hides the title and the secondary line | shown |
 | `icon` | `{ id, fit }`: an icon of the profile; `fit` is `fit` (whole icon, aspect kept, transparent borders), `fill` (stretched to the key), `crop` (covers the key, aspect kept, overflow cut off) | no icon; `fit` |
+| `text` | the title's text mode and its settings: `{ mode, size, align, maxLines, overflow, minSize, fit, speed, pause }`, every field optional; `mode` is `wrap`, `singleLine`, `autoFit` or `marquee` ([key-text.md](key-text.md)) | wrapped, as before text modes |
+| `fontFamily` | a title font id of `TITLE_FONTS` (`inter`); an unknown id is kept and drawn with Inter, and refused when saved from the app | `inter` |
+| `bold`, `italic`, `underline` | `true` or `false` (explicit `false` is kept: it beats a plugin's suggestion); bold is Inter SemiBold, italic a 10° slant ([key-text.md](key-text.md#title-appearance)) | off |
+
+Unset, explicit black, explicit white and `transparent` are four different
+values: an explicit colour is stored and drawn as chosen, whatever the
+model's defaults. `transparent` was added after 0.9.0; earlier versions cannot
+read a layout that uses it.
+
+Each device model may describe its defaults (`DeviceModel.defaultAppearance`,
+absent: the built-in ones):
+
+```json
+{ "keyBackground": "transparent", "textColor": "#ffffff", "displayBackground": "#000000" }
+```
+
+The Stream Deck MK.2, XL and + use exactly these, the built-in defaults:
+transparent keys on the black LCD, white text. The renderer
+(`deckpilot_render::key_colors`, mirrored by `keyColors` in the app's
+`layout-editor/appearance.ts` for the colour fields and the contrast hint)
+resolves a key's background as: the key's own, else its live state's
+accent, else the model's `keyBackground`; a transparent one is the
+`displayBackground`, as the device takes opaque images. The device and the
+app's previews draw the same pixels. A live state's accent is a state
+colour, not a default, and an explicit background wins over it.
 
 Invalid colours or values make the layout unreadable and are refused when
 saving; an icon id that is not in the profile is a layout issue. The app
@@ -654,7 +844,7 @@ local layouts no profile uses that the export does not have.
 | `reorder_profile_layouts` | `profileId`, `order` (every assigned layout once) | — |
 | `profile_layouts` | `profileId` | the profile's layouts in order, with `isDefault` and the keys that cannot run in it |
 
-## Storage schema (version 10)
+## Storage schema (version 12)
 
 Migrations run in a transaction each; a failed migration leaves the database
 unchanged.
@@ -687,6 +877,17 @@ unchanged.
   `profile_actions`, `layout_actions`, `library_icons`, `profile_icons`,
   `layout_icons`) and adds `device_layouts`; profile documents are rewritten
   in document version 6. See [Shared layouts](#shared-layouts).
+- **Migration 11** gives folder pages of stored layouts their Back setting
+  (`back.position`, see [The protected Back key](#the-protected-back-key)):
+  layout documents are rewritten in place (item document version 1, the
+  fields are additive), `updated_at` is kept, no binding changes, and a
+  folder that stays `legacy` gets a migration note.
+- **Migration 12** makes folder keys core controls
+  ([Folder controls](#folder-controls)): a folder key keeps only its
+  `openPage` on the press, its other bindings and timings move to the
+  layout's `recovered` list; layout documents are rewritten in place (item
+  document version 1, the field is additive), `updated_at` is kept, and
+  every such key gets a migration note.
 
 Since version 0.4 the database is encrypted with SQLCipher; see
 [security.md](security.md). Every upgrade of an existing database is

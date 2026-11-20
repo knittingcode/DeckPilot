@@ -177,6 +177,15 @@ Action::new("focus", focus).state(shown)
 | `badge` | 4 characters | a small label in the top left corner |
 | `series` | at most 32 values 0 to 100, oldest first | a line behind the texts |
 
+**Text modes come for free.** The user chooses how a key's title is laid
+out (wrapped, on one line, fitted by shrinking, or scrolling sideways), its
+size and alignment, in the key's Text appearance; the agent's renderer
+applies that to your `label` and `detail` as to any other key's text
+([key-text.md](../../key-text.md)), at the resolution of each device, and a
+new label is fitted again. A plugin sends text only: it does not measure,
+shorten, wrap or animate it, and needs no permission or API version for
+this.
+
 Every member is optional; `KeyState::new()` leaves the key as the user
 designed it. A state out of bounds is replaced by the failure
 `invalid-state` before it leaves the plugin. `Err(PluginError)` shows the

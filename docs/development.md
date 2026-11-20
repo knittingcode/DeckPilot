@@ -140,6 +140,40 @@ it behaves the same on Linux, macOS and Windows:
   them when the tray restarts the app. The agent additionally keeps its own rotating
   log in `.dev/data/logs/`. Credentials are not logged.
 
+### Layout probe
+
+`tauri dev` serves a development-only layout probe (`apps/desktop/dev/layout-probe-plugin.ts`,
+answered by the main window from `src/dev/layout-probe.ts`). It measures the real layout of the
+running app (WebKit on macOS) and can select a device control or scroll a container, which
+jsdom cannot do. Builds and Vitest never contain it.
+
+```sh
+pnpm --filter @deckpilot/desktop layout:check
+# another session: DECKPILOT_VITE_PORT=1441 DECKPILOT_DEV_DIR=$PWD/.dev node apps/desktop/scripts/layout-check.mjs
+```
+
+With the Device Editor open, the check selects every control twice and asserts that the
+document and the workspace do not scroll, the editor and the library scroll independently,
+no positioned element escapes a scroll container, the editor's scroll area ends at its
+content, nothing grows on reselection, and the status bar stays at the bottom. Run it at the
+window sizes you care about (resize the window, run again).
+
+The endpoint (`POST /__deckpilot/probe`) needs the session's token from
+`$DECKPILOT_DEV_DIR/layout-probe.token` (mode 600) in the `x-deckpilot-probe` header; a web
+page cannot send that header to localhost without a CORS preflight, which the server never
+allows. It knows a fixed list of commands (`PROBE_COMMANDS`: `measure`, `keys`, `select`,
+`scroll`, …, `title` for the title popover and `keymenu` for the key preview's menu, its
+Icon Library, Background Library and custom colour pickers and the Show title switch) and
+cannot run code. The check also asserts that the key header has no Background row and Show
+title under the title (its height unchanged when toggled), and that the key menu and every
+picker open inside the window above the inspector and its curtain, scroll only in a library's
+grid, and give the focus back to the preview on Escape.
+
+Rule it enforces, also checked by `src/lib/scroll-containers.test.ts`: a scroll container is
+the containing block of its content (`relative`), so absolutely positioned descendants
+(visually hidden inputs, `sr-only` text) are clipped and scroll with it instead of stretching
+an outer container.
+
 ### Windows
 
 The Makefile only calls `cargo` and `pnpm`, so it works with GNU Make from

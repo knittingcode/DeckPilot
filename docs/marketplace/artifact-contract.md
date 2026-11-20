@@ -63,8 +63,10 @@ The schema (`crates/deckpilot-plugin-manifest/schema/` and its copy in
 ## Package
 
 Required files: `manifest.json`, `plugin.wasm`, `LICENSE`, plus the files the
-manifest names (icons, key icons, screenshots, README, CHANGELOG). Nothing
-else. `plugin.wasm` is at most 4 MiB (the package limits stay as in #191:
+manifest names (icons, key icons, screenshots, README, CHANGELOG, and
+with plugin API 1.6 the locale files `locales/<tag>.json` of `locales`,
+each at most 64 KiB, checked as translation files:
+[sdk/localization.md](sdk/localization.md)). Nothing else. `plugin.wasm` is at most 4 MiB (the package limits stay as in #191:
 5 MiB compressed, 5 MiB per file, 10 MiB unpacked).
 
 At verify time (`deckpilot_plugin_package::verify_package`, after the size and

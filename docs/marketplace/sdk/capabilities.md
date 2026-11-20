@@ -155,6 +155,23 @@ Ok(Output::message("opened the pull request"))
   [`Context::run_context`](#run-context) to tell beforehand, for example
   to report a link as an output instead.
 
+## Dialogs
+
+`Context::dialog(Dialog::form(..))` (op `dialog.open`, plugin API 1.5)
+shows a standard confirm, alert, form or selection dialog and returns the
+user's checked answer. It needs the `dialogs` permission and a run the
+user started; see [dialogs.md](dialogs.md).
+
+## Language and translations
+
+`Context::locale()` (op `locale.get`, plugin API 1.6) is the app's language
+as a tag (`en`, `pl`, `pl-PL`); `Context::t(key, &[("count", 3)])` and
+`Context::text(key)` (op `locale.translate`) resolve one of the plugin's
+own translation keys in it, with the fallback chain, `{{name}}`
+placeholders and plurals of [localization.md](localization.md). Both need no
+permission, are allowed in every run and answer plain text; a plugin can
+only reach its own keys.
+
 ## Run context
 
 ```rust

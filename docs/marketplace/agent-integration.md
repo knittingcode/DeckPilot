@@ -587,13 +587,14 @@ older clients ignore.
 | `declinePluginUpdate` | `plugin` | `plugin` |
 | `rollbackPlugin` | `plugin` | `plugin` |
 | `uninstallPlugin` | `plugin`, `keep?: {settings?, credentials?}` | `ok` (see [retention](#uninstall-retention)); refused with `requiredBy` while an enabled plugin requires it |
+| `restoreBundledPlugin` | `plugin` | `plugin`: a bundled plugin the user uninstalled installed again from the application bundle (tombstone cleared, kept settings and credentials back, low-tier grants as seeding, enabled when nothing else needs consent), or a broken bundled copy replaced with its grants kept; pins (and the macOS seal) checked first, so a refusal changes nothing. Refused with `notBundled`, `notPinned` (this build has no pinned copy), `alreadyInstalled` (installed and not broken), `invalidState` or `invalidPackage` (protocol 15, feature `restoreBundled`) |
 | `planPluginInstall` | `plugin`, `version?`, `optional?: [id]` | `pluginInstallPlan { plan: {plugin, version, steps: [{id, name, version, action: install \| update \| enable \| keep \| builtin \| enableBuiltin, fromVersion?, requested?, optional?, builtin?, requiredBy?, permissions?, publisher?, blocker?}], optional?: [{of, dependency}], fingerprint} }`: every package downloaded and verified, nothing installed (feature `dependencies`, [dependencies.md](dependencies.md#4-installing-planplugininstall-installpluginplan)) |
 | `installPluginPlan` | `plugin`, `version?`, `optional?`, `fingerprint`, `consent: {pluginId: [key]}`, `activate` | `plugin` (the requested one); refused with `planChanged` when the plan is no longer the one confirmed, `consentRequired` before anything is installed when a plugin would lack a permission; a failed step undoes the finished ones (feature `dependencies`) |
 | `planPluginRemoval` | `plugin`, `uninstall` | `pluginRemovalPlan { plan: {plugin, uninstall, requiredBy?, disables?, usedBy?, orphans?} }` (feature `dependencies`) |
 | `removePlugin` | `plugin`, `uninstall`, `keep?`, `withDependents`, `orphans?: [id]` | `ok`: the enabled dependents turned off first (never uninstalled), then the plugin; after an uninstall the listed orphans too (feature `dependencies`) |
 | `invokePluginAction` | `plugin`, `action`, `params: {name: bool \| number \| text \| list}` | `pluginActionResult { outcome: {status: "ok", message?, data} \| {status: "skipped"} \| {status: "failed", code, message?, retryable} }` (parameters that do not match the manifest: `failed`, `invalid-parameters`, before the host runs) |
 | `subscribePluginEvents` | `migrations?: bool` (omitted when false) | `ok`; then `pluginEvent` messages on this connection, `migrationChanged` ones only with `migrations: true` |
-| `listKnownPlugins` | — | `knownPlugins { plugins: [{id, name, publisher, namespace, lastVersion, installed, firstSeenAt, lastSeenAt}] }` |
+| `listKnownPlugins` | — | `knownPlugins { plugins: [{id, name, publisher, namespace, lastVersion, installed, firstSeenAt, lastSeenAt, restorable?}] }`; `restorable` (feature `restoreBundled`): a removed bundled plugin `restoreBundledPlugin` installs again |
 | `getPluginSettings` | `plugin` | `pluginSettings { settings: {plugin, fields, values, effective, missing?, origins?} }`; `origins` lists the origin settings (G2): `{setting, label, permission, status: unset \| invalid \| declared \| slotNotGranted \| needsConsent \| granted, origin?, problem?, privateHost?, privateNetworkAllowed?, privateNetworkGranted?, pathPrefixAllowed?, methods, credentials?, grantedAt?}` |
 | `setPluginSettings` | `plugin`, `values: {key: value \| null}` (merged; `null` resets to the default) | `pluginSettings` (refused with `invalidData` unless every value fits its field; an origin setting is normalized, and a changed one ends the consent to its old server) |
 | `grantPluginUserOrigin` | `plugin`, `setting`, `origin` (exactly `origins[].origin`), `privateNetwork?: bool` (omitted when false) | `pluginSettings` (refused with `invalidData` for another origin than the setting holds, a declared host, or a private host without `privateNetwork`) |
@@ -838,6 +839,9 @@ grants, **storage, settings and credentials**; its audit and its
 plugin id (storage is never kept). The choice is journaled with the
 uninstall, so recovery after a crash honours it. The design's "after
 asking" for credentials is the app's job (the default is to delete).
+For a bundled first-party plugin the user's uninstall also writes a
+tombstone; `restoreBundledPlugin` (protocol 15) is the user's undo, and
+the kept settings and credentials are the restored plugin's again.
 
 ## Running it
 
