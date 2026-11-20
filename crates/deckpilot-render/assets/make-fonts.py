@@ -17,7 +17,11 @@ Extended-A, common punctuation, arrows, the euro sign), without hinting. Its
 pair kerning (GPOS) is copied into a `kern` table, the kerning the
 renderer reads (`skrifa`'s `kern` table). Lucide is subset to the icons in
 `icons.txt`; the renderer maps an icon name to its code point with
-`icons.txt` order, so the list and the font always change together.
+`icons.txt` order, so the list and the font always change together. New
+icons are appended (the code points of the others stay). `library.txt` (the
+Icon Library's categories) and `icon-tags.txt` (search words from the
+package's `tags.json`) name only icons of `icons.txt`; a renderer test checks
+all three agree.
 """
 
 import json

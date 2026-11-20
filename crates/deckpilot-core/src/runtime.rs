@@ -996,7 +996,12 @@ fn settle_request(mut result: ActionResult, invocation: &Invocation) -> ActionRe
     let applied = invocation.workflow.is_none()
         && matches!(
             invocation.origin,
-            Some(crate::RunOrigin::Key | crate::RunOrigin::Gesture | crate::RunOrigin::App)
+            Some(
+                crate::RunOrigin::Key
+                    | crate::RunOrigin::Gesture
+                    | crate::RunOrigin::App
+                    | crate::RunOrigin::Simulated
+            )
         );
     if result.request.is_some() && !applied {
         return ActionResult::error(

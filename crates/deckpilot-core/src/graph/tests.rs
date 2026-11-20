@@ -143,6 +143,8 @@ impl Fixture {
         registry
             .register(Box::new(Probe {
                 definition: ActionType {
+                    editor_navigation: None,
+                    title: None,
                     id: probe_type(),
                     name: "Probe".into(),
                     description: String::new(),

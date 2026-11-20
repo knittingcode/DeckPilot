@@ -111,6 +111,8 @@ pub struct LogMessage(ActionType);
 impl LogMessage {
     pub fn new() -> Self {
         Self(ActionType {
+            editor_navigation: None,
+            title: None,
             id: log_id(),
             name: "Log message".into(),
             description: "Writes a message to the execution log.".into(),
@@ -190,6 +192,8 @@ pub struct Wait(ActionType);
 impl Wait {
     pub fn new() -> Self {
         Self(ActionType {
+            editor_navigation: None,
+            title: None,
             id: wait_id(),
             name: "Wait".into(),
             description: "Waits a number of seconds; stops at once when the workflow is cancelled."
@@ -286,6 +290,8 @@ pub struct Delay(ActionType);
 impl Delay {
     pub fn new() -> Self {
         Self(ActionType {
+            editor_navigation: None,
+            title: None,
             id: delay_id(),
             name: "Delay".into(),
             description: "Waits a number of milliseconds between steps; stops at once when the \

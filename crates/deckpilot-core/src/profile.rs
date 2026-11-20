@@ -134,8 +134,7 @@ impl Profile {
                     if binding
                         .appearance
                         .as_ref()
-                        .and_then(|a| a.icon)
-                        .is_some_and(|icon| icon.id == id)
+                        .is_some_and(|look| look.shows_icon(id))
                     {
                         usages.push(Usage::LayoutBinding {
                             layout: layout.id,
@@ -554,25 +553,46 @@ pub(crate) fn remap_layout(
             page.parent = Some(*new);
         }
         for binding in &mut page.bindings {
-            match &mut binding.target {
-                BindingTarget::Action { action, .. } => {
-                    if let Some(new) = actions.get(action) {
-                        *action = *new;
-                    }
-                }
-                BindingTarget::Workflow { workflow } => {
-                    if let Some(new) = workflows.get(workflow) {
-                        *workflow = *new;
-                    }
-                }
-                BindingTarget::OpenPage { page } => {
-                    if let Some(new) = pages.get(page) {
-                        *page = *new;
-                    }
-                }
-                BindingTarget::Back | BindingTarget::Stateful(_) => {}
+            remap_binding(binding, pages, actions, workflows);
+        }
+    }
+    // Recovered bindings follow their pages and what they run.
+    for entry in &mut layout.recovered {
+        if let Some(new) = pages.get(&entry.page) {
+            entry.page = *new;
+        }
+        if let Some(new) = pages.get(&entry.folder) {
+            entry.folder = *new;
+        }
+        for binding in &mut entry.bindings {
+            remap_binding(binding, pages, actions, workflows);
+        }
+    }
+}
+
+fn remap_binding(
+    binding: &mut crate::ControlBinding,
+    pages: &HashMap<PageId, PageId>,
+    actions: &HashMap<ActionInstanceId, ActionInstanceId>,
+    workflows: &HashMap<WorkflowId, WorkflowId>,
+) {
+    match &mut binding.target {
+        BindingTarget::Action { action, .. } => {
+            if let Some(new) = actions.get(action) {
+                *action = *new;
             }
         }
+        BindingTarget::Workflow { workflow } => {
+            if let Some(new) = workflows.get(workflow) {
+                *workflow = *new;
+            }
+        }
+        BindingTarget::OpenPage { page } => {
+            if let Some(new) = pages.get(page) {
+                *page = *new;
+            }
+        }
+        BindingTarget::Back | BindingTarget::Stateful(_) => {}
     }
 }
 
@@ -664,7 +684,7 @@ mod tests {
         );
         binding.appearance = Some(crate::KeyAppearance {
             icon: Some(crate::IconRef {
-                id,
+                id: id.into(),
                 fit: crate::IconFit::Fill,
             }),
             ..crate::KeyAppearance::default()

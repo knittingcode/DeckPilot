@@ -14,6 +14,7 @@ deckpilot-core.workspace = true
 deckpilot-device.workspace = true
 image = { workspace = true, features = ["png", "jpeg"] }
 skrifa.workspace = true
+unicode-segmentation.workspace = true
 
 [lints]
 workspace = true

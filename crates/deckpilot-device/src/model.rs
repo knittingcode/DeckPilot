@@ -2,7 +2,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{DeviceCapabilities, ModelVerification};
+use crate::{DefaultAppearance, DeviceCapabilities, ModelVerification};
 
 /// Stable identifier of a device model, for example `elgato.streamdeck.mk2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -69,11 +69,23 @@ pub struct DeviceModel {
     /// older versions, which then reads as [`crate::VerificationLevel::Defined`].
     #[serde(default)]
     pub verification: ModelVerification,
+    /// How keys look when they set no colours; `None` (and data from older
+    /// versions): [`DefaultAppearance::BUILTIN`]. Read it with
+    /// [`DeviceModel::effective_appearance`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_appearance: Option<DefaultAppearance>,
 }
 
 impl DeviceModel {
     /// Listed as supported: physically verified on at least one platform.
     pub fn is_supported(&self) -> bool {
         self.verification.is_supported()
+    }
+
+    /// How keys look when they set no colours: the model's own defaults,
+    /// else the built-in ones.
+    pub fn effective_appearance(&self) -> DefaultAppearance {
+        self.default_appearance
+            .unwrap_or(DefaultAppearance::BUILTIN)
     }
 }

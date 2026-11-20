@@ -567,9 +567,9 @@ fn with_icon(store: &SqliteStore, profile: &Profile) -> Profile {
         &profile,
     );
     layout.pages[0].bindings[0].appearance = Some(deckpilot_core::KeyAppearance {
-        background: Some(deckpilot_core::Color([1, 2, 3])),
+        background: Some(deckpilot_core::Color([1, 2, 3]).into()),
         icon: Some(deckpilot_core::IconRef {
-            id,
+            id: id.into(),
             fit: deckpilot_core::IconFit::Crop,
         }),
         ..deckpilot_core::KeyAppearance::default()
@@ -612,6 +612,113 @@ fn icons_and_appearances_travel_with_their_profile() {
     assert_ne!(copy.id, work.id);
     assert_eq!(copy.icons, work.icons);
     assert_eq!(copy.validate(&catalog()), []);
+}
+
+/// Text modes of key titles (`docs/key-text.md`) travel with the layout:
+/// exported, sealed, opened and imported unchanged, also as a copy; an
+/// export without them (an older version's) imports with wrapped titles.
+#[test]
+fn text_appearances_travel_with_their_layouts() {
+    use deckpilot_core::{FitLines, KeyAppearance, TextAlign, TextAppearance, TextMode};
+
+    let (source, profiles) = store_with(&["Work"]);
+    let mut work = profiles[0].clone();
+    let mut layout = deckpilot_core::DeviceLayout::generate(
+        "Main",
+        &deckpilot_device::models::stream_deck_mk2(),
+        &work,
+    );
+    let texts = [
+        TextAppearance {
+            mode: TextMode::Marquee,
+            speed: Some(45),
+            pause: Some(700),
+            align: Some(TextAlign::Left),
+            ..TextAppearance::default()
+        },
+        TextAppearance {
+            mode: TextMode::AutoFit,
+            size: Some(15),
+            min_size: Some(9),
+            fit: Some(FitLines::Multiline),
+            ..TextAppearance::default()
+        },
+    ];
+    for (binding, text) in layout.pages[0].bindings.iter_mut().zip(texts) {
+        binding.appearance = Some(KeyAppearance {
+            text: Some(text),
+            // Title typography travels too.
+            font_family: Some(deckpilot_core::FontFamilyId::new("inter")),
+            bold: Some(true),
+            italic: Some(false),
+            underline: Some(true),
+            ..KeyAppearance::default()
+        });
+    }
+    assert!(layout.pages[0].bindings.len() >= 2);
+    work.layouts.push(layout);
+    source.save_profile(&work).unwrap();
+    let payload = round_trip(&exported(&source));
+    let found = |profile: &Profile| -> Vec<TextAppearance> {
+        profile.layouts[0].pages[0]
+            .bindings
+            .iter()
+            .filter_map(|b| b.appearance.as_ref()?.text)
+            .collect()
+    };
+    assert_eq!(found(&payload.profiles[0]), texts);
+
+    let target = SqliteStore::open_in_memory().unwrap();
+    apply(
+        &target,
+        &payload,
+        &ImportOptions {
+            profiles: vec![work.id],
+            ..ImportOptions::default()
+        },
+    );
+    let imported = target.load_profile(work.id).unwrap().unwrap();
+    assert_eq!(found(&imported), texts);
+    // With the typography, explicit "not italic" included.
+    assert_eq!(imported, work);
+    // As a copy, too.
+    let summary = apply(
+        &target,
+        &payload,
+        &ImportOptions {
+            profiles: vec![work.id],
+            conflicts: BTreeMap::from([(work.id, ConflictResolution::KeepBoth)]),
+            ..ImportOptions::default()
+        },
+    );
+    let copy = target.load_profile(summary.imported[0].0).unwrap().unwrap();
+    assert_eq!(found(&copy), texts);
+
+    // An export written before text modes: no `text`, wrapped titles.
+    let mut old = serde_json::to_value(&payload).unwrap();
+    for binding in old["profiles"][0]["layouts"][0]["pages"][0]["bindings"]
+        .as_array_mut()
+        .unwrap()
+    {
+        if let Some(look) = binding
+            .get_mut("appearance")
+            .and_then(|a| a.as_object_mut())
+        {
+            look.remove("text");
+        }
+    }
+    let old: Payload = serde_json::from_value(old).unwrap();
+    let fresh = SqliteStore::open_in_memory().unwrap();
+    apply(
+        &fresh,
+        &old,
+        &ImportOptions {
+            profiles: vec![work.id],
+            ..ImportOptions::default()
+        },
+    );
+    let plain = fresh.load_profile(work.id).unwrap().unwrap();
+    assert_eq!(found(&plain), Vec::<TextAppearance>::new());
 }
 
 #[test]
@@ -890,5 +997,95 @@ fn incompatible_bindings_are_kept_and_reported() {
             .check_compatibility(&catalog(), &registry, &imported)
             .len(),
         1
+    );
+}
+
+/// A layout with three folders: Tools (reserved Back, Auto Exit after
+/// 30 s), Git (legacy: its first key runs the action) and Old, stored as
+/// exports from before the setting (none).
+fn with_folders(profile: &mut Profile) -> (deckpilot_core::LayoutId, [deckpilot_core::PageId; 3]) {
+    use deckpilot_core::{
+        AutoExit, BindingTarget, ControlBinding, DeviceLayout, FolderBack, LayoutPage, Trigger,
+    };
+    use deckpilot_device::{ControlId, DeviceModelId, models};
+    let mut layout = DeviceLayout::new("Main", DeviceModelId::new(models::STREAM_DECK_MK2_ID));
+    let mut tools = LayoutPage::folder("Tools", layout.home_page);
+    tools.auto_exit = Some(AutoExit {
+        enabled: true,
+        seconds: 30,
+    });
+    let mut git = LayoutPage::folder("Git", tools.id);
+    git.back = Some(FolderBack::LEGACY);
+    git.bindings.push(ControlBinding::new(
+        ControlId::Key { index: 0 },
+        Trigger::Press,
+        BindingTarget::action(profile.actions[0].id),
+    ));
+    let mut old = LayoutPage::new("Old");
+    old.parent = Some(tools.id);
+    let ids = [tools.id, git.id, old.id];
+    layout.pages.extend([tools, git, old]);
+    layout.explicit_tree = true;
+    let id = layout.id;
+    profile.layouts.push(layout);
+    (id, ids)
+}
+
+#[test]
+fn folder_back_and_auto_exit_survive_export_and_import() {
+    use deckpilot_core::{AutoExit, BackPosition};
+    let (source, _) = store_with(&[]);
+    let mut work = profile("Work");
+    let (layout, [tools, git, old]) = with_folders(&mut work);
+    source.save_profile(&work).unwrap();
+    let payload = round_trip(&exported(&source));
+    let target = SqliteStore::open_in_memory().unwrap();
+    apply(
+        &target,
+        &payload,
+        &ImportOptions {
+            profiles: vec![work.id],
+            ..ImportOptions::default()
+        },
+    );
+    let imported = target.load_profile(work.id).unwrap().unwrap();
+    let layout = imported.layout(layout).unwrap();
+    let position = |page| layout.page(page).unwrap().back.map(|b| b.position);
+    assert_eq!(position(tools), Some(BackPosition::Reserved));
+    assert_eq!(position(git), Some(BackPosition::Legacy));
+    // An export from before the setting: migrated on import (free key).
+    assert_eq!(position(old), Some(BackPosition::Reserved));
+    assert_eq!(
+        layout.page(tools).unwrap().auto_exit,
+        Some(AutoExit {
+            enabled: true,
+            seconds: 30
+        })
+    );
+    assert_eq!(layout.page(git).unwrap().bindings.len(), 1);
+}
+
+#[test]
+fn a_binding_on_the_reserved_back_key_is_imported_with_a_warning() {
+    use deckpilot_core::{BindingTarget, ControlBinding, Trigger};
+    use deckpilot_device::ControlId;
+    let (source, _) = store_with(&[]);
+    let mut work = profile("Work");
+    let (_, [tools, ..]) = with_folders(&mut work);
+    let action = work.actions[0].id;
+    work.layouts[0]
+        .page_mut(tools)
+        .unwrap()
+        .bindings
+        .push(ControlBinding::new(
+            ControlId::Key { index: 0 },
+            Trigger::Press,
+            BindingTarget::action(action),
+        ));
+    source.save_profile(&work).unwrap();
+    let warnings = validate(&exported(&source), &catalog()).unwrap();
+    assert!(
+        warnings.iter().any(|w| w.contains("folder's Back key")),
+        "{warnings:?}"
     );
 }

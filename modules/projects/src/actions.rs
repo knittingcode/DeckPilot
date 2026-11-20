@@ -112,6 +112,8 @@ pub fn handlers(wrap_around: bool) -> Vec<Box<dyn ActionHandler>> {
 
 fn action_type(id: ActionTypeId, name: &str, description: &str) -> ActionType {
     ActionType {
+        editor_navigation: None,
+        title: None,
         id,
         name: name.into(),
         description: description.into(),

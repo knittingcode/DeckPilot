@@ -211,6 +211,18 @@ pub struct LayoutPage {
     /// as Back would. Not stored when off.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auto_return: bool,
+    /// Where the page's Back is when it is inside a folder: on the
+    /// reserved, protected key, or where it was before that key existed
+    /// ([`crate::folder`]). Not stored for top-level pages; a folder page
+    /// without it behaves as [`crate::BackPosition::Legacy`] until it is
+    /// migrated or saved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub back: Option<crate::FolderBack>,
+    /// A folder page that leaves itself a while after a device entered it
+    /// ([`crate::AutoExit`]). Not stored when never set; new folders store
+    /// it switched off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_exit: Option<crate::AutoExit>,
 }
 
 impl LayoutPage {
@@ -222,6 +234,19 @@ impl LayoutPage {
             bindings: Vec::new(),
             gestures: Vec::new(),
             auto_return: false,
+            back: None,
+            auto_exit: None,
+        }
+    }
+
+    /// A new folder page inside `parent`: the reserved Back, Auto Exit
+    /// stored switched off.
+    pub fn folder(name: impl Into<String>, parent: PageId) -> Self {
+        Self {
+            parent: Some(parent),
+            back: Some(crate::FolderBack::RESERVED),
+            auto_exit: Some(crate::AutoExit::disabled()),
+            ..Self::new(name)
         }
     }
 
@@ -279,6 +304,12 @@ pub struct DeviceLayout {
     /// parents), parents that are not stored are inferred.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub explicit_tree: bool,
+    /// Bindings set aside from folder controls ([`crate::folder_control`]):
+    /// stored and exported with the layout, never run. Empty, and not
+    /// stored, unless migration 12 or an import found a folder key with
+    /// more than its `OpenPage`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recovered: Vec<crate::RecoveredBindings>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -360,6 +391,60 @@ pub enum LayoutIssue {
     /// automatic Back key on the page's first free key.
     #[error("page `{page}` has no Back key; an automatic one is shown on its first free key")]
     MissingBack { page: String },
+    /// A binding other than Back on the reserved Back key of a folder page
+    /// ([`crate::folder`]): that key belongs to DeckPilot.
+    #[error("page `{page}`: {control} is the folder's Back key and cannot run anything else")]
+    ReservedBack { page: String, control: ControlId },
+    #[error("page `{page}`: {reason}")]
+    InvalidAutoExit {
+        page: String,
+        reason: crate::AutoExitError,
+    },
+    /// A folder control ([`crate::folder_control`]) with a binding besides
+    /// the one that opens its folder.
+    #[error("page `{page}`: {control} opens the folder “{folder}” and cannot run anything else")]
+    FolderControlBindings {
+        page: String,
+        control: ControlId,
+        folder: String,
+    },
+    /// A folder control whose `OpenPage` is on another trigger than the
+    /// press.
+    #[error("page `{page}`: {control} opens the folder “{folder}” on a press, not on {trigger:?}")]
+    FolderControlTrigger {
+        page: String,
+        control: ControlId,
+        folder: String,
+        trigger: Trigger,
+    },
+    /// A folder control whose `OpenPage` was replaced by something else
+    /// ([`DeviceLayout::folder_control_edits`]).
+    #[error(
+        "page `{page}`: {control} opens the folder “{folder}”; clear the key or delete the folder instead of replacing it"
+    )]
+    FolderControlReplaced {
+        page: String,
+        control: ControlId,
+        folder: String,
+    },
+    /// Recovered bindings that are not stored: they are only kept, moved
+    /// or discarded ([`DeviceLayout::folder_control_edits`]).
+    #[error("recovered bindings can only be kept, moved to a free key or discarded")]
+    FolderControlRecovered,
+}
+
+impl LayoutIssue {
+    /// The stable reason of a folder-control refusal, as the desktop's
+    /// `invalid.<reason>` error codes use it; `None` for other issues.
+    pub fn folder_control_reason(&self) -> Option<&'static str> {
+        match self {
+            Self::FolderControlBindings { .. } => Some("folderControl.extraBinding"),
+            Self::FolderControlTrigger { .. } => Some("folderControl.trigger"),
+            Self::FolderControlReplaced { .. } => Some("folderControl.replaced"),
+            Self::FolderControlRecovered => Some("folderControl.recovered"),
+            _ => None,
+        }
+    }
 }
 
 impl DeviceLayout {
@@ -373,6 +458,7 @@ impl DeviceLayout {
             home_page: home.id,
             pages: vec![home],
             explicit_tree: false,
+            recovered: Vec::new(),
         }
     }
 
@@ -475,8 +561,11 @@ impl DeviceLayout {
         if self.page(self.home_page).is_none() {
             issues.push(LayoutIssue::MissingHomePage);
         }
+        let parents = self.page_parents();
         for page in &self.pages {
             self.validate_page(page, &model.capabilities, profile, &mut issues);
+            self.validate_folder(page, &parents, &model.capabilities, &mut issues);
+            self.validate_folder_controls(page, &parents, &mut issues);
         }
         self.validate_parents(&mut issues);
         issues
@@ -551,8 +640,13 @@ impl DeviceLayout {
             // unavailable in this profile (`shared_layouts::availability`),
             // not an error: the layout may be shared with the profile that
             // has the project. The run is refused here.
-            if let Some(icon) = binding.appearance.as_ref().and_then(|a| a.icon)
-                && profile.icon(icon.id).is_none()
+            // Library assets (built in, a plugin's) may be missing here:
+            // the key is drawn without them until they are back. Profile
+            // images must be in the profile.
+            if binding
+                .appearance
+                .as_ref()
+                .is_some_and(|look| look.profile_icons().any(|id| profile.icon(id).is_none()))
             {
                 issues.push(LayoutIssue::MissingIcon {
                     page: name(),
@@ -564,6 +658,35 @@ impl DeviceLayout {
             }
         }
         validate_gesture_settings(page, capabilities, issues);
+    }
+
+    /// The reserved Back key of a folder page binds nothing but Back (kept
+    /// from before it was reserved); Auto Exit has
+    /// a valid time.
+    fn validate_folder(
+        &self,
+        page: &LayoutPage,
+        parents: &std::collections::BTreeMap<PageId, PageId>,
+        capabilities: &DeviceCapabilities,
+        issues: &mut Vec<LayoutIssue>,
+    ) {
+        if let Some(control) = self.system_back_with(parents, page.id, capabilities)
+            && page
+                .bindings
+                .iter()
+                .any(|binding| binding.control == control && binding.target != BindingTarget::Back)
+        {
+            issues.push(LayoutIssue::ReservedBack {
+                page: page.name.clone(),
+                control,
+            });
+        }
+        if let Some(Err(reason)) = page.auto_exit.map(crate::AutoExit::check) {
+            issues.push(LayoutIssue::InvalidAutoExit {
+                page: page.name.clone(),
+                reason,
+            });
+        }
     }
 
     /// Checks the parameter overrides of action bindings against the
@@ -923,6 +1046,7 @@ mod tests {
             },
             support: HardwareSupport::DescriptorOnly,
             verification: ModelVerification::default(),
+            default_appearance: None,
         });
         catalog
     }
@@ -1088,7 +1212,7 @@ mod tests {
         );
         back.appearance = Some(crate::KeyAppearance {
             icon: Some(crate::IconRef {
-                id: icon.id,
+                id: icon.id.into(),
                 fit: crate::IconFit::Fit,
             }),
             ..crate::KeyAppearance::default()

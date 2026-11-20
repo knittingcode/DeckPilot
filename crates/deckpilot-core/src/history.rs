@@ -75,6 +75,9 @@ pub enum ExecutionTrigger {
     /// The start or end-verification workflow of a work session (see
     /// [`crate::work_session`]); older readers see [`Self::Other`].
     WorkSession,
+    /// A press the configuration app simulated (`simulatePress`); older
+    /// readers see [`Self::Other`].
+    Simulated,
     /// A kind this version does not know.
     #[serde(other)]
     Other,

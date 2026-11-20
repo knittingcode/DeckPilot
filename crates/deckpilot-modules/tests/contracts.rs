@@ -191,6 +191,8 @@ fn modules(launcher: &Arc<RecordingLauncher>) -> Vec<Box<dyn FeatureModule>> {
 
 fn schema(id: &str, parameters: Vec<ParameterSpec>) -> ActionType {
     ActionType {
+        editor_navigation: None,
+        title: None,
         id: ActionTypeId::new(format!("{id}.config")).unwrap(),
         name: id.into(),
         description: String::new(),
@@ -1097,6 +1099,8 @@ mod broken {
             ];
         }
         ActionType {
+            editor_navigation: None,
+            title: None,
             id: ActionTypeId::new(id).unwrap(),
             name: "Broken".into(),
             description,
@@ -1432,6 +1436,8 @@ mod first_party {
             .map_or(30_000, |n| u32::try_from(n.timeout_ms()).unwrap())
             .clamp(1, MAX_TIMEOUT_MS);
         ActionType {
+            editor_navigation: None,
+            title: None,
             id: ActionTypeId::new(format!("{plugin}.{}", action.id)).unwrap(),
             name: action.name.clone(),
             description: action.description.clone(),

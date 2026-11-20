@@ -29,8 +29,8 @@ use serde::{Deserialize, Serialize};
 use deckpilot_device::{ControlId, ControlInput, DeviceModel, DeviceModelId, ModelCatalog};
 
 use crate::{
-    ActionInstance, ActionInstanceId, BindingTarget, DeviceLayout, IconId, LayoutId, PageId,
-    Profile, Trigger, WorkflowId,
+    ActionInstance, ActionInstanceId, BindingTarget, DeviceLayout, IconId, KeyAppearance, LayoutId,
+    PageId, Profile, Trigger, WorkflowId,
 };
 
 impl DeviceLayout {
@@ -41,6 +41,8 @@ impl DeviceLayout {
         self.pages
             .iter()
             .flat_map(|page| &page.bindings)
+            // Recovered bindings keep what they run and show.
+            .chain(self.recovered_bindings())
             .filter_map(|binding| binding.target.action_id())
             .filter(|id| seen.insert(*id))
             .collect()
@@ -52,6 +54,8 @@ impl DeviceLayout {
         self.pages
             .iter()
             .flat_map(|page| &page.bindings)
+            // Recovered bindings keep what they run and show.
+            .chain(self.recovered_bindings())
             .filter_map(|binding| match binding.target {
                 BindingTarget::Workflow { workflow } => Some(workflow),
                 _ => None,
@@ -66,7 +70,10 @@ impl DeviceLayout {
         self.pages
             .iter()
             .flat_map(|page| &page.bindings)
-            .filter_map(|binding| binding.appearance.as_ref()?.icon.map(|icon| icon.id))
+            // Recovered bindings keep what they run and show.
+            .chain(self.recovered_bindings())
+            .filter_map(|binding| binding.appearance.as_ref())
+            .flat_map(KeyAppearance::profile_icons)
             .filter(|id| seen.insert(*id))
             .collect()
     }

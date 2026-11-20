@@ -23,6 +23,9 @@ struct MockDevice {
     pending: BTreeMap<ControlId, Option<Frame>>,
     frames: BTreeMap<ControlId, Frame>,
     image_writes: usize,
+    /// Images written per control, for checks that unrelated keys are
+    /// left alone.
+    writes: BTreeMap<ControlId, usize>,
     brightness: Option<u8>,
 }
 
@@ -116,6 +119,14 @@ impl MockBackend {
     /// Total number of images written since the device was created.
     pub fn image_writes(&self, id: &DeviceId) -> usize {
         self.lock().get(id).map_or(0, |device| device.image_writes)
+    }
+
+    /// Images written to each control since the device was created.
+    pub fn control_writes(&self, id: &DeviceId) -> BTreeMap<ControlId, usize> {
+        self.lock()
+            .get(id)
+            .map(|device| device.writes.clone())
+            .unwrap_or_default()
     }
 
     pub fn brightness(&self, id: &DeviceId) -> Option<u8> {
@@ -283,6 +294,7 @@ impl DeviceHandle for MockHandle {
         self.with_device(|device| {
             for (control, frame) in std::mem::take(&mut device.pending) {
                 device.image_writes += 1;
+                *device.writes.entry(control).or_default() += 1;
                 match frame {
                     Some(frame) => device.frames.insert(control, frame),
                     None => device.frames.remove(&control),

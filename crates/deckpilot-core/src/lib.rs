@@ -9,16 +9,21 @@
 pub mod action;
 pub mod alias;
 pub mod appearance;
+pub mod assets;
 pub mod button_state;
 pub mod cancel;
 pub mod controls;
 pub mod credentials;
 pub mod device_runtime;
+pub mod editor_navigation;
 pub mod execution;
 pub mod face;
+pub mod folder;
+pub mod folder_control;
 pub mod gesture;
 pub mod graph;
 pub mod history;
+pub mod i18n;
 pub mod id;
 pub mod launch;
 pub mod layout;
@@ -52,8 +57,15 @@ pub use alias::{
     LegacyRouting, ParamRule, RESERVED_MODULE_IDS,
 };
 pub use appearance::{
-    Color, FontSize, Icon, IconData, IconFit, IconRef, KeyAppearance, MAX_ICON_BYTES,
-    MAX_ICON_NAME, MAX_ICON_SIZE, MAX_ICONS, TitleAlign,
+    ActionTitle, Color, DEFAULT_MARQUEE_PAUSE_MS, DEFAULT_MARQUEE_SPEED, DEFAULT_MIN_TEXT_POINTS,
+    DEFAULT_TITLE_FONT, DefaultAppearance, FitLines, FontFamilyId, FontSize, Icon, IconData,
+    IconFit, IconRef, KeyAppearance, KeyBackground, MARQUEE_SPEED, MAX_ICON_BYTES, MAX_ICON_NAME,
+    MAX_ICON_SIZE, MAX_ICONS, MAX_MARQUEE_PAUSE_MS, MAX_TEXT_LINES, TEXT_SIZE_POINTS, TITLE_FONTS,
+    TextAlign, TextAppearance, TextMode, TextOverflow, TitleAlign, TitleFeature, TitleFont,
+};
+pub use assets::{
+    AssetId, AssetRef, BACKGROUND_ASSET_PREFIX, BUILTIN_GRADIENTS, BUILTIN_NAMESPACE, Background,
+    BuiltinGradient, Gradient, MAX_GRADIENT_COLORS, builtin_gradient,
 };
 pub use button_state::{
     Accent, ButtonState, Glyph, Indicator, MAX_REFRESH_INTERVAL, MAX_STATE_BADGE, MAX_STATE_SERIES,
@@ -68,12 +80,26 @@ pub use credentials::{
     CredentialError, CredentialId, CredentialInfo, CredentialSource, MemoryCredentials,
     NoCredentials, Secret,
 };
-pub use device_runtime::{DetachedAction, LayoutStatus, Runtime, RuntimeOutcome, page_faces};
+pub use device_runtime::{
+    DetachedAction, EditorTarget, LayoutStatus, NavigationError, NavigationState, Runtime,
+    RuntimeOutcome, page_faces,
+};
+pub use editor_navigation::{
+    ControlNavigation, EditorNavigation, NavigationOperation, control_navigation,
+};
 pub use execution::{
     ActionResult, ActionStatus, CapabilityDenied, ContextEffect, DeckRequest, ExecutionContext,
     ExecutionControl, ProfileTarget, Progress, RunOrigin, RunSummary, WorkflowCause,
 };
 pub use face::{FaceStyle, KeyFace, PageLabel, render_label, render_page_label};
+pub use folder::{
+    AutoExit, AutoExitError, BackPosition, FolderBack, FolderBackError, FolderBackReport,
+    FolderExit, FolderTimers, reserved_back_control,
+};
+pub use folder_control::{
+    FOLDER_CONTROL_TRIGGER, NormalizedFolderControl, NormalizedFolderLabel, RecoveredBindings,
+    RecoveredError, RecoveryReason,
+};
 pub use history::{
     ExecutionRecord, ExecutionState, ExecutionSummary, ExecutionTrigger, ProjectOutcome,
     safe_event, safe_report,

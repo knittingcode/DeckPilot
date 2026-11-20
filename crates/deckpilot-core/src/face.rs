@@ -64,6 +64,11 @@ pub struct KeyFace {
     /// its fallback icon.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
+    /// Which of the texts DeckPilot produced itself, so the agent draws
+    /// them in the effective language ([`crate::i18n`]). Not part of the
+    /// look: ignored by comparisons and never serialized.
+    #[serde(skip)]
+    pub text: crate::i18n::FaceText,
 }
 
 impl KeyFace {
@@ -82,6 +87,7 @@ impl KeyFace {
             badge: None,
             series: None,
             symbol: None,
+            text: crate::i18n::FaceText::default(),
         }
     }
 
@@ -100,6 +106,7 @@ impl KeyFace {
             badge: None,
             series: None,
             symbol: None,
+            text: crate::i18n::FaceText::default(),
         }
     }
 
@@ -113,6 +120,7 @@ impl KeyFace {
     #[must_use]
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
+        self.text.detail = None;
         self
     }
 
@@ -142,6 +150,29 @@ impl KeyFace {
         self
     }
 
+    /// The face with an action type's title suggestions filled in where
+    /// the binding's look sets nothing ([`KeyAppearance::with_suggestions`]).
+    #[must_use]
+    pub fn with_title_suggestions(mut self, title: Option<&crate::ActionTitle>) -> Self {
+        if let Some(title) = title.filter(|title| title.position.is_some()) {
+            self.appearance = self
+                .appearance
+                .take()
+                .unwrap_or_default()
+                .with_suggestions(title)
+                .normalized();
+        }
+        self
+    }
+
+    /// The face with its title marked as the user's (see
+    /// [`crate::i18n::FaceText::user_title`]) or not.
+    #[must_use]
+    pub fn with_user_title(mut self, user: bool) -> Self {
+        self.text.user_title = user;
+        self
+    }
+
     pub fn is_empty(&self) -> bool {
         self.style == FaceStyle::Empty
     }
@@ -154,11 +185,16 @@ impl KeyFace {
         if matches!(self.style, FaceStyle::Empty | FaceStyle::Notice) {
             return self;
         }
-        if let Some(label) = &state.label {
+        // A plugin's dynamic title, unless the user titled the key.
+        if let Some(label) = &state.label
+            && !self.text.user_title
+        {
             self.title.clone_from(label);
+            self.text.title = None;
         }
         if let Some(detail) = &state.detail {
             self.detail = Some(detail.clone());
+            self.text.detail = None;
         }
         self.indicator = state.indicator.or(self.indicator);
         self.progress = state.progress.map(|p| p.min(100)).or(self.progress);
@@ -189,7 +225,7 @@ impl KeyFace {
             StateSnapshot::Failed { .. } => {
                 let mut face = self.with_indicator(Indicator::Error);
                 if face.detail.is_none() {
-                    face.detail = Some("Error".into());
+                    face = face.with_system_detail(crate::i18n::SystemText::Error);
                 }
                 face
             }

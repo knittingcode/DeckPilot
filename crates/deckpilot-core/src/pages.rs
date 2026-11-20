@@ -247,12 +247,18 @@ impl DeviceLayout {
         Ok(())
     }
 
-    /// Whether a page inside a folder has a way back: a Back binding, or a
-    /// binding that opens one of its folders. Pages outside folders need
-    /// none.
+    /// Whether a page inside a folder has a way back: the reserved Back
+    /// key, a Back binding, or a binding that opens one of its folders.
+    /// Pages outside folders need none.
     pub fn has_way_back(&self, page: PageId) -> bool {
         let ancestors = self.ancestors(page);
         if ancestors.is_empty() {
+            return true;
+        }
+        // The reserved Back key is its way back (`crate::folder`).
+        if self.page(page).and_then(|p| p.back).map(|b| b.position)
+            == Some(crate::BackPosition::Reserved)
+        {
             return true;
         }
         self.page(page).is_none_or(|p| {

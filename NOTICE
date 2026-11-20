@@ -18,5 +18,7 @@ crates/deckpilot-render/assets/make-fonts.py.
   icons listed in crates/deckpilot-render/assets/icons.txt, Copyright (c)
   2026 Lucide Icons and Contributors, ISC License; the icons derived from
   Feather, Copyright (c) 2013-present Cole Bemis, MIT License. The full
-  licence is crates/deckpilot-render/assets/Lucide-LICENSE.txt. The app's
-  own icons come from the same set (lucide-react).
+  licence is crates/deckpilot-render/assets/Lucide-LICENSE.txt. They are
+  also the built-in Icon Library (library.txt; search words in
+  icon-tags.txt, from the package's tags.json). The app's own icons come
+  from the same set (lucide-react).

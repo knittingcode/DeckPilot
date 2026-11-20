@@ -356,6 +356,18 @@ pub struct ActionType {
     /// declares its controls.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controls: Option<crate::ActionControls>,
+    /// What running the action does to the page or layout a device shows,
+    /// for the editor's interactive preview
+    /// ([`crate::editor_navigation`]): data only, never run by the editor.
+    /// `None`, and not sent, for every action that does not navigate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor_navigation: Option<crate::EditorNavigation>,
+    /// What a plugin's action suggests for its keys' titles (plugin API
+    /// 1.8): a default title, a dynamic title, a position and the parts of
+    /// the look the editor offers. Suggestions only; the user's title and
+    /// look win. `None`, and not sent, for every built-in type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<crate::ActionTitle>,
 }
 
 impl ActionType {
@@ -715,6 +727,8 @@ mod tests {
 
     fn action_type() -> ActionType {
         ActionType {
+            editor_navigation: None,
+            title: None,
             id: ActionTypeId::new("test.action").unwrap(),
             name: "Test".into(),
             description: String::new(),
@@ -839,6 +853,8 @@ mod structured_text_tests {
 
     fn spec(kind: ParameterKind) -> ActionType {
         ActionType {
+            editor_navigation: None,
+            title: None,
             id: ActionTypeId::new("test.structured").unwrap(),
             name: "Test".into(),
             description: String::new(),
@@ -955,6 +971,8 @@ mod reference_tests {
 
     fn action_type() -> ActionType {
         ActionType {
+            editor_navigation: None,
+            title: None,
             id: ActionTypeId::new("test.references").unwrap(),
             name: "Test".into(),
             description: String::new(),
