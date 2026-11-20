@@ -397,19 +397,41 @@ const steps = [
     "enable with consent",
     async () => {
       await installedTab()
-      await click(`//button[@role='switch' and @aria-label=${lit(`Enable ${NAME}`)}]`)
+      // From 0.9.0 (plugin API 1.4) the install plan activates a plugin whose
+      // install consent covered all its permissions: disable it here first so
+      // enabling it again goes through the consent review as before.
+      const enableSwitch = `//button[@role='switch' and @aria-label=${lit(`Enable ${NAME}`)}]`
+      const disableSwitch = `//button[@role='switch' and @aria-label=${lit(`Disable ${NAME}`)}]`
+      const atInstall = await until("the plugin's enable switch", async () =>
+        (await visible(enableSwitch))
+          ? "disabled"
+          : (await visible(disableSwitch))
+            ? "enabled"
+            : null,
+      )
+      let disabled = ""
+      if (atInstall === "enabled") {
+        await click(disableSwitch)
+        await wait(enableSwitch, LONG)
+        const off = await until("state disabled", async () => {
+          const p = await invoke("get_plugin", { plugin: PLUGIN })
+          return p?.summary?.state === "disabled" ? p : null
+        })
+        disabled = `enabled at install, disabled with its switch (state ${off.summary.state}); `
+      }
+      await click(enableSwitch)
       await wait(DIALOG)
       const consentShot = await screenshot("enable-consent")
       const boxes = await consentAll()
       await click(`${DIALOG}${button("Enable")}`)
       await dialogClosed()
-      await wait(`//button[@role='switch' and @aria-label=${lit(`Disable ${NAME}`)}]`, LONG)
+      await wait(disableSwitch, LONG)
       const plugin = await until("state enabled", async () => {
         const p = await invoke("get_plugin", { plugin: PLUGIN })
         return p?.summary?.state === "enabled" ? p : null
       })
       const permissions = (plugin.permissions ?? []).map((p) => `${p.key}=${p.status}`).join(", ")
-      return `${boxes} consent box(es); state ${plugin.summary.state}; permissions ${permissions}; ${consentShot}; ${await screenshot("enabled")}`
+      return `${disabled}${boxes} consent box(es); state ${plugin.summary.state}; permissions ${permissions}; ${consentShot}; ${await screenshot("enabled")}`
     },
   ],
   [

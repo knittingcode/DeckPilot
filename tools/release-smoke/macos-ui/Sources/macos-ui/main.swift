@@ -605,13 +605,24 @@ let axSteps: [(String, () throws -> String)] = [
   ("enable with consent", {
     try marketplace(mainWindow)
     try tab(mainWindow, "Installed")
-    try press(try find(mainWindow, "switch 'Enable \(pluginName)'") { name($0) == "Enable \(pluginName)" })
+    // From 0.9.0 (plugin API 1.4) the install plan activates a plugin whose
+    // install consent covered all its permissions: disable it here first so
+    // enabling it again goes through the consent review as before.
+    let atInstall = try find(mainWindow, "switch 'Enable \(pluginName)' or 'Disable \(pluginName)'") {
+      name($0) == "Enable \(pluginName)" || name($0) == "Disable \(pluginName)"
+    }
+    var disabled = ""
+    if name(atInstall) == "Disable \(pluginName)" {
+      try press(atInstall)
+      disabled = "enabled at install, disabled with its switch; "
+    }
+    try press(try find(mainWindow, "switch 'Enable \(pluginName)'", long) { name($0) == "Enable \(pluginName)" })
     let confirm = try button(mainWindow, "Enable")
     let consentShot = screenshot("enable-consent")
     let boxes = try checkAll(mainWindow)
     try press(confirm)
     let on = try find(mainWindow, "switch 'Disable \(pluginName)'", long) { name($0) == "Disable \(pluginName)" }
-    return "\(boxes) consent box(es); switch now '\(name(on))'; \(consentShot); \(screenshot("enabled"))"
+    return "\(disabled)\(boxes) consent box(es); switch now '\(name(on))'; \(consentShot); \(screenshot("enabled"))"
   }),
   ("plugin toolbar entries", {
     let nav = first(mainWindow) { name($0) == "Plugins" && !isButton($0) && role($0) != kAXListRole as String }

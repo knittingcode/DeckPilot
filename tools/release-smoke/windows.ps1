@@ -210,20 +210,32 @@ switch ($Command) {
     $realBefore = @(Real-ProfileState)
     $since = Get-Date
     $desktop = Start-WithEnv $exe $envs
-    $checks = 0; $aliveDesktop = 0; $aliveAgent = 0
+    # The app starts the agent; on a first launch right after the install
+    # (Defender scans the new binaries) that can take longer than the first
+    # 5 s sample (run 44665060136: seen at 5/6 samples). Up to 15 s to appear,
+    # then the same agent process must stay alive at every sample for 30 s:
+    # a crash and restart (a new pid) fails.
+    $agentWait = 0
+    while ($agentWait -lt 15 -and -not (Get-Process deckpilot-agent -ErrorAction SilentlyContinue)) { Start-Sleep 1; $agentWait++ }
+    $first = Get-Process deckpilot-agent -ErrorAction SilentlyContinue | Sort-Object Id
+    $firstIds = (@($first) | ForEach-Object Id) -join ' '
+    $checks = 0; $aliveDesktop = 0; $aliveAgent = 0; $samples = @()
     for ($i = 0; $i -lt 6; $i++) {
       Start-Sleep 5
       $checks++
       if (-not $desktop.HasExited) { $aliveDesktop++ }
-      if (Get-Process deckpilot-agent -ErrorAction SilentlyContinue) { $aliveAgent++ }
+      $ids = (@(Get-Process deckpilot-agent -ErrorAction SilentlyContinue | Sort-Object Id) | ForEach-Object Id) -join ' '
+      $samples += $(if ($ids) { $ids } else { '-' })
+      if ($firstIds -and $ids -eq $firstIds) { $aliveAgent++ }
     }
     if ($aliveDesktop -eq $checks) { Record "${Label}: desktop alive 30 s" 'pass' "pid $($desktop.Id) alive at $aliveDesktop/$checks checks" }
     else { Record "${Label}: desktop alive 30 s" 'fail' "alive at $aliveDesktop/$checks checks; exit code $(if ($desktop.HasExited) { $desktop.ExitCode })" }
     $agents = Get-Process deckpilot-agent -ErrorAction SilentlyContinue
+    $evidence = "appeared after ${agentWait} s (pids $(if ($firstIds) { $firstIds } else { 'none' })); samples every 5 s: $($samples -join ', ')"
     if ($aliveAgent -eq $checks) {
-      Record "${Label}: agent started by the app, alive 30 s" 'pass' "pids $(($agents | ForEach-Object Id) -join ' ') ($(($agents | Select-Object -First 1).Path)) at $aliveAgent/$checks checks"
+      Record "${Label}: agent started by the app, alive 30 s" 'pass' "$evidence ($(($agents | Select-Object -First 1).Path)); the same process at $aliveAgent/$checks checks"
     } else {
-      Record "${Label}: agent started by the app, alive 30 s" 'fail' "agent seen at $aliveAgent/$checks checks"
+      Record "${Label}: agent started by the app, alive 30 s" 'fail' "$evidence; the same process at $aliveAgent/$checks checks"
     }
     $data = $envs.DECKPILOT_DATA_DIR
     $db = Join-Path $data 'deckpilot.db'
