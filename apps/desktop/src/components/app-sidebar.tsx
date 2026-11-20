@@ -1,11 +1,4 @@
-import {
-  LayoutDashboard,
-  LayoutGrid,
-  LayoutTemplate,
-  Library,
-  ListOrdered,
-  type LucideIcon,
-} from "lucide-react"
+import { LayoutDashboard, LayoutGrid, LayoutTemplate, Library, type LucideIcon } from "lucide-react"
 
 import {
   Sidebar,
@@ -19,7 +12,9 @@ import {
 } from "@/components/ui/sidebar"
 import { type TranslationKey, useTranslation } from "@/i18n"
 import { type PageId, useAppContext } from "@/lib/app-context"
+import { usePluginFeatures } from "@/lib/plugin-features"
 import { moduleNavigation } from "@/modules"
+import { hostPages } from "@/modules/host-views"
 
 interface NavGroup {
   id: "workspace" | "configure"
@@ -28,7 +23,8 @@ interface NavGroup {
 }
 
 /**
- * The workspace pages besides the device editor. Module pages are added to
+ * The workspace pages besides the device editor. The Workflows and Projects
+ * screens (while their plugins activate them) and module pages are added to
  * "Configure". Profiles, devices and everything else to set up are in the
  * settings window; device and profile are chosen in the toolbar.
  */
@@ -45,10 +41,7 @@ const RAIL_GROUPS: NavGroup[] = [
   {
     id: "configure",
     label: "navigation:rail.configure",
-    items: [
-      { id: "actions", label: "navigation:pages.actions", icon: Library },
-      { id: "workflows", label: "navigation:pages.workflows", icon: ListOrdered },
-    ],
+    items: [{ id: "actions", label: "navigation:pages.actions", icon: Library }],
   },
 ]
 
@@ -68,14 +61,20 @@ export function AppSidebar({
 }) {
   const { t } = useTranslation()
   const { modules } = useAppContext()
+  const features = usePluginFeatures()
   // Module pages are named by their module (its manifest), not translated here.
   const fromModules = moduleNavigation(modules)
+  const fromPlugins = hostPages(features).map((page) => ({
+    id: page.id,
+    label: t(page.label),
+    icon: page.icon,
+  }))
   const groups = RAIL_GROUPS.map((group) => {
     const items = group.items.map((item) => ({ ...item, label: t(item.label) }))
     return {
       id: group.id,
       label: t(group.label),
-      items: group.id === "configure" ? [...items, ...fromModules] : items,
+      items: group.id === "configure" ? [...items, ...fromPlugins, ...fromModules] : items,
     }
   })
   return (

@@ -16,22 +16,23 @@ use deckpilot_core::{
     ProjectKey, ResourceKey, ResourceKind,
 };
 use deckpilot_ipc::{ClientError, Request, Response};
-use deckpilot_modules::projects::{ProjectCatalog, module_id, switching};
+use deckpilot_modules::projects::{ProjectCatalog, switching};
 use deckpilot_storage::ConfigStore;
 
 use crate::agent;
 use crate::commands::agent::unexpected;
 use crate::commands::modify_profile;
 use crate::error::{CommandError, CommandResult};
-use crate::state::{AppState, load_profile, machine_config};
+use crate::state::{AppState, PROJECTS_PLUGIN, load_profile, machine_config};
 
-/// Changes a profile's projects after checking that the module is enabled.
+/// Changes a profile's projects after checking that the Projects feature
+/// is on ([`AppState::require_feature`]).
 fn modify_projects<T>(
     state: &AppState,
     profile_id: ProfileId,
     change: impl FnOnce(&mut deckpilot_core::Profile) -> CommandResult<T>,
 ) -> CommandResult<T> {
-    state.require_module(&module_id())?;
+    state.require_feature(PROJECTS_PLUGIN)?;
     modify_profile(state, profile_id, change)
 }
 
@@ -143,7 +144,7 @@ pub fn copy_project(
     project_id: ProjectId,
     target_profile_id: ProfileId,
 ) -> CommandResult<Project> {
-    state.require_module(&module_id())?;
+    state.require_feature(PROJECTS_PLUGIN)?;
     let source = load_profile(&*state.store()?, profile_id)?;
     modify_profile(&state, target_profile_id, |target| {
         let id = source.copy_project_to(project_id, target)?;
@@ -156,7 +157,7 @@ pub fn copy_project(
 
 /// Switching acts on the active profile, which is what the agent runs.
 fn ensure_active(state: &AppState, profile_id: ProfileId) -> CommandResult<()> {
-    state.require_module(&module_id())?;
+    state.require_feature(PROJECTS_PLUGIN)?;
     if state.store()?.active_profile()? == Some(profile_id) {
         Ok(())
     } else {
@@ -265,13 +266,14 @@ fn status_of(binding: &MachineResourceBinding) -> ResourceStatus {
 }
 
 /// Checks every machine binding and every resource the profile's projects
-/// refer to.
+/// refer to. Not gated on the Projects feature: the bindings are core
+/// (Settings › Resources, the `system.open-*` launchers); the projects'
+/// own resources are listed only as what uses a binding.
 #[tauri::command]
 pub fn check_resources(
     state: State<'_, AppState>,
     profile_id: ProfileId,
 ) -> CommandResult<Vec<ResourceCheck>> {
-    state.require_module(&module_id())?;
     let store = state.store()?;
     let profile = load_profile(&store, profile_id)?;
     let config = machine_config(&store)?;

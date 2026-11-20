@@ -8,18 +8,20 @@
 //! parameters, outputs and error codes, on plugin API 1.9:
 //!
 //! * `open-in-editor` and `open-project` open bound locations in bound
-//!   applications with `resource.open` (X4). The plugin never sees a path:
-//!   its `resource` parameters and the project's roles reach it as opaque
-//!   handles labelled with the binding's name, the agent picks the editor's
-//!   arguments from the plan the action names, and checks that the user
-//!   started the run.
+//!   applications with `resource.open` (X4). Its `resource` parameters and
+//!   the project's roles reach it as opaque handles labelled with the
+//!   binding's name, the agent picks the editor's arguments from the plan
+//!   the action names, and checks that the user started the run. The one
+//!   path it reads is the opened location's, for the `path` output (a
+//!   path, as the built-in's), with `resources.paths` (medium tier, X2);
+//!   without that grant `path` names the binding.
 //! * `open-urls` opens the pages the user typed into the action with
 //!   `url.openParam` (X5): the plugin names the parameter and the line, the
 //!   agent opens the literal value (http or https only).
 //!
 //! **What differs from the built-in**: pages always open in the default
-//! browser (`browser` is accepted and noted); outputs name the bindings,
-//! never the paths (`path` is the binding's name and the relative path).
+//! browser (`browser` is accepted and noted); messages name the bindings,
+//! never the paths.
 //! A `path` inside the folder is opened by the agent (`resource.open`'s
 //! `path`), which refuses one that leaves the folder, by `..` or through
 //! a link, and one that does not exist.
@@ -289,6 +291,31 @@ fn resource_param(
 
 // ------------------------------------------------------------- actions
 
+/// The path `open-in-editor` opened, as the built-in's `path` output: the
+/// location's bound path (`displayPath`, only with `resources.paths`) and
+/// the relative `path` inside it, joined with the bound path's separator.
+/// `None` without the grant.
+pub fn opened_path(location: &ResourceHandle, path: Option<&str>) -> Option<String> {
+    let base = location.display_path.as_deref()?;
+    let Some(path) = path else {
+        return Some(base.to_owned());
+    };
+    let separator = if base.contains('\\') && !base.contains('/') {
+        '\\'
+    } else {
+        '/'
+    };
+    let relative: String = path
+        .chars()
+        .map(|c| if c == '/' { separator } else { c })
+        .collect();
+    Some(if base.ends_with(separator) {
+        format!("{base}{relative}")
+    } else {
+        format!("{base}{separator}{relative}")
+    })
+}
+
 fn open_in_editor(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
     let position = position(ctx, args.get("line")?, args.get("column")?)?;
     let path = optional(args, "path")?;
@@ -341,6 +368,7 @@ fn open_in_editor(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
         Some(path) => format!("{}/{path}", location.label),
         None => location.label.clone(),
     };
+    let opened = opened_path(&location, path.as_deref()).unwrap_or_else(|| shown.clone());
     let message = say(
         ctx,
         messages::OPENED_IN,
@@ -350,7 +378,7 @@ fn open_in_editor(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
         ],
     );
     Ok(Output::message(message)
-        .with("path", shown)
+        .with("path", opened)
         .with("application", application.label)
         .with("located", located))
 }

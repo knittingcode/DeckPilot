@@ -103,12 +103,30 @@ capability operations `resource.resolve`, `resource.open`, `tool.run`,
 `url.openParam`, `project.current`, `project.list`, `project.select`,
 `project.cycle` and `profile.read` are compatible additions within ABI 1
 (a guest that does not use them never sends them; an older agent refuses
-them as unknown). This agent reports plugin API 1.9, carries out `resource`
-parameters and `resource.resolve`, and answers the other operations as not
-implemented until their host side lands; an agent of 1.8
-reports a `^1.9` version `incompatible`. The SDK's `LATEST_API_LEVEL` is
-1.9. An older app ignores a navigation entry of an unknown view kind. No
-IPC protocol or document change.
+them as unknown). This agent reports plugin API 1.9 and carries out all of
+them; an agent of 1.8 reports a `^1.9` version `incompatible`. The SDK's
+`LATEST_API_LEVEL` is 1.9. An older app ignores a navigation entry of an
+unknown view kind. A manifest action's `node.changesContext` (a first-party
+plugin with `projectContext.select` only) is another `^1.9` field that an
+older agent refuses as unknown; a `resource.resolve` role is the user's
+role name (up to 1,024 characters, not blank), no longer a parameter key.
+No IPC protocol or document change.
+
+The plugin store goes from schema 5 to 6 with the extraction's cut-over
+(`docs/marketplace/module-migration.md` §7 X13): an additive
+`host_settings` table, after the usual encrypted backup in
+`plugins/.backups/` (`plugins-schema5-…`). It holds what the host keeps
+for itself and never hands a plugin: the built-in `git` and `docker`
+modules' executable, context and time limits that `tool.run` uses
+(`tools.git`, `tools.docker`), and the journal's note of the encrypted
+`deckpilot-pre-plugin-extraction-…` backup of the configuration database
+taken before the first extraction cut-over. A 0.9.x agent (store schema 5)
+refuses a schema 6 `plugins.db` with `UnsupportedSchema` before writing
+anything, reports the plugin store unavailable and runs without plugins:
+its built-in `git`, `docker`, `workspace`, `projects`, `github`, `gitlab`
+and `jira` modules serve the stored legacy ids again, since the migration
+never changes `deckpilot.db`. Going back with plugins means restoring the
+`plugins-schema5-…` backup as `plugins.db`.
 
 Before it, protocol 13 and plugin API 1.6: localization
 ([i18n.md](i18n.md#plugin-localization),

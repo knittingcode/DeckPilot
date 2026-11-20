@@ -6,8 +6,8 @@
 //!   the first start with its one low-tier permission, no actions, and the
 //!   `workflows` view and its navigation entry listed, translated;
 //! * `workflows_run_without_the_plugin`: the engine stays in the core:
-//!   with the plugin disabled the view goes with its state (the app shows
-//!   plugin views of enabled plugins only), and a workflow still runs.
+//!   with the plugin disabled its view is no longer listed (host views
+//!   only while enabled), and a workflow still runs.
 #![cfg(feature = "plugins")]
 
 #[path = "support/first_party.rs"]
@@ -106,8 +106,9 @@ async fn workflows_run_without_the_plugin() {
     agent.disable().await;
     let summary = agent.summary().await.unwrap();
     assert_eq!(summary.state, PluginState::Disabled);
-    // The entry is still described, with the state the app gates it on.
-    assert_eq!(summary.navigation.len(), 1);
+    // The app's own Workflows screen is listed only while the plugin is
+    // enabled: disabled, it has no entry (plugin API 1.9, `hostViews`).
+    assert_eq!(summary.navigation, Vec::new(), "{summary:?}");
     let record = agent.start_workflow(id).await;
     assert_eq!(
         record.summary.state,
@@ -120,5 +121,7 @@ async fn workflows_run_without_the_plugin() {
     let summary = agent.seeded().await;
     assert_eq!(summary.state, PluginState::Disabled, "{}", agent.log());
     agent.enable().await;
+    let summary = agent.wait_state(PluginState::Enabled).await;
+    assert_eq!(summary.navigation.len(), 1, "{summary:?}");
     agent.stop().await;
 }

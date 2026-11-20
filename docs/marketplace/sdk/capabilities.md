@@ -453,7 +453,14 @@ starts its message with the reason code: `projects-off`, `locked`,
 `not-permitted` (`not-permitted`) for a switch in a run the user did not
 start. `project.select` and `project.cycle` answer the new project. The
 app's `projectChanged` event names the plugin. `profile.read` without an
-active project has no `project`; that is not an error.
+active project has no `project`; that is not an error. In a workflow run a
+switch is the run's, as a built-in project action's: only an action whose
+node declares `changesContext` may switch, nothing changes until it
+succeeds, the nodes after it run in the selected project, and the
+workflow's project scope decides whether the active project follows at its
+end; `project.current` and `profile.read` answer the run's project there.
+`resource.resolve`'s `role` is the role name the user gave the project's
+resource (not blank, no control character, at most 1,024 bytes).
 
 The agent also carries out `tool.run`. It checks the array again before
 anything runs: the denylists first (every option before `--`, as `--x`,

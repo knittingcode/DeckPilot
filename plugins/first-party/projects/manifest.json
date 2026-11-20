@@ -16,14 +16,8 @@
     "directory": "plugins/first-party/projects"
   },
   "license": "Apache-2.0",
-  "keywords": [
-    "projects",
-    "context",
-    "switcher"
-  ],
-  "categories": [
-    "productivity"
-  ],
+  "keywords": ["projects", "context", "switcher"],
+  "categories": ["productivity"],
   "engines": {
     "deckpilot": ">=0.10.0 <1.0.0",
     "pluginApi": "^1.9",
@@ -38,10 +32,7 @@
     "128": "assets/icon-128.png"
   },
   "defaultLocale": "en",
-  "locales": [
-    "en",
-    "pl"
-  ],
+  "locales": ["en", "pl"],
   "permissions": [
     {
       "kind": "projectContext",
@@ -55,9 +46,7 @@
     },
     {
       "kind": "profile",
-      "read": [
-        "project"
-      ],
+      "read": ["project"],
       "justification": "t:permissions.profile"
     },
     {
@@ -80,10 +69,7 @@
             "required": false,
             "kind": {
               "type": "choice",
-              "options": [
-                "next",
-                "previous"
-              ]
+              "options": ["next", "previous"]
             },
             "default": {
               "type": "choice",
@@ -118,22 +104,12 @@
           "retrySafe": false,
           "idempotent": false,
           "cancellable": false,
-          "effect": "modifies"
+          "effect": "modifies",
+          "changesContext": true
         },
         "controls": {
-          "key": [
-            "click",
-            "double-click",
-            "long-press",
-            "press",
-            "release"
-          ],
-          "encoder": [
-            "click",
-            "press",
-            "rotate-clockwise",
-            "rotate-counter-clockwise"
-          ]
+          "key": ["click", "double-click", "long-press", "press", "release"],
+          "encoder": ["click", "press", "rotate-clockwise", "rotate-counter-clockwise"]
         }
       },
       {
@@ -179,7 +155,8 @@
           "retrySafe": true,
           "idempotent": true,
           "cancellable": false,
-          "effect": "modifies"
+          "effect": "modifies",
+          "changesContext": true
         }
       },
       {
@@ -478,22 +455,12 @@
           "retrySafe": false,
           "idempotent": false,
           "cancellable": false,
-          "effect": "modifies"
+          "effect": "modifies",
+          "changesContext": true
         },
         "controls": {
-          "key": [
-            "click",
-            "double-click",
-            "long-press",
-            "press",
-            "release"
-          ],
-          "encoder": [
-            "click",
-            "press",
-            "rotate-clockwise",
-            "rotate-counter-clockwise"
-          ]
+          "key": ["click", "double-click", "long-press", "press", "release"],
+          "encoder": ["click", "press", "rotate-clockwise", "rotate-counter-clockwise"]
         },
         "deprecated": true,
         "replacedBy": "cycle"
@@ -531,22 +498,12 @@
           "retrySafe": false,
           "idempotent": false,
           "cancellable": false,
-          "effect": "modifies"
+          "effect": "modifies",
+          "changesContext": true
         },
         "controls": {
-          "key": [
-            "click",
-            "double-click",
-            "long-press",
-            "press",
-            "release"
-          ],
-          "encoder": [
-            "click",
-            "press",
-            "rotate-clockwise",
-            "rotate-counter-clockwise"
-          ]
+          "key": ["click", "double-click", "long-press", "press", "release"],
+          "encoder": ["click", "press", "rotate-clockwise", "rotate-counter-clockwise"]
         },
         "deprecated": true,
         "replacedBy": "cycle"
@@ -618,9 +575,7 @@
           "type": "string"
         },
         "scope": "project",
-        "requires": [
-          "project"
-        ],
+        "requires": ["project"],
         "source": "host:project.id"
       },
       {
@@ -631,9 +586,7 @@
           "type": "string"
         },
         "scope": "project",
-        "requires": [
-          "project"
-        ],
+        "requires": ["project"],
         "source": "host:project.key"
       },
       {
@@ -644,9 +597,7 @@
           "type": "string"
         },
         "scope": "project",
-        "requires": [
-          "project"
-        ],
+        "requires": ["project"],
         "source": "host:project.name"
       }
     ],
@@ -665,12 +616,8 @@
         "context": "profile"
       }
     ],
-    "statusItems": [
-      "activeProject"
-    ],
-    "dashboardCards": [
-      "activeProject"
-    ],
+    "statusItems": ["activeProject"],
+    "dashboardCards": ["activeProject"],
     "errorCodes": {
       "no-projects": "t:errors.no-projects",
       "at-last-project": "t:errors.at-last-project",

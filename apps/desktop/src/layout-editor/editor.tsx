@@ -40,6 +40,7 @@ import {
   whyNotOnControl,
 } from "@/lib/compatibility"
 import { pluginActionUnavailable, withPluginTypes } from "@/lib/plugin-actions"
+import { WORKFLOWS_PLUGIN, useIsPluginActive } from "@/lib/plugin-features"
 import { isSystemBack, systemBackControl } from "@/lib/folder-back"
 import { isFolderControl } from "@/lib/folder-control"
 import {
@@ -358,11 +359,20 @@ export function LayoutEditor({
     },
     restyle: commands.restyle,
   }
+  // Without the Workflows plugin, workflows on keys still run but are read-only here.
+  const workflowsActive = useIsPluginActive(WORKFLOWS_PLUGIN)
   const groups = useMemo(
-    () => targetGroups(profile, draft, pageId, (type) => pluginActionUnavailable(modules, type)),
+    () =>
+      targetGroups(
+        profile,
+        draft,
+        pageId,
+        (type) => pluginActionUnavailable(modules, type),
+        workflowsActive,
+      ),
     // The groups' labels are translated: rebuilt when the language changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [profile, draft, pageId, modules, language],
+    [profile, draft, pageId, modules, language, workflowsActive],
   )
   const bound = boundControls(draft, pageId)
   const controls = orderedControls(model)

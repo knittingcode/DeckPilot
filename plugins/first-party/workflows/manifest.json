@@ -39,8 +39,6 @@
         "view": "workflows"
       }
     ],
-    "views": [
-      { "id": "workflows", "kind": "workflows", "context": "profile" }
-    ]
+    "views": [{ "id": "workflows", "kind": "workflows", "context": "profile" }]
   }
 }

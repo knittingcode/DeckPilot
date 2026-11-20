@@ -11,6 +11,12 @@
 //!   and the resource actions report what the core holds;
 //! * `switching_is_refused_in_a_run_the_user_did_not_start`: a
 //!   scheduled workflow's `cycle` is refused and nothing switches;
+//! * `a_select_in_a_workflow_changes_the_runs_project`: in a workflow the
+//!   user started, `select` changes the run's project for the nodes after
+//!   it, as the built-in's does (`changesContext`); the workflow's project
+//!   scope decides whether the active project follows at its end;
+//! * `a_workflow_started_by_a_project_change_cannot_switch`: the loop
+//!   guard, a `projectChanged` lifecycle run's `select` is refused;
 //! * `host_variables_and_views_exist_only_while_the_plugin_is_enabled`:
 //!   `current.id`, `.key` and `.name` are the host's values, the project in
 //!   the context, while the plugin is enabled and not before or after;
@@ -64,6 +70,62 @@ struct Fixture {
     documentation: deckpilot_core::ActionInstanceId,
     ci: deckpilot_core::ActionInstanceId,
     scheduled: deckpilot_core::WorkflowId,
+    /// `select CMS → current`, keeping the change in the run.
+    in_run: deckpilot_core::WorkflowId,
+    /// The same, saved before project scopes: the active project follows.
+    follows: deckpilot_core::WorkflowId,
+    /// `select CMS`, started by every project change.
+    on_change: deckpilot_core::WorkflowId,
+}
+
+/// `start → select (CMS) → read (current)`, with `scope`.
+fn select_then_read(
+    profile: &mut Profile,
+    name: &str,
+    select: deckpilot_core::ActionInstanceId,
+    current: deckpilot_core::ActionInstanceId,
+    scope: Option<deckpilot_core::ProjectScope>,
+) -> deckpilot_core::WorkflowId {
+    let mut workflow = support::graph_workflow(
+        name,
+        support::graph(
+            &json!([
+                {"id": "start", "type": "trigger"},
+                {"id": "select", "type": "action", "action": select},
+                {"id": "read", "type": "action", "action": current},
+            ]),
+            &json!([{"from": "start", "to": "select"}, {"from": "select", "to": "read"}]),
+        ),
+    );
+    workflow.project_scope = scope;
+    let id = workflow.id;
+    profile.workflows.push(workflow);
+    id
+}
+
+/// `start → run (select)`, started by every project change.
+fn on_change(
+    profile: &mut Profile,
+    select: deckpilot_core::ActionInstanceId,
+) -> deckpilot_core::WorkflowId {
+    let mut workflow = support::graph_workflow(
+        "On a change",
+        support::graph(
+            &json!([
+                {"id": "start", "type": "trigger"},
+                {"id": "run", "type": "action", "action": select},
+            ]),
+            &json!([{"from": "start", "to": "run"}]),
+        ),
+    );
+    workflow
+        .triggers
+        .push(deckpilot_core::WorkflowTrigger::lifecycle(
+            deckpilot_core::LifecycleEvent::ProjectChanged,
+        ));
+    let id = workflow.id;
+    profile.workflows.push(workflow);
+    id
 }
 
 fn fixture(dir: &std::path::Path) -> Fixture {
@@ -131,6 +193,16 @@ fn fixture(dir: &std::path::Path) -> Fixture {
     );
     let cycle = first_party::instance(&mut profile, PLUGIN.id, "cycle", &[]);
     let scheduled = first_party::scheduled_workflow(&mut profile, "Every minute", cycle);
+    let current = first_party::instance(&mut profile, PLUGIN.id, "current", &[]);
+    let in_run = select_then_read(
+        &mut profile,
+        "In the run",
+        select_cms,
+        current,
+        Some(deckpilot_core::ProjectScope::Execution),
+    );
+    let follows = select_then_read(&mut profile, "Follows", select_cms, current, None);
+    let on_change = on_change(&mut profile, select_cms);
     Fixture {
         profile,
         ids,
@@ -142,6 +214,9 @@ fn fixture(dir: &std::path::Path) -> Fixture {
         documentation,
         ci,
         scheduled,
+        in_run,
+        follows,
+        on_change,
     }
 }
 
@@ -366,16 +441,13 @@ async fn host_variables_and_views_exist_only_while_the_plugin_is_enabled() {
     let agent = env.start().await;
     let profile = f.profile.id;
 
-    // ---- seeded, not enabled: no values; the view is listed with the
-    // plugin's state (the app shows plugin views of enabled plugins only).
+    // ---- seeded, not enabled: no values; the app's Projects screen,
+    // status item and card are not listed (host views only while enabled).
     let summary = agent.seeded().await;
     assert_ne!(summary.state, PluginState::Enabled);
-    let views: Vec<(String, String)> = summary
-        .navigation
-        .iter()
-        .map(|e| (e.view.kind.clone(), e.label.clone()))
-        .collect();
-    assert_eq!(views, [("projects".to_owned(), "Projects".to_owned())]);
+    assert_eq!(summary.navigation, Vec::new(), "{summary:?}");
+    assert_eq!(summary.status_items, Vec::<String>::new());
+    assert_eq!(summary.dashboard_cards, Vec::<String>::new());
     let before = agent.preview(profile, &VARIABLES).await;
     assert!(
         before
@@ -397,10 +469,21 @@ async fn host_variables_and_views_exist_only_while_the_plugin_is_enabled() {
         [string("CMR")]
     );
     let summary = agent.wait_state(PluginState::Enabled).await;
-    assert_eq!(summary.navigation.len(), 1);
+    let views: Vec<(String, String)> = summary
+        .navigation
+        .iter()
+        .map(|e| (e.view.kind.clone(), e.label.clone()))
+        .collect();
+    assert_eq!(views, [("projects".to_owned(), "Projects".to_owned())]);
+    assert_eq!(summary.status_items, ["activeProject"]);
+    assert_eq!(summary.dashboard_cards, ["activeProject"]);
 
     // ---- disabled: gone, with the view's plugin.
     agent.disable().await;
+    let summary = agent.summary().await.unwrap();
+    assert_eq!(summary.navigation, Vec::new(), "{summary:?}");
+    assert_eq!(summary.status_items, Vec::<String>::new());
+    assert_eq!(summary.dashboard_cards, Vec::<String>::new());
     let after = agent.preview(profile, &VARIABLES).await;
     assert!(
         after
@@ -414,5 +497,79 @@ async fn host_variables_and_views_exist_only_while_the_plugin_is_enabled() {
         agent.preview(profile, &VARIABLES[1..2]).await,
         [string("CMR")]
     );
+    agent.stop().await;
+}
+
+/// In a workflow the user started, the plugin's `select` changes the
+/// run's project for the nodes after it, as the built-in's
+/// `ContextEffect` did: `current` then reads the selected project. A run
+/// that keeps project changes leaves the active project alone; a workflow
+/// saved before project scopes (its `select` changes the context, so the
+/// active project follows) moves the active project at its end.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_select_in_a_workflow_changes_the_runs_project() {
+    let dir = support::TempDir::new("plugins-projects-workflow-fixture");
+    let f = fixture(dir.path());
+    let env = env("plugins-projects-workflow", &f);
+    let agent = env.start().await;
+    agent.seeded().await;
+    agent.enable().await;
+
+    let record = agent.start_workflow(f.in_run).await;
+    assert_eq!(
+        record.summary.state,
+        deckpilot_core::ExecutionState::Succeeded,
+        "{record:#?}\n{}",
+        agent.log()
+    );
+    assert_eq!(
+        first_party::node(&record, "select").output["projectKey"],
+        "CMS"
+    );
+    let read = first_party::node(&record, "read");
+    assert_eq!(read.output["projectKey"], "CMS", "{record:#?}");
+    assert_eq!(read.output["projectId"], f.ids[2].to_string());
+    assert_eq!(active(&agent).await, Some(f.ids[0]), "kept in the run");
+
+    tokio::time::sleep(SWITCH_GAP).await;
+    let record = agent.start_workflow(f.follows).await;
+    assert_eq!(
+        record.summary.state,
+        deckpilot_core::ExecutionState::Succeeded,
+        "{record:#?}"
+    );
+    assert_eq!(
+        first_party::node(&record, "read").output["projectKey"],
+        "CMS"
+    );
+    assert_eq!(
+        active(&agent).await,
+        Some(f.ids[2]),
+        "the active project follows"
+    );
+    agent.stop().await;
+}
+
+/// The loop guard (X6): a workflow that a project change started is not
+/// one the user started, so its `select` is refused and the project the
+/// user chose stays active.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_workflow_started_by_a_project_change_cannot_switch() {
+    let dir = support::TempDir::new("plugins-projects-lifecycle-fixture");
+    let f = fixture(dir.path());
+    let env = env("plugins-projects-lifecycle", &f);
+    let agent = env.start().await;
+    agent.seeded().await;
+    agent.enable().await;
+    agent.ok(Request::SelectProject { project: f.ids[1] }).await;
+    let record = agent.first_run(f.on_change).await;
+    let run = first_party::node(&record, "run");
+    let error = run.error.as_ref().expect("the node failed");
+    assert_eq!(
+        error.action_code.as_deref(),
+        Some("not-permitted"),
+        "{record:#?}"
+    );
+    assert_eq!(active(&agent).await, Some(f.ids[1]));
     agent.stop().await;
 }

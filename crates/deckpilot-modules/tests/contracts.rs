@@ -1433,7 +1433,9 @@ mod first_party {
 
     /// A manifest action as the agent registers it
     /// (`apps/agent/src/plugins/engine.rs` `action_type`): every plugin
-    /// action is cancellable and never changes the run's project.
+    /// action is cancellable; it changes the run's project only when its
+    /// node declares `changesContext` (plugin API 1.9, with
+    /// `projectContext.select`); its controls are the manifest's.
     fn plugin_type(plugin: &str, action: &deckpilot_plugin_manifest::Action) -> ActionType {
         let parameters = action
             .parameters
@@ -1449,7 +1451,11 @@ mod first_party {
             serde_json::from_value(serde_json::to_value(n).unwrap()).expect("the node converts")
         });
         node.cancellable = true;
-        node.changes_context = false;
+        node.changes_context = action
+            .node
+            .as_ref()
+            .and_then(|n| n.changes_context)
+            .unwrap_or(false);
         node.timeout_ms = action
             .node
             .as_ref()
@@ -1465,7 +1471,12 @@ mod first_party {
             parameters,
             requires_project: action.requires_project.unwrap_or(false),
             deprecated: action.deprecated.unwrap_or(false),
-            controls: None,
+            controls: action
+                .controls
+                .as_ref()
+                .map(|controls| deckpilot_core::ActionControls {
+                    bindings: controls.as_sets(),
+                }),
             node,
         }
     }
@@ -2103,7 +2114,6 @@ mod first_party {
         manifest: &Manifest,
         module: &dyn FeatureModule,
         not_kept: &[&str],
-        known: &[&str],
     ) -> Vec<&'static ActionAlias> {
         let name = module.manifest().id.to_string();
         let aliases: Vec<&'static ActionAlias> =
@@ -2179,6 +2189,26 @@ mod first_party {
                         );
                     }
                     ParamRule::Unsupported(_) => {}
+                    // A bound narrower than the built-in's, which the
+                    // plugin declares as its own maximum.
+                    ParamRule::AtMost(_, most) => {
+                        let (
+                            ParameterKind::Integer { max: old_max, .. },
+                            ParameterKind::Integer { max: new_max, .. },
+                        ) = (
+                            &before.as_ref().unwrap().kind,
+                            &after.as_ref().unwrap().kind,
+                        )
+                        else {
+                            panic!("{}: `{legacy}` is capped as an integer", alias.legacy);
+                        };
+                        assert!(
+                            old_max.is_none_or(|max| max > *most),
+                            "{}: `{legacy}` is narrower than the built-in's",
+                            alias.legacy
+                        );
+                        assert_eq!(*new_max, Some(*most), "{}: `{legacy}`", alias.legacy);
+                    }
                     ParamRule::DropIfDefault(_) => {
                         panic!("{}: the extraction drops nothing", alias.legacy)
                     }
@@ -2205,11 +2235,11 @@ mod first_party {
             assert_eq!(new.deprecated, old.deprecated, "{}", alias.legacy);
         }
         mirrors_extracted_settings(module, manifest, not_kept, &mut problems);
-        // Exactly the known gaps: a gap that is fixed must leave the list.
+        // No gap: the agent's health check before a cut-over finds none.
         assert_eq!(
-            problems.iter().map(String::as_str).collect::<Vec<_>>(),
-            known,
-            "the contract of {} differs from its known gaps",
+            problems,
+            Vec::<String>::new(),
+            "the contract of {} differs from its built-in's",
             manifest.id
         );
         aliases
@@ -2263,52 +2293,6 @@ mod first_party {
         assert_eq!(left, not_kept, "{}", manifest.id);
     }
 
-    /// Known gaps between a plugin and its built-in, each a finding of the
-    /// contract check (and so of the agent's health check before a
-    /// cut-over, which fails and leaves the built-in serving while it is
-    /// compiled in). Fixing one fails the test until it leaves the list.
-    ///
-    /// Docker: the plugin's `composeRole` is at most 64 characters, the
-    /// built-in's 1024. Not an action's contract: a saved role longer than
-    /// 64 makes the migration `not_eligible` (the settings copy refuses it),
-    /// so nothing is cut short.
-    const DOCKER_GAPS: &[&str] = &["setting `composeRole`: the kind differs"];
-    /// Workspace: `line` and `column` stop at 1,000,000 (the built-in's
-    /// `MAX_POSITION` is 10,000,000), and the `path` output is text, not a
-    /// path. The migration fails its contract check and the built-in keeps
-    /// serving until `plugins/first-party/workspace` matches.
-    const WORKSPACE_GAPS: &[&str] = &[
-        "workspace.open-in-editor: parameter `line`: its kind or constraints are narrower",
-        "workspace.open-in-editor: parameter `column`: its kind or constraints are narrower",
-        "workspace.open-in-editor: output `path` has another kind",
-    ];
-    /// Projects: a plugin action never changes the run's project (the
-    /// agent registers every plugin action with `changesContext` off; the
-    /// plugin's `project.select` switches the active project, not the
-    /// workflow's), so a workflow node after `projects.select` or `cycle`
-    /// would keep the old project; and the plugin declares no dial
-    /// controls, which stored dial bindings of `cycle`, `next` and
-    /// `previous` use. The migration fails its contract check and the
-    /// built-in keeps serving until the host and the plugin close both.
-    const PROJECTS_GAPS: &[&str] = &[
-        "projects.cycle: the node's `changesContext` differs",
-        "projects.cycle: encoder: press is no longer supported",
-        "projects.cycle: encoder: rotate-clockwise is no longer supported",
-        "projects.cycle: encoder: rotate-counter-clockwise is no longer supported",
-        "projects.cycle: encoder: click is no longer supported",
-        "projects.select: the node's `changesContext` differs",
-        "projects.next: the node's `changesContext` differs",
-        "projects.next: encoder: press is no longer supported",
-        "projects.next: encoder: rotate-clockwise is no longer supported",
-        "projects.next: encoder: rotate-counter-clockwise is no longer supported",
-        "projects.next: encoder: click is no longer supported",
-        "projects.previous: the node's `changesContext` differs",
-        "projects.previous: encoder: press is no longer supported",
-        "projects.previous: encoder: rotate-clockwise is no longer supported",
-        "projects.previous: encoder: rotate-counter-clockwise is no longer supported",
-        "projects.previous: encoder: click is no longer supported",
-    ];
-
     /// `deckpilot.git` replaces the built-in `git`: `repository` kept as a
     /// resource handle, `project_id` its `projectId`, `application` of
     /// `open-repository` kept. `gitExecutable` is the host's (`tool.run`),
@@ -2317,12 +2301,8 @@ mod first_party {
     fn the_git_plugin_honours_the_builtin_contract() {
         let manifest = bundled_manifest(GIT_MANIFEST);
         assert_eq!(manifest.id.as_str(), "deckpilot.git");
-        let aliases = honours_the_extraction_contract(
-            &manifest,
-            &git::GitModule::new(),
-            &[git::EXECUTABLE],
-            &[],
-        );
+        let aliases =
+            honours_the_extraction_contract(&manifest, &git::GitModule::new(), &[git::EXECUTABLE]);
         assert_eq!(aliases.len(), 6);
         assert_eq!(module_variables(&git::GitModule::new()), 0);
         assert_eq!(manifest.contributes.variables().len(), 0);
@@ -2345,7 +2325,6 @@ mod first_party {
                 docker::CONTEXT,
                 docker::EXECUTABLE,
             ],
-            DOCKER_GAPS,
         );
         let refused: Vec<&str> = aliases
             .iter()
@@ -2371,12 +2350,8 @@ mod first_party {
     fn the_workspace_plugin_honours_the_builtin_contract() {
         let manifest = bundled_manifest(WORKSPACE_MANIFEST);
         assert_eq!(manifest.id.as_str(), "deckpilot.workspace");
-        let aliases = honours_the_extraction_contract(
-            &manifest,
-            &workspace::WorkspaceModule::new(),
-            &[],
-            WORKSPACE_GAPS,
-        );
+        let aliases =
+            honours_the_extraction_contract(&manifest, &workspace::WorkspaceModule::new(), &[]);
         assert_eq!(aliases.len(), 3);
         assert_eq!(manifest.contributes.variables().len(), 0);
     }
@@ -2391,7 +2366,7 @@ mod first_party {
         let manifest = bundled_manifest(PROJECTS_MANIFEST);
         assert_eq!(manifest.id.as_str(), "deckpilot.projects");
         let module = projects::ProjectsModule::new();
-        let aliases = honours_the_extraction_contract(&manifest, &module, &[], PROJECTS_GAPS);
+        let aliases = honours_the_extraction_contract(&manifest, &module, &[]);
         assert_eq!(aliases.len(), 9);
         let declared: BTreeSet<String> = module
             .manifest()

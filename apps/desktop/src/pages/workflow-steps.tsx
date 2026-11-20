@@ -55,6 +55,7 @@ import { useTitlebar } from "@/hooks/use-titlebar"
 import { type TranslationKey, useTranslation } from "@/i18n"
 import { useActionModules, useAppContext } from "@/lib/app-context"
 import { pluginActionUnavailable } from "@/lib/plugin-actions"
+import { PROJECTS_PLUGIN, useIsPluginActive } from "@/lib/plugin-features"
 import { ActionIcon } from "@/components/action-icon"
 import { initialValue } from "@/lib/parameters"
 import type {
@@ -471,6 +472,14 @@ function SortableStep({
   // A delay row: only its duration is edited; the step keeps whatever else
   // it has.
   const delay = delayAction(step, actions)
+  // "While project …" conditions come with the Projects plugin; a step
+  // that has one keeps it (shown) while the plugin is off.
+  const projectsActive = useIsPluginActive(PROJECTS_PLUGIN)
+  const conditionProjects = projectsActive
+    ? view.profile.projects
+    : view.profile.projects.filter(
+        (p) => step.condition?.type === "activeProject" && step.condition.project === p.id,
+      )
 
   return (
     <li
@@ -585,8 +594,12 @@ function SortableStep({
                   </SelectItem>
                 ),
               )}
-              {view.profile.projects.map((project) => (
-                <SelectItem key={project.id} value={`project:${project.id}`}>
+              {conditionProjects.map((project) => (
+                <SelectItem
+                  key={project.id}
+                  value={`project:${project.id}`}
+                  disabled={!projectsActive}
+                >
                   {t("workflows:steps.condition.whileProject", { project: project.key })}
                 </SelectItem>
               ))}

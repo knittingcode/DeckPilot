@@ -2231,20 +2231,33 @@ mod extraction {
         }
     }
 
-    /// A plugin whose actions cannot replace the built-in's (the known
-    /// gaps of `crates/deckpilot-modules/tests/contracts.rs`) fails before
-    /// the user is asked: nothing waits, the built-in serves, and it is
-    /// retried at the next start. Projects counts its projects as use.
-    #[test]
-    fn a_plugin_that_cannot_replace_the_builtin_fails_with_fallback() {
+    /// The configuration both cut-over tests use: a profile with a
+    /// project (the `projects` module's data in use) and two Workspace
+    /// keys, one at a line above the review's bound (§7 X4).
+    fn workspace_and_projects() -> Shipped {
         let mut env = Shipped::new();
         env.profile.projects.push(deckpilot_core::Project::new(
             deckpilot_core::ProjectKey::new("SHOP").unwrap(),
             "Shop",
         ));
-        env.uses("Edit", "workspace.open-urls", &[]);
+        env.uses(
+            "Edit",
+            "workspace.open-in-editor",
+            &[("line", ParameterValue::Integer(20_000_000))],
+        );
+        env.uses("Pages", "workspace.open-urls", &[]);
+        env
+    }
+
+    /// Workspace and Projects reach the cut-over now that their plugins
+    /// honour the built-ins' contracts: eligible by their use (keys; a
+    /// profile's projects), installed and waiting, unavailable, for the
+    /// high tier (`resources:open`, `projectContext:select`), cut over by
+    /// the user's consent, their keys then routed to the plugin. A stored
+    /// line above the review's bound is named, never clamped: that key is
+    /// unavailable until it is lowered.
+    fn cut_over_with(snapshot: &LegacySnapshot, env: &Shipped) {
         let bundle = env.bundle();
-        let snapshot = env.backed_up();
         let projects = snapshot
             .modules
             .iter()
@@ -2252,24 +2265,37 @@ mod extraction {
             .unwrap();
         assert!(projects.data_in_use && projects.instances == 0);
         let mut manager = env.open();
-        start(&mut manager, &bundle, &snapshot);
-        for (module, gap) in [
-            (
-                "workspace",
-                "`deckpilot.workspace.open-in-editor` cannot replace",
-            ),
-            ("projects", "`deckpilot.projects.cycle` cannot replace"),
+        start(&mut manager, &bundle, snapshot);
+        for (module, high) in [
+            ("workspace", "resources:open"),
+            ("projects", "projectContext:select"),
         ] {
             let record = phase(&manager, module).unwrap();
-            assert_eq!(record.phase, MigrationPhase::Failed, "{module}: {record:?}");
-            let reason = record.reason.unwrap();
+            assert_eq!(
+                record.phase,
+                MigrationPhase::AwaitingConsent,
+                "{module}: {record:?}"
+            );
+            assert!(record.reason.unwrap().contains(high), "{module}");
+            assert_eq!(
+                route_of(&manager, &bundle, module),
+                LegacyRoute::AwaitingConsent,
+                "{module}"
+            );
             assert!(
-                reason.starts_with("health check: ") && reason.contains(gap),
-                "{reason}"
+                !granted(&manager, module).iter().any(|(key, _)| key == high),
+                "{module}: the high tier is never derived"
+            );
+            consent_to(&mut manager, &bundle, snapshot, module);
+            let record = phase(&manager, module).unwrap();
+            assert_eq!(
+                record.phase,
+                MigrationPhase::CutOver,
+                "{module}: {record:?}"
             );
             assert_eq!(
                 route_of(&manager, &bundle, module),
-                LegacyRoute::Builtin,
+                LegacyRoute::Plugin,
                 "{module}"
             );
             assert_eq!(
@@ -2279,18 +2305,106 @@ mod extraction {
                     .unwrap()
                     .unwrap()
                     .state,
-                PluginState::Disabled
+                PluginState::Enabled,
+                "{module}"
             );
             assert!(
-                !granted(&manager, module)
-                    .iter()
-                    .any(|(_, by)| by.starts_with("user:")),
+                granted(&manager, module)
+                    .contains(&(high.to_owned(), format!("user:migration:{module}"))),
                 "{module}"
             );
         }
-        // Retried at the next start, failing the same way.
+        let reason = phase(&manager, "workspace").unwrap().reason.unwrap();
+        assert!(
+            reason.contains("`Edit` sets `line` above 1000000")
+                && reason.contains("unavailable until cleared"),
+            "{reason}"
+        );
+        // Derived: the medium tier the built-in used, its paths among them.
+        let derived: BTreeSet<String> = granted(&manager, "workspace")
+            .into_iter()
+            .filter(|(_, by)| by == "migration:workspace")
+            .map(|(key, _)| key)
+            .collect();
+        assert!(derived.contains("resources:paths"), "{derived:?}");
+        assert_eq!(
+            manager.store().host_setting(BACKUP_NOTE).unwrap(),
+            Some(json!({"file": BACKUP}))
+        );
+    }
+
+    #[test]
+    fn workspace_and_projects_cut_over_after_consent() {
+        let env = workspace_and_projects();
+        let snapshot = env.backed_up();
+        cut_over_with(&snapshot, &env);
+    }
+
+    /// X13: with none of the moved built-ins compiled in (WP-C5, WP-C6)
+    /// a configuration saved by 0.9.x migrates from the static
+    /// descriptors alone: the same eligibility, settings, derived grants,
+    /// consent and cut-over, the host's tool settings from the stored row.
+    #[test]
+    fn without_the_builtin_crates_the_descriptors_migrate() {
+        let mut env = workspace_and_projects();
+        env.save(
+            "git",
+            &[
+                ("gitExecutable", text("/opt/git/bin/git")),
+                ("repositoryRole", text("code")),
+            ],
+        );
+        env.uses("Branch", "git.branch", &[]);
+        let registry = deckpilot_core::ModuleRegistry::new(Os::current())
+            .with_aliases(deckpilot_core::alias::ACTION_ALIASES);
+        let mut snapshot = LegacySnapshot::read(&env.config, &registry).unwrap();
+        snapshot.backup = Some(Ok(BACKUP.into()));
+        for m in &snapshot.modules {
+            if m.module.as_str() == "notifications" {
+                assert!(m.manifest.is_none() && m.descriptor.is_none());
+                continue;
+            }
+            assert!(m.descriptor.is_some(), "{}", m.module);
+            assert!(m.builtin_types.is_empty(), "{}", m.module);
+            assert!(m.manifest.is_some() && m.enabled, "{}", m.module);
+        }
+        let git = snapshot
+            .modules
+            .iter()
+            .find(|m| m.module.as_str() == "git")
+            .unwrap();
+        assert_eq!(git.config.text("repositoryRole"), Some("code"));
+        assert_eq!(
+            git.config.get("networkTimeoutSeconds"),
+            Some(&ParameterValue::Integer(20))
+        );
+        assert!(snapshot.needs_backup());
+        cut_over_with(&snapshot, &env);
+
+        let bundle = env.bundle();
+        let mut manager = env.open();
         start(&mut manager, &bundle, &snapshot);
-        assert_eq!(phase(&manager, "projects").unwrap().attempts, 2);
+        assert_eq!(
+            phase(&manager, "git").unwrap().phase,
+            MigrationPhase::AwaitingConsent
+        );
+        assert_eq!(
+            manager.store().host_setting("tools.git").unwrap(),
+            Some(json!({"gitExecutable": "/opt/git/bin/git"}))
+        );
+        assert_eq!(
+            manager.store().settings(&plugin("git")).unwrap(),
+            BTreeMap::from([("repositoryRole".to_owned(), json!("code"))])
+        );
+        consent_to(&mut manager, &bundle, &snapshot, "git");
+        assert_eq!(route_of(&manager, &bundle, "git"), LegacyRoute::Plugin);
+        // Docker is not used here: nothing installed, as with the crate.
+        let docker = phase(&manager, "docker").unwrap();
+        assert_eq!(docker.phase, MigrationPhase::NotEligible);
+        assert_eq!(
+            docker.reason.as_deref(),
+            Some("the built-in module is not used on this computer")
+        );
     }
 
     /// The extraction plans and their aliases agree: one plan per

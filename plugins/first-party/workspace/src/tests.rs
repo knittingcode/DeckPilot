@@ -64,12 +64,13 @@ fn the_manifest_is_valid_with_minimal_permissions() {
             p
         })
         .collect();
-    // No `paths`: the plugin names bindings, never their paths. No hosts:
-    // it opens only what the user typed into the action.
+    // `paths` for the opened path the built-in reported (the `path`
+    // output, never in a message). No hosts: it opens only what the user
+    // typed into the action.
     assert_eq!(
         kinds,
         [
-            json!({"kind": "resources", "open": true}),
+            json!({"kind": "resources", "open": true, "paths": true}),
             json!({"kind": "openUrl", "hosts": [], "fromParams": true}),
             json!({"kind": "profile", "read": ["project"]}),
         ]
@@ -780,4 +781,34 @@ fn refusals_carry_the_agents_reason_code() {
     let mut host = MockHost::new(|_| CallResult::error(CallErrorCode::Throttled, "rate limited"));
     let error = host.context().open_url_param("urls", None).unwrap_err();
     assert_eq!(refusal(&error).0, "throttled");
+}
+
+/// The `path` output is the opened path, as the built-in's, once the
+/// agent shows the bound path (`resources.paths`); the binding's name
+/// otherwise.
+#[test]
+fn the_path_output_is_the_opened_path_with_the_paths_grant() {
+    let handle = |display: Option<&str>| ResourceHandle {
+        handle: "0".repeat(32),
+        kind: ResourceKind::Directory,
+        label: "shop.repo".into(),
+        display_path: display.map(str::to_owned),
+    };
+    assert_eq!(opened_path(&handle(None), Some("src/main.rs")), None);
+    assert_eq!(
+        opened_path(&handle(Some("/home/me/shop")), None).as_deref(),
+        Some("/home/me/shop")
+    );
+    assert_eq!(
+        opened_path(&handle(Some("/home/me/shop")), Some("src/main.rs")).as_deref(),
+        Some("/home/me/shop/src/main.rs")
+    );
+    assert_eq!(
+        opened_path(&handle(Some("/")), Some("etc")).as_deref(),
+        Some("/etc")
+    );
+    assert_eq!(
+        opened_path(&handle(Some(r"C:\Users\me\shop")), Some("src/main.rs")).as_deref(),
+        Some(r"C:\Users\me\shop\src\main.rs")
+    );
 }

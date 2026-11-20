@@ -30,7 +30,13 @@ export const VARIABLES_EVENT = "agent-variables"
 
 /** Context events of the agent; none of them carries a value. */
 export type VariableContextEvent =
-  | { type: "projectChanged"; profile: string; project: string | null; source: ProjectSource; plugin?: string }
+  | {
+      type: "projectChanged"
+      profile: string
+      project: string | null
+      source: ProjectSource
+      plugin?: string
+    }
   | { type: "profileChanged"; profile: string }
   | { type: "sharedVariablesChanged"; keys: string[] }
   | { type: "resourceBindingsChanged" }

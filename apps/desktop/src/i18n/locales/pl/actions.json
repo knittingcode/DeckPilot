@@ -202,7 +202,8 @@
       "none": "Ten profil nie ma jeszcze projektów. Dodaj projekt na stronie Projekty.",
       "choose": "Wybierz projekt",
       "current": "Bieżący projekt (domyślnie)",
-      "notInProfile": "Zapisany projekt nie należy do tego profilu. Wybierz jeden z jego projektów."
+      "notInProfile": "Zapisany projekt nie należy do tego profilu. Wybierz jeden z jego projektów.",
+      "pluginOff": "Wtyczka Projekty jest wyłączona: projekt pozostaje zapisany, ale można go zmienić tylko przy włączonej wtyczce (Ustawienia › Wtyczki)."
     },
     "resource": {
       "source": "Źródło zasobu",

@@ -1020,7 +1020,9 @@ pub enum Effect {
     Modifies,
 }
 
-/// Workflow node contract (`NodeSpec` without `changesContext`).
+/// Workflow node contract (`NodeSpec`). `changesContext` came with plugin
+/// API 1.9 and only with a `projectContext` permission that may `select`
+/// (first-party bundled plugins, X6).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Node {
@@ -1040,6 +1042,12 @@ pub struct Node {
     pub cancellable: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effect: Option<Effect>,
+    /// The action selects a project: a workflow node after it runs in the
+    /// project it selected, and a workflow saved without a project scope
+    /// changes the active project (the built-in project actions'
+    /// contract). Plugin API 1.9, with `projectContext.select` (X6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changes_context: Option<bool>,
 }
 
 impl Node {

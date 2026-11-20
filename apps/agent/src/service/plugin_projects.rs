@@ -17,6 +17,14 @@
 //!   `projectChanged` event names the plugin. The lifecycle trigger
 //!   `projectChanged` then fires as for every switch; a run it starts is
 //!   not one the user started, so it cannot switch again (no loop).
+//! * In a **workflow run** the executor asks [`ProjectCall::InRun`] with
+//!   the run's project: `current` and `profile.read` answer that project,
+//!   and `select` and `cycle` only say where the run goes, switching
+//!   nothing. The executor keeps the target for the action, whose result
+//!   carries it as the built-in project actions' `ContextEffect`; the
+//!   engine applies it to the run's project, and the workflow's project
+//!   scope decides at its end whether the active project follows
+//!   (`docs/workflow-graphs.md`).
 //! * `profile.read` answers the profile's name and the active project
 //!   (`None` without one, and while no provider is active); the executor
 //!   passes on only the granted scopes.
@@ -48,6 +56,13 @@ pub(crate) enum ProjectCall {
     },
     /// `profile.read`: the profile's name and the active project.
     Profile,
+    /// `call` in a workflow run whose project is `project` (its id;
+    /// `None`: the run has none): answered for that project, and a
+    /// `select` or `cycle` switches nothing, it says where the run goes.
+    InRun {
+        project: Option<String>,
+        call: Box<ProjectCall>,
+    },
 }
 
 /// A project as plugins see it: no bindings, no paths.
@@ -102,6 +117,16 @@ impl ProjectRefusal {
 
 pub(crate) type ProjectReply = Result<ProjectAnswer, ProjectRefusal>;
 
+/// Whose project a call is about.
+#[derive(Debug, Clone, Copy)]
+enum Scope<'a> {
+    /// The active project, which a switch changes.
+    Active,
+    /// A workflow run's (its id; `None`: the run has none), which a switch
+    /// only plans.
+    Run(Option<&'a str>),
+}
+
 /// The project context as the executors reach it.
 pub(crate) trait ProjectHost: Send + Sync + std::fmt::Debug {
     /// Carries out `call` for `plugin` (already allowed by the broker and
@@ -141,6 +166,21 @@ impl Agent {
     /// A plugin's project operation or profile read, on the agent's
     /// thread.
     pub(super) fn plugin_project(&mut self, plugin: &str, call: ProjectCall) -> ProjectReply {
+        match call {
+            ProjectCall::InRun { project, call } => match *call {
+                ProjectCall::InRun { .. } => Err(ProjectRefusal::new(
+                    "unavailable",
+                    "a run's call names one run",
+                )),
+                call => self.project_call(plugin, call, Scope::Run(project.as_deref())),
+            },
+            call => self.project_call(plugin, call, Scope::Active),
+        }
+    }
+
+    /// `call` for the active project or for a workflow run's project,
+    /// which a switch only plans.
+    fn project_call(&mut self, plugin: &str, call: ProjectCall, scope: Scope<'_>) -> ProjectReply {
         if self.security != SecurityState::Unlocked {
             return Err(ProjectRefusal::new("locked", "DeckPilot is locked"));
         }
@@ -149,10 +189,17 @@ impl Agent {
             .runtime
             .profile()
             .ok_or_else(|| ProjectRefusal::new("no-active-profile", "no profile is active"))?;
-        let current = self
-            .runtime
-            .active_project_id()
-            .and_then(|id| profile.project(id));
+        let current = match scope {
+            // Never another profile's: an id the active profile does not
+            // have is no project.
+            Scope::Run(project) => {
+                project.and_then(|id| profile.projects.iter().find(|p| p.id.to_string() == id))
+            }
+            Scope::Active => self
+                .runtime
+                .active_project_id()
+                .and_then(|id| profile.project(id)),
+        };
         if call == ProjectCall::Profile {
             return Ok(ProjectAnswer::Profile {
                 name: profile.name.clone(),
@@ -175,6 +222,12 @@ impl Agent {
                 ));
             }
             ProjectCall::Profile => unreachable!("answered above"),
+            ProjectCall::InRun { .. } => {
+                return Err(ProjectRefusal::new(
+                    "unavailable",
+                    "a run's call names one run",
+                ));
+            }
             ProjectCall::Select { id } => profile
                 .projects
                 .iter()
@@ -191,6 +244,17 @@ impl Agent {
             )
             .map_err(|e| ProjectRefusal::new(e.code(), e.to_string()))?,
         };
+        if let Scope::Run(_) = scope {
+            // The run's switch, which the action's result carries: the
+            // active project stays as it is.
+            let from = current.map(|p| p.id.to_string());
+            let to = profile
+                .project(target)
+                .map(ProjectEntry::from)
+                .ok_or_else(|| ProjectRefusal::new("not-found", "the project is gone"))?;
+            info!(plugin, from = ?from, to = %to.id, "a plugin selected the run's project");
+            return Ok(ProjectAnswer::Switched { from, to });
+        }
         self.switch_project_for(plugin, target)
     }
 

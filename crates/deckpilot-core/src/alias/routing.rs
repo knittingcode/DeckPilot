@@ -616,3 +616,93 @@ fn renamed_kept_and_unsupported_parameters_reach_the_plugin_as_declared() {
         1
     );
 }
+
+/// `AtMost` as the alias handler applies it: a value up to the bound
+/// passes unchanged, a larger one is refused when saved and when run,
+/// never clamped; and the contract check takes the bound for the
+/// built-in's.
+#[test]
+fn a_capped_parameter_passes_up_to_its_bound_and_is_never_clamped() {
+    use crate::{ParameterKind, ParameterSpec};
+    let spec = |max: i64| ParameterSpec {
+        key: "line".into(),
+        label: "Line".into(),
+        description: None,
+        kind: ParameterKind::Integer {
+            min: Some(1),
+            max: Some(max),
+        },
+        required: false,
+        default: None,
+    };
+    let mut plugin = plugin_fetch();
+    plugin.parameters = vec![spec(1_000_000)];
+    let alias = ActionAlias {
+        params: &[ParamRule::AtMost("line", 1_000_000)],
+        ..FIXTURE_ALIASES[0]
+    };
+    let mut builtin = crate::testing::legacy_fetch();
+    builtin.parameters = vec![spec(10_000_000)];
+    let target = {
+        let mut target = plugin.clone();
+        target.node = builtin.node.clone();
+        target.node.cancellable = true;
+        target.controls = builtin.controls.clone();
+        target
+    };
+    let problems = super::incompatibilities(&alias, &builtin, &target);
+    assert!(
+        !problems.iter().any(|p| p.contains("`line`")),
+        "{problems:?}"
+    );
+    // Without the rule the plugin's bound is narrower.
+    let plain = ActionAlias {
+        params: &[],
+        ..FIXTURE_ALIASES[0]
+    };
+    assert!(
+        super::incompatibilities(&plain, &builtin, &target)
+            .contains(&"parameter `line`: its kind or constraints are narrower".to_owned())
+    );
+    // A plugin bound below the cap is still narrower.
+    let mut lower = target.clone();
+    lower.parameters = vec![spec(999)];
+    assert!(
+        super::incompatibilities(&alias, &builtin, &lower)
+            .contains(&"parameter `line`: its kind or constraints are narrower".to_owned())
+    );
+
+    let handler = crate::registry::AliasHandler::new(&alias, Box::new(Keys(plugin)), None, None);
+    let profile = Profile::new("Work");
+    let machine = MachineConfig::new(Os::Linux);
+    let context = ExecutionContext::new(&profile, None, &machine);
+    let within = ActionParameters::new().with("line", ParameterValue::Integer(1_000_000));
+    let ran = crate::ActionHandler::execute(&handler, &within, &context);
+    assert_eq!(
+        ran.status,
+        crate::ActionStatus::Succeeded,
+        "{}",
+        ran.message
+    );
+    assert_eq!(
+        ran.message,
+        format!(
+            "line={}",
+            serde_json::to_string(&ParameterValue::Integer(1_000_000)).unwrap()
+        )
+    );
+    let above = ActionParameters::new().with("line", ParameterValue::Integer(1_000_001));
+    let refused = crate::ActionHandler::execute(&handler, &above, &context);
+    assert_eq!(refused.status, crate::ActionStatus::Failed);
+    assert!(
+        refused
+            .message
+            .starts_with("parameter `line` is 1000001, above 1000000"),
+        "{}",
+        refused.message
+    );
+    assert_eq!(
+        crate::ActionHandler::check(&handler, &above, &profile).len(),
+        1
+    );
+}

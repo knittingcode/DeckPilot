@@ -60,6 +60,7 @@ import {
   encodeTarget,
   WORK_SESSION_MODULE,
   gestureOnlyGroups,
+  readOnlyTarget,
   unavailableTarget,
   type TargetGroup,
 } from "./targets"
@@ -254,13 +255,27 @@ export function Inspector(props: InspectorProps) {
   return <ControlInspector {...props} control={focus} />
 }
 
-/** Why the target a control already uses cannot run now; it stays bound. */
-export function UnavailableNote({ reason }: { reason: string | undefined }) {
+/**
+ * Why the target a control already uses cannot run now; it stays bound.
+ * `readOnly`: it does run, it only cannot be changed here.
+ */
+export function UnavailableNote({
+  reason,
+  readOnly = false,
+}: {
+  reason: string | undefined
+  readOnly?: boolean
+}) {
   const { t } = useTranslation()
   if (!reason) return null
   return (
-    <p className="text-xs text-destructive" role="note">
-      {t("editor:inspector.unavailable", { reason })}
+    <p
+      className={readOnly ? "text-xs text-muted-foreground" : "text-xs text-destructive"}
+      role="note"
+    >
+      {readOnly
+        ? t("editor:inspector.readOnly", { reason })
+        : t("editor:inspector.unavailable", { reason })}
     </p>
   )
 }
@@ -440,6 +455,7 @@ function ControlInspector({
                 reason={
                   binding ? unavailableTarget(groups, encodeTarget(binding.target)) : undefined
                 }
+                readOnly={binding ? readOnlyTarget(groups, encodeTarget(binding.target)) : false}
               />
               <IncompatibleNote
                 reason={

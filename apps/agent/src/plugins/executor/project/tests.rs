@@ -50,6 +50,20 @@ impl ProjectHost for FakeAgent {
             ));
         }
         Ok(match call {
+            // A workflow run's project: answered for it, a switch planned
+            // from it.
+            ProjectCall::InRun { project, call } => match *call {
+                ProjectCall::Current => ProjectAnswer::Current(project.map(|id| entry(&id, "RUN"))),
+                ProjectCall::Select { id } => ProjectAnswer::Switched {
+                    from: project,
+                    to: entry(&id, "CRM"),
+                },
+                ProjectCall::Cycle { .. } => ProjectAnswer::Switched {
+                    from: project,
+                    to: entry("c", "OPS"),
+                },
+                other => panic!("not a run's call: {other:?}"),
+            },
             ProjectCall::Current => ProjectAnswer::Current(Some(entry("a", "SHOP"))),
             ProjectCall::List => ProjectAnswer::List(vec![entry("a", "SHOP"), entry("b", "CRM")]),
             ProjectCall::Select { id } if id == "b" => ProjectAnswer::Switched {
@@ -117,6 +131,45 @@ impl Fixture {
             r#"[{"kind":"projectContext","select":true},
                 {"kind":"profile","read":["profile","project"]}]"#,
         )
+    }
+
+    /// The executor of an invocation of an action that changes the run's
+    /// project (`changes`), in a run whose project is `project`.
+    fn invocation(
+        &self,
+        run: RunContext,
+        changes: bool,
+        project: Option<&str>,
+    ) -> (Executor, ProjectSwitch) {
+        let switch = ProjectSwitch::for_action(changes);
+        let resources = super::super::resources::InvocationResources {
+            project: project.map(|id| super::super::resources::ProjectResources {
+                id: id.into(),
+                roles: std::collections::BTreeMap::new(),
+            }),
+            switch: switch.clone(),
+            ..Default::default()
+        };
+        let (executor, _) = self.executor(run).with_resources(
+            PLUGIN,
+            "0.1.0",
+            std::collections::BTreeMap::new(),
+            resources,
+        );
+        (executor, switch)
+    }
+
+    /// One call of `executor`, as [`Fixture::call`].
+    fn call_in(&self, executor: &mut Executor, request: &Value) -> CallResult {
+        let plugin = PluginId::new(PLUGIN).unwrap();
+        let request: CapabilityRequest = serde_json::from_value(request.clone()).unwrap();
+        let session = self.broker.session(plugin.clone());
+        match session.authorize_in(&request, executor.run_context()) {
+            Decision::Allow(allowed) => executor.execute(&plugin, &allowed),
+            Decision::Deny(reason) => {
+                CallResult::error(reason.call_error_code(), reason.to_string())
+            }
+        }
     }
 
     fn executor(&self, run: RunContext) -> Executor {
@@ -224,17 +277,83 @@ fn a_select_in_a_run_the_user_started_switches_and_is_audited() {
     f.clock.advance(std::time::Duration::from_millis(500));
     ok(f.call(key(), &select("b")));
     f.clock.advance(std::time::Duration::from_millis(500));
-    // A workflow the user started may switch too; cycling wraps by default.
+    // A workflow the user started may switch too, its run's project
+    // (below); cycling wraps by default.
     let user = RunContext::workflow(RunCause::User, None);
-    ok(f.call(user, &cycle()));
+    let (mut executor, switch) = f.invocation(user, true, Some("a"));
+    ok(f.call_in(&mut executor, &cycle()));
     assert_eq!(f.calls().len(), 3);
     assert_eq!(
         f.calls()[2],
-        ProjectCall::Cycle {
-            direction: CoreDirection::Next,
-            wrap: true
+        ProjectCall::InRun {
+            project: Some("a".into()),
+            call: Box::new(ProjectCall::Cycle {
+                direction: CoreDirection::Next,
+                wrap: true
+            }),
         }
     );
+    assert_eq!(switch.target().as_deref(), Some("c"));
+}
+
+/// In a workflow the user started, a switch is the run's: the agent only
+/// plans it from the run's project, the invocation keeps the target for
+/// the action's result (the engine applies it to the nodes after it), and
+/// `current` and `profile.read` then answer the run's new project. An
+/// action whose node does not declare `changesContext` cannot switch.
+#[test]
+fn a_switch_in_a_workflow_run_selects_the_runs_project() {
+    let f = Fixture::switching();
+    let user = RunContext::workflow(RunCause::User, None);
+    let (mut executor, switch) = f.invocation(user.clone(), true, Some("a"));
+    let switched = ok(f.call_in(&mut executor, &select("b")));
+    assert_eq!(switched["id"], "b");
+    assert_eq!(switch.target().as_deref(), Some("b"));
+    let current = ok(f.call_in(&mut executor, &json!({"op": "project.current", "args": {}})));
+    assert_eq!(current["id"], "b");
+    assert_eq!(
+        f.calls(),
+        vec![
+            ProjectCall::InRun {
+                project: Some("a".into()),
+                call: Box::new(ProjectCall::Select { id: "b".into() }),
+            },
+            ProjectCall::InRun {
+                project: Some("b".into()),
+                call: Box::new(ProjectCall::Current),
+            },
+        ]
+    );
+    let audit = f.audit.lock().unwrap();
+    assert_eq!(
+        audit[0].record.details,
+        vec![
+            ("from", "a".to_owned()),
+            ("to", "b".to_owned()),
+            ("scope", "run".to_owned())
+        ]
+    );
+    assert_eq!(audit[0].origin, "workflow/user");
+    drop(audit);
+
+    // Not an action that changes the run's project: refused, the agent
+    // never asked, nothing selected.
+    f.clock.advance(std::time::Duration::from_secs(1));
+    let (mut executor, switch) = f.invocation(user, false, Some("a"));
+    let (code, message) = refused(&f.call_in(&mut executor, &select("b")));
+    assert_eq!(code, CallErrorCode::NotPermitted);
+    assert!(message.contains("changesContext"), "{message}");
+    assert_eq!(switch.target(), None);
+    assert_eq!(f.calls().len(), 2);
+
+    // A lifecycle-triggered workflow cannot switch, even in an action
+    // that may.
+    let (mut executor, switch) =
+        f.invocation(RunContext::workflow(RunCause::Event, None), true, Some("a"));
+    let (code, _) = refused(&f.call_in(&mut executor, &select("b")));
+    assert_eq!(code, CallErrorCode::NotPermitted);
+    assert_eq!(switch.target(), None);
+    assert_eq!(f.calls().len(), 2);
 }
 
 #[test]
@@ -294,12 +413,17 @@ fn switching_needs_the_select_grant() {
 #[test]
 fn reading_works_with_the_medium_grant_in_any_run() {
     let f = Fixture::new(r#"[{"kind":"projectContext"}]"#);
-    let run = RunContext::workflow(RunCause::Event, None);
-    let current = ok(f.call(run.clone(), &json!({"op": "project.current", "args": {}})));
+    let current = ok(f.call(key(), &json!({"op": "project.current", "args": {}})));
     assert_eq!(
         current,
         json!({"id": "a", "key": "SHOP", "name": "SHOP project"})
     );
+    // In a workflow (one an event started, too) `current` is the run's
+    // project.
+    let run = RunContext::workflow(RunCause::Event, None);
+    let (mut executor, _) = f.invocation(run.clone(), false, Some("r"));
+    let in_run = ok(f.call_in(&mut executor, &json!({"op": "project.current", "args": {}})));
+    assert_eq!(in_run["id"], "r");
     let list = ok(f.call(run, &json!({"op": "project.list", "args": {}})));
     assert_eq!(list["projects"].as_array().unwrap().len(), 2);
     // Ids, keys and names only.
@@ -307,10 +431,20 @@ fn reading_works_with_the_medium_grant_in_any_run() {
         list["projects"][1],
         json!({"id": "b", "key": "CRM", "name": "CRM project"})
     );
-    assert_eq!(f.calls(), vec![ProjectCall::Current, ProjectCall::List]);
+    assert_eq!(
+        f.calls(),
+        vec![
+            ProjectCall::Current,
+            ProjectCall::InRun {
+                project: Some("r".into()),
+                call: Box::new(ProjectCall::Current),
+            },
+            ProjectCall::List
+        ]
+    );
     let audit = f.audit.lock().unwrap();
     assert_eq!(audit[0].record.grant, "projectContext");
-    assert_eq!(audit.len(), 2);
+    assert_eq!(audit.len(), 3);
 }
 
 #[test]

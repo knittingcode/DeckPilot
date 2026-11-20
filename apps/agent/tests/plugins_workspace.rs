@@ -256,7 +256,8 @@ async fn every_action_opens_bound_resources_through_the_launcher() {
     let opened = agent.run_action(f.at_line).await;
     assert!(opened.ok, "{opened:?}\n{}", agent.log());
     assert_eq!(opened.message, "opened shop.main in tools.code");
-    assert_eq!(opened.data["path"], "shop.main");
+    // `path` is the opened path, as the built-in's (`resources.paths`).
+    assert_eq!(opened.data["path"], f.file.display().to_string());
     assert_eq!(opened.data["application"], "tools.code");
     assert_eq!(opened.data["located"], "true");
     let launched = env.launched();
@@ -266,21 +267,22 @@ async fn every_action_opens_bound_resources_through_the_launcher() {
         launched[0].1,
         ["--goto", &format!("{}:12:3", f.file.display())]
     );
-    // Never a path in what the plugin answered.
+    // No other path in what the plugin answered, none in its message.
     assert!(
         !opened
             .data
-            .values()
-            .any(|v| v.contains(&*f.repo.to_string_lossy())),
+            .iter()
+            .any(|(k, v)| k != "path" && v.contains(&*f.repo.to_string_lossy())),
         "{opened:?}"
     );
+    assert!(!opened.message.contains(&*f.repo.to_string_lossy()));
 
     // ---- open-in-editor without a folder: the active project's
     // repository, no line.
     tokio::time::sleep(Duration::from_millis(1_100)).await;
     let opened = agent.run_action(f.repository).await;
     assert!(opened.ok, "{opened:?}");
-    assert_eq!(opened.data["path"], "shop.repo");
+    assert_eq!(opened.data["path"], f.repo.display().to_string());
     assert_eq!(opened.data["located"], "false");
     let launched = env.launched();
     assert_eq!(launched.len(), 2, "{launched:?}");
@@ -427,7 +429,7 @@ async fn a_path_inside_the_bound_folder_opens_and_nothing_outside_it() {
     let opened = agent.run_action(inside).await;
     assert!(opened.ok, "{opened:?}\n{}", agent.log());
     assert_eq!(opened.message, "opened shop.repo/src/main.rs in tools.code");
-    assert_eq!(opened.data["path"], "shop.repo/src/main.rs");
+    assert_eq!(opened.data["path"], f.file.display().to_string());
     assert_eq!(opened.data["located"], "true");
     assert_eq!(
         env.launched(),

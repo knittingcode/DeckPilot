@@ -18,7 +18,7 @@ use deckpilot_core::{
     ActionHandler, ActionParameters, ActionRegistry, ActionResult, ActionType, ExecutionContext,
     ModuleId,
 };
-use deckpilot_ipc::plugins::PluginSummary;
+use deckpilot_ipc::plugins::{MigrationRoute, ModuleMigrationInfo, PluginState, PluginSummary};
 
 /// `definition` with its editor navigation (plugin API 1.7) only when the
 /// host's own rules accept it: an allowlisted operation whose target is one
@@ -40,11 +40,33 @@ fn checked(definition: &ActionType) -> ActionType {
 #[derive(Debug, Default)]
 pub struct PluginActions {
     plugins: BTreeMap<String, PluginSummary>,
+    /// Whether the frontend ever asked for plugins (only builds with
+    /// `VITE_DECKPILOT_PLUGINS=1` do). Until then the features plugins
+    /// took over keep their behaviour from before the extraction
+    /// ([`PluginActions::feature`]).
+    answered: bool,
+    /// The routes of the last `listModuleMigrations` answer, by built-in
+    /// module id.
+    routes: BTreeMap<String, MigrationRoute>,
+}
+
+/// Whether a feature a first-party plugin owns (`deckpilot.workflows`,
+/// `deckpilot.projects`) is on, as far as this process knows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeatureState {
+    /// No plugin answer yet: a build without plugins, where the feature
+    /// behaves as before the extraction.
+    Unknown,
+    /// The plugin is installed and enabled.
+    Enabled,
+    /// Plugins were listed, and this one is not enabled (or not there).
+    Off,
 }
 
 impl PluginActions {
     /// The installed plugins are exactly `plugins` (a `listPlugins` answer).
     pub fn replace(&mut self, plugins: &[PluginSummary]) {
+        self.answered = true;
         self.plugins = plugins
             .iter()
             .map(|plugin| (plugin.id.clone(), plugin.clone()))
@@ -53,18 +75,52 @@ impl PluginActions {
 
     /// One plugin changed (the answer to `getPlugin`, an install, enable…).
     pub fn upsert(&mut self, plugin: &PluginSummary) {
+        self.answered = true;
         self.plugins.insert(plugin.id.clone(), plugin.clone());
     }
 
     /// The plugin was uninstalled.
     pub fn remove(&mut self, plugin: &str) {
+        self.answered = true;
         self.plugins.remove(plugin);
     }
 
     /// Plugins cannot be asked for (no agent, plugins off, locked): none
-    /// is known, so their actions are unknown action types again.
+    /// is known, so their actions are unknown action types again, and the
+    /// features plugins own are off.
     pub fn clear(&mut self) {
+        self.answered = true;
         self.plugins.clear();
+    }
+
+    /// The module migrations are exactly `migrations` (a
+    /// `listModuleMigrations` answer).
+    pub fn record_migrations(&mut self, migrations: &[ModuleMigrationInfo]) {
+        self.routes = migrations
+            .iter()
+            .map(|m| (m.module.clone(), m.route))
+            .collect();
+    }
+
+    /// The last known route of a built-in module's legacy action types;
+    /// `None` when no migration is known for it.
+    pub fn route(&self, module: &str) -> Option<MigrationRoute> {
+        self.routes.get(module).copied()
+    }
+
+    /// The state of the feature `plugin` owns.
+    pub fn feature(&self, plugin: &str) -> FeatureState {
+        if !self.answered {
+            FeatureState::Unknown
+        } else if self
+            .plugins
+            .get(plugin)
+            .is_some_and(|p| p.state == PluginState::Enabled)
+        {
+            FeatureState::Enabled
+        } else {
+            FeatureState::Off
+        }
     }
 
     #[cfg(test)]
@@ -146,7 +202,7 @@ impl ActionHandler for AgentAction {
 #[cfg(test)]
 mod tests {
     use deckpilot_core::{ActionTypeId, ParameterValue, RegistryError};
-    use deckpilot_ipc::plugins::{PluginActionInfo, PluginOrigin, PluginState};
+    use deckpilot_ipc::plugins::{PluginActionInfo, PluginOrigin};
 
     use super::*;
 
@@ -194,6 +250,8 @@ mod tests {
             navigation: Vec::new(),
             installed_for: None,
             visual_assets: Vec::new(),
+            status_items: Vec::new(),
+            dashboard_cards: Vec::new(),
         }
     }
 

@@ -37,6 +37,7 @@ use deckpilot_plugin_manifest::Action;
 use deckpilot_plugin_supervisor::AbortSignal;
 use tracing::warn;
 
+use super::executor::project::ProjectSwitch;
 use super::executor::resources::InvocationResources;
 use super::key_state::{Asked, KeyId, Turn};
 use super::variables::{PluginVariableSource, PublishedVariables, declarations};
@@ -156,14 +157,7 @@ impl PluginModule {
                 description: plugin.description.clone(),
                 platforms: Vec::new(),
                 pages: Vec::new(),
-                capabilities: if plugin.resources || takes_resources(&plugin.actions) {
-                    vec![
-                        deckpilot_core::Capability::ProfileRead,
-                        deckpilot_core::Capability::MachineResources,
-                    ]
-                } else {
-                    Vec::new()
-                },
+                capabilities: capabilities(&plugin),
                 config: Vec::new(),
                 // Only while it runs: a plugin that cannot run (for lack
                 // of one of them, say) does not hold its dependencies.
@@ -186,6 +180,26 @@ impl PluginModule {
             invoker,
         })
     }
+}
+
+/// What a plugin's module may use of the core: the profile and the
+/// bindings for one that resolves resources; the profile and the project
+/// context for one holding `projectContext` (X6), whose switches in a
+/// workflow run are its results' `ContextEffect`s, which the action
+/// registry refuses from any other module.
+fn capabilities(plugin: &CatalogPlugin) -> Vec<deckpilot_core::Capability> {
+    use deckpilot_core::Capability;
+    let mut capabilities = Vec::new();
+    if plugin.resources || takes_resources(&plugin.actions) {
+        capabilities.extend([Capability::ProfileRead, Capability::MachineResources]);
+    }
+    if plugin.project_context {
+        if !capabilities.contains(&Capability::ProfileRead) {
+            capabilities.push(Capability::ProfileRead);
+        }
+        capabilities.push(Capability::ProjectContext);
+    }
+    capabilities
 }
 
 impl FeatureModule for PluginModule {
@@ -259,10 +273,12 @@ pub(crate) fn action_type(plugin: &str, action: &Action) -> Result<ActionType, S
             .map_err(|e| format!("node: {e}"))?,
         None => NodeSpec::default(),
     };
-    // Every plugin action can be stopped (the abort signal), and none
-    // can change the run's project (plugins have no project context).
+    // Every plugin action can be stopped (the abort signal). One changes
+    // the run's project only when its node declares it (plugin API 1.9,
+    // a first-party manifest with `projectContext.select`, X6): its
+    // `project.select` in a workflow run is the result's `ContextEffect`.
     node.cancellable = true;
-    node.changes_context = false;
+    node.changes_context = action.changes_context();
     node.timeout_ms = u32::try_from(
         action
             .node
@@ -557,11 +573,15 @@ impl PluginActionHandler {
             Ok(params) => params,
             Err(problem) => return ActionResult::error("invalid-parameters", problem),
         };
-        let resources = InvocationResources::of(parameters, context).with_urls(
+        let mut resources = InvocationResources::of(parameters, context).with_urls(
             &self.definition,
             parameters,
             context.provenance(),
         );
+        // What a `project.select` of a workflow run selects (X6), for the
+        // result.
+        let switch = ProjectSwitch::for_action(self.definition.node.changes_context);
+        resources.switch = switch.clone();
         let abort = AbortSignal::new();
         let run = run_context(context).with_key_scope(key_scope(
             &self.plugin,
@@ -585,7 +605,7 @@ impl PluginActionHandler {
         let deadline = Instant::now() + self.timeout + QUEUE_MARGIN;
         let reason = loop {
             match answer.recv_timeout(POLL) {
-                Ok(reply) => return self.result(reply),
+                Ok(reply) => return with_switch(self.result(reply), &switch),
                 Err(RecvTimeoutError::Disconnected) => {
                     return ActionResult::error(
                         "plugin-host-failed",
@@ -637,6 +657,27 @@ impl PluginActionHandler {
             ),
             Err(EngineFailure { code, message }) => ActionResult::error(code, message),
         }
+    }
+}
+
+/// `result` with the run's new project as its `ContextEffect` when the
+/// action selected one in a workflow run and succeeded: the engine applies
+/// it to the run's project, as a built-in project action's (and refuses it
+/// from a module without the project context). Nothing for a failed or
+/// skipped action.
+fn with_switch(result: ActionResult, switch: &ProjectSwitch) -> ActionResult {
+    if !result.is_success() {
+        return result;
+    }
+    match switch
+        .target()
+        .map(|id| id.parse::<deckpilot_core::ProjectId>())
+    {
+        Some(Ok(project)) => {
+            result.with_effect(deckpilot_core::ContextEffect::SelectProject { project })
+        }
+        Some(Err(_)) => ActionResult::failure("the plugin selected a project that does not exist"),
+        None => result,
     }
 }
 

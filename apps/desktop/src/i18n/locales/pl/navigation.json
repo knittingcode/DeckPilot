@@ -21,7 +21,8 @@
     "layouts": "Układy",
     "dashboard": "Pulpit",
     "actions": "Biblioteka akcji",
-    "workflows": "Przepływy pracy"
+    "workflows": "Przepływy pracy",
+    "projects": "Projekty"
   },
   "statusBar": {
     "label": "Pasek stanu",

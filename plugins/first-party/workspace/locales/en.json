@@ -7,7 +7,7 @@
     "projects": "Open project workspace opens the active project's resources; without Projects there is no active project."
   },
   "permissions": {
-    "resources": "Opens the folders and files you bound on this computer in the editor you bound, and a project's pages in the browser, when you press a key.",
+    "resources": "Opens the folders and files you bound on this computer in the editor you bound, and a project's pages in the browser, when you press a key; reports the path it opened.",
     "openUrl": "Opens the web pages you typed into an Open pages action in the browser, when you press a key.",
     "profile": "Reads the active project's key to report which project was opened."
   },

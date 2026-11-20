@@ -16,15 +16,8 @@
     "directory": "plugins/first-party/docker"
   },
   "license": "Apache-2.0",
-  "keywords": [
-    "docker",
-    "compose",
-    "containers",
-    "logs"
-  ],
-  "categories": [
-    "developer-tools"
-  ],
+  "keywords": ["docker", "compose", "containers", "logs"],
+  "categories": ["developer-tools"],
   "engines": {
     "deckpilot": ">=0.9.0 <1.0.0",
     "pluginApi": "^1.9",
@@ -39,10 +32,7 @@
     "128": "assets/icon-128.png"
   },
   "defaultLocale": "en",
-  "locales": [
-    "en",
-    "pl"
-  ],
+  "locales": ["en", "pl"],
   "dependencies": [
     {
       "id": "deckpilot.projects",
@@ -63,58 +53,35 @@
             },
             {
               "name": "version",
-              "options": [
-                "--format"
-              ]
+              "options": ["--format"]
             },
             {
               "name": "compose version",
-              "options": [
-                "--short"
-              ]
+              "options": ["--short"]
             },
             {
               "name": "ps",
-              "options": [
-                "--no-trunc",
-                "--format",
-                "--all",
-                "--filter"
-              ]
+              "options": ["--no-trunc", "--format", "--all", "--filter"]
             },
             {
               "name": "compose ps",
-              "options": [
-                "--format",
-                "--all"
-              ]
+              "options": ["--format", "--all"]
             },
             {
               "name": "compose logs",
-              "options": [
-                "--tail",
-                "--since",
-                "--no-color"
-              ]
+              "options": ["--tail", "--since", "--no-color"]
             },
             {
               "name": "logs",
-              "options": [
-                "--tail",
-                "--since"
-              ]
+              "options": ["--tail", "--since"]
             },
             {
               "name": "compose up",
-              "options": [
-                "--detach"
-              ]
+              "options": ["--detach"]
             },
             {
               "name": "compose down",
-              "options": [
-                "--remove-orphans"
-              ]
+              "options": ["--remove-orphans"]
             },
             {
               "name": "compose restart"
@@ -131,9 +98,7 @@
     },
     {
       "kind": "profile",
-      "read": [
-        "project"
-      ],
+      "read": ["project"],
       "justification": "t:permissions.profile"
     },
     {
@@ -167,10 +132,7 @@
             "required": false,
             "kind": {
               "type": "resource",
-              "kinds": [
-                "dockerEnvironment",
-                "directory"
-              ]
+              "kinds": ["dockerEnvironment", "directory"]
             }
           }
         ],
@@ -278,10 +240,7 @@
             "required": false,
             "kind": {
               "type": "resource",
-              "kinds": [
-                "dockerEnvironment",
-                "directory"
-              ]
+              "kinds": ["dockerEnvironment", "directory"]
             }
           }
         ],
@@ -344,11 +303,7 @@
             "required": false,
             "kind": {
               "type": "resource",
-              "kinds": [
-                "directory",
-                "file",
-                "dockerEnvironment"
-              ]
+              "kinds": ["directory", "file", "dockerEnvironment"]
             }
           },
           {
@@ -458,11 +413,7 @@
             "required": false,
             "kind": {
               "type": "resource",
-              "kinds": [
-                "directory",
-                "file",
-                "dockerEnvironment"
-              ]
+              "kinds": ["directory", "file", "dockerEnvironment"]
             }
           },
           {
@@ -547,9 +498,7 @@
           "refresh": "every",
           "intervalSeconds": 5
         },
-        "requiresPermissions": [
-          "tools:docker:modify"
-        ]
+        "requiresPermissions": ["tools:docker:modify"]
       },
       {
         "id": "compose-down",
@@ -564,11 +513,7 @@
             "required": false,
             "kind": {
               "type": "resource",
-              "kinds": [
-                "directory",
-                "file",
-                "dockerEnvironment"
-              ]
+              "kinds": ["directory", "file", "dockerEnvironment"]
             }
           },
           {
@@ -654,9 +599,7 @@
           "refresh": "every",
           "intervalSeconds": 5
         },
-        "requiresPermissions": [
-          "tools:docker:modify"
-        ]
+        "requiresPermissions": ["tools:docker:modify"]
       },
       {
         "id": "compose-restart",
@@ -671,11 +614,7 @@
             "required": false,
             "kind": {
               "type": "resource",
-              "kinds": [
-                "directory",
-                "file",
-                "dockerEnvironment"
-              ]
+              "kinds": ["directory", "file", "dockerEnvironment"]
             }
           },
           {
@@ -760,9 +699,7 @@
           "refresh": "every",
           "intervalSeconds": 5
         },
-        "requiresPermissions": [
-          "tools:docker:modify"
-        ]
+        "requiresPermissions": ["tools:docker:modify"]
       },
       {
         "id": "logs",
@@ -822,11 +759,7 @@
             "required": false,
             "kind": {
               "type": "resource",
-              "kinds": [
-                "directory",
-                "file",
-                "dockerEnvironment"
-              ]
+              "kinds": ["directory", "file", "dockerEnvironment"]
             }
           },
           {
@@ -865,10 +798,7 @@
             "required": false,
             "kind": {
               "type": "resource",
-              "kinds": [
-                "dockerEnvironment",
-                "directory"
-              ]
+              "kinds": ["dockerEnvironment", "directory"]
             }
           }
         ],
@@ -926,7 +856,7 @@
           "required": true,
           "kind": {
             "type": "text",
-            "maxLength": 64
+            "maxLength": 1024
           },
           "default": {
             "type": "text",

@@ -1,17 +1,21 @@
-import { Box, Puzzle, type LucideIcon } from "lucide-react"
+import { Box, FolderKanban, Puzzle, type LucideIcon } from "lucide-react"
 
+import { isExtractedModule } from "@/lib/plugin-features"
 import type { ToolbarContext } from "@/lib/toolbar-context"
 import type { ModuleInfo } from "@/lib/types"
 
 import { httpModule } from "./http"
-import { projectsModule } from "./projects"
 import type { FrontendModule } from "./types"
 import { workSessionModule } from "./work-session"
 
-/** Every module with a user interface. Modules without one need no entry. */
-const FRONTEND_MODULES: FrontendModule[] = [projectsModule, httpModule, workSessionModule]
+/**
+ * Every module with a user interface. Modules without one need no entry.
+ * The Projects screen, status item and card are not a module's: the
+ * `deckpilot.projects` plugin activates them (`./host-views.ts`).
+ */
+const FRONTEND_MODULES: FrontendModule[] = [httpModule, workSessionModule]
 
-/** Page id used in navigation for a module page, e.g. `projects/projects`. */
+/** Page id used in navigation for a module page, e.g. `http/requests`. */
 export type ModulePageId = `${string}/${string}`
 
 export function modulePageId(module: string, page: string): ModulePageId {
@@ -87,9 +91,12 @@ export function moduleSettingsId(module: string) {
   return `module:${module}`
 }
 
+/** Icons of modules without a frontend entry of their own. */
+const MODULE_ICONS: Partial<Record<string, LucideIcon>> = { projects: FolderKanban }
+
 /** The icon of a module in the settings. */
 export function moduleIcon(module: string): LucideIcon {
-  return frontend(module)?.icon ?? Puzzle
+  return frontend(module)?.icon ?? MODULE_ICONS[module] ?? Puzzle
 }
 
 export interface ModuleSettingsPage {
@@ -102,11 +109,19 @@ export interface ModuleSettingsPage {
 
 /**
  * Settings pages of enabled modules: their own view, or one generated from
- * the settings their manifest declares. Modules without either have none.
+ * the settings their manifest declares. Modules without either have none,
+ * and so do modules whose UI moved to a plugin (builds with plugins: the
+ * plugin's settings replace them).
  */
 export function moduleSettingsPages(modules: ModuleInfo[]): ModuleSettingsPage[] {
   return modules
-    .filter((m) => m.enabled && m.supported && (m.config.length > 0 || frontend(m.id)?.settings))
+    .filter(
+      (m) =>
+        m.enabled &&
+        m.supported &&
+        !isExtractedModule(m.id) &&
+        (m.config.length > 0 || frontend(m.id)?.settings),
+    )
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((module) => ({
       id: moduleSettingsId(module.id),

@@ -75,6 +75,10 @@
     },
     "module": {
       "description": "Ustawienia modułu {{module}}"
+    },
+    "resources": {
+      "title": "Zasoby",
+      "description": "Co oznacza każdy klucz zasobu na tym komputerze: foldery, aplikacje, terminale i adresy URL otwierane przez akcje"
     }
   },
   "language": {

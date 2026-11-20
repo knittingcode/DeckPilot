@@ -153,7 +153,8 @@
     "back": "Back",
     "openPage": "Open {{page}}",
     "workSession": "Work Session",
-    "workSessionController": "Work Session controller"
+    "workSessionController": "Work Session controller",
+    "workflowsOff": "the Workflows plugin is off"
   },
   "drag": {
     "action": "Action",
@@ -260,7 +261,8 @@
       "release": "Its release binding (“{{target}}”) is removed: a key with gestures cannot also react to its release.",
       "untilSaved": "Nothing changes on the device until you save the layout.",
       "confirm": "Switch to gestures"
-    }
+    },
+    "readOnly": "Read-only: {{reason}}. This workflow still runs from this key; it can be chosen or changed again once the plugin is on (Settings › Plugins)."
   },
   "shell": {
     "switchPreset": {
@@ -338,7 +340,8 @@
       "encoder": "Deselect dial",
       "touchZone": "Deselect touch zone",
       "many": "Deselect controls"
-    }
+    },
+    "readOnly": "Read-only: {{reason}}. This workflow still runs from this key; it can be chosen or changed again once the plugin is on (Settings › Plugins)."
   },
   "pageNav": {
     "untitled": "Untitled",

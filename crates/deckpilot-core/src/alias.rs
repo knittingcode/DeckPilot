@@ -74,6 +74,14 @@ pub enum ParamRule {
     /// Empty passes; any other value fails the run and is refused when
     /// saved, rather than being dropped or replaced by a guess.
     Unsupported(&'static str),
+    /// An integer parameter the plugin accepts only up to `.1`, narrower
+    /// than the built-in by its security review (`workspace`'s `line` and
+    /// `column`, at most 1,000,000 by §7 X4, where the built-in took
+    /// 10,000,000). A value up to `.1` passes unchanged; a larger one is
+    /// never clamped: it fails the run and is refused when saved, with a
+    /// reason, and the migration names the stored uses (recoverable by
+    /// lowering the value).
+    AtMost(&'static str, i64),
 }
 
 impl ParamRule {
@@ -83,7 +91,8 @@ impl ParamRule {
             Self::DropIfDefault(key)
             | Self::Keep(key)
             | Self::Rename(key, _)
-            | Self::Unsupported(key) => key,
+            | Self::Unsupported(key)
+            | Self::AtMost(key, _) => key,
         }
     }
 
@@ -91,7 +100,7 @@ impl ParamRule {
     pub const fn plugin_key(self) -> Option<&'static str> {
         match self {
             Self::DropIfDefault(_) => None,
-            Self::Keep(key) | Self::Unsupported(key) => Some(key),
+            Self::Keep(key) | Self::Unsupported(key) | Self::AtMost(key, _) => Some(key),
             Self::Rename(_, to) => Some(to),
         }
     }
@@ -434,8 +443,15 @@ const COMPOSE: &[ParamRule] = &[
     PROJECT_ID,
     ParamRule::Unsupported("projectName"),
 ];
-/// `workspace.open-in-editor`: the editor and the folder.
-const EDITOR: &[ParamRule] = &[ParamRule::Keep("application"), ParamRule::Keep("location")];
+/// `workspace.open-in-editor`: the editor and the folder, and the line
+/// and column within the review's bound (§7 X4: 1 to 1,000,000; the
+/// built-in took up to 10,000,000).
+const EDITOR: &[ParamRule] = &[
+    ParamRule::Keep("application"),
+    ParamRule::Keep("location"),
+    ParamRule::AtMost("line", crate::launch::PLUGIN_MAX_POSITION),
+    ParamRule::AtMost("column", crate::launch::PLUGIN_MAX_POSITION),
+];
 /// `workspace.open-urls` and `open-project`: the browser.
 const BROWSER: &[ParamRule] = &[ParamRule::Keep("browser")];
 /// The projects actions that name a project.
@@ -808,7 +824,27 @@ pub fn incompatibilities(
             }
             continue;
         };
-        if let Err(reason) = kind_compatible(&spec.kind, &other.kind) {
+        // A capped integer is compared with the cap as the built-in's
+        // bound (and must be one).
+        let capped;
+        let builtin_kind = match (alias.rule(&spec.key), &spec.kind) {
+            (Some(ParamRule::AtMost(_, most)), ParameterKind::Integer { min, max }) => {
+                capped = ParameterKind::Integer {
+                    min: *min,
+                    max: Some(max.map_or(most, |max| max.min(most))),
+                };
+                &capped
+            }
+            (Some(ParamRule::AtMost(..)), _) => {
+                problems.push(format!(
+                    "parameter `{}` is capped, which only an integer can be",
+                    spec.key
+                ));
+                &spec.kind
+            }
+            _ => &spec.kind,
+        };
+        if let Err(reason) = kind_compatible(builtin_kind, &other.kind) {
             problems.push(format!("parameter `{}`: {reason}", spec.key));
         }
         if !spec.required && is_required(other) {
@@ -1090,7 +1126,12 @@ mod tests {
                 ),
                 "workspace" if name == "open-in-editor" => (
                     "deckpilot.workspace",
-                    &[ParamRule::Keep("application"), ParamRule::Keep("location")],
+                    &[
+                        ParamRule::Keep("application"),
+                        ParamRule::Keep("location"),
+                        ParamRule::AtMost("line", 1_000_000),
+                        ParamRule::AtMost("column", 1_000_000),
+                    ],
                 ),
                 "workspace" => ("deckpilot.workspace", &[ParamRule::Keep("browser")]),
                 "projects"

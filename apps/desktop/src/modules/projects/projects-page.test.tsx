@@ -44,7 +44,7 @@ async function renderProjects(projects = [shop, cmr]) {
   api.getProfile.mockResolvedValue(profileView({ projects }, { activeProjectId: shop.id }))
   api.checkResources.mockResolvedValue(checks)
   const rendered = renderWithApp(<ProjectsPage />)
-  await screen.findByRole("tab", { name: "Projects" })
+  await screen.findByText("Online Shop")
   return rendered
 }
 
@@ -184,13 +184,15 @@ describe("Projects page", () => {
     expect(screen.getByRole("alertdialog", { name: "Delete CMR?" })).toBeInTheDocument()
   })
 
-  it("has empty states for projects and machine resources", async () => {
+  it("has an empty state and leads to this computer's bindings in Settings", async () => {
     api.checkResources.mockResolvedValue([])
     api.getProfile.mockResolvedValue(profileView())
-    const { user } = renderWithApp(<ProjectsPage />)
+    const { user, context } = renderWithApp(<ProjectsPage />)
     expect(await screen.findByText("No projects in this profile")).toBeInTheDocument()
-    await user.click(screen.getByRole("tab", { name: "This machine" }))
-    expect(await screen.findByText("No resources used or mapped yet")).toBeInTheDocument()
+    // The binding editor is the core's now (Settings › Resources).
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Open Settings › Resources" }))
+    expect(context.openSettings).toHaveBeenCalledWith("resources")
   })
 })
 
@@ -206,16 +208,15 @@ describe("Projects page in Polish", () => {
       profileView({ projects: [shop, cmr, ...extra] }, { activeProjectId: shop.id }),
     )
     api.checkResources.mockResolvedValue(checks)
-    const { user } = renderWithApp(<ProjectsPage />)
-    expect(await screen.findByRole("tab", { name: "Projekty" })).toBeInTheDocument()
+    renderWithApp(<ProjectsPage />)
+    expect(await screen.findByText("Online Shop")).toBeInTheDocument()
     expect(screen.getByRole("heading", { name: "Kolejność przełączania" })).toBeInTheDocument()
     expect(screen.getByText(/^5 projektów w cyklu\./)).toBeInTheDocument()
     const item = screen.getByText("Online Shop").closest("li") as HTMLElement
     expect(within(item).getByText("Aktywny")).toBeInTheDocument()
     expect(within(item).getByText("(Znaleziono)")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Edytuj SHOP" })).toBeInTheDocument()
-    await user.click(screen.getByRole("tab", { name: "Ten komputer" }))
-    expect(await screen.findByText("Zasoby na tym komputerze")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Otwórz Ustawienia › Zasoby" })).toBeInTheDocument()
     cleanup()
 
     api.getProfile.mockResolvedValue(

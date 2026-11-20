@@ -87,7 +87,8 @@
       "trigger": "key {{key}} opens the folder “{{folder}}” on a single press only",
       "replaced": "key {{key}} opens the folder “{{folder}}”; clear the key or delete the folder instead of replacing it",
       "recovered": "recovered gestures can only be kept, moved to a free key or discarded"
-    }
+    },
+    "pluginFeatureOff": "the {{feature}} plugin is off: turn it on in Settings › Plugins"
   },
   "storage": {
     "database": "database error: {{detail}}",

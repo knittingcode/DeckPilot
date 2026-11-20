@@ -5,6 +5,7 @@ import { cleanup, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ModulesSettings } from "@/settings/pages/modules"
+import { settingsPages } from "@/settings/registry"
 import { api, resetApi } from "@/test/api-mock"
 import { installDomStubs } from "@/test/dom"
 import { builtInModules } from "@/test/fixtures"
@@ -20,7 +21,10 @@ beforeEach(() => {
   resetToasts()
   localStorage.clear()
 })
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllEnvs()
+})
 
 describe("Modules settings with the built-in modules", () => {
   it("disables a module and reports the new state", async () => {
@@ -86,5 +90,24 @@ describe("Modules settings with the built-in modules", () => {
     )
     await user.type(screen.getByRole("searchbox", { name: "Search modules" }), "http")
     expect(screen.getByText("No modules found")).toBeInTheDocument()
+  })
+})
+
+describe("Modules settings in a build with plugins", () => {
+  it("leaves the modules whose UI moved to a plugin to Settings › Plugins", () => {
+    vi.stubEnv("VITE_DECKPILOT_PLUGINS", "1")
+    const modules = builtInModules()
+    renderWithApp(<ModulesSettings />, { modules })
+    for (const name of ["Git", "Docker", "Workspace", "GitHub", "GitLab", "Jira", "Projects"]) {
+      expect(screen.queryByRole("switch", { name: `Disable ${name}` })).not.toBeInTheDocument()
+    }
+    expect(screen.getByRole("switch", { name: "Disable HTTP" })).toBeInTheDocument()
+    // Nor their settings pages.
+    const ids = settingsPages(modules).map((page) => page.id)
+    for (const id of ["git", "docker", "workspace", "github", "gitlab", "jira", "projects"]) {
+      expect(ids).not.toContain(`module:${id}`)
+    }
+    // Resources are the core's, in every build.
+    expect(ids).toContain("resources")
   })
 })

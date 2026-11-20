@@ -440,6 +440,172 @@ fn workflows_are_validated_and_keep_their_step_order() {
     assert_eq!(steps[1]["condition"]["type"], "previousSucceeded");
 }
 
+/// A `listPlugins` entry for a first-party plugin without actions.
+fn first_party(id: &str, state: &str) -> deckpilot_ipc::plugins::PluginSummary {
+    serde_json::from_value(json!({
+        "id": id, "name": id, "publisher": "DeckPilot", "version": "0.1.0",
+        "state": state, "origin": { "type": "bundled" }, "actions": [],
+    }))
+    .unwrap()
+}
+
+/// The code and the feature of a refusal while a plugin's feature is off.
+fn feature_off(h: &Harness, cmd: &str, args: Value) -> (String, String) {
+    let error = h.call_raw(cmd, args).expect_err(cmd);
+    (
+        error["code"].as_str().unwrap_or_default().to_owned(),
+        error["params"]["feature"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+    )
+}
+
+/// Workflow management and the Projects commands follow their plugins
+/// (decisions D1/D6 of 2026-11-20): on before any plugin answer (a build
+/// without plugins), refused with `invalid.pluginFeatureOff` once plugins
+/// are listed without them, on again with the plugin enabled. Multi
+/// Actions (step workflows) and the core resource bindings keep working.
+#[allow(clippy::too_many_lines)] // One life of both features.
+#[test]
+fn workflow_and_project_commands_require_their_plugins() {
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    let first = log_action(&h, &profile_id, "First", "1");
+    let graph_id = "00000000-0000-4000-8000-0000000000a1";
+    let graph = json!({ "id": graph_id, "name": "Graph", "steps": [], "graph": {
+        "version": 1,
+        "nodes": [
+            { "id": "start", "type": "trigger" },
+            { "id": "log", "type": "action", "action": first["id"] }
+        ],
+        "edges": [{ "from": "start", "to": "log" }]
+    }});
+    let steps = json!({ "id": "00000000-0000-4000-8000-0000000000a2", "name": "Multi Action",
+        "steps": [{ "action": first["id"] }] });
+    let save = |workflow: &Value| {
+        h.call_raw(
+            "save_workflow",
+            json!({ "profileId": profile_id, "workflow": workflow }),
+        )
+    };
+    let project = |key: &str| {
+        h.call_raw(
+            "create_project",
+            json!({ "profileId": profile_id, "project": { "key": key, "name": key } }),
+        )
+    };
+
+    // No plugin answer yet: as before the extraction.
+    h.ok(
+        "convert_workflow",
+        json!({ "profileId": profile_id, "workflow": steps }),
+    );
+    project("SHOP").unwrap();
+    save(&graph).unwrap();
+
+    // Plugins listed, neither of the two among them: both features off.
+    let state = h.window.state::<AppState>();
+    state.plugin_actions().replace(&[]);
+    let off = |name: &str| ("invalid.pluginFeatureOff".to_owned(), name.to_owned());
+    assert_eq!(
+        feature_off(
+            &h,
+            "validate_workflow_graph",
+            json!({ "profileId": profile_id, "workflow": graph })
+        ),
+        off("Workflows")
+    );
+    assert_eq!(
+        feature_off(
+            &h,
+            "convert_workflow",
+            json!({ "profileId": profile_id, "workflow": steps })
+        ),
+        off("Workflows")
+    );
+    let refused = save(&graph).unwrap_err();
+    assert_eq!(refused["code"], "invalid.pluginFeatureOff", "{refused}");
+    assert!(
+        refused["message"]
+            .as_str()
+            .unwrap()
+            .contains("the Workflows plugin is off"),
+        "{refused}"
+    );
+    // A Multi Action is the key editor's: saved, duplicated and deleted.
+    save(&steps).unwrap();
+    let copy = h.ok(
+        "duplicate_workflow",
+        json!({ "profileId": profile_id, "workflowId": steps["id"], "name": "Copy" }),
+    );
+    h.ok(
+        "delete_workflow",
+        json!({ "profileId": profile_id, "workflowId": copy["id"] }),
+    );
+    assert_eq!(
+        feature_off(
+            &h,
+            "delete_workflow",
+            json!({ "profileId": profile_id, "workflowId": graph_id })
+        ),
+        off("Workflows")
+    );
+    // Nor can a graph be replaced by steps behind the plugin's back.
+    let flattened = json!({ "id": graph_id, "name": "Graph", "steps": [] });
+    let refused = save(&flattened).unwrap_err();
+    assert_eq!(refused["code"], "invalid.pluginFeatureOff", "{refused}");
+    // The built-in module still serves Projects while not migrated.
+    project("CMS").unwrap();
+    state
+        .plugin_actions()
+        .record_migrations(&[serde_json::from_value(json!({
+            "module": "projects", "moduleName": "Projects", "plugin": "deckpilot.projects",
+            "phase": "cutOver", "attempts": 0, "maxAttempts": 3, "canRetry": false,
+            "route": "pluginWithdrawn", "aliases": [], "updatedAt": 0
+        }))
+        .unwrap()]);
+    let refused = project("CMR").unwrap_err();
+    assert_eq!(refused["code"], "invalid.pluginFeatureOff", "{refused}");
+    assert_eq!(refused["params"]["feature"], "Projects");
+    assert_eq!(
+        feature_off(
+            &h,
+            "cycle_project",
+            json!({ "profileId": profile_id, "direction": "next" })
+        ),
+        off("Projects")
+    );
+    // Resources are core.
+    h.ok("check_resources", json!({ "profileId": profile_id }));
+    // Nothing was deleted.
+    let view = h.ok("get_profile", json!({ "profileId": profile_id }));
+    assert_eq!(view["profile"]["projects"].as_array().unwrap().len(), 2);
+
+    // Both plugins enabled: on.
+    state.plugin_actions().replace(&[
+        first_party("deckpilot.workflows", "enabled"),
+        first_party("deckpilot.projects", "enabled"),
+    ]);
+    h.ok(
+        "convert_workflow",
+        json!({ "profileId": profile_id, "workflow": steps }),
+    );
+    project("CMR").unwrap();
+    // Disabled: off again.
+    state
+        .plugin_actions()
+        .upsert(&first_party("deckpilot.workflows", "disabled"));
+    assert_eq!(
+        feature_off(
+            &h,
+            "convert_workflow",
+            json!({ "profileId": profile_id, "workflow": steps })
+        ),
+        off("Workflows")
+    );
+}
+
 #[test]
 fn duplicated_profiles_are_isolated() {
     let h = Harness::new();
@@ -1229,13 +1395,12 @@ fn modules_and_project_copies_work_with_the_running_agent() {
         )
         .is_err()
     );
-    assert!(
-        h.call("check_resources", json!({ "profileId": work }))
-            .is_err()
-    );
+    // The resource bindings are core (Settings › Resources): still checked.
+    h.ok("check_resources", json!({ "profileId": work }));
     let view = h.ok("get_profile", json!({ "profileId": work }));
     assert_eq!(view["profile"]["actions"].as_array().unwrap().len(), 3);
-    wait_for(&h, |s| s["status"]["activeProject"]["key"] == "CMR");
+    // No project is shown while Projects are off; the selection is kept.
+    wait_for(&h, |s| s["status"]["activeProject"].is_null());
 
     // Enabled again with wrap-around off: the agent's switching follows the
     // module setting, just like the actions.
@@ -3890,7 +4055,11 @@ fn plugin_actions_are_validated_against_what_the_agent_reported() {
 
     // Enabled: offered, validated (required parameters included) and saved.
     let state = h.window.state::<AppState>();
-    state.plugin_actions().replace(&[hello_weather(true)]);
+    // With the Workflows plugin, whose screens the graph edits below need.
+    state.plugin_actions().replace(&[
+        hello_weather(true),
+        first_party("deckpilot.workflows", "enabled"),
+    ]);
     let after = types(&h);
     assert_eq!(after.len(), before.len() + 1);
     assert!(after.contains(&"acme.hello-weather.greet".to_owned()));
@@ -4110,10 +4279,10 @@ fn constrained_plugin() -> deckpilot_ipc::plugins::PluginSummary {
 fn invalid_plugin_actions_are_refused_when_saved_like_built_in_ones() {
     let h = Harness::new();
     let profile_id = new_profile(&h, "Work");
-    h.window
-        .state::<AppState>()
-        .plugin_actions()
-        .replace(&[constrained_plugin()]);
+    h.window.state::<AppState>().plugin_actions().replace(&[
+        constrained_plugin(),
+        first_party("deckpilot.workflows", "enabled"),
+    ]);
     let create = |action_type: &str, parameters: Value| {
         h.call(
             "create_action",

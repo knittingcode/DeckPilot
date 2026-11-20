@@ -14,6 +14,7 @@ import { ReferenceValueField } from "@/components/variable-picker/reference-valu
 import { VariablePicker } from "@/components/variable-picker/variable-picker"
 import { useTranslation } from "@/i18n"
 import { initialValue } from "@/lib/parameters"
+import { PROJECTS_PLUGIN, useIsPluginActive } from "@/lib/plugin-features"
 import { PROFILE_PARAMETER, ProfileField, SWITCH_PROFILE_TYPE } from "@/modules/deck/profile-field"
 import { CANDIDATES_PARAMETER, RANDOM_TYPE } from "@/modules/deck/candidates"
 import { CandidatesField } from "@/modules/deck/candidates-field"
@@ -338,7 +339,27 @@ function ProjectControl({
   onChange: (project: string) => void
 }) {
   const { t } = useTranslation()
+  // Projects are the Projects plugin's: without it the value is kept and
+  // shown, but cannot be changed (the action does not run either).
+  const active = useIsPluginActive(PROJECTS_PLUGIN)
   const known = projects.some((p) => p.id === value)
+  if (!active) {
+    const current = projects.find((p) => p.id === value)
+    return (
+      <div className="grid gap-1">
+        <p id={id} className="text-sm">
+          {current
+            ? `${current.key} · ${current.name}`
+            : value === ""
+              ? t("actions:parameters.project.current")
+              : t("actions:parameters.project.notInProfile")}
+        </p>
+        <p className="text-xs text-muted-foreground" role="note">
+          {t("actions:parameters.project.pluginOff")}
+        </p>
+      </div>
+    )
+  }
   if (projects.length === 0 && !optional) {
     return (
       <p id={id} className="text-sm text-muted-foreground">

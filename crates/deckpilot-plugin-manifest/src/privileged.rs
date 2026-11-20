@@ -37,6 +37,14 @@ impl crate::Action {
     pub fn requires_permissions(&self) -> &[String] {
         self.requires_permissions.as_deref().unwrap_or_default()
     }
+
+    /// `node.changesContext`: the action selects the run's project.
+    pub fn changes_context(&self) -> bool {
+        self.node
+            .as_ref()
+            .and_then(|node| node.changes_context)
+            .unwrap_or(false)
+    }
 }
 
 impl Manifest {
@@ -282,6 +290,12 @@ fn usages(m: &Manifest) -> Vec<(String, String)> {
         }
     }
     for (a, action) in m.contributes.actions().iter().enumerate() {
+        if action.changes_context() {
+            found.push((
+                format!("contributes.actions[{a}].node.changesContext"),
+                "`node.changesContext`".to_owned(),
+            ));
+        }
         for (p, parameter) in action.parameters.iter().enumerate() {
             if matches!(parameter.kind, ParameterKind::Resource { .. }) {
                 found.push((
@@ -345,6 +359,7 @@ pub(super) fn check(c: &mut Checker, m: &Manifest) {
     }
     host_views(c, m);
     host_variables(c, m);
+    changes_context(c, m);
     requires_permissions(c, m);
     // Common rule 6: no exfiltration channel next to process authority.
     if m.permission(PermissionKind::Tools).is_some() {
@@ -364,6 +379,29 @@ pub(super) fn check(c: &mut Checker, m: &Manifest) {
                     ),
                 );
             }
+        }
+    }
+}
+
+/// `node.changesContext` (X6): only with a `projectContext` permission
+/// that may `select`, whose switch the action's run then applies to the
+/// run's project instead of the active one.
+fn changes_context(c: &mut Checker, m: &Manifest) {
+    let select = m
+        .permissions
+        .iter()
+        .any(|p| matches!(p, Permission::ProjectContext { select, .. } if *select == Some(true)));
+    if select {
+        return;
+    }
+    for (index, action) in m.contributes.actions().iter().enumerate() {
+        if action.changes_context() {
+            c.error(
+                format!("contributes.actions[{index}].node.changesContext"),
+                IssueCode::MissingPermission,
+                "an action that changes the run's project needs the `projectContext` \
+                 permission with `select`",
+            );
         }
     }
 }

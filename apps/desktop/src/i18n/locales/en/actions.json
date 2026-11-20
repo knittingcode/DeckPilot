@@ -192,7 +192,8 @@
       "none": "This profile has no projects yet. Add one on the Projects page.",
       "choose": "Choose a project",
       "current": "Current project (default)",
-      "notInProfile": "The saved project is not part of this profile. Choose one of its projects."
+      "notInProfile": "The saved project is not part of this profile. Choose one of its projects.",
+      "pluginOff": "The Projects plugin is off: the project stays saved but can only be changed while the plugin is on (Settings › Plugins)."
     },
     "resource": {
       "source": "Resource source",

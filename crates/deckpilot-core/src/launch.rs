@@ -208,6 +208,12 @@ fn direct(application: &str, args: Vec<String>) -> LaunchPlan {
 /// Highest line or column an editor is opened at.
 pub const MAX_POSITION: i64 = 10_000_000;
 
+/// Highest line or column a plugin's `resource.open` takes (the security
+/// review of `docs/marketplace/module-migration.md` §7 X4: 1 to
+/// 1,000,000), below the built-in's [`MAX_POSITION`]. The `workspace`
+/// aliases cap `line` and `column` there (`alias::ParamRule::AtMost`).
+pub const PLUGIN_MAX_POSITION: i64 = 1_000_000;
+
 /// Error codes of the editor plans, as [`crate::ActionResult::code`].
 pub mod codes {
     /// A line or column that is out of range, or a column without a line.

@@ -409,6 +409,9 @@ jira). The rules:
   parameter kind) exists. The built-in keeps running, and the migration
   note names the action.
 
+The extraction of 2026-11-20 added `Keep`, `Rename`, `Unsupported` and
+`AtMost` ([X10](#x10-alias-parameter-rules-keep-and-set)).
+
 The translation runs on the parameters *after* overrides and mappings are
 applied, so it covers instances, bindings and workflow nodes alike. While
 the plugin serves the legacy type, a value it cannot be given is also
@@ -647,6 +650,7 @@ gate, not a code switch.
 | --- | --- | --- |
 | `deckpilot.db` (schema 9) | nothing: no schema change, no rewritten document, no deleted row | opens it as before. Legacy ids find its built-ins; `modules` and `credentials` rows are as they were at migration time |
 | `plugins.db` | schema 2 → 3 (`module_migrations`, `plugin_tombstones`, `source = 'bundled'`) | refuses schema 3 with `UnsupportedSchema` (`crates/deckpilot-plugin-store/src/db.rs:163`). The agent reports the plugin store as unavailable and runs without plugins (`apps/agent/src/plugins/service.rs:294-302`). Release builds include the `plugins` feature from the first release after v0.6.0 |
+| `plugins.db` (the extraction) | schema 5 → 6 (`host_settings`, [X13](#x13-migration-consent-and-the-upgrade-path)) | a 0.9.x agent refuses schema 6 the same way and runs without plugins; its built-ins serve the legacy ids |
 
 Turning plugins off on the same data (`--disable-plugins` or
 `DECKPILOT_ENABLE_PLUGINS=0`, see [§5.10](#510-plugins-on-by-default))
@@ -1848,6 +1852,45 @@ within 500 ms: the second is `Throttled`. An id of another profile gives
 emitted. A third-party manifest declaring `projectContext` is refused at
 validation.
 
+*As implemented, follow-up of 2026-11-20: the run's project.* A built-in
+project action changes the **run's** project (its result's
+`ContextEffect`, applied by the engine for the nodes after it; the
+workflow's project scope decides at its end whether the active project
+follows). The plugin now does the same, under the same rules:
+
+- A manifest action declares it with `node.changesContext: true` (plugin
+  API 1.9; only with `projectContext.select`, first-party only, checked by
+  the validator). The agent registers such an action with `changesContext`
+  on (`plugins/engine.rs` `action_type`), so a legacy workflow without a
+  saved project scope still changes the active project, and a
+  `projectChanged` lifecycle trigger on an application-scoped workflow is
+  refused at save as for the built-in. `deckpilot.projects` declares it
+  for `cycle`, `select`, `next` and `previous`.
+- In a **workflow run** a `project.select` or `project.cycle` switches
+  nothing: the agent plans it from the run's project
+  (`ProjectCall::InRun`, `service/plugin_projects.rs`), the invocation
+  keeps the target (`executor/project.rs` `ProjectSwitch`), and the
+  action's successful result carries it as `ContextEffect::SelectProject`,
+  which the engine applies to the run (the action registry refuses it from
+  a module without `Capability::ProjectContext`, which only a plugin
+  holding `projectContext` has). `project.current` and `profile.read`
+  answer the run's project there. An action without `changesContext` is
+  refused a switch in a workflow run (`not-permitted`).
+- From a key, a gesture or the app the switch changes the active project
+  at once, as before (those runs are detached and carry no effect).
+- Unchanged: only user-started runs (a workflow of cause `user`) may
+  switch; never one a lifecycle event (the loop guard), a schedule, the
+  start or a work session started; 2 switches per second; the audit adds
+  `scope=run` for a run's switch.
+
+*Tests.* `executor/project/tests.rs`
+`a_switch_in_a_workflow_run_selects_the_runs_project`;
+`apps/agent/tests/plugins_projects.rs`
+`a_select_in_a_workflow_changes_the_runs_project` (the next node reads the
+selected project; kept in the run, or followed by the active project for a
+legacy workflow) and `a_workflow_started_by_a_project_change_cannot_switch`;
+manifest `changes_context_needs_project_context_select`.
+
 #### X7 Host-published context variables
 
 *Purpose.* `projects.current.{id,key,name}` become
@@ -1937,6 +1980,30 @@ the guest as a path. `Set` is not used in 1.9: the deprecated
 routed legacy `git.status` with a fixed repository reaches the guest as a
 handle and never as a path.
 
+*As implemented (WP-C1 and its follow-up).* The extraction's alias blocks
+use four rules (`crates/deckpilot-core/src/alias.rs`), applied to the
+parameters after overrides and mappings:
+
+- `Keep(key)`: a `resource` parameter on both sides, passed unchanged to
+  the host's resolver (X1).
+- `Rename(from, to)`: the built-in's `project_id` is the plugins'
+  `projectId`; the legacy type keeps the legacy key, so stored instances,
+  overrides and mappings stay valid.
+- `Unsupported(key)`: the plugin declares the parameter but cannot honour
+  a value (Docker's `projectName`: the host pins the Compose project).
+  Empty passes; any other value fails the run and is refused when saved,
+  never dropped or guessed. The migration names the stored uses in its
+  note ("… unavailable until cleared") and still cuts over.
+- `AtMost(key, max)`: an integer the plugin takes only up to a bound
+  narrower than the built-in's, by its review: `workspace.open-in-editor`'s
+  `line` and `column` (1 to 1,000,000, X4; the built-in took 10,000,000).
+  A larger value is never clamped: the run fails and a save is refused with
+  the reason, the migration names the stored uses as for `Unsupported`, and
+  lowering the value recovers the key. The contract check compares the
+  bound with the plugin's maximum.
+
+`Set` is not used (above).
+
 #### X11 Workflow engine API: not offered
 
 The Workflows plugin needs no data ABI, because its view is host-rendered
@@ -1999,14 +2066,14 @@ refused. A third-party publisher with each gated kind is refused.
   the first cut-over, and its name is journaled.
 - **Eligibility without the built-in.** v0.10.0 ships with the built-ins
   removed (D2, D5). Users who upgrade straight from v0.9.x have never run
-  these migrations. Today eligibility requires "the built-in module is
-  compiled in and enabled" (`eligibility`,
-  `apps/agent/src/plugins/migration.rs:650`), and `demonstrated` reads the
+  these migrations. Eligibility required "the built-in module is
+  compiled in and enabled" (`eligibility` in
+  `apps/agent/src/plugins/migration.rs`), and `demonstrated` read the
   built-in's manifest. Each removed module therefore needs a static
   **legacy descriptor** kept in the agent as data: its id, its declared
   capabilities, and its settings keys and kinds. Eligibility then uses the
   stored `modules` row and the stored instances. This is a precondition of
-  WP-C5 and WP-C6.
+  WP-C5 and WP-C6, implemented (below: "Legacy descriptors").
 
 *Threats.* Consent fatigue or a pre-approved dialog. A plugin triggering
 consent prompts. Data loss. A confused deputy where a lifecycle event
@@ -2027,6 +2094,70 @@ eligible, awaiting consent (the keys are Unavailable with a reason),
 consent given (cut over), declined (still Unavailable, recoverable),
 `allowStateChanges` off (modify never offered), and the backup recorded
 before the first cut-over.
+
+*As implemented (WP-C1, with the follow-up of 2026-11-20).*
+
+- **Plans.** `PLANS` (`apps/agent/src/plugins/migration.rs`) has one
+  `Extraction` plan each for `git`, `docker`, `workspace` and `projects`:
+  the host-held tool settings, the grants offered only when a setting was
+  on (`tools:docker:modify` with `allowStateChanges`), and, for
+  `projects`, a profile's projects as the module's data in use.
+- **The `AwaitingConsent` route.** While an extraction plan waits for the
+  user (and after a decline, until Retry), its legacy action types are
+  unavailable with the reason ("… waits for your consent: allow it in
+  Settings › Plugins"): `LegacyRoute::AwaitingConsent`, not the built-in.
+  A failed step still falls back to the built-in while it is compiled in.
+- **The pre-extraction backup.** The service task writes the encrypted
+  backup `backups/deckpilot-pre-plugin-extraction-<ms>.db` of
+  `deckpilot.db` when a module of the set is in use, and the first cut-over
+  journals it once in `plugins.db` (`host_settings`
+  `migration.backup.pre-plugin-extraction`, `{"file": …}`); a backup that
+  could not be written fails the cut-over, which then falls back.
+- **Plugin store schema 6.** `host_settings` (additive, after the store's
+  encrypted backup) holds what the host keeps for itself: the built-ins'
+  `gitExecutable`, `networkTimeoutSeconds`, `dockerExecutable`, `context`
+  and `timeoutSeconds` (`tools.git`, `tools.docker`, refreshed at every
+  start while the migration runs or is cut over, read by `tool.run` also
+  once the built-ins are gone), and the backup note. A 0.9.x agent refuses
+  schema 6 with `UnsupportedSchema` before writing, reports the plugin
+  store unavailable and runs **without plugins**: its built-ins serve the
+  stored legacy ids, since `deckpilot.db` is never changed
+  ([compatibility.md](../compatibility.md)).
+- **No known gaps.** The contract check
+  (`crates/deckpilot-modules/tests/contracts.rs`, and the agent's health
+  check before a cut-over) passes for all four plugins with no exemption.
+  The follow-up closed the gaps the cut-over had recorded: Workspace's
+  `path` output is a path again (the opened location's, with
+  `resources.paths`, medium tier, derived because the built-in reported
+  it) and `line` and `column` are capped by `AtMost` (X10); Docker's
+  `composeRole` takes 1,024 characters as the built-in's, and a
+  `resource.resolve` role is any role name the user gave (not blank, no
+  control character, at most 1,024 bytes; it only names an entry of the
+  project's role map); Projects changes the run's project from a workflow
+  (X6) and its `cycle`, `next` and `previous` declare the dial controls
+  the built-ins had, which the contract now compares.
+- **Legacy descriptors.** `apps/agent/src/plugins/migration/descriptors.rs`
+  holds a static descriptor of every moved built-in (`github`, `gitlab`,
+  `jira`, `git`, `docker`, `workspace`, `projects`): id, name, default
+  state, capabilities, settings (key, kind, default, `required`) and action
+  ids with their parameter keys. The plans and the host's tool settings
+  name keys from them, not from the module crates. `LegacySnapshot::read`
+  uses a descriptor only when the built-in is not registered: the stored
+  row is read as the module registry read it (declared keys, checked
+  against their kinds, defaults for the rest), the enabled state is the
+  row's or the default, `demonstrated` reads the descriptor's
+  capabilities, and the health check, without the built-in's full
+  `ActionType`, requires the plugin to declare every alias target with
+  every built-in parameter under the alias's key (the full contract was
+  checked while the crate existed, and the bundled copy is pinned).
+  `descriptors.rs`'s tests hold every descriptor equal to its built-in
+  while both exist; `without_the_builtin_crates_the_descriptors_migrate`
+  migrates a 0.9.x configuration with none of the crates registered.
+  WP-C5 and WP-C6 can therefore remove the crates.
+- **End to end.** `apps/agent/tests/plugins_cutover_git.rs`,
+  `plugins_cutover_projects.rs` and `plugins_cutover_workspace.rs`: a used
+  module waits for consent with its stored keys unavailable, then the same
+  keys run through the plugin.
 
 ## 8. Installer size
 

@@ -428,8 +428,8 @@ impl Agent {
             // Someone else changed the active project meanwhile: their
             // change stands.
             not_applied(after, "the active project changed during the run")
-        } else if self.require_projects().is_err() {
-            not_applied(after, "the Projects module is disabled")
+        } else if !self.project_context_active() {
+            not_applied(after, "the Projects plugin is off")
         } else if self.runtime.select_project(project).is_err() {
             not_applied(after, "the project no longer exists")
         } else {

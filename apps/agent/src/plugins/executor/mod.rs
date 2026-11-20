@@ -109,7 +109,7 @@ use tracing::{debug, info, warn};
 use super::variables::{PublishedVariables, typed};
 
 mod open;
-mod project;
+pub(super) mod project;
 pub(super) mod resources;
 mod tools;
 

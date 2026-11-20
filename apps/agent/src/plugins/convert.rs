@@ -218,6 +218,7 @@ pub fn summary(record: &PluginRecord, stored: &[StoredGrant]) -> ipc::PluginSumm
     let active = record.active();
     let manifest = active.map(|v| &v.manifest);
     let reason = unavailable_with(record, stored);
+    let enabled = record.state == PluginState::Enabled;
     let actions = manifest
         .map(|m| {
             let unmet = unmet_permissions(m, stored);
@@ -243,10 +244,49 @@ pub fn summary(record: &PluginRecord, stored: &[StoredGrant]) -> ipc::PluginSumm
         actions,
         action_count: None,
         health: None,
-        navigation: manifest.map(navigation).unwrap_or_default(),
+        navigation: manifest
+            .map(|m| listed_navigation(m, enabled))
+            .unwrap_or_default(),
         installed_for: None,
         visual_assets: manifest.map(visual_assets).unwrap_or_default(),
+        status_items: manifest
+            .filter(|_| enabled)
+            .map(|m| names(m.contributes.status_items()))
+            .unwrap_or_default(),
+        dashboard_cards: manifest
+            .filter(|_| enabled)
+            .map(|m| names(m.contributes.dashboard_cards()))
+            .unwrap_or_default(),
     }
+}
+
+/// The navigation entries a summary lists: every entry while the plugin
+/// is enabled; otherwise those opening the app's own screens (`hostViews`,
+/// plugin API 1.9: `workflows`, `projects`) are left out, so the app never
+/// sees a host view of a plugin that is not enabled.
+fn listed_navigation(manifest: &Manifest, enabled: bool) -> Vec<ipc::PluginNavigationEntry> {
+    let host_view = |id: &str| {
+        manifest
+            .contributes
+            .views()
+            .iter()
+            .any(|view| view.id == id && view.kind.is_host_view())
+    };
+    navigation(manifest)
+        .into_iter()
+        .filter(|entry| enabled || !host_view(&entry.view.id))
+        .collect()
+}
+
+/// The manifest names of closed-list contributions (`activeProject`).
+fn names<T: serde::Serialize>(items: &[T]) -> Vec<String> {
+    items
+        .iter()
+        .filter_map(|item| match serde_json::to_value(item) {
+            Ok(serde_json::Value::String(name)) => Some(name),
+            _ => None,
+        })
+        .collect()
 }
 
 pub fn changes(diff: &PermissionDiff, manifest: &Manifest) -> ipc::PermissionChanges {

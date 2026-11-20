@@ -15,15 +15,27 @@
 //! scopes; without an active project its `project` is absent, not an
 //! error.
 //!
+//! **In a workflow run** a switch changes the run's project, as the
+//! built-in project actions' `ContextEffect` does, not the active one:
+//! the agent only says where the run goes ([`ProjectCall::InRun`]), the
+//! target waits in the invocation's [`ProjectSwitch`], and the action's
+//! result carries it to the engine, which applies it for the nodes after
+//! it (the workflow's project scope then decides whether the active
+//! project follows). Only an action whose node declares `changesContext`
+//! may; `current` and `profile.read` answer the run's project there.
+//! From a key, a gesture or the app a switch changes the active project
+//! at once (those runs are detached and carry no effect).
+//!
 //! Every call is audited ([`super::PrivilegedRecord`]): the operation, the
 //! grant, the run's origin, the outcome and, for a switch, the from and to
 //! project ids. Refusals carry their reason code at the start of the
 //! message (`projects-off: …`).
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use deckpilot_core::CycleDirection as CoreDirection;
+use deckpilot_plugin_abi::capability::RunTrigger;
 use deckpilot_plugin_abi::privileged::{CycleDirection, ProfileInfo, ProjectInfo, ProjectList};
 use deckpilot_plugin_abi::{CallErrorCode, CallResult};
 use deckpilot_plugin_broker::{Allowed, DenyReason, PluginId, ProfileScope};
@@ -34,6 +46,58 @@ use super::{Executor, PrivilegedRecord};
 use crate::service::plugin_projects::{
     ProjectAnswer, ProjectCall, ProjectEntry, ProjectHost, ProjectRefusal,
 };
+
+/// The project a plugin action selected in a workflow run, shared by the
+/// action's handler (which made it) and its executor (which fills it).
+/// Empty until a `project.select` or `project.cycle` of the invocation.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ProjectSwitch(Arc<Mutex<SwitchState>>);
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct SwitchState {
+    /// The action's node declares `changesContext`.
+    allowed: bool,
+    /// The selected project's id.
+    target: Option<String>,
+}
+
+impl ProjectSwitch {
+    /// The switch of an invocation of an action that changes the run's
+    /// project (`allowed`) or not.
+    pub fn for_action(allowed: bool) -> Self {
+        Self(Arc::new(Mutex::new(SwitchState {
+            allowed,
+            target: None,
+        })))
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, SwitchState> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn allowed(&self) -> bool {
+        self.state().allowed
+    }
+
+    /// The project the invocation selected, if it did.
+    pub fn target(&self) -> Option<String> {
+        self.state().target.clone()
+    }
+
+    fn select(&self, id: String) {
+        self.state().target = Some(id);
+    }
+}
+
+impl PartialEq for ProjectSwitch {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0) || *self.state() == *other.state()
+    }
+}
+
+impl Eq for ProjectSwitch {}
 
 impl Executor {
     /// The executor of an invocation that reaches the agent's project
@@ -80,6 +144,7 @@ impl Executor {
             details: Vec::new(),
         };
         let switch = matches!(call, ProjectCall::Select { .. } | ProjectCall::Cycle { .. });
+        let in_run = self.in_run();
         let answer = if switch && !self.run.is_user_initiated() {
             // The broker refuses it already; checked again so that nothing
             // but a run the user started switches the project (no loop on
@@ -90,7 +155,14 @@ impl Executor {
                 "not-permitted",
                 DenyReason::PrivilegedNotUserInitiated.to_string(),
             ))
+        } else if switch && in_run.as_ref().is_some_and(|(s, _)| !s.allowed()) {
+            Err(ProjectRefusal::new(
+                "not-permitted",
+                "this action does not change the run's project (its node does not declare \
+                 `changesContext`)",
+            ))
         } else {
+            let call = scoped(in_run.as_ref(), call);
             match &self.projects {
                 Some(host) => host.call(plugin.as_str(), call),
                 None => Err(ProjectRefusal::new(
@@ -106,6 +178,11 @@ impl Executor {
                         .details
                         .push(("from", from.clone().unwrap_or_default()));
                     record.details.push(("to", to.id.clone()));
+                    if let Some((switched, _)) = &in_run {
+                        // Applied to the run when the action succeeds.
+                        switched.select(to.id.clone());
+                        record.details.push(("scope", "run".to_owned()));
+                    }
                 }
                 let scopes = match allowed {
                     Allowed::ProfileRead { scopes } => Some(scopes),
@@ -127,6 +204,40 @@ impl Executor {
         record.elapsed = started.elapsed();
         self.audit_privileged(&record);
         result
+    }
+}
+
+impl Executor {
+    /// In a workflow run: the invocation's switch and the run's project,
+    /// which a switch changes (and `current` and `profile.read` answer):
+    /// the one this invocation selected, else the run's own.
+    fn in_run(&self) -> Option<(ProjectSwitch, Option<String>)> {
+        (self.run.trigger == RunTrigger::Workflow).then(|| {
+            let table = self.handles();
+            let switched = table.switch().clone();
+            let project = switched
+                .target()
+                .or_else(|| table.run_project().map(str::to_owned));
+            (switched, project)
+        })
+    }
+}
+
+/// `call` as the agent is asked it: for the run's project in a workflow
+/// run (`in_run`), except `project.list`, which is the profile's.
+fn scoped(in_run: Option<&(ProjectSwitch, Option<String>)>, call: ProjectCall) -> ProjectCall {
+    match (in_run, call) {
+        (
+            Some((_, project)),
+            call @ (ProjectCall::Current
+            | ProjectCall::Profile
+            | ProjectCall::Select { .. }
+            | ProjectCall::Cycle { .. }),
+        ) => ProjectCall::InRun {
+            project: project.clone(),
+            call: Box::new(call),
+        },
+        (_, call) => call,
     }
 }
 

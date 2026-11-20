@@ -14,6 +14,12 @@ export interface TargetOption {
    * or not installed). Controls that already use it keep it.
    */
   unavailable?: string
+  /**
+   * With `unavailable`: the target still runs from the controls that use
+   * it and is only read-only here (a workflow while the Workflows plugin
+   * is off: the engine is the core's, managing workflows the plugin's).
+   */
+  readOnly?: boolean
   /** For an action: its type, so compatibility can be checked. */
   actionType?: string
   /**
@@ -65,6 +71,13 @@ export function targetGroups(
   pageId: string,
   /** Why an action of this type cannot be placed now; `null` when it can. */
   unavailable: (actionType: string) => string | null = () => null,
+  /**
+   * Whether workflows can be chosen (the Workflows plugin is active). When
+   * not, graph workflows stay listed, read-only: controls that use them
+   * keep them and still run them. Step workflows (Multi Actions) are the
+   * key editor's own and stay available.
+   */
+  workflows = true,
 ): TargetGroup[] {
   const option = (target: BindingTarget, label: string, kind: TargetOption["kind"]) => ({
     value: encodeTarget(target),
@@ -89,9 +102,12 @@ export function targetGroups(
     {
       id: "workflows",
       label: i18n.t("editor:targets.workflows"),
-      options: profile.workflows.map((w) =>
-        option({ type: "workflow", workflow: w.id }, w.name, "workflow"),
-      ),
+      options: profile.workflows.map((w) => ({
+        ...option({ type: "workflow", workflow: w.id }, w.name, "workflow"),
+        ...(!workflows && w.graph
+          ? { unavailable: i18n.t("editor:targets.workflowsOff"), readOnly: true }
+          : {}),
+      })),
     },
     {
       id: "navigation",
@@ -133,9 +149,18 @@ export function markIncompatible(
 
 /** Why the option of `value` cannot be placed now, if it cannot. */
 export function unavailableTarget(groups: TargetGroup[], value: string): string | undefined {
+  return findTarget(groups, value)?.unavailable
+}
+
+/** Whether the option of `value` is only read-only here (it still runs). */
+export function readOnlyTarget(groups: TargetGroup[], value: string): boolean {
+  return findTarget(groups, value)?.readOnly === true
+}
+
+function findTarget(groups: TargetGroup[], value: string): TargetOption | undefined {
   for (const group of groups) {
     const found = group.options.find((o) => o.value === value)
-    if (found) return found.unavailable
+    if (found) return found
   }
   return undefined
 }

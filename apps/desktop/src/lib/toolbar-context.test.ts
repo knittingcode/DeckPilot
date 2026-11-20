@@ -50,7 +50,6 @@ describe("toolbar context", () => {
   })
 
   it("lets module pages say theirs, none when they do not", () => {
-    expect(modulePageContext("projects/projects")).toBe("profile")
     expect(modulePageContext("work-session/work-session")).toBe("profile")
     expect(modulePageContext("unknown/page")).toBe("none")
     expect(modulePageContext("nonsense")).toBe("none")

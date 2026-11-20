@@ -128,6 +128,9 @@ pub struct AliasHandler {
     renames: Vec<(String, String)>,
     /// Parameters the plugin cannot honour any value of.
     unsupported: Vec<String>,
+    /// Integer parameters the plugin takes only up to a bound
+    /// ([`ParamRule::AtMost`]).
+    capped: Vec<(String, i64)>,
 }
 
 impl fmt::Debug for AliasHandler {
@@ -155,6 +158,7 @@ impl AliasHandler {
         let mut drops = Vec::new();
         let mut renames = Vec::new();
         let mut unsupported = Vec::new();
+        let mut capped = Vec::new();
         for rule in alias.params {
             match *rule {
                 ParamRule::DropIfDefault(key) => {
@@ -197,6 +201,7 @@ impl AliasHandler {
                     renames.push((from.to_owned(), to.to_owned()));
                 }
                 ParamRule::Unsupported(key) => unsupported.push(key.to_owned()),
+                ParamRule::AtMost(key, most) => capped.push((key.to_owned(), most)),
                 ParamRule::Keep(_) => {}
             }
         }
@@ -206,6 +211,7 @@ impl AliasHandler {
             drops,
             renames,
             unsupported,
+            capped,
         }
     }
 
@@ -246,6 +252,19 @@ impl AliasHandler {
                     reason: format!(
                         "is not supported by the plugin providing `{}`, and no other value is \
                          guessed for it; clear it to run the action",
+                        self.definition.id
+                    ),
+                });
+            }
+            if let (Some((_, most)), ParameterValue::Integer(n)) =
+                (self.capped.iter().find(|(k, _)| k == key), value)
+                && n > most
+            {
+                return Err(ParameterError::Invalid {
+                    key: key.clone(),
+                    reason: format!(
+                        "is {n}, above {most}, the most the plugin providing `{}` accepts; it \
+                         is not lowered for you: set it to {most} or less to run the action",
                         self.definition.id
                     ),
                 });

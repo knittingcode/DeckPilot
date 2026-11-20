@@ -33,15 +33,19 @@ pub(crate) struct LegacyModule {
     pub aliases: Vec<ActionAlias>,
     /// What the alias table does not say (credentials, origin…).
     pub plan: Option<&'static MigrationPlan>,
-    /// The built-in's manifest; `None` when it is not compiled in.
+    /// The built-in's manifest, or what its descriptor says of it when it
+    /// is not compiled in (`descriptors.rs`, X13); `None`: neither.
     pub manifest: Option<ModuleManifest>,
+    /// The built-in is not compiled in: its descriptor stands in for it.
+    pub descriptor: Option<&'static super::descriptors::LegacyDescriptor>,
     pub enabled: bool,
     /// The `modules` row as stored (`None`: never saved).
     pub row: Option<ModuleSettings>,
     /// The settings the built-in runs with (the row's values, defaults
     /// for the rest).
     pub config: ActionParameters,
-    /// The built-in definitions of the uses legacy types.
+    /// The built-in definitions of the uses legacy types (none without
+    /// the crate: then only the descriptor's parameter keys are known).
     pub builtin_types: Vec<ActionType>,
     /// Stored action instances of the uses legacy types.
     pub instances: usize,
@@ -49,7 +53,8 @@ pub(crate) struct LegacyModule {
     /// translate, by action name and parameter (never the value).
     pub untranslatable: Vec<String>,
     /// Instances, bindings or nodes that set a parameter the plugin cannot
-    /// honour ([`ParamRule::Unsupported`]), by action name and parameter:
+    /// honour ([`ParamRule::Unsupported`], or above a
+    /// [`ParamRule::AtMost`] bound), by action name and parameter:
     /// they do not stop the migration, they are unavailable after it until
     /// the value is cleared, and the journal says which.
     pub unsupported: Vec<String>,
@@ -125,7 +130,26 @@ impl LegacySnapshot {
                 continue;
             };
             let info = infos.iter().find(|i| i.manifest.id == module_id);
-            let config = info.map(|i| i.config_values.clone()).unwrap_or_default();
+            let row = rows.get(&module_id).cloned();
+            // Without the crate (WP-C5, WP-C6) the module's descriptor
+            // stands in for it: its settings, defaults and capabilities.
+            let descriptor = info
+                .is_none()
+                .then(|| super::descriptors::of(&module))
+                .flatten();
+            let manifest = info
+                .map(|i| i.manifest.clone())
+                .or_else(|| descriptor.map(super::descriptors::LegacyDescriptor::manifest));
+            let config = match (info, descriptor) {
+                (Some(info), _) => info.config_values.clone(),
+                (None, Some(descriptor)) => descriptor.config(row.as_ref()),
+                (None, None) => ActionParameters::default(),
+            };
+            let enabled = match (info, descriptor) {
+                (Some(info), _) => info.enabled,
+                (None, Some(descriptor)) => descriptor.enabled(row.as_ref()),
+                (None, None) => false,
+            };
             let builtin_types: Vec<ActionType> = info
                 .map(|i| {
                     i.action_types
@@ -149,7 +173,7 @@ impl LegacySnapshot {
                     plan.credentials
                         .iter()
                         .map(|(setting, slot)| {
-                            let id = credential_id(info.map(|i| &i.manifest), &config, setting);
+                            let id = credential_id(manifest.as_ref(), &config, setting);
                             let secret = id.as_ref().and_then(|id| secrets.secret(id));
                             LegacyCredential {
                                 setting: (*setting).to_owned(),
@@ -162,9 +186,10 @@ impl LegacySnapshot {
                 })
                 .unwrap_or_default();
             modules.push(LegacyModule {
-                row: rows.get(&module_id).cloned(),
-                enabled: info.is_some_and(|i| i.enabled),
-                manifest: info.map(|i| i.manifest.clone()),
+                row,
+                enabled,
+                manifest,
+                descriptor,
                 module: module_id,
                 plugin,
                 aliases,
@@ -244,6 +269,11 @@ fn translatable(value: &ParameterValue, key: &str, config: &ActionParameters) ->
         || config.get(key) == Some(value)
 }
 
+/// Whether `value` is an integer above `most` ([`ParamRule::AtMost`]).
+fn above(value: &ParameterValue, most: i64) -> bool {
+    matches!(value, ParameterValue::Integer(n) if *n > most)
+}
+
 /// What the stored documents do with a module's legacy types.
 struct Usage {
     instances: usize,
@@ -286,6 +316,9 @@ fn usage(profiles: &[Profile], aliases: &[ActionAlias], config: &ActionParameter
                     ParamRule::Unsupported(key) if set(value) => {
                         unsupported.push(format!("`{}` sets `{key}`", instance.name));
                     }
+                    ParamRule::AtMost(key, most) if above(value, most) => {
+                        unsupported.push(format!("`{}` sets `{key}` above {most}", instance.name));
+                    }
                     _ => {}
                 }
             }
@@ -320,6 +353,16 @@ fn usage(profiles: &[Profile], aliases: &[ActionAlias], config: &ActionParameter
                         ),
                         ParamRule::Unsupported(key) => {
                             (&mut unsupported, overrides.get(key).is_some_and(set))
+                        }
+                        // A mapped value is known only at run time, where
+                        // one above the bound fails the node.
+                        ParamRule::AtMost(key, most) => {
+                            if overrides.get(key).is_some_and(|v| above(v, most)) {
+                                unsupported.push(format!(
+                                    "a use of `{name}` overrides `{key}` above {most}"
+                                ));
+                            }
+                            continue;
                         }
                         ParamRule::Keep(_) | ParamRule::Rename(..) => continue,
                     };

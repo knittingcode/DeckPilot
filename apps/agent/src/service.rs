@@ -145,6 +145,10 @@ pub enum TrayCommand {
 /// built-in `projects` module is extracted (plugin API 1.9).
 pub(crate) const PROJECTS_PLUGIN: &str = "deckpilot.projects";
 
+/// The reason ([`IpcError::reason`]) of a project request refused while no
+/// project context provider is active.
+pub(crate) const PROJECTS_OFF: &str = "projectsOff";
+
 #[derive(Debug)]
 pub(crate) enum Command {
     Request {
@@ -1097,7 +1101,10 @@ impl Agent {
             Request::GetActiveProfile => Ok(Response::ActiveProfile {
                 profile: self.active_profile_info(),
             }),
-            Request::GetActiveProject => Ok(self.active_project_response()),
+            Request::GetActiveProject => {
+                self.require_projects()?;
+                Ok(self.active_project_response())
+            }
             Request::ListVariables { context, filter } => self.list_variables(&context, &filter),
             Request::PreviewReferences { context, items } => {
                 self.preview_references(&context, &items)
@@ -1477,10 +1484,11 @@ impl Agent {
     /// Whether something provides the project context now: the Projects
     /// plugin (`deckpilot.projects`) is enabled, or the built-in `projects`
     /// module is enabled and was not migrated to it. Plugins' project
-    /// operations (plugin API 1.9, `service/plugin_projects.rs`) ask it;
-    /// [`Agent::require_projects`] moves to it when the module is extracted.
-    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
-    fn project_context_active(&self) -> bool {
+    /// operations (plugin API 1.9, `service/plugin_projects.rs`),
+    /// [`Agent::require_projects`], the project a workflow leaves behind
+    /// and the tray ask it. Nothing is deleted while it is off: the
+    /// profile's projects and the stored active project stay as they are.
+    pub(crate) fn project_context_active(&self) -> bool {
         let plugin = deckpilot_core::ModuleId::new(PROJECTS_PLUGIN)
             .is_ok_and(|id| self.modules.is_enabled(&id));
         let builtin = deckpilot_modules::projects::module_id();
@@ -1490,17 +1498,19 @@ impl Agent {
                     == deckpilot_core::alias::LegacyRoute::Builtin)
     }
 
-    /// Project switching belongs to the projects module and is refused while
-    /// that module is disabled.
+    /// Project switching belongs to the Projects plugin (or the built-in
+    /// module while it is not migrated) and is refused, with the reason
+    /// [`PROJECTS_OFF`], while no project context provider is active
+    /// ([`Agent::project_context_active`]).
     fn require_projects(&self) -> Result<(), IpcError> {
-        let id = deckpilot_modules::projects::module_id();
-        if self.modules.is_enabled(&id) {
+        if self.project_context_active() {
             Ok(())
         } else {
             Err(IpcError::new(
                 ErrorCode::Failed,
-                "the Projects module is disabled",
-            ))
+                "the Projects plugin is off: turn it on in Settings › Plugins",
+            )
+            .with_reason(PROJECTS_OFF))
         }
     }
 
@@ -2110,7 +2120,13 @@ impl Agent {
             backend: self.options.backend.name().into(),
             profiles: self.profiles(),
             active_profile: self.active_profile_info(),
-            active_project: self.runtime.active_project().cloned(),
+            // Not shown (tray, status) while no project context provider
+            // is active; the stored active project is kept.
+            active_project: self
+                .runtime
+                .active_project()
+                .filter(|_| self.project_context_active())
+                .cloned(),
             devices: self.device_infos(),
             brightness: self.brightness,
             last_input_at: self.last_input_at,

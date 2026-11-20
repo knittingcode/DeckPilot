@@ -781,3 +781,46 @@ fn state_on_a_modifying_action_needs_plugin_api_1_9() {
         "{errors:?}"
     );
 }
+
+/// `node.changesContext` (X6): a first-party bundled plugin of `^1.9`
+/// with `projectContext.select` may declare that an action selects the
+/// run's project; without `select`, below 1.9 or outside the bundle it is
+/// refused, and the schema knows the field.
+#[test]
+fn changes_context_needs_project_context_select() {
+    let switching = |select: Option<bool>, level: &str| {
+        let mut permission =
+            json!({"kind": "projectContext", "justification": "Switches projects."});
+        if let Some(select) = select {
+            permission["select"] = json!(select);
+        }
+        let mut value = with_permission(level, permission);
+        value["contributes"]["actions"][0]["node"]["changesContext"] = json!(true);
+        value
+    };
+    let value = switching(Some(true), "^1.9");
+    assert!(schema_ok(&value));
+    let manifest = parse(&value);
+    assert!(manifest.contributes.actions()[0].changes_context());
+    manifest.validate_bundled().unwrap();
+    let path = "contributes.actions[0].node.changesContext";
+    for select in [None, Some(false)] {
+        let errors = parse(&switching(select, "^1.9"))
+            .validate_bundled()
+            .unwrap_err();
+        assert!(errors.has(path, IssueCode::MissingPermission), "{errors}");
+    }
+    let errors = parse(&switching(Some(true), "^1.8"))
+        .validate_bundled()
+        .unwrap_err();
+    assert!(errors.has(path, IssueCode::Conflict), "{errors}");
+    let errors = parse(&third_party(switching(Some(true), "^1.9")))
+        .validate()
+        .unwrap_err();
+    assert!(errors.has(path, IssueCode::FirstPartyOnly), "{errors}");
+    // `false` is the default and needs nothing.
+    let mut plain = first_party("^1.9");
+    plain["contributes"]["actions"][0]["node"]["changesContext"] = json!(false);
+    assert!(!parse(&plain).contributes.actions()[0].changes_context());
+    parse(&plain).validate_bundled().unwrap();
+}

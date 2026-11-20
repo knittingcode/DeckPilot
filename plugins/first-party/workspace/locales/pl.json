@@ -7,7 +7,7 @@
     "projects": "Akcja Otwórz obszar roboczy projektu otwiera zasoby aktywnego projektu; bez Projektów nie ma aktywnego projektu."
   },
   "permissions": {
-    "resources": "Po naciśnięciu klawisza otwiera foldery i pliki przypisane na tym komputerze w przypisanym edytorze, a strony projektu w przeglądarce.",
+    "resources": "Po naciśnięciu klawisza otwiera foldery i pliki przypisane na tym komputerze w przypisanym edytorze, a strony projektu w przeglądarce; podaje otwartą ścieżkę.",
     "openUrl": "Po naciśnięciu klawisza otwiera w przeglądarce strony internetowe wpisane w akcji Otwórz strony.",
     "profile": "Odczytuje klucz aktywnego projektu, aby podać, który projekt został otwarty."
   },

@@ -130,6 +130,7 @@ use tracing::{info, warn};
 
 use super::bundled::{self, Bundle, Seeded};
 
+pub(crate) mod descriptors;
 #[cfg(feature = "test-hooks")]
 pub(crate) mod fixture;
 pub(crate) mod legacy;
@@ -263,14 +264,14 @@ pub(crate) const PLANS: &[MigrationPlan] = &[
 ///
 /// [`ParamRule::DropIfDefault`]: deckpilot_core::alias::ParamRule::DropIfDefault
 const GITHUB: MigrationPlan = MigrationPlan {
-    module: deckpilot_modules::github::MODULE_ID,
-    credentials: &[(deckpilot_modules::github::CREDENTIAL, "token")],
+    module: descriptors::github::MODULE_ID,
+    credentials: &[(descriptors::github::CREDENTIAL, "token")],
     origin: Some(OriginPlan {
-        setting: deckpilot_modules::github::API_URL,
-        default: Some(deckpilot_modules::github::DEFAULT_API_URL),
+        setting: descriptors::github::API_URL,
+        default: Some(descriptors::github::DEFAULT_API_URL),
         entered: true,
     }),
-    private_network: Some(deckpilot_modules::github::ALLOW_PRIVATE),
+    private_network: Some(descriptors::github::ALLOW_PRIVATE),
     open_url_hosts: &["github.com"],
     extraction: None,
 };
@@ -290,14 +291,14 @@ const GITHUB: MigrationPlan = MigrationPlan {
 /// - `gitlab.com` is the web host the built-in opens pages on (`openUrl`,
 ///   derived when GitLab.com is what the built-in used).
 const GITLAB: MigrationPlan = MigrationPlan {
-    module: deckpilot_modules::gitlab::MODULE_ID,
-    credentials: &[(deckpilot_modules::gitlab::CREDENTIAL, "token")],
+    module: descriptors::gitlab::MODULE_ID,
+    credentials: &[(descriptors::gitlab::CREDENTIAL, "token")],
     origin: Some(OriginPlan {
-        setting: deckpilot_modules::gitlab::API_URL,
-        default: Some(deckpilot_modules::gitlab::DEFAULT_API_URL),
+        setting: descriptors::gitlab::API_URL,
+        default: Some(descriptors::gitlab::DEFAULT_API_URL),
         entered: true,
     }),
-    private_network: Some(deckpilot_modules::gitlab::ALLOW_PRIVATE),
+    private_network: Some(descriptors::gitlab::ALLOW_PRIVATE),
     open_url_hosts: &["gitlab.com"],
     extraction: None,
 };
@@ -315,14 +316,14 @@ const GITLAB: MigrationPlan = MigrationPlan {
 /// - `deployment` and `timeoutSeconds` are declared by the plugin with the
 ///   same keys and copied one to one.
 const JIRA: MigrationPlan = MigrationPlan {
-    module: deckpilot_modules::jira::MODULE_ID,
-    credentials: &[(deckpilot_modules::jira::CREDENTIAL, "credential")],
+    module: descriptors::jira::MODULE_ID,
+    credentials: &[(descriptors::jira::CREDENTIAL, "credential")],
     origin: Some(OriginPlan {
-        setting: deckpilot_modules::jira::SITE_URL,
+        setting: descriptors::jira::SITE_URL,
         default: None,
         entered: true,
     }),
-    private_network: Some(deckpilot_modules::jira::ALLOW_PRIVATE),
+    private_network: Some(descriptors::jira::ALLOW_PRIVATE),
     open_url_hosts: &[],
     extraction: None,
 };
@@ -334,7 +335,7 @@ const JIRA: MigrationPlan = MigrationPlan {
 /// copied one to one; the agent routes the plugin's notifications by them
 /// (the manifest's `notifications.routing`, G9).
 const NOTIFICATIONS: MigrationPlan = MigrationPlan {
-    module: deckpilot_modules::notifications::MODULE_ID,
+    module: "notifications",
     credentials: &[],
     origin: None,
     private_network: None,
@@ -361,13 +362,13 @@ const fn extracted(module: &'static str, extraction: &'static Extraction) -> Mig
 /// (`tools.git`, `ToolSettings`). Waits for `tools:git`,
 /// `tools:git:network` and `resources:open` (high tier).
 const GIT: MigrationPlan = extracted(
-    deckpilot_modules::git::MODULE_ID,
+    descriptors::git::MODULE_ID,
     &Extraction {
         tool: Some(HostTool {
             key: "tools.git",
             settings: &[
-                deckpilot_modules::git::EXECUTABLE,
-                deckpilot_modules::git::NETWORK_TIMEOUT,
+                descriptors::git::EXECUTABLE,
+                descriptors::git::NETWORK_TIMEOUT,
             ],
         }),
         offered_if: &[],
@@ -382,19 +383,19 @@ const GIT: MigrationPlan = extracted(
 /// offered only when `allowStateChanges` was on, and asked for, never
 /// derived (X3c, X13).
 const DOCKER: MigrationPlan = extracted(
-    deckpilot_modules::docker::MODULE_ID,
+    descriptors::docker::MODULE_ID,
     &Extraction {
         tool: Some(HostTool {
             key: "tools.docker",
             settings: &[
-                deckpilot_modules::docker::EXECUTABLE,
-                deckpilot_modules::docker::CONTEXT,
-                deckpilot_modules::docker::TIMEOUT,
+                descriptors::docker::EXECUTABLE,
+                descriptors::docker::CONTEXT,
+                descriptors::docker::TIMEOUT,
             ],
         }),
         offered_if: &[(
             "tools:docker:modify",
-            deckpilot_modules::docker::ALLOW_STATE_CHANGES,
+            descriptors::docker::ALLOW_STATE_CHANGES,
         )],
         projects_data: false,
     },
@@ -404,7 +405,7 @@ const DOCKER: MigrationPlan = extracted(
 /// URLs of its parameters is derived (the built-in opened them); waits for
 /// `resources:open` (high tier).
 const WORKSPACE: MigrationPlan = extracted(
-    deckpilot_modules::workspace::MODULE_ID,
+    descriptors::workspace::MODULE_ID,
     &Extraction {
         tool: None,
         offered_if: &[],
@@ -417,7 +418,7 @@ const WORKSPACE: MigrationPlan = extracted(
 /// tables. A profile with projects is the module's data in use. Waits for
 /// `projectContext:select` (high tier).
 const PROJECTS: MigrationPlan = extracted(
-    deckpilot_modules::projects::MODULE_ID,
+    descriptors::projects::MODULE_ID,
     &Extraction {
         tool: None,
         offered_if: &[],
@@ -814,7 +815,9 @@ fn origin_asks(manager: &PluginManager, m: &LegacyModule, manifest: &Manifest) -
 /// the built-in whether or not the user's data uses it (§4.3, §5.8).
 fn eligibility(m: &LegacyModule, default: bool) -> Option<String> {
     if m.manifest.is_none() {
-        return Some("the built-in module is not part of this app".into());
+        return Some(
+            "the built-in module is not part of this app, and nothing describes it".into(),
+        );
     }
     if !m.enabled {
         return Some("the built-in module is disabled".into());
@@ -1573,19 +1576,47 @@ impl Engine<'_> {
 
 /// Whether `manifest`'s plugin declares every alias target of `m` with a
 /// contract that can replace the built-in's (`alias::incompatibilities`).
+///
+/// Without the built-in's crate (X13) only its descriptor is known: the
+/// plugin must then declare every alias target with every parameter of
+/// the built-in under the alias's key. The full contract was checked
+/// while the crate existed (`crates/deckpilot-modules/tests/contracts.rs`),
+/// and the plugin is the pinned bundled copy of the same release.
 fn contract(m: &LegacyModule, manifest: &Manifest) -> Result<(), String> {
     let actions = manifest.contributes.actions();
     for alias in &m.aliases {
-        let builtin = m
-            .builtin_types
-            .iter()
-            .find(|t| t.id.as_str() == alias.legacy)
-            .ok_or_else(|| format!("the built-in `{}` is not part of this app", alias.legacy))?;
         let action = actions
             .iter()
             .find(|a| format!("{}.{}", m.plugin, a.id) == alias.target)
             .ok_or_else(|| format!("{} does not provide `{}`", m.plugin, alias.target))?;
         let target = super::engine::action_type(m.plugin.as_str(), action)?;
+        let Some(builtin) = m
+            .builtin_types
+            .iter()
+            .find(|t| t.id.as_str() == alias.legacy)
+        else {
+            let params = m
+                .descriptor
+                .and_then(|d| d.params_of(alias.legacy))
+                .ok_or_else(|| {
+                    format!("the built-in `{}` is not part of this app", alias.legacy)
+                })?;
+            let missing: Vec<&str> = params
+                .iter()
+                .filter_map(|key| alias.plugin_key(key).map(|plugin| (*key, plugin)))
+                .filter(|(_, plugin)| !target.parameters.iter().any(|p| p.key == *plugin))
+                .map(|(key, _)| key)
+                .collect();
+            if !missing.is_empty() {
+                return Err(format!(
+                    "`{}` cannot replace `{}`: it lacks {}",
+                    alias.target,
+                    alias.legacy,
+                    missing.join(", ")
+                ));
+            }
+            continue;
+        };
         let problems = deckpilot_core::alias::incompatibilities(alias, builtin, &target);
         if !problems.is_empty() {
             return Err(format!(

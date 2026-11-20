@@ -898,7 +898,7 @@
     "node": {
       "type": "object",
       "additionalProperties": false,
-      "description": "NodeSpec without changesContext (plugins cannot change the active project).",
+      "description": "NodeSpec. changesContext (plugin API 1.9) needs the projectContext permission with select: first-party bundled plugins only.",
       "properties": {
         "version": { "type": "integer", "minimum": 1, "default": 1 },
         "icon": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" },
@@ -907,7 +907,8 @@
         "retrySafe": { "type": "boolean", "default": false },
         "idempotent": { "type": "boolean", "default": false },
         "cancellable": { "type": "boolean", "default": false },
-        "effect": { "enum": ["readOnly", "opens", "modifies"], "default": "readOnly" }
+        "effect": { "enum": ["readOnly", "opens", "modifies"], "default": "readOnly" },
+        "changesContext": { "type": "boolean", "default": false }
       }
     },
     "action": {

@@ -68,6 +68,9 @@ pub(crate) struct InvocationResources {
     /// The values of the action's text and list parameters, and whether
     /// each is literal, which `url.openParam` opens from (X5, `open.rs`).
     pub urls: BTreeMap<String, super::open::UrlParam>,
+    /// Where a `project.select` or `project.cycle` of a workflow run puts
+    /// the run's new project, for the action's result (X6, `project.rs`).
+    pub switch: super::project::ProjectSwitch,
 }
 
 /// One `resource` parameter's binding.
@@ -187,6 +190,17 @@ pub(super) struct HandleTable {
 impl HandleTable {
     pub fn version(&self) -> &str {
         &self.version
+    }
+
+    /// The run's project (its id), if it has one and the plugin may read
+    /// it.
+    pub fn run_project(&self) -> Option<&str> {
+        self.resolved.project.as_ref().map(|p| p.id.as_str())
+    }
+
+    /// The invocation's project switch (X6).
+    pub fn switch(&self) -> &super::project::ProjectSwitch {
+        &self.resolved.switch
     }
 
     /// The value of the text or list parameter `key` of this invocation

@@ -36,8 +36,8 @@ static SOURCES: RwLock<Sources> = RwLock::new(Sources {
 
 /// The modules, in the order of [`Sources`].
 const MODULES: [&str; 2] = [
-    deckpilot_modules::git::MODULE_ID,
-    deckpilot_modules::docker::MODULE_ID,
+    super::migration::descriptors::git::MODULE_ID,
+    super::migration::descriptors::docker::MODULE_ID,
 ];
 
 /// The built-in `git` and `docker` modules' configuration, `None` for one

@@ -11,6 +11,8 @@ import { CoreStatusItems } from "@/components/status-sources"
 import { StatusContext, type StatusStores, createStatusStores } from "@/hooks/use-status"
 import { AppContext, type AppContextValue } from "@/lib/app-context"
 import { SecurityContext } from "@/lib/security-context"
+import { pluginFeatures } from "@/lib/plugin-features"
+import { hostStatusItems } from "@/modules/host-views"
 import {
   FINISHED_VISIBLE_MS,
   NOTIFICATION_LIMIT,
@@ -136,6 +138,9 @@ function Shell({
           {moduleStatusItems(modules).map(({ key, component: Item }) => (
             <Item key={key} />
           ))}
+          {hostStatusItems(pluginFeatures(modules, [])).map(({ key, component: Item }) => (
+            <Item key={key} />
+          ))}
         </StatusContext>
       </SecurityContext>
     </AppContext>
@@ -251,7 +256,7 @@ describe("status model", () => {
 })
 
 describe("status bar", () => {
-  it("shows agent, devices, profile and the active project of an enabled module", () => {
+  it("shows agent, devices, profile and the active project while Projects is active", () => {
     const stores = createStatusStores()
     const projects = moduleInfo({ id: "projects" })
     const { rerender } = render(<Shell stores={stores} value={context({})} modules={[projects]} />)

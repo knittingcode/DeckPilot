@@ -23,8 +23,13 @@ use crate::capability::RequestError;
 
 /// Characters of a resource handle: 128 random bits as lowercase hex.
 pub const HANDLE_LEN: usize = 32;
-/// Longest parameter key (the manifest's camel keys) and role name.
+/// Longest parameter key (the manifest's camel keys).
 pub const MAX_PARAM_KEY: usize = 32;
+/// Longest project role: a role is any name the user gave a project's
+/// resource (the core requires only that it is not blank), and the
+/// built-ins took role settings of up to 1,024 characters
+/// (`composeRole`, `repositoryRole`).
+pub const MAX_ROLE: usize = 1024;
 /// Longest project id.
 pub const MAX_PROJECT_ID: usize = 64;
 /// Most resource kinds one call may accept.
@@ -327,6 +332,13 @@ pub fn is_param_key(key: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric())
 }
 
+/// A project role as the core stores it: not blank, no control
+/// character, at most [`MAX_ROLE`] bytes. It only names an entry of the
+/// project's role map, never a path or a binding.
+pub fn is_role(role: &str) -> bool {
+    !role.trim().is_empty() && role.len() <= MAX_ROLE && !role.chars().any(char::is_control)
+}
+
 fn is_project_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= MAX_PROJECT_ID
@@ -338,8 +350,10 @@ fn is_project_id(id: &str) -> bool {
 impl ResourceResolve {
     pub(crate) fn validate(&self) -> Result<(), RequestError> {
         match (&self.param, &self.role) {
-            (Some(key), None) | (None, Some(key)) if is_param_key(key) => {}
-            (Some(_), None) | (None, Some(_)) => return Err(RequestError::Invalid("param")),
+            (Some(key), None) if is_param_key(key) => {}
+            (None, Some(role)) if is_role(role) => {}
+            (Some(_), None) => return Err(RequestError::Invalid("param")),
+            (None, Some(_)) => return Err(RequestError::Invalid("role")),
             _ => return Err(RequestError::Invalid("param or role")),
         }
         if self
@@ -576,6 +590,13 @@ mod tests {
         assert!(resolve(None, None, dir()).is_err());
         assert!(resolve(Some("repo"), Some("repository"), dir()).is_err());
         assert!(resolve(Some("../etc"), None, dir()).is_err());
+        // A role is the user's name for a project resource, as the core
+        // and the built-ins take it: up to 1,024 characters, not blank.
+        assert!(resolve(None, Some("docker-compose"), dir()).is_ok());
+        assert!(resolve(None, Some(&"r".repeat(MAX_ROLE)), dir()).is_ok());
+        assert!(resolve(None, Some(&"r".repeat(MAX_ROLE + 1)), dir()).is_err());
+        assert!(resolve(None, Some(" "), dir()).is_err());
+        assert!(resolve(None, Some("a\nb"), dir()).is_err());
         assert!(resolve(Some("repo"), None, vec![]).is_err());
         assert!(
             resolve(

@@ -21,7 +21,8 @@
     "layouts": "Layouts",
     "dashboard": "Dashboard",
     "actions": "Action Library",
-    "workflows": "Workflows"
+    "workflows": "Workflows",
+    "projects": "Projects"
   },
   "statusBar": {
     "label": "Status bar",

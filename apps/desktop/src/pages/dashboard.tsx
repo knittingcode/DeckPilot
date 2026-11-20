@@ -19,13 +19,16 @@ import { useFormat } from "@/i18n/format"
 import { api } from "@/lib/api"
 import { toastFailure } from "@/lib/failure"
 import { type PageId, useAppContext } from "@/lib/app-context"
+import { usePluginFeatures } from "@/lib/plugin-features"
 import { dashboardCards } from "@/modules"
+import { hostDashboardCards } from "@/modules/host-views"
 
 export function DashboardPage() {
   const { t } = useTranslation()
   const format = useFormat()
   const { revision, profiles, refresh, agent, updates, navigate, openSettings, modules } =
     useAppContext()
+  const features = usePluginFeatures()
   const { state } = useAsync(
     () => Promise.all([api.getOverview(), api.launchInfo()]),
     String(revision),
@@ -116,11 +119,13 @@ export function DashboardPage() {
                   </Button>
                 )}
               </SettingsRow>
-              {dashboardCards(modules).map(({ key, card: ModuleCard }) => (
-                <Suspense key={key} fallback={<Loading />}>
-                  <ModuleCard />
-                </Suspense>
-              ))}
+              {[...hostDashboardCards(features), ...dashboardCards(modules)].map(
+                ({ key, card: ModuleCard }) => (
+                  <Suspense key={key} fallback={<Loading />}>
+                    <ModuleCard />
+                  </Suspense>
+                ),
+              )}
             </SettingsGroup>
           </SettingsSection>
 
@@ -165,11 +170,16 @@ export function DashboardPage() {
                       active.data.profile.actions.length,
                       "actions",
                     ],
-                    [
-                      "workspace:dashboard.counts.workflows",
-                      active.data.profile.workflows.length,
-                      "workflows",
-                    ],
+                    // The Workflows screen only while its plugin shows it.
+                    ...(features.hostViews.has("workflows")
+                      ? [
+                          [
+                            "workspace:dashboard.counts.workflows",
+                            active.data.profile.workflows.length,
+                            "workflows",
+                          ],
+                        ]
+                      : []),
                     [
                       "workspace:dashboard.counts.layouts",
                       active.data.profile.layouts.length,

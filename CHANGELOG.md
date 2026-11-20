@@ -260,6 +260,26 @@ released either. 0.6.0 is the first version intended for publication.
 
 ### Changed
 
+- In builds with plugins, Workflows and Projects are what their plugins
+  make them: the Workflows screen and its navigation entry only while
+  `deckpilot.workflows` is enabled, and the Projects screen, the active
+  project in the status bar, its dashboard card and every project control
+  (project parameters, `{project.*}` hints, "while project" conditions, a
+  workflow's project permission) only while `deckpilot.projects` is (or
+  its legacy module, before the migration). Enabling or disabling the
+  plugin shows or hides them at once. Nothing is deleted: keys that run
+  workflows still run them, and graph workflows already on keys show
+  read-only with the reason; Multi Actions stay the key editor's own. The
+  agent refuses project requests while no project context is active
+  (`projectsOff`), the app refuses workflow and project management while
+  the plugin is off (`invalid.pluginFeatureOff`), and plugin answers carry
+  the new optional `statusItems` and `dashboardCards` (no protocol
+  change). Git, Docker, Workspace, GitHub, GitLab, Jira and Projects no
+  longer have module cards or settings pages there: their plugins' pages
+  replace them. Builds without plugins are unchanged.
+- This computer's resource bindings moved from the Projects screen to
+  **Settings › Resources**, which works without the Projects plugin (the
+  core's `system.open-*` launchers use them).
 - The key header: clicking the key preview opens one menu with an **Icon**
   and a **Background** section (library, import, paste, remove; background
   library, custom colour, reset to the device default); the Background row

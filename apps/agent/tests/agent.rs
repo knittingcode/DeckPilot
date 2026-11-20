@@ -1027,11 +1027,19 @@ async fn disabled_modules_stop_their_actions_without_losing_them() {
             direction: CycleDirection::Next,
         })
         .await;
-    assert!(matches!(cycle, Err(ClientError::Agent(e)) if e.message.contains("disabled")));
-    // The stored action is untouched.
+    assert!(
+        matches!(&cycle, Err(ClientError::Agent(e)) if e.reason.as_deref() == Some("projectsOff")),
+        "{cycle:?}"
+    );
+    // The stored action and the stored selection are untouched; the
+    // status shows no project while Projects are off.
     let stored = agent.store().load_profile(agent.work.id).unwrap().unwrap();
     assert_eq!(stored.actions, agent.work.actions);
-    assert_eq!(active_key(&agent.status().await), Some("CMR"));
+    assert_eq!(active_key(&agent.status().await), None);
+    assert_eq!(
+        agent.store().active_project(agent.work.id).unwrap(),
+        Some(agent.work.projects[1].id)
+    );
 
     agent
         .store()
@@ -1046,6 +1054,86 @@ async fn disabled_modules_stop_their_actions_without_losing_them() {
     client.request(Request::ReloadConfiguration).await.unwrap();
     assert!(run_action(&mut client, next).await.is_success());
     assert_eq!(active_key(&agent.status().await), Some("CMS"));
+    agent.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn without_a_project_context_provider_project_requests_are_refused_and_workflows_run() {
+    let agent = setup().await;
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let workflow = waiting_workflow(&profile, 10);
+    let workflow_id = workflow.id;
+    profile.workflows.push(workflow);
+    profile.layouts[0].pages[0]
+        .bindings
+        .push(deckpilot_core::ControlBinding {
+            control: ControlId::Key { index: 5 },
+            trigger: deckpilot_core::Trigger::Press,
+            target: deckpilot_core::BindingTarget::Workflow {
+                workflow: workflow_id,
+            },
+            label: None,
+            appearance: None,
+        });
+    agent.store().save_profile(&profile).unwrap();
+    // No Projects plugin, and the built-in module disabled: nothing
+    // provides the project context.
+    agent
+        .store()
+        .set_module_state(
+            &projects::module_id(),
+            &ModuleSettings {
+                enabled: false,
+                config: ActionParameters::new(),
+            },
+        )
+        .unwrap();
+    let mut events = agent.client().await;
+    events.subscribe().await.unwrap();
+    let mut client = agent.client().await;
+    client.request(Request::ReloadConfiguration).await.unwrap();
+    let cms = agent.work.projects[2].id;
+    for request in [
+        Request::GetActiveProject,
+        Request::SelectProject { project: cms },
+        Request::CycleProject {
+            direction: CycleDirection::Next,
+        },
+    ] {
+        let refused = client.request(request).await;
+        assert!(
+            matches!(&refused, Err(ClientError::Agent(e))
+                if e.reason.as_deref() == Some("projectsOff")
+                    && e.message.contains("Projects plugin is off")),
+            "{refused:?}"
+        );
+    }
+    assert_eq!(agent.status().await.active_project, None);
+    // Nothing was deleted: the projects and the selection stay stored.
+    let stored = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    assert_eq!(stored.projects, agent.work.projects);
+    // A key that runs a workflow still runs it.
+    client
+        .request(Request::SimulateInput {
+            device: agent.device.clone(),
+            control: ControlId::Key { index: 5 },
+            input: ControlInput::Press,
+        })
+        .await
+        .unwrap();
+    let started = loop {
+        if let AgentEvent::ExecutionStarted { execution } =
+            tokio::time::timeout(TIMEOUT, events.next_event())
+                .await
+                .unwrap()
+                .unwrap()
+        {
+            break execution;
+        }
+    };
+    assert_eq!(started.workflow, workflow_id);
+    let (_, finished) = execution_events(&mut events, started.id).await;
+    assert_eq!(finished.state, deckpilot_core::ExecutionState::Succeeded);
     agent.shutdown().await;
 }
 

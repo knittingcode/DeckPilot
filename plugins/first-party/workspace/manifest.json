@@ -16,14 +16,8 @@
     "directory": "plugins/first-party/workspace"
   },
   "license": "Apache-2.0",
-  "keywords": [
-    "workspace",
-    "editor",
-    "projects"
-  ],
-  "categories": [
-    "developer-tools"
-  ],
+  "keywords": ["workspace", "editor", "projects"],
+  "categories": ["developer-tools"],
   "engines": {
     "deckpilot": ">=0.10.0 <1.0.0",
     "pluginApi": "^1.9",
@@ -38,10 +32,7 @@
     "128": "assets/icon-128.png"
   },
   "defaultLocale": "en",
-  "locales": [
-    "en",
-    "pl"
-  ],
+  "locales": ["en", "pl"],
   "dependencies": [
     {
       "id": "deckpilot.projects",
@@ -54,6 +45,7 @@
     {
       "kind": "resources",
       "open": true,
+      "paths": true,
       "justification": "t:permissions.resources"
     },
     {
@@ -64,9 +56,7 @@
     },
     {
       "kind": "profile",
-      "read": [
-        "project"
-      ],
+      "read": ["project"],
       "justification": "t:permissions.profile"
     }
   ],
@@ -85,9 +75,7 @@
             "required": true,
             "kind": {
               "type": "resource",
-              "kinds": [
-                "application"
-              ]
+              "kinds": ["application"]
             }
           },
           {
@@ -97,14 +85,7 @@
             "required": false,
             "kind": {
               "type": "choice",
-              "options": [
-                "vscode",
-                "cursor",
-                "jetbrains",
-                "zed",
-                "sublime",
-                "other"
-              ]
+              "options": ["vscode", "cursor", "jetbrains", "zed", "sublime", "other"]
             },
             "default": {
               "type": "choice",
@@ -118,10 +99,7 @@
             "required": false,
             "kind": {
               "type": "resource",
-              "kinds": [
-                "directory",
-                "file"
-              ]
+              "kinds": ["directory", "file"]
             }
           },
           {
@@ -165,7 +143,7 @@
             {
               "key": "path",
               "label": "t:outputs.path",
-              "kind": "text",
+              "kind": "path",
               "always": true
             },
             {
@@ -213,9 +191,7 @@
             "required": false,
             "kind": {
               "type": "resource",
-              "kinds": [
-                "application"
-              ]
+              "kinds": ["application"]
             }
           }
         ],
@@ -263,14 +239,7 @@
             "required": false,
             "kind": {
               "type": "choice",
-              "options": [
-                "vscode",
-                "cursor",
-                "jetbrains",
-                "zed",
-                "sublime",
-                "other"
-              ]
+              "options": ["vscode", "cursor", "jetbrains", "zed", "sublime", "other"]
             },
             "default": {
               "type": "choice",
@@ -341,9 +310,7 @@
             "required": false,
             "kind": {
               "type": "resource",
-              "kinds": [
-                "application"
-              ]
+              "kinds": ["application"]
             }
           }
         ],

@@ -16,15 +16,8 @@
     "directory": "plugins/first-party/git"
   },
   "license": "Apache-2.0",
-  "keywords": [
-    "git",
-    "repository",
-    "branch",
-    "status"
-  ],
-  "categories": [
-    "developer-tools"
-  ],
+  "keywords": ["git", "repository", "branch", "status"],
+  "categories": ["developer-tools"],
   "engines": {
     "deckpilot": ">=0.9.0 <1.0.0",
     "pluginApi": "^1.9",
@@ -39,10 +32,7 @@
     "128": "assets/icon-128.png"
   },
   "defaultLocale": "en",
-  "locales": [
-    "en",
-    "pl"
-  ],
+  "locales": ["en", "pl"],
   "dependencies": [
     {
       "id": "deckpilot.projects",
@@ -60,36 +50,22 @@
           "subcommands": [
             {
               "name": "status",
-              "options": [
-                "--porcelain=v2",
-                "--branch",
-                "-z",
-                "--untracked-files"
-              ]
+              "options": ["--porcelain=v2", "--branch", "-z", "--untracked-files"]
             },
             {
               "name": "log",
-              "options": [
-                "-1",
-                "--no-show-signature",
-                "--format"
-              ]
+              "options": ["-1", "--no-show-signature", "--format"]
             },
             {
               "name": "config",
-              "options": [
-                "--get"
-              ]
+              "options": ["--get"]
             },
             {
               "name": "remote"
             },
             {
               "name": "rev-parse",
-              "options": [
-                "--verify",
-                "-q"
-              ]
+              "options": ["--verify", "-q"]
             },
             {
               "name": "ls-remote"
@@ -108,9 +84,7 @@
     },
     {
       "kind": "profile",
-      "read": [
-        "project"
-      ],
+      "read": ["project"],
       "justification": "t:permissions.profile"
     },
     {
@@ -134,9 +108,7 @@
             "required": false,
             "kind": {
               "type": "resource",
-              "kinds": [
-                "directory"
-              ]
+              "kinds": ["directory"]
             }
           },
           {
@@ -262,9 +234,7 @@
             "required": false,
             "kind": {
               "type": "resource",
-              "kinds": [
-                "directory"
-              ]
+              "kinds": ["directory"]
             }
           },
           {
@@ -348,9 +318,7 @@
             "required": false,
             "kind": {
               "type": "resource",
-              "kinds": [
-                "directory"
-              ]
+              "kinds": ["directory"]
             }
           },
           {
@@ -457,9 +425,7 @@
             "required": false,
             "kind": {
               "type": "resource",
-              "kinds": [
-                "directory"
-              ]
+              "kinds": ["directory"]
             }
           },
           {
@@ -539,9 +505,7 @@
             "required": false,
             "kind": {
               "type": "resource",
-              "kinds": [
-                "directory"
-              ]
+              "kinds": ["directory"]
             }
           },
           {
@@ -664,9 +628,7 @@
             "required": false,
             "kind": {
               "type": "resource",
-              "kinds": [
-                "directory"
-              ]
+              "kinds": ["directory"]
             }
           },
           {
@@ -685,9 +647,7 @@
             "required": false,
             "kind": {
               "type": "resource",
-              "kinds": [
-                "application"
-              ]
+              "kinds": ["application"]
             }
           }
         ],

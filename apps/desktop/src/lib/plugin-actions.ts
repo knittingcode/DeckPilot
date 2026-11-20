@@ -126,7 +126,19 @@ export function pluginModules(
     }
     if (module.plugin) module.plugin.aliases = aliases
   }
+  // Where each migrated module is routed, on its plugin's module.
+  for (const m of migrations) {
+    const module = modules.find((p) => p.id === m.plugin)
+    if (!module?.plugin || isPluginId(m.module)) continue
+    module.plugin.route =
+      m.route === "plugin" || m.route === "pluginWithdrawn" ? m.route : "builtin"
+  }
   return modules
+}
+
+/** `values` without duplicates and anything but short identifiers. */
+function names(values: string[] | undefined): string[] {
+  return [...new Set((values ?? []).filter((v) => /^[a-zA-Z][a-zA-Z0-9]{0,31}$/.test(v)))]
 }
 
 function installedPluginModules(plugins: PluginSummary[], known: KnownPlugin[]): ModuleInfo[] {
@@ -165,7 +177,14 @@ function installedPluginModules(plugins: PluginSummary[], known: KnownPlugin[]):
         supported: true,
         configValues: {},
         actionTypes,
-        plugin: { state: plugin.state, unavailable },
+        plugin: {
+          state: plugin.state,
+          unavailable,
+          // The app's own views the plugin activates (plugin API 1.9).
+          hostViews: names((plugin.navigation ?? []).map((entry) => entry.view.kind)),
+          statusItems: names(plugin.statusItems),
+          dashboardCards: names(plugin.dashboardCards),
+        },
       }
     })
     .concat(gone)
