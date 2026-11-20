@@ -42,6 +42,9 @@ pub struct ExecutionContext<'a> {
     )>,
     /// What started the run, when the caller said.
     origin: Option<RunOrigin>,
+    /// Where each parameter value came from, when the engine resolved
+    /// them ([`crate::resolution::Provenances`]).
+    provenance: Option<&'a crate::resolution::Provenances>,
 }
 
 /// What started the run an action belongs to: the user directly (a key, a
@@ -212,6 +215,7 @@ impl<'a> ExecutionContext<'a> {
             notifier: None,
             dependencies: None,
             origin: None,
+            provenance: None,
         }
     }
 
@@ -225,6 +229,22 @@ impl<'a> ExecutionContext<'a> {
     /// What started the run, if the caller said.
     pub fn origin(&self) -> Option<RunOrigin> {
         self.origin
+    }
+
+    /// The same context, whose parameters came from where `provenance`
+    /// says.
+    #[must_use]
+    pub fn with_provenance(self, provenance: &'a crate::resolution::Provenances) -> Self {
+        Self {
+            provenance: Some(provenance),
+            ..self
+        }
+    }
+
+    /// Where the parameter values came from; `None` when the caller did not
+    /// say, which counts as no value being literal.
+    pub fn provenance(&self) -> Option<&'a crate::resolution::Provenances> {
+        self.provenance
     }
 
     /// The same context with the services of an execution, handed over

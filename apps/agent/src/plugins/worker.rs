@@ -47,6 +47,9 @@ pub(crate) struct Events {
     pub notifier: Arc<dyn deckpilot_core::notify::Notifier>,
     /// Plugin dialogs and the app connections that show them.
     pub dialogs: Arc<crate::plugin_dialogs::PluginDialogs>,
+    /// The agent's project context (plugin API 1.9); without it the
+    /// project operations and `profile.read` are `unavailable`.
+    pub projects: Option<Arc<dyn crate::service::plugin_projects::ProjectHost>>,
 }
 
 /// Why an engine invocation produced no outcome: a stable code for the

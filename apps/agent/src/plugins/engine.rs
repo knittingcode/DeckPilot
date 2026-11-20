@@ -83,6 +83,13 @@ pub(crate) struct CatalogPlugin {
     /// The visual assets keys may draw now (plugin API 1.8): those of an
     /// enabled plugin whose files match the integrity record, decoded.
     pub visual_assets: Vec<(deckpilot_core::AssetId, deckpilot_render::LibraryAsset)>,
+    /// It holds `projectContext` (plugin API 1.9): with it, and while it
+    /// can run, its host-published variables have a value (X7).
+    pub project_context: bool,
+    /// It holds `resources` (plugin API 1.9): its invocations resolve the
+    /// project's roles (`resource.resolve`, X2) even without a `resource`
+    /// parameter, so its module reads the profile and the bindings.
+    pub resources: bool,
 }
 
 impl CatalogPlugin {
@@ -133,12 +140,12 @@ impl PluginModule {
         }
         let namespace = module_namespace(&id);
         let variables = declarations(&namespace, &plugin.variables);
+        let host_context = plugin.unavailable.is_none() && plugin.project_context;
         let source = (!variables.is_empty()).then(|| {
-            Arc::new(PluginVariableSource::new(
-                plugin.id.clone(),
-                namespace,
-                values,
-            )) as Arc<dyn VariableSource>
+            Arc::new(
+                PluginVariableSource::new(plugin.id.clone(), namespace, values)
+                    .with_host_context(&plugin.variables, host_context),
+            ) as Arc<dyn VariableSource>
         });
         Some(Self {
             source,
@@ -149,7 +156,7 @@ impl PluginModule {
                 description: plugin.description.clone(),
                 platforms: Vec::new(),
                 pages: Vec::new(),
-                capabilities: if takes_resources(&plugin.actions) {
+                capabilities: if plugin.resources || takes_resources(&plugin.actions) {
                     vec![
                         deckpilot_core::Capability::ProfileRead,
                         deckpilot_core::Capability::MachineResources,
@@ -546,7 +553,11 @@ impl PluginActionHandler {
             Ok(params) => params,
             Err(problem) => return ActionResult::error("invalid-parameters", problem),
         };
-        let resources = InvocationResources::of(parameters, context);
+        let resources = InvocationResources::of(parameters, context).with_urls(
+            &self.definition,
+            parameters,
+            context.provenance(),
+        );
         let abort = AbortSignal::new();
         let Some(answer) = self.invoker.invoke(
             self.plugin.clone(),

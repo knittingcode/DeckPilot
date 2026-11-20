@@ -1009,7 +1009,11 @@
           "items": { "const": "project" }
         },
         "sensitive": { "type": "boolean", "default": false },
-        "deprecated": { "type": "boolean", "default": false }
+        "deprecated": { "type": "boolean", "default": false },
+        "source": {
+          "enum": ["host:project.id", "host:project.key", "host:project.name"],
+          "description": "Plugin API 1.9, first-party bundled plugins with the projectContext permission only: DeckPilot computes and publishes the value (the id, key or name of the project in the context; scope project, a string). The plugin never publishes it."
+        }
       }
     },
     "userOriginSlot": {

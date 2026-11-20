@@ -49,6 +49,8 @@ mod registry;
 #[cfg(feature = "plugins")]
 mod service;
 #[cfg(feature = "plugins")]
+mod tools;
+#[cfg(feature = "plugins")]
 mod variables;
 #[cfg(feature = "plugins")]
 mod worker;
@@ -357,7 +359,12 @@ impl PluginRuntime {
     /// Starts the worker when built with plugins and enabled. `changed` is
     /// called (on the worker's thread) whenever the installed plugins or
     /// their availability changed, so the agent registers
-    /// [`PluginRuntime::modules`] again.
+    /// [`PluginRuntime::modules`] again. Plugins' project operations
+    /// (plugin API 1.9) reach the agent through `commands`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the agent's channels, handed over one by one"
+    )]
     pub(crate) fn new(
         settings: PluginSettings,
         data_dir: &std::path::Path,
@@ -366,6 +373,7 @@ impl PluginRuntime {
         dialogs: &std::sync::Arc<crate::plugin_dialogs::PluginDialogs>,
         notifier: std::sync::Arc<dyn deckpilot_core::notify::Notifier>,
         changed: std::sync::Arc<dyn Fn() + Send + Sync>,
+        commands: tokio::sync::mpsc::UnboundedSender<crate::service::Command>,
     ) -> Self {
         #[cfg(feature = "plugins")]
         {
@@ -378,6 +386,9 @@ impl PluginRuntime {
                         plugins: plugin_events.clone(),
                         notifier,
                         dialogs: dialogs.clone(),
+                        projects: Some(std::sync::Arc::new(
+                            crate::service::plugin_projects::AgentProjects::new(commands),
+                        )),
                     },
                     changed,
                 )
@@ -386,7 +397,15 @@ impl PluginRuntime {
         }
         #[cfg(not(feature = "plugins"))]
         {
-            let _ = (data_dir, events, plugin_events, dialogs, notifier, changed);
+            let _ = (
+                data_dir,
+                events,
+                plugin_events,
+                dialogs,
+                notifier,
+                changed,
+                commands,
+            );
             Self { settings }
         }
     }
@@ -439,6 +458,22 @@ impl PluginRuntime {
     /// (`modules`, before plugins are registered), for plugins that depend
     /// on one of them.
     pub(crate) fn builtins(&self, modules: &deckpilot_core::ModuleRegistry) {
+        // The user's git and docker settings, which `tool.run` uses (the
+        // host's, never a plugin's), as the built-in modules keep them.
+        #[cfg(feature = "plugins")]
+        {
+            let infos = modules.modules();
+            let config = |id: &str| {
+                infos
+                    .iter()
+                    .find(|m| m.manifest.id.as_str() == id)
+                    .map(|m| &m.config_values)
+            };
+            tools::configure(tools::ToolSettings::from_modules(
+                config("git"),
+                config("docker"),
+            ));
+        }
         #[cfg(feature = "plugins")]
         if let Some(worker) = &self.worker {
             let builtins = modules

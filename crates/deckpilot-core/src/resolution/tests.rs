@@ -105,6 +105,9 @@ impl ActionHandler for Probe {
         if let Some(device) = context.device() {
             result = result.with_data("device", device.to_string());
         }
+        if let Some(provenance) = context.provenance().and_then(|p| p.get("message")) {
+            result = result.with_data("provenance", format!("{provenance:?}"));
+        }
         if let Ok(Some(project)) = context.application_project() {
             result = result.with_data("applicationProject", project.to_string());
         }
@@ -1145,4 +1148,70 @@ fn work_session_variables_come_from_the_live_state() {
     )
     .unwrap();
     assert_eq!(found.parameters.text("message"), Some("65s"));
+}
+
+/// Each value says where it came from: written as it is, a template, a
+/// reference or the definition's default; a workflow node's overrides
+/// are mapped. Only a written value is literal.
+#[test]
+fn resolved_values_say_where_they_came_from() {
+    let f = Fixture::new();
+    let variables = f.variables();
+    let resolver = ContextResolver {
+        profile: &f.profile,
+        os: Os::Linux,
+        shared: &variables,
+        outputs: None,
+        registry: &REGISTRY,
+        live: &crate::variables::NoLiveState,
+    };
+    let context = Invocation::default().context(&f.profile, None);
+    let mut definition = Probe::new().definition().clone();
+    definition.parameters[3].default = Some(ParameterValue::Choice("a".into()));
+    let outcome = resolve_parameters(
+        &definition,
+        &ActionParameters::new()
+            .with("message", template("hi {{ shared.team.name }}"))
+            .with("count", reference("shared.team.size"))
+            .with("project", ParameterValue::Project(f.profile.projects[0].id)),
+        &resolver,
+        &context,
+        &f.profile,
+    )
+    .unwrap();
+    let provenance = &outcome.provenance;
+    assert_eq!(provenance.get("message"), Some(Provenance::Template));
+    assert_eq!(provenance.get("count"), Some(Provenance::Reference));
+    assert_eq!(provenance.get("project"), Some(Provenance::Literal));
+    assert_eq!(provenance.get("mode"), Some(Provenance::Default));
+    assert_eq!(provenance.get("other"), None);
+    assert!(provenance.is_literal("project"));
+    assert!(!provenance.is_literal("mode") && !provenance.is_literal("message"));
+
+    let literal = resolve_parameters(
+        &definition,
+        &message(ParameterValue::Text("https://example.com/".into())),
+        &resolver,
+        &context,
+        &f.profile,
+    )
+    .unwrap()
+    .provenance;
+    assert!(literal.is_literal("message"));
+    let mapped = literal.mapped(&message(ParameterValue::Text(
+        "https://example.com/".into(),
+    )));
+    assert_eq!(mapped.get("message"), Some(Provenance::Mapped));
+    assert!(!mapped.is_literal("message"));
+}
+
+/// The engine hands the provenance to the handler; a run of a saved
+/// instance has its written values as literals.
+#[test]
+fn handlers_see_where_their_values_came_from() {
+    let mut f = Fixture::new();
+    let literal = f.run(message(ParameterValue::Text("plain".into())), Some(0));
+    assert_eq!(literal.data["provenance"], "Literal");
+    let templated = f.run(message(template("{{ shared.team.name }}")), Some(0));
+    assert_eq!(templated.data["provenance"], "Template");
 }

@@ -65,6 +65,9 @@ pub(crate) struct InvocationResources {
     pub named: Vec<ProjectResources>,
     /// The Projects feature is off: every role is `no-active-project`.
     pub projects_off: bool,
+    /// The values of the action's text and list parameters, and whether
+    /// each is literal, which `url.openParam` opens from (X5, `open.rs`).
+    pub urls: BTreeMap<String, super::open::UrlParam>,
 }
 
 /// One `resource` parameter's binding.
@@ -186,6 +189,14 @@ impl HandleTable {
         &self.version
     }
 
+    /// The value of the text or list parameter `key` of this invocation
+    /// of `plugin` (`url.openParam`, `open.rs`).
+    pub fn text_param(&self, plugin: &PluginId, key: &str) -> Option<super::open::UrlParam> {
+        (self.plugin.as_ref() == Some(plugin))
+            .then(|| self.resolved.urls.get(key).cloned())
+            .flatten()
+    }
+
     /// The handle of `source`, issued once per invocation.
     fn issue(&mut self, source: Source, issued: Issued) -> Result<String, Refusal> {
         if let Some(handle) = self.sources.get(&source) {
@@ -241,15 +252,16 @@ fn resolve_refusal(error: &ResolveError) -> Refusal {
 
 /// The plugin kind of a binding: folders, applications and Docker
 /// environments as such, a binding of kind `other` whose value is an
-/// absolute path as a file. Terminals, services and URLs are none.
+/// absolute path as a file, URLs as such. Terminals and services are none.
 fn kind_of(binding: &MachineResourceBinding) -> Option<ResourceKind> {
     use deckpilot_core::ResourceKind as Core;
     match binding.kind {
         Core::Directory => Some(ResourceKind::Directory),
         Core::Application => Some(ResourceKind::Application),
         Core::DockerEnvironment => Some(ResourceKind::DockerEnvironment),
+        Core::Url => Some(ResourceKind::Url),
         Core::Other if Path::new(binding.value.trim()).is_absolute() => Some(ResourceKind::File),
-        Core::Terminal | Core::Service | Core::Url | Core::Other => None,
+        Core::Terminal | Core::Service | Core::Other => None,
     }
 }
 
@@ -259,6 +271,7 @@ fn kind_name(kind: ResourceKind) -> &'static str {
         ResourceKind::File => "file",
         ResourceKind::Application => "application",
         ResourceKind::DockerEnvironment => "dockerEnvironment",
+        ResourceKind::Url => "url",
     }
 }
 
@@ -313,7 +326,7 @@ fn checked(binding: &MachineResourceBinding, kinds: &[ResourceKind]) -> Result<I
     let exists = match kind {
         ResourceKind::Directory => path.is_absolute() && path.is_dir(),
         ResourceKind::File => path.is_absolute() && path.is_file(),
-        ResourceKind::Application | ResourceKind::DockerEnvironment => true,
+        ResourceKind::Application | ResourceKind::DockerEnvironment | ResourceKind::Url => true,
     };
     if !exists {
         return Err(Refusal::new(
@@ -427,10 +440,6 @@ impl Executor {
 
     /// The binding of `handle`, which must be one this invocation issued
     /// to `plugin`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "`tool.run` and `resource.open` (WP-A4, WP-A5)")
-    )]
     pub(super) fn bound(&self, plugin: &PluginId, handle: &str) -> Result<Issued, CallResult> {
         let table = self.handles();
         if table.plugin.as_ref() != Some(plugin) {
@@ -444,10 +453,6 @@ impl Executor {
     /// The existing file or folder at `relative` inside the folder of
     /// `handle` (the folder itself without `relative`): by name and by
     /// where links lead, it stays inside the binding.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "`tool.run` and `resource.open` (WP-A4, WP-A5)")
-    )]
     pub(super) fn bound_inside(
         &self,
         plugin: &PluginId,

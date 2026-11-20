@@ -1,168 +1,14 @@
 //! How editors and browsers are opened: the arguments known editors take
-//! for a line, and the launch plan on each operating system. Pure, so
-//! every platform's plan is tested everywhere.
+//! for a line, and the launch plan on each operating system. The plans
+//! live in the core (`deckpilot_core::launch`), where the plugin host's
+//! `resource.open` uses the same ones; pure, so every platform's plan is
+//! tested everywhere.
 
-use std::path::Path;
-
+#[cfg(test)]
 use deckpilot_core::Os;
-use deckpilot_core::launch::{self, LaunchError, LaunchPlan, OpenTarget};
+pub use deckpilot_core::launch::{EDITORS, Editor, MAX_POSITION, Position, editor_plan, url_plan};
 use deckpilot_core::paths;
 use deckpilot_module_system::support::{self, Failure};
-
-/// Highest line or column accepted.
-pub const MAX_POSITION: i64 = 10_000_000;
-
-/// Editors whose way of opening a file at a line is known.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Editor {
-    /// Visual Studio Code: `--goto file:line:column`.
-    VsCode,
-    /// Cursor: like Visual Studio Code.
-    Cursor,
-    /// IDEs by `JetBrains` (IDEA and the others): `--line N --column M file`.
-    JetBrains,
-    /// Zed: `file:line:column`.
-    Zed,
-    /// Sublime Text: `file:line:column`.
-    Sublime,
-    /// Anything else: the file is opened with the application, without a
-    /// line.
-    Other,
-}
-
-pub const EDITORS: [&str; 6] = ["vscode", "cursor", "jetbrains", "zed", "sublime", "other"];
-
-impl Editor {
-    pub fn parse(value: &str) -> Self {
-        match value {
-            "vscode" => Self::VsCode,
-            "cursor" => Self::Cursor,
-            "jetbrains" => Self::JetBrains,
-            "zed" => Self::Zed,
-            "sublime" => Self::Sublime,
-            _ => Self::Other,
-        }
-    }
-
-    /// The arguments that open `path` at `position`, or `None` when the
-    /// editor has no known convention.
-    pub fn arguments(self, path: &Path, position: Position) -> Option<Vec<String>> {
-        let file = path.to_string_lossy();
-        let located = match position.column {
-            Some(column) => format!("{file}:{}:{column}", position.line),
-            None => format!("{file}:{}", position.line),
-        };
-        match self {
-            Self::VsCode | Self::Cursor => Some(vec!["--goto".into(), located]),
-            Self::Zed | Self::Sublime => Some(vec![located]),
-            Self::JetBrains => {
-                let mut args = vec!["--line".into(), position.line.to_string()];
-                if let Some(column) = position.column {
-                    args.extend(["--column".into(), column.to_string()]);
-                }
-                args.push(file.into_owned());
-                Some(args)
-            }
-            Self::Other => None,
-        }
-    }
-}
-
-/// A line and optional column, both counted from 1.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Position {
-    pub line: u32,
-    pub column: Option<u32>,
-}
-
-impl Position {
-    /// Checks a line and column: within 1..=[`MAX_POSITION`], and a column
-    /// only with a line.
-    pub fn new(line: Option<i64>, column: Option<i64>) -> Result<Option<Self>, Failure> {
-        let check = |value: i64, what: &str| {
-            u32::try_from(value)
-                .ok()
-                .filter(|v| (1..=MAX_POSITION).contains(&i64::from(*v)))
-                .ok_or_else(|| {
-                    support::fail(
-                        crate::codes::INVALID_POSITION,
-                        format!("the {what} must be between 1 and {MAX_POSITION}"),
-                    )
-                })
-        };
-        match (line, column) {
-            (None, None) => Ok(None),
-            (None, Some(_)) => Err(support::fail(
-                crate::codes::INVALID_POSITION,
-                "a column needs a line",
-            )),
-            (Some(line), column) => Ok(Some(Self {
-                line: check(line, "line")?,
-                column: column.map(|c| check(c, "column")).transpose()?,
-            })),
-        }
-    }
-}
-
-/// An application value that names a command-line program by path (such
-/// as `/usr/local/bin/code`) rather than an application bundle, a bundle
-/// identifier or a `.desktop` id.
-fn is_command_line_tool(application: &str) -> bool {
-    let extension = Path::new(application)
-        .extension()
-        .map(|e| e.to_string_lossy().to_ascii_lowercase());
-    application.contains(['/', '\\']) && !matches!(extension.as_deref(), Some("app" | "desktop"))
-}
-
-/// How `application` opens `path`, at `position` when given and the
-/// editor knows how. Returns the plan and whether the position is passed.
-///
-/// A command-line tool is started directly with the arguments on every
-/// system, so the line reaches an editor that is already running (on
-/// macOS, `open -a … --args` only passes arguments to an editor that is
-/// not running yet).
-pub fn editor_plan(
-    os: Os,
-    editor: Editor,
-    application: &str,
-    path: &Path,
-    position: Option<Position>,
-) -> Result<(LaunchPlan, bool), LaunchError> {
-    let arguments = position.and_then(|p| editor.arguments(path, p));
-    let Some(arguments) = arguments else {
-        let plan = launch::plan(
-            os,
-            &OpenTarget::PathWith {
-                path: path.to_path_buf(),
-                application: application.to_owned(),
-            },
-        )?;
-        return Ok((plan, false));
-    };
-    if os == Os::Other {
-        return Err(LaunchError::Unsupported(
-            "opening is not supported on this operating system".into(),
-        ));
-    }
-    if is_command_line_tool(application) {
-        return Ok((
-            LaunchPlan {
-                program: application.to_owned(),
-                args: arguments,
-                wait: false,
-            },
-            true,
-        ));
-    }
-    let plan = launch::plan(
-        os,
-        &OpenTarget::Application {
-            application: application.to_owned(),
-            arguments,
-        },
-    )?;
-    Ok((plan, true))
-}
 
 /// A page to open in a browser: the System module's URL rules, and only
 /// `http` or `https`.
@@ -175,23 +21,6 @@ pub fn browser_url(text: &str) -> Result<String, Failure> {
             deckpilot_module_system::codes::INVALID_URL,
             format!("“{}” must be an http or https address", text.trim()),
         ))
-    }
-}
-
-/// How `url` is opened: in the default browser, or in `browser` (an
-/// application resource value).
-pub fn url_plan(os: Os, url: &str, browser: Option<&str>) -> Result<LaunchPlan, LaunchError> {
-    match browser {
-        None => launch::plan(os, &OpenTarget::Url(url.to_owned())),
-        // `open -a Browser <url>` on macOS, `<browser> <url>` elsewhere:
-        // the page reaches a browser that is already running.
-        Some(browser) => launch::plan(
-            os,
-            &OpenTarget::PathWith {
-                path: url.into(),
-                application: browser.to_owned(),
-            },
-        ),
     }
 }
 

@@ -1428,6 +1428,34 @@ pub struct Variable {
     pub sensitive: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deprecated: Option<bool>,
+    /// Plugin API 1.9, first-party bundled plugins with `projectContext`
+    /// only (X7): the host computes and publishes the value from the
+    /// project in the context; the plugin never writes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<VariableHostSource>,
+}
+
+/// Where the host takes a host-published variable's value from (X7):
+/// the id, key or name of the project in the context. Plugin API 1.9 has
+/// only these three.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum VariableHostSource {
+    #[serde(rename = "host:project.id")]
+    ProjectId,
+    #[serde(rename = "host:project.key")]
+    ProjectKey,
+    #[serde(rename = "host:project.name")]
+    ProjectName,
+}
+
+impl VariableHostSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ProjectId => "host:project.id",
+            Self::ProjectKey => "host:project.key",
+            Self::ProjectName => "host:project.name",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

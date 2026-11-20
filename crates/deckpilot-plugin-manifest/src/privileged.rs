@@ -12,7 +12,9 @@
 //! not.
 
 use super::{Checker, Issue, IssueCode, Manifest, ParameterKind, Permission, PermissionKind};
-use crate::model::{PRIVILEGED_API, ToolDeclaration, ToolExecutable};
+use crate::model::{
+    PRIVILEGED_API, ToolDeclaration, ToolExecutable, VariableScope, VariableValueKind,
+};
 use crate::tools::{self, ToolGrant};
 
 /// Most executables of one `tools` permission (`git` and `docker`).
@@ -188,6 +190,14 @@ fn usages(m: &Manifest) -> Vec<(String, String)> {
             }
         }
     }
+    for (index, variable) in m.contributes.variables().iter().enumerate() {
+        if let Some(source) = variable.source {
+            found.push((
+                format!("contributes.variables[{index}].source"),
+                format!("the host source `{}`", source.as_str()),
+            ));
+        }
+    }
     for (index, view) in m.contributes.views().iter().enumerate() {
         if view.kind.is_host_view() {
             found.push((
@@ -233,6 +243,7 @@ pub(super) fn check(c: &mut Checker, m: &Manifest) {
         }
     }
     host_views(c, m);
+    host_variables(c, m);
     // Common rule 6: no exfiltration channel next to process authority.
     if m.permission(PermissionKind::Tools).is_some() {
         for (index, permission) in m.permissions.iter().enumerate() {
@@ -251,6 +262,46 @@ pub(super) fn check(c: &mut Checker, m: &Manifest) {
                     ),
                 );
             }
+        }
+    }
+}
+
+/// Host-published variables (X7): project scope, a string, and only with
+/// the `projectContext` permission, whose values they are.
+fn host_variables(c: &mut Checker, m: &Manifest) {
+    let granted = m.permission(PermissionKind::ProjectContext).is_some();
+    for (index, variable) in m.contributes.variables().iter().enumerate() {
+        let Some(source) = variable.source else {
+            continue;
+        };
+        let path = format!("contributes.variables[{index}]");
+        if variable.scope != VariableScope::Project {
+            c.error(
+                format!("{path}.scope"),
+                IssueCode::InvalidValue,
+                format!(
+                    "`{}` is a project value: its scope is `project`",
+                    source.as_str()
+                ),
+            );
+        }
+        if variable.value_type.kind != VariableValueKind::String {
+            c.error(
+                format!("{path}.valueType"),
+                IssueCode::InvalidValue,
+                format!("`{}` is a string", source.as_str()),
+            );
+        }
+        if !granted {
+            c.error(
+                format!("{path}.source"),
+                IssueCode::MissingPermission,
+                format!(
+                    "`{}` needs the `{}` permission",
+                    source.as_str(),
+                    PermissionKind::ProjectContext.as_str()
+                ),
+            );
         }
     }
 }

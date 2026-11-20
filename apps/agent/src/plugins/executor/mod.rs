@@ -75,9 +75,9 @@
 //!   each: resource handles and `resource.resolve` (`resources.rs`: opaque
 //!   per-invocation handles, never a path without `resources:paths`),
 //!   `tool.run` (`tools.rs`), `resource.open` and `url.openParam`
-//!   (`open.rs`), the project context and `profile.read` (`project.rs`).
-//!   What is not carried out yet is answered `unsupported-op`. Every call
-//!   is audited ([`PrivilegedRecord`]).
+//!   (`open.rs`), the project context and `profile.read` (`project.rs`,
+//!   through the agent's thread). Every call is audited
+//!   ([`PrivilegedRecord`]).
 //! * Response headers: only the ABI's allowlist
 //!   ([`RESPONSE_HEADERS`](deckpilot_plugin_abi::capability::RESPONSE_HEADERS):
 //!   caching, pagination and rate-limit headers, never `set-cookie` or an
@@ -566,6 +566,9 @@ pub(super) struct Executor {
     /// `unavailable`.
     access: Option<DataAccess>,
     opener: Opener,
+    /// What `resource.open` and `url.openParam` counted and launch with
+    /// (`open.rs`).
+    opens: open::Opens,
     /// URLs this invocation opened (an executor serves one invocation).
     opened: std::sync::atomic::AtomicU32,
     /// What started the invocation's run (G8); unknown until the caller
@@ -584,6 +587,13 @@ pub(super) struct Executor {
     /// Where the records of plugin API 1.9's operations go; the agent's
     /// log by default.
     audit: PrivilegedAudit,
+    /// The host-held `git` and `docker` settings of `tool.run` (plugin
+    /// API 1.9, `tools.rs`); never the plugin's.
+    tools: super::tools::ToolHost,
+    /// The agent's project context (plugin API 1.9, `project.rs`);
+    /// without it the project operations and `profile.read` are
+    /// `unavailable`.
+    projects: Option<Arc<dyn crate::service::plugin_projects::ProjectHost>>,
 }
 
 /// One audit record of a plugin API 1.9 operation the executor carried
@@ -695,12 +705,15 @@ impl Executor {
             variables,
             access: None,
             opener,
+            opens: open::Opens::default(),
             opened: std::sync::atomic::AtomicU32::new(0),
             run: RunContext::unknown(),
             dialogs: None,
             translator: None,
             handles: resources::table(),
             audit: Arc::new(log_privileged),
+            tools: super::tools::ToolHost::from_agent(),
+            projects: None,
         }
     }
 
@@ -1131,6 +1144,16 @@ impl Executor {
                 ),
             );
         };
+        // Host-published (X7): the host's value, never the plugin's.
+        if let Some(source) = variable.source {
+            return CallResult::error(
+                CallErrorCode::NotPermitted,
+                format!(
+                    "`{id}` is published by DeckPilot (`{}`); the plugin cannot set it",
+                    source.as_str()
+                ),
+            );
+        }
         if variable.scope != VariableScope::Machine {
             return CallResult::error(
                 CallErrorCode::Unavailable,
@@ -1351,15 +1374,6 @@ fn rank(severity: Severity) -> u8 {
         Severity::Warning => 2,
         Severity::Error => 3,
     }
-}
-
-/// The answer to a plugin API 1.9 operation this agent does not carry out
-/// yet: `unsupported-op`, which the SDKs report as unsupported.
-fn not_implemented(op: &str) -> CallResult {
-    CallResult::error(
-        CallErrorCode::UnsupportedOp,
-        format!("{op} is not implemented by this version of DeckPilot"),
-    )
 }
 
 fn storage_error(error: &StorageError) -> CallResult {
@@ -2225,12 +2239,14 @@ mod dialog_tests {
         broker: Broker,
         dialogs: Arc<PluginDialogs>,
         plugin: PluginId,
+        clock: deckpilot_plugin_broker::ManualClock,
     }
 
     fn fixture(grants: &str) -> Fixture {
+        let clock = deckpilot_plugin_broker::ManualClock::default();
         let broker = Broker::new(
             Arc::new(deckpilot_plugin_broker::MemoryAudit::new(100)),
-            Arc::new(deckpilot_plugin_broker::ManualClock::default()),
+            Arc::new(clock.clone()),
             deckpilot_plugin_broker::RateLimits::default(),
         );
         let plugin = PluginId::new("acme.repo").unwrap();
@@ -2244,6 +2260,7 @@ mod dialog_tests {
             broker,
             dialogs: Arc::default(),
             plugin,
+            clock,
         }
     }
 
@@ -2297,6 +2314,7 @@ mod dialog_tests {
                 broker: self.broker.clone(),
                 dialogs: self.dialogs.clone(),
                 plugin: self.plugin.clone(),
+                clock: self.clock.clone(),
             };
             std::thread::spawn(move || me.call(&mut executor, &request, &interrupt))
         }
@@ -2679,25 +2697,20 @@ mod dialog_tests {
         );
     }
 
-    /// Plugin API 1.9's operations: the broker allows them with the
-    /// grants, and this agent refuses each but `resource.resolve`
-    /// (`resources.rs`) as not implemented (WP-A4 to WP-A6 carry them
-    /// out), so nothing is run or opened.
+    /// The project operations and `profile.read` (plugin API 1.9): the
+    /// broker allows them with the grants; an executor without the
+    /// agent's project context (`project.rs`) answers each `unavailable`,
+    /// so nothing is read or switched.
     #[test]
-    fn privileged_operations_are_refused_as_not_implemented() {
+    fn project_operations_need_the_agents_project_context() {
         let fixture = fixture(
             r#"[{"kind":"resources","paths":true,"open":true},{"kind":"openUrlFromParams"},
                 {"kind":"projectContext","select":true},{"kind":"profile","read":["profile","project"]},
                 {"kind":"tool","tool":"git","network":true},
                 {"kind":"tool","tool":"docker","modify":true}]"#,
         );
-        let handle = "0123456789abcdef0123456789abcdef";
         let interrupt = CallInterrupt::new(None, Instant::now() + Duration::from_secs(60));
         for op in [
-            json!({"op": "resource.open", "args": {"handle": handle}}),
-            json!({"op": "tool.run", "args": {"tool": "git", "args": ["status"], "cwd": handle}}),
-            json!({"op": "tool.run", "args": {"tool": "docker", "args": ["compose", "up"], "cwd": handle}}),
-            json!({"op": "url.openParam", "args": {"param": "urls"}}),
             json!({"op": "project.current", "args": {}}),
             json!({"op": "project.list", "args": {}}),
             json!({"op": "project.select", "args": {"id": "p-1"}}),
@@ -2705,13 +2718,15 @@ mod dialog_tests {
             json!({"op": "profile.read", "args": {}}),
         ] {
             let request: CapabilityRequest = serde_json::from_value(op.clone()).unwrap();
+            // One project switch per 500 ms (X6): keep the rate out of it.
+            fixture.clock.advance(Duration::from_millis(500));
             let mut executor = fixture.executor(RunContext::direct(RunTrigger::Key));
             let CallResult::Error(error) = fixture.call(&mut executor, &request, &interrupt) else {
                 panic!("{op}: carried out");
             };
-            assert_eq!(error.code, CallErrorCode::UnsupportedOp, "{op}");
+            assert_eq!(error.code, CallErrorCode::Unavailable, "{op}");
             assert!(
-                error.message.contains(request.op()) && error.message.contains("not implemented"),
+                error.message.starts_with("unavailable: "),
                 "{op}: {}",
                 error.message
             );

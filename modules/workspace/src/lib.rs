@@ -26,7 +26,7 @@ pub const MODULE_ID: &str = "workspace";
 /// module's `invalid-url`, `invalid-path` and `not-found`.
 pub mod codes {
     /// A line or column that is out of range, or given without a file.
-    pub const INVALID_POSITION: &str = "invalid-position";
+    pub const INVALID_POSITION: &str = deckpilot_core::launch::codes::INVALID_POSITION;
     /// No URL was given.
     pub const NO_URLS: &str = "no-urls";
     /// More URLs than allowed.

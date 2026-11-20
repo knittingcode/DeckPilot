@@ -2179,8 +2179,10 @@ fn needs_project(c: &mut Checker, m: &Manifest) {
             needs.push(format!("contributes.settings.fields[{i}].kind"));
         }
     }
+    // A host-published variable (X7) is the host's value, under
+    // `projectContext` instead.
     for (i, variable) in m.contributes.variables().iter().enumerate() {
-        if variable.scope == VariableScope::Project {
+        if variable.scope == VariableScope::Project && variable.source.is_none() {
             needs.push(format!("contributes.variables[{i}].scope"));
         }
     }

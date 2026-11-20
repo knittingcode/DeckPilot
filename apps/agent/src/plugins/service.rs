@@ -674,6 +674,8 @@ impl PluginService {
                 action_unavailable: BTreeMap::new(),
                 requires: Vec::new(),
                 visual_assets: Vec::new(),
+                project_context: false,
+                resources: false,
             });
         let graph = self.graph();
         self.locales
@@ -716,6 +718,16 @@ impl PluginService {
                         .collect(),
                     default_names,
                     visual_assets: self.drawable_assets(record, &dir),
+                    project_context: grants.iter().any(|g| {
+                        g.key.kind == deckpilot_plugin_manifest::PermissionKind::ProjectContext
+                            && g.key.key.is_empty()
+                            && g.status == deckpilot_plugin_store::GrantStatus::Granted
+                    }),
+                    resources: grants.iter().any(|g| {
+                        g.key.kind == deckpilot_plugin_manifest::PermissionKind::Resources
+                            && g.key.key.is_empty()
+                            && g.status == deckpilot_plugin_store::GrantStatus::Granted
+                    }),
                 })
             })
             .chain(gone)
@@ -2404,7 +2416,8 @@ impl PluginService {
         .with_notifier(self.events.notifier.clone())
         .with_dialogs(self.events.dialogs.clone())
         .with_translator(translator)
-        .with_data(access);
+        .with_data(access)
+        .with_projects(self.events.projects.clone());
         Ok((
             record,
             Prepared {

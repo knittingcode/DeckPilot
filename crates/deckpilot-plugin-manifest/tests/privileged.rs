@@ -144,7 +144,25 @@ fn privileged_manifests(level: &str) -> Vec<(&'static str, Value)> {
                      "kind": {"type": "resource", "kinds": ["directory"]}}),
         );
     out.push(("resource parameter", resource));
+    out.push(("host variable", host_variable(level)));
     out
+}
+
+/// A plugin with `projectContext` and a variable the host publishes (X7).
+fn host_variable(level: &str) -> Value {
+    let mut value = with_permission(
+        level,
+        json!({"kind": "projectContext",
+               "justification": "Shows the active project's key on your keys."}),
+    );
+    value["contributes"]["variables"]
+        .as_array_mut()
+        .unwrap()
+        .push(
+            json!({"id": "current.key", "name": "Project key", "valueType": {"type": "string"},
+                     "scope": "project", "source": "host:project.key"}),
+        );
+    value
 }
 
 // ---------------------------------------------------------------- accepted
@@ -606,6 +624,47 @@ fn host_views_need_the_permission_and_resource_settings_do_not_exist() {
         assert!(refused.is_err(), "{kind}");
         assert!(!schema_ok(&value), "{kind}: schema");
     }
+}
+
+#[test]
+fn host_variables_are_project_strings_of_a_project_context_plugin() {
+    let manifest = parse(&host_variable("^1.9"));
+    let variable = manifest.contributes.variables().last().unwrap();
+    assert_eq!(
+        variable.source,
+        Some(deckpilot_plugin_manifest::VariableHostSource::ProjectKey)
+    );
+    let refused = |change: &dyn Fn(&mut Value), path: &str, code: IssueCode| {
+        let mut value = host_variable("^1.9");
+        change(&mut value);
+        let errors = parse(&value).validate_bundled().unwrap_err();
+        assert!(errors.has(path, code), "{path}: {errors}");
+    };
+    refused(
+        &|v| v["contributes"]["variables"][2]["scope"] = json!("machine"),
+        "contributes.variables[2].scope",
+        IssueCode::InvalidValue,
+    );
+    refused(
+        &|v| v["contributes"]["variables"][2]["valueType"] = json!({"type": "integer"}),
+        "contributes.variables[2].valueType",
+        IssueCode::InvalidValue,
+    );
+    refused(
+        &|v| {
+            v["permissions"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|p| p["kind"] != "projectContext");
+        },
+        "contributes.variables[2].source",
+        IssueCode::MissingPermission,
+    );
+    // 1.9 has only the three host sources.
+    let mut value = host_variable("^1.9");
+    value["contributes"]["variables"][2]["source"] = json!("host:profile.name");
+    assert!(Manifest::from_json(&value.to_string()).is_err());
+    assert!(!schema_ok(&value));
 }
 
 #[test]

@@ -16,6 +16,16 @@
 //! (the module is disabled or gone) or, once it runs again, as having no
 //! value until it publishes again. Every drop starts a new generation, so
 //! a publish from an invocation that began before it is refused.
+//!
+//! Host-published variables (plugin API 1.9, X7 in
+//! `docs/marketplace/module-migration.md` §7): a variable declared with a
+//! `source` (`host:project.id`, `.key`, `.name`) is the host's value, the
+//! project in the resolution's context, computed on every resolution like
+//! the built-in `projects.current.*`. The plugin never writes it
+//! (`variables.publish` refuses its id, `executor`). It has a value only
+//! while the plugin is enabled and holds `projectContext`
+//! ([`PluginVariableSource::with_host_context`]); otherwise it is
+//! unavailable with its module, or has no value.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, PoisonError, RwLock};
@@ -24,7 +34,9 @@ use deckpilot_core::variables::{
     DeclaredScope, MissingReason, Requirement, Resolution, ValueSource, VariableDeclaration,
     VariableEnvironment, VariableId, VariableSource, VariableType, VariableValue,
 };
-use deckpilot_plugin_manifest::{Variable, VariableRequirement, VariableScope, VariableValueKind};
+use deckpilot_plugin_manifest::{
+    Variable, VariableHostSource, VariableRequirement, VariableScope, VariableValueKind,
+};
 
 /// The values one plugin published.
 #[derive(Debug, Default)]
@@ -147,6 +159,9 @@ pub(crate) fn declarations(namespace: &str, variables: &[Variable]) -> Vec<Varia
                     .map(|requirement| match requirement {
                         VariableRequirement::Project => Requirement::Project,
                     })
+                    .chain(variable.source.map(|_| Requirement::Project))
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
                     .collect(),
                 sensitive: variable.sensitive.unwrap_or(false),
                 read_only: true,
@@ -195,12 +210,17 @@ pub(crate) fn typed(
     Ok(Some(typed))
 }
 
-/// Resolves a plugin's variables from what it published (design §3.7):
-/// never runs plugin code.
+/// Resolves a plugin's variables from what it published (design §3.7),
+/// and its host-published ones from the context: never runs plugin code.
 pub(crate) struct PluginVariableSource {
     plugin: String,
     namespace: String,
     values: PublishedVariables,
+    /// The host-published variables, by relative id (X7).
+    host: BTreeMap<String, VariableHostSource>,
+    /// The plugin is enabled and holds `projectContext`: only then do
+    /// host-published variables have a value.
+    host_context: bool,
 }
 
 impl PluginVariableSource {
@@ -209,7 +229,39 @@ impl PluginVariableSource {
             plugin,
             namespace,
             values,
+            host: BTreeMap::new(),
+            host_context: false,
         }
+    }
+
+    /// The host-published variables among `variables`, with a value only
+    /// when `active` (the plugin is enabled and holds `projectContext`).
+    #[must_use]
+    pub fn with_host_context(mut self, variables: &[Variable], active: bool) -> Self {
+        self.host = variables
+            .iter()
+            .filter_map(|v| Some((v.id.clone(), v.source?)))
+            .collect();
+        self.host_context = active;
+        self
+    }
+}
+
+/// The value of a host-published variable: the project in the context.
+fn host_value(source: VariableHostSource, environment: &VariableEnvironment<'_>) -> Resolution {
+    let project = match environment.project() {
+        Ok(project) => project,
+        Err(resolution) => return resolution,
+    };
+    let value = match source {
+        VariableHostSource::ProjectId => project.id.to_string(),
+        VariableHostSource::ProjectKey => project.key.to_string(),
+        VariableHostSource::ProjectName => project.name.clone(),
+    };
+    Resolution::Value {
+        value: VariableValue::String(value),
+        source: ValueSource::System,
+        sensitive: false,
     }
 }
 
@@ -217,13 +269,20 @@ impl VariableSource for PluginVariableSource {
     fn resolve(
         &self,
         declaration: &VariableDeclaration,
-        _environment: &VariableEnvironment<'_>,
+        environment: &VariableEnvironment<'_>,
     ) -> Resolution {
         let relative = declaration
             .id
             .as_str()
             .strip_prefix(&self.namespace)
             .and_then(|rest| rest.strip_prefix('.'));
+        if let Some(source) = relative.and_then(|id| self.host.get(id)) {
+            return if self.host_context {
+                host_value(*source, environment)
+            } else {
+                Resolution::Missing(MissingReason::NoValue)
+            };
+        }
         match relative.and_then(|id| self.values.get(&self.plugin, id)) {
             Some(value) => Resolution::Value {
                 value,
@@ -308,5 +367,93 @@ mod tests {
         assert!(declared.iter().all(|d| d.read_only));
         assert_eq!(declared[1].value_type, VariableType::Json);
         assert_eq!(declared[1].scope, DeclaredScope::Project);
+    }
+
+    fn host_variable(id: &str, source: &str) -> Variable {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "name": id, "valueType": {"type": "string"}, "scope": "project",
+            "source": source
+        }))
+        .unwrap()
+    }
+
+    /// X7: the host's value, the project in the context, only while the
+    /// plugin is enabled and holds `projectContext`; what the plugin
+    /// published never stands in for it.
+    #[test]
+    fn host_variables_have_the_contexts_project_only_while_the_plugin_may_have_them() {
+        use deckpilot_core::variables::{NoLiveState, ProjectSource, ResolutionContext};
+        use deckpilot_core::{Os, Profile, Project, ProjectKey};
+
+        let mut profile = Profile::new("Work");
+        profile
+            .projects
+            .push(Project::new(ProjectKey::new("SHOP").unwrap(), "Shop"));
+        let shop = profile.projects[0].id;
+        let variables = [
+            host_variable("current.id", "host:project.id"),
+            host_variable("current.key", "host:project.key"),
+            host_variable("current.name", "host:project.name"),
+        ];
+        let namespace = "plugins.deckpilot.projects";
+        let declared = declarations(namespace, &variables);
+        assert!(
+            declared
+                .iter()
+                .all(|d| d.requires == vec![Requirement::Project] && d.read_only)
+        );
+        let store = PublishedVariables::default();
+        // Even a value the plugin got into the store is not used.
+        let generation = store.generation("deckpilot.projects");
+        assert!(store.set(
+            "deckpilot.projects",
+            generation,
+            "current.key",
+            Some(VariableValue::String("FORGED".into()))
+        ));
+        let source = |active| {
+            PluginVariableSource::new("deckpilot.projects".into(), namespace.into(), store.clone())
+                .with_host_context(&variables, active)
+        };
+        let with_project = ResolutionContext::preview(profile.id)
+            .with_project(Some(shop), ProjectSource::Application);
+        let without = ResolutionContext::preview(profile.id);
+        let resolve = |source: &PluginVariableSource, context, index: usize| {
+            source.resolve(
+                &declared[index],
+                &VariableEnvironment {
+                    context,
+                    profile: &profile,
+                    os: Os::MacOs,
+                    live: &NoLiveState,
+                },
+            )
+        };
+        let value = |text: &str| Resolution::Value {
+            value: VariableValue::String(text.into()),
+            source: ValueSource::System,
+            sensitive: false,
+        };
+        let enabled = source(true);
+        assert_eq!(
+            resolve(&enabled, &with_project, 0),
+            value(&shop.to_string())
+        );
+        assert_eq!(resolve(&enabled, &with_project, 1), value("SHOP"));
+        assert_eq!(resolve(&enabled, &with_project, 2), value("Shop"));
+        assert_eq!(
+            resolve(&enabled, &without, 1),
+            Resolution::Missing(MissingReason::NoProject)
+        );
+        // Disabled, or without `projectContext`: withdrawn.
+        let disabled = source(false);
+        for index in 0..3 {
+            assert_eq!(
+                resolve(&disabled, &with_project, index),
+                Resolution::Missing(MissingReason::NoValue)
+            );
+        }
+        // Enabled again: back.
+        assert_eq!(resolve(&source(true), &with_project, 1), value("SHOP"));
     }
 }
