@@ -199,6 +199,46 @@ released either. 0.6.0 is the first version intended for publication.
   one invocation and plugin, labels only, the declared kinds only, project
   roles only with an active project and Projects on, audited) and answers
   the other operations as not implemented.
+- Plugin API 1.9's project context: `project.current` and `project.list`
+  (ids, keys and names of the active profile's projects), and
+  `project.select` and `project.cycle` only in runs the user started, never
+  from a lifecycle event or a schedule, so a plugin cannot loop on the
+  switch it caused. A switch is applied like one from the app and its
+  `projectChanged` event names the plugin. `profile.read` answers the
+  granted scopes. Variables a plugin declares with a `host:project.id`,
+  `.key` or `.name` source carry the project in the context, published by
+  DeckPilot only while the plugin is enabled and holds `projectContext`.
+  Every operation needs an active Projects feature and is audited.
+- Plugin API 1.9's `tool.run`, carried out by the agent: the user's own
+  `git` or `docker` (the executable, context and time limits set for the
+  built-in Git and Docker modules, or the agent's `PATH`, plus Homebrew's
+  and Docker Desktop's folders on macOS; the file must be named `git` or
+  `docker`), never a shell, with every argument
+  checked again at run time against the denylists, the host's table, the
+  manifest policy and the plugin's own declaration (a manifest can only
+  narrow), typed values that never start with `-`, and a canonical
+  command line with the host's fixed prefix (`-C <handle> --no-pager
+  --no-optional-locks` and hardening configuration: no `gpg` on `log`, no
+  `ext::`, `file://` or remote helper transports, no credential prompts;
+  docker's `--context`, and the compose file, folder and project name
+  taken from the binding, never from the plugin). git works only on the
+  bound folder's own repository (never one above it), compose only on a
+  compose file inside the bound folder. The working directory is a
+  resource handle of the invocation; the environment is an allowlist (no credentials, no git or
+  compose overrides, `SSH_AUTH_SOCK` only for `ls-remote` with
+  `tools:git:network` or an `ssh://` docker engine). `ls-remote` contacts
+  only a remote `git remote` lists. Time limits per class (10 s local git,
+  20 s network, 30 s docker reads, 300 s docker changes; the plugin may
+  only shorten them), output caps (128 KiB, 64 KiB for logs, 16 KiB of
+  errors), URL credentials (userinfo and token or password query
+  parameters) removed from the output, at most 4 runs per
+  plugin and one modifying run at a time; the process group is stopped on
+  the deadline, an abort and a revoked grant. Docker changes need
+  `tools:docker:modify` (off by default) and a run the user or their work
+  session started. Every run is audited by subcommand, option names,
+  handle label, exit status and byte counts, never by value. A program that
+  leaves its process group no longer keeps a run waiting past its time
+  limit.
 
 ### Changed
 

@@ -180,6 +180,7 @@ The plugin's own variables, published with `Context::publish_variable`
 | `valueType` | `{ "type": "string" \| "integer" \| "boolean" \| "json" }`; a published value of another type is refused |
 | `scope` | `machine`, `profile` or `project`. **Only `machine` can be published in this version**; the others are refused with `unavailable` |
 | `requires`, `sensitive`, `deprecated` | Optional; `requires` only `["project"]` |
+| `source` | Plugin API 1.9, first-party plugins shipped inside the app with the `projectContext` permission only: `host:project.id`, `host:project.key` or `host:project.name`. DeckPilot computes the value (the project in the context; scope `project`, type `string`) while the plugin is enabled and holds `projectContext`; publishing it is refused (`not-permitted`) |
 
 ## `contributes.settings`
 

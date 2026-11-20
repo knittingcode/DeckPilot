@@ -433,7 +433,8 @@ for every other plugin they are denied. They need
 `"engines": { "pluginApi": "^1.9" }` (`PRIVILEGED_API_LEVEL` in the SDK).
 
 **Status: the ABI, the SDK and the broker's decisions are in place; the
-agent carries out `resource` parameters and `resource.resolve`.** Every
+agent carries out `resource` parameters, `resource.resolve` and
+`tool.run`.** Every
 other allowed call is answered `unsupported-op` ("… is not implemented by
 this version of DeckPilot", `CapabilityErrorKind::Unsupported`) until its
 host side lands (WP-A4 to WP-A6 of the extraction). A refused
@@ -442,6 +443,51 @@ host side lands (WP-A4 to WP-A6 of the extraction). A refused
 `resource-not-set` (`unavailable`), `resource-unbound`,
 `resource-role-missing`, `not-found` (`failed`), `resource-kind-mismatch`
 and `not-permitted` (`not-permitted`), `throttled`.
+
+The agent also carries out the project operations and `profile.read`. They
+read and switch only the active profile's projects, and only while a
+project context provider is active (the Projects feature). A refusal
+starts its message with the reason code: `projects-off`, `locked`,
+`no-active-profile` and `unavailable` (`unavailable`); `not-found`,
+`no-projects`, `at-last-project` and `at-first-project` (`failed`); and
+`not-permitted` (`not-permitted`) for a switch in a run the user did not
+start. `project.select` and `project.cycle` answer the new project. The
+app's `projectChanged` event names the plugin. `profile.read` without an
+active project has no `project`; that is not an error.
+
+The agent also carries out `tool.run`. It checks the array again before
+anything runs: the denylists first (every option before `--`, as `--x`,
+`--x=v`, `--x v`, `-xv` and each letter of `-xyz`), then the host's table
+(`apps/agent/src/plugins/tools/{git,docker}.rs`), then the plugin's own
+declaration; every value and positional fills a typed slot (a ref, a
+`branch.<ref>.remote|merge` key, a remote name `git remote` lists, a
+container, service or project name, `--tail` 1-1000, a `--since`), never
+a path, a URL or anything starting with `-`. The working directory is a
+handle: a `directory` for git, which must be the repository's own
+folder, with its git directory inside it or a linked worktree's (git
+never looks above it; a `.git` file or link to another repository, a
+submodule and a bare repository are refused: `not-a-repository`,
+`tool-outside-binding`); a `directory` or compose `file` for `docker
+compose`; for docker's other commands also a `dockerEnvironment`, whose
+context is used. For compose the host adds `--project-directory`, `-f`
+(the bound file, or the folder's own `compose.yaml`, `compose.yml`,
+`docker-compose.yaml` or `docker-compose.yml`) and `--project-name` (the
+file's `name:`, else the folder's name); a plugin never passes them. A
+`git log` format must start with `format:` or `tformat:`. Limits: 10 s for git's local reads, the user's
+network time limit (default 20 s) for `ls-remote`, 30 s for docker's
+reads, the user's change time limit (default 300 s) for docker's changes;
+`timeoutMs` only shortens them, and the invocation's deadline always
+applies. Output is capped at 128 KiB (64 KiB for logs; 16 KiB of standard
+error), `truncated` says so, and URL userinfo is removed. A non-zero exit
+is a result, not an error. A refusal starts with its reason code:
+`tool-option-denied`, `tool-subcommand-denied`, `tool-not-allowed`,
+`tool-not-declared`, `tool-invalid-cwd` and `tool-outside-binding`
+(`not-permitted`),
+`tool-invalid-argument` (`bad-request`), `not-user-initiated`
+(`not-permitted`), `tool-unknown-remote`, `tool-executable-invalid`,
+`not-a-repository`, `timed-out`, `cancelled` and `revoked` (`failed`),
+`tool-not-found`
+(`unavailable`).
 
 | Operation | `Context` | Needs | Run origin | Rate |
 | --- | --- | --- | --- | --- |
@@ -471,9 +517,28 @@ and `not-permitted` (`not-permitted`), `throttled`.
   host's; the agent checks every array against the host policy the
   manifest declared a subset of
   ([`tools`](permissions.md#tools)).
+- `resource.open` opens the folder or file of a handle with the
+  application of another handle of kind `application` (a binding the user
+  chose) or with the system's default handler; `editor` picks the host's
+  argument plan for `position`. The plugin never names a program, an
+  argument or a path. A handle of kind `url` (a project's URL role,
+  resolved with `resource.resolve {role, kinds: ["url"]}`) opens in the
+  default browser only, without `with`, `position` or `editor`, under the
+  URL rules of `url.openParam`; the guest sees its label, never the
+  address. Refusals start with `not-user-initiated`, `not-permitted`,
+  `resource-kind-mismatch`, `invalid-application`, `not-found`,
+  `invalid-position`, `invalid-url`, `bad-request` or `throttled`.
 - `url.openParam` opens the literal value the user stored in the
   invocation's own parameter (http or https, no userinfo, at most 2,048
-  bytes, no template output): the plugin never passes a URL.
+  bytes, no template output): the plugin never passes a URL. The value must
+  be printable ASCII (an internationalized host in its `xn--` form), with
+  its host written exactly as parsed (no percent-encoded or numeric
+  shorthand host, no backslash). Private and local hosts open. Only a
+  value the user wrote as it is opens, in any run the user started (a
+  workflow's included); a default, a template, a variable or a workflow
+  node's mapped value is `url-param-not-literal`. Other refusals: `invalid-url`,
+  `url-param-missing`, `url-param-index`, `not-user-initiated`,
+  `throttled`.
 - No operation is available in a [state call](actions.md#key-state).
 - Every call, allowed or denied, is audited by operation, never by value.
 

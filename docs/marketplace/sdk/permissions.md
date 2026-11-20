@@ -106,8 +106,8 @@ in general, a shell, the file system, the workflows engine and plugin UI
 stay never grantable for every publisher.
 
 **Status:** the manifest, the grants, the ABI, the SDK and the broker are
-in place; the agent carries out `resource` parameters and
-`resource.resolve`, and answers the other operations as not implemented
+in place; the agent carries out `resource` parameters,
+`resource.resolve` and `tool.run`, and answers the other operations as not implemented
 until their host side lands (WP-A4 to WP-A6).
 
 | Kind | Fields | Grant keys and tiers | Allows |
@@ -145,7 +145,13 @@ never seeded with a bundled plugin (which seeds low tiers only).
   `remote`, `rev-parse`, `ls-remote`; docker `context show`, `version`,
   `compose version`, `ps`, `compose ps`, `compose logs`, `logs`,
   `compose up`, `compose down`, `compose restart`, `start`, `stop`,
-  `restart`, each with its own options. That allowlist is the boundary.
+  `restart`, each with its own options (what the built-in modules pass:
+  for example `status --untracked-files`, `log --no-show-signature`,
+  `compose ps --all`, `compose logs --no-color`). That allowlist is the
+  boundary; the agent checks every run against it and the declaration
+  again. The compose file, folder and project name are the host's, from
+  the binding: a plugin never declares or passes `-f`, `-p` or
+  `--project-name`.
 - The denylists are checked first for a precise error: git's `-c`,
   `--config-env`, `-C`, `--git-dir`, `--work-tree`, `--namespace`,
   `--exec-path`, `--upload-pack`/`-u`, `--receive-pack`, `--output`/`-o`,
@@ -157,7 +163,7 @@ never seeded with a bundled plugin (which seeds low tiers only).
   `--volume(s)`, `--mount`, `--privileged`, `--cap-add`, `--device`,
   `--pid`, `--network`, `--security-opt`, `-H`/`--host`, `--context`,
   `--config`, `--tls*`, `-e`/`--env`, `--env-file`,
-  `--project-directory`, `-f`/`--file`, `--rmi`, `--build`,
+  `--project-directory`, `-p`/`--project-name`, `-f`/`--file`, `--rmi`, `--build`,
   `--force-recreate`, `--renew-anon-volumes`.
 - `network` (git only) is declared exactly when `ls-remote` is; `modify`
   (docker only) exactly when a subcommand that starts, stops or restarts

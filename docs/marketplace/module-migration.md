@@ -1403,9 +1403,13 @@ stderr, truncated, durationMs}`.
 | `rev-parse` | `--verify -q <ref name>` |
 | `ls-remote` | `-- <remote name> <ref name>`, only with `tools:git:network`. The remote must be a **name** listed by `git remote`, never a URL (a URL would let the plugin choose the server, and `ext::` URLs run commands) |
 
-*Host-fixed prefix*, which the plugin cannot change:
-`-C <handle dir> --no-pager --no-optional-locks -c core.fsmonitor=false -c protocol.ext.allow=never -c protocol.file.allow=never`.
+*Host-fixed prefix*, which the plugin cannot change (as implemented,
+after the security review of WP-A4; see
+[below](#x3-as-implemented-and-the-review-of-wp-a4)):
+`-C <handle dir> --no-pager --no-optional-locks -c core.fsmonitor=false -c log.showSignature=false -c protocol.allow=never -c protocol.https.allow=always -c protocol.ssh.allow=always -c protocol.git.allow=always -c protocol.ext.allow=never -c protocol.file.allow=never -c credential.interactive=never -c core.askPass=`.
 The environment is `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0`,
+`GIT_PROTOCOL_FROM_USER=0`, `GCM_INTERACTIVE=never`, an empty
+`GIT_ASKPASS`, `GIT_CEILING_DIRECTORIES=<the binding's parent>`,
 `LC_ALL=C`, plus `GIT_EXEC_PATH` and `XDG_CONFIG_HOME` from the agent's own
 environment. `SSH_AUTH_SOCK` is added **only** for `ls-remote` under
 `tools:git:network`.
@@ -1443,7 +1447,11 @@ it. The time limit is `networkTimeoutSeconds` (5-120, default 20) for
   `config` set and no file system), so it gains nothing the repository's
   author did not already have. WP-A4 should also force
   `-c core.sshCommand=ssh` and `-c core.gitProxy=` for `ls-remote`, and
-  measure whether that breaks common setups before it is made mandatory.
+  measure whether that breaks common setups before it is made mandatory. WP-A4 (2026-11-20) does **not** force them: they would also override
+  the user's own global `core.sshCommand` (a custom key or agent), which
+  has not been measured. This stays an accepted risk, as for the
+  built-in. The environment overrides (`GIT_SSH_COMMAND`, `GIT_CONFIG_*`,
+  `GIT_ASKPASS`, `GIT_DIR`) never reach git.
 - **The isolation gain is limited.** The authority stays in the agent. A
   bug in the host policy is a bug in trusted code, exactly as G13 warned.
   The sandbox isolates parsing and formatting only. The gain is
@@ -1454,8 +1462,8 @@ it. The time limit is `networkTimeoutSeconds` (5-120, default 20) for
 
 *Allowed:* `context show`; `version --format {{json .}}`; `compose version
 --short`; `ps --no-trunc --format {{json .}} [--all] [--filter
-name=<name>]`; `compose -f <handle> -p <project> ps --format json`;
-`compose -f <handle> -p <project> logs --tail <1-1000> [--since <v>]
+name=<name>]`; `compose -f <file> -p <project> ps --format json`;
+`compose -f <file> -p <project> logs --tail <1-1000> [--since <v>]
 [<service>…]`; `logs --tail <1-1000> [--since <v>] -- <container>`. The
 compose file is always the handle's path, which the host inserts.
 
@@ -1489,7 +1497,7 @@ data can leave it only through the user's own configuration.
 
 ##### X3c `tools:docker:modify`
 
-*Allowed:* `compose -f <handle> -p <project> up --detach [<service>…]`,
+*Allowed:* `compose -f <file> -p <project> up --detach [<service>…]`,
 `compose … down [--remove-orphans]`, `compose … restart [<service>…]`,
 and `start|stop|restart -- <container>`. Never `down -v` or `--volumes`,
 `--rmi`, `up --build`, `--force-recreate` with `--renew-anon-volumes`, or
@@ -1562,6 +1570,70 @@ executable that records its argv and environment):
   manifest that also declares `network`, `credentials` or `openUrl` is
   refused.
 
+##### X3 as implemented and the review of WP-A4
+
+WP-A4 (`apps/agent/src/plugins/tools/`, `executor/tools.rs`) had an
+independent security review on 2026-11-20 ("ship after fixes"). Each
+finding is fixed and has a regression test that reproduces the attack
+(`apps/agent/src/plugins/tools/tests.rs` and `tests/runs.rs`, with fake
+executables and, for git's own behaviour, the real `git` in temporary
+repositories; never a real docker):
+
+| Finding | Fix | Test |
+| --- | --- | --- |
+| M1 git discovery escapes the binding (a folder inside a dotfiles repository lists the home folder) | `GIT_CEILING_DIRECTORIES=<the binding's parent>`, and before every run `rev-parse --show-toplevel`, whose real path must be the binding or inside it (`not-a-repository`, `tool-outside-binding`) | `git_never_finds_a_repository_above_the_binding`, `a_work_tree_outside_the_binding_is_refused` |
+| M2 compose on a folder loads a file outside it (the folders above, `COMPOSE_FILE=../compose.yaml` in `.env`) | the host picks `compose.yaml`, `compose.yml`, `docker-compose.yaml` or `docker-compose.yml` **inside** the folder (real path contained) and passes it as `-f`; none is a refusal | `the_compose_file_of_a_folder_is_inside_it`, `compose_on_a_folder_runs_the_folders_own_file_only` |
+| M3 a plugin-chosen `--project-name` reaches another project | the plugin passes no `-f`, `-p` or `--project-name` (denylisted); the host pins the name: the file's literal top-level `name:`, else compose's default for its folder | `a_plugin_can_never_name_the_compose_project`, `compose_on_a_folder_runs_the_folders_own_file_only` |
+| I1 the user's settings unused | `gitExecutable`, `networkTimeoutSeconds`, `dockerExecutable`, `context` and `timeoutSeconds` of the built-in modules are read by the agent whenever it loads its modules (`ToolSettings`); on macOS `git` and `docker` are also looked for where Homebrew and Docker Desktop install them | `the_users_module_settings_are_the_hosts`, `the_executable_must_be_the_tools_own` |
+| L1 a hostile repository runs `gpg` on `log` | `-c log.showSignature=false`; a format must start with `format:` or `tformat:` (a bare word names a `pretty.*` of the repository) and has no `%G` placeholder | `a_hostile_repository_cannot_run_gpg_on_log`, `log_formats_must_be_explicit_and_never_check_signatures` |
+| L2 remote helper transports (`foo::bar`) | `GIT_PROTOCOL_FROM_USER=0`, `protocol.allow=never` with `https`, `ssh` and `git` allowed again | `remote_helper_transports_never_run` |
+| L3 relative `PATH` entries | only absolute, non-empty entries, plus the executable's own folder | `only_absolute_path_entries_reach_the_child` |
+| L4 credential prompts and windows | `credential.interactive=never`, empty `core.askPass` and `GIT_ASKPASS`, `GCM_INTERACTIVE=never`, no `SSH_ASKPASS` | `git_runs_exactly_the_canonical_argv_in_the_allowlisted_environment` |
+| L5 a `setsid` grandchild holding the pipes outlives the time limit | the core's process runner waits for the output at most the grace period after the program ended, then returns what it has (truncated) | `deckpilot-core` `a_detached_grandchild_holding_the_pipes_does_not_outlast_the_run` |
+| I2 redaction gaps | userinfo with `/` in the password, and the values of `access_token`, `private_token`, `oauth_token`, `token` and `password` query parameters | `credentials_in_queries_and_passwords_with_slashes_are_redacted` |
+| Re-review: a `.git` file (`gitdir: ../secret/.git`) or a `.git` link leads to another repository | `rev-parse --show-toplevel --absolute-git-dir`: the real git directory must be inside the binding too, except a genuine linked worktree (`<common>/worktrees/<name>` with a `commondir`, whose `gitdir` back-pointer names this work tree's `.git`); a submodule's git directory (`.git/modules/…` of the superproject) is refused | `a_git_directory_outside_the_binding_is_refused_except_for_a_linked_worktree` |
+| Re-review: userinfo containing `@` (`https://user:p@ss@host/`) | the **last** `@` before the host that ends a `user[:pass]` is the end of the userinfo | `credentials_in_queries_and_passwords_with_slashes_are_redacted` |
+| I3 broker denials audited without the subcommand | the broker's record of a `tool.run` names the tool and its subcommand (`git status`; `?` when it is not a plain word), never another argument | broker `tool_run_denials_name_the_tool_and_subcommand_only` |
+
+*Accepted risks that remain, stated precisely.*
+
+- **Repository-local configuration.** `.git/config` of the bound
+  repository may still set `core.sshCommand`, `core.gitProxy`,
+  `remote.<name>.uploadpack` (run by `ls-remote`), `filter.*` (run by
+  `status` for files that need them) and `protocol.<name>.allow=always`
+  for a remote helper of a remote it configures. The plugin cannot write
+  any of it; the built-in has the same exposure.
+- **The project's `.env` and the compose file.** The `.env` inside the
+  binding still interpolates the compose file and sets the other
+  `COMPOSE_*` settings (profiles, for example); `-f` and `-p` override
+  `COMPOSE_FILE` and `COMPOSE_PROJECT_NAME`. A compose file may `include`
+  or `extends` files outside the folder, and `up` runs whatever it
+  declares (privileged containers, bind mounts). That is the user's own
+  file, as for the built-in.
+- **The project name.** A file whose `name:` is interpolated (`${X}`)
+  gets the folder's name, which may not be the project its containers were
+  started under from the command line; the run then sees no containers.
+  The built-in's `projectName` parameter has no plugin equivalent.
+- **A repository below the binding's root only.** A binding that is a
+  subfolder of a repository is `not-a-repository` (it used to work with
+  the built-in); the binding must be the repository's own folder. Linked
+  worktrees work; **submodules are not supported as bindings yet**
+  (their git directory lives in the superproject), and neither are bare
+  repositories.
+- **Settings after the built-ins are removed (WP-C6).** `ToolSettings`
+  reads the built-in `git` and `docker` modules' configuration. When WP-C6
+  removes those modules, it must keep these values as host-held settings
+  (migrated, not lost) and feed them to `tools::configure`, or every run
+  falls back to `PATH` and the default time limits.
+- **Settings and `PATH`.** A configured executable that is a name other
+  than `git` or `docker` (not an absolute path) is refused. A
+  desktop-started agent outside macOS finds the tools only on its own
+  `PATH`, as the built-in did.
+- **Output redaction** is best effort: a secret that is not in a URL's
+  userinfo or one of the named query parameters reaches the plugin, which
+  holds no network grant (common rule 6). A path with `:` before an `@`
+  may be shortened more than needed (over-redaction, never under).
+
 #### X4 `resource.open`
 
 *Purpose.* `workspace.open-in-editor`, `workspace.open-project` and
@@ -1584,7 +1656,11 @@ canonical absolute paths checked with `existing_inside` and `join_inside`
 (moved to the core, WP-A3), so they never start with `-`. Line and column
 are integers from 1 to 1,000,000. Only in user-started runs. At most 1 per
 second and 5 per invocation (`open-project` opens the editor, the docs and
-the URLs).
+the URLs). *Clarified 2026-11-20 (implementation):* a token bucket with a
+burst of 5 (the per-invocation cap) that refills at 1 per second, so a
+single `open-project` is never throttled by its own opens; `url.openParam`
+likewise has its own bucket with a burst of 10 refilling at 1 per 2 s,
+plus the shared 20 per 10 minutes window.
 
 *Tier.* **High.** Explicit consent: it starts programs the user chose.
 
@@ -1600,6 +1676,19 @@ trust model.
 `..` or symlink escape, and a path outside the location are each refused.
 It is refused from a schedule, an event or startup run. The rate limits
 hold. The editor argv matches the fixtures for each plan.
+
+*Decision of 2026-11-20 (WP-A5, coordinator within the owner's
+authorization): URL roles.* A project's URL role (a binding of kind `url`)
+resolves to a handle of the new ABI kind `url` (`resource.resolve {role,
+kinds: ["url"]}`, by label only) and `resource.open` opens it with the
+system's default browser only: never with `with`, `position` or `editor`,
+under X5's URL rules (http or https, no userinfo, printable ASCII, the host
+written literally, at most 2,048 bytes), in user-started runs, within the
+5 per invocation, audited by label and origin. This gives
+`workspace.open-project` its URL roles as the built-in has them. *Tests:*
+a bound address opens in the browser and nowhere else; with an
+application, a position or an editor, as a non-literal URL, as `with`,
+and from a schedule it is refused.
 
 #### X5 `url.openParam`
 
@@ -1633,6 +1722,21 @@ when the built-in was in use.
 `data:`, a custom scheme and userinfo is refused. An index out of range is
 refused. It is refused from a schedule. The 11th call in an invocation is
 `Throttled`.
+
+*Decision of 2026-11-20 (WP-A5, coordinator within the owner's
+authorization): provenance instead of no workflows.* The core's
+`resolve_parameters` reports where each value came from
+(`deckpilot_core::resolution::Provenance`: `Literal`, `Default`,
+`Template`, `Reference`, `Mapped`), the engine marks a workflow node's
+overrides (its mappings) `Mapped`, and the handler's context carries it.
+`url.openParam` opens only a `Literal` value: one the user wrote as it is
+into the instance, a binding's overrides or a step's overrides. It does so
+in every user-started run, workflows the user started included. Defaults
+(which the plugin's manifest supplies), templates, references and
+mappings stay refused (`url-param-not-literal`), and so does every value
+when the caller gave no provenance. *Tests:* a literal value in a
+user-started workflow opens; a template-expanded or mapped value is
+refused; a non-user run is refused.
 
 #### X6 Project operations (`projectContext`)
 
