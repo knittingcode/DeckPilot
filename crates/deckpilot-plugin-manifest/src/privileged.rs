@@ -17,6 +17,107 @@ use crate::model::{
 };
 use crate::tools::{self, ToolGrant};
 
+/// The sub-grants an action may name in `requiresPermissions` (plugin API
+/// 1.9): each is consented to on its own, so a plugin can do without it.
+/// Naming one makes it optional: the plugin is enabled with its other
+/// grants, and only the actions that name it wait for it (the docker
+/// plugin's Compose changes and `tools:docker:modify`, X3c, off by
+/// default).
+pub const OPTIONAL_PERMISSIONS: &[&str] = &[
+    "tools:git:network",
+    "tools:docker:modify",
+    "resources:open",
+    "resources:paths",
+    "projectContext:select",
+    "openUrl:from-params",
+];
+
+impl crate::Action {
+    /// `requiresPermissions`: the optional sub-grants this action needs.
+    pub fn requires_permissions(&self) -> &[String] {
+        self.requires_permissions.as_deref().unwrap_or_default()
+    }
+}
+
+impl Manifest {
+    /// The grant keys that are optional for enabling the plugin: every
+    /// sub-grant an action names in `requiresPermissions` (only those the
+    /// manifest declares; the validation refuses the others).
+    pub fn optional_permissions(&self) -> std::collections::BTreeSet<&str> {
+        self.contributes
+            .actions()
+            .iter()
+            .flat_map(crate::Action::requires_permissions)
+            .map(String::as_str)
+            .filter(|key| declares_sub_grant(self, key))
+            .collect()
+    }
+}
+
+/// Whether `m` declares the sub-grant `key` of [`OPTIONAL_PERMISSIONS`].
+fn declares_sub_grant(m: &Manifest, key: &str) -> bool {
+    m.permissions
+        .iter()
+        .any(|permission| match (key, permission) {
+            ("tools:git:network", Permission::Tools { tools, .. }) => tools
+                .iter()
+                .any(|t| t.executable == ToolExecutable::Git && t.network()),
+            ("tools:docker:modify", Permission::Tools { tools, .. }) => tools
+                .iter()
+                .any(|t| t.executable == ToolExecutable::Docker && t.modify()),
+            ("resources:open", Permission::Resources { open, .. }) => *open == Some(true),
+            ("resources:paths", Permission::Resources { paths, .. }) => *paths == Some(true),
+            ("projectContext:select", Permission::ProjectContext { select, .. }) => {
+                *select == Some(true)
+            }
+            ("openUrl:from-params", _) => permission.opens_from_params(),
+            _ => false,
+        })
+}
+
+/// `contributes.actions[].requiresPermissions` (plugin API 1.9): 1 to
+/// [`OPTIONAL_PERMISSIONS`]`.len()` unique sub-grants of that list, each
+/// declared by the manifest.
+fn requires_permissions(c: &mut Checker, m: &Manifest) {
+    let required = m.engines.plugin_api;
+    for (index, action) in m.contributes.actions().iter().enumerate() {
+        let Some(keys) = &action.requires_permissions else {
+            continue;
+        };
+        let path = format!("contributes.actions[{index}].requiresPermissions");
+        if required.minimum < PRIVILEGED_API {
+            c.error(
+                &path,
+                IssueCode::Conflict,
+                format!(
+                    "needs plugin API {PRIVILEGED_API}: set engines.pluginApi to \
+                     `^{PRIVILEGED_API}` (it is `{required}`)"
+                ),
+            );
+        }
+        c.count(&path, keys.len(), 1, OPTIONAL_PERMISSIONS.len());
+        c.unique(&path, keys.iter());
+        for (i, key) in keys.iter().enumerate() {
+            if !OPTIONAL_PERMISSIONS.contains(&key.as_str()) {
+                c.error(
+                    format!("{path}[{i}]"),
+                    IssueCode::InvalidValue,
+                    format!(
+                        "`{key}` cannot be optional; an action may name {}",
+                        OPTIONAL_PERMISSIONS.join(", ")
+                    ),
+                );
+            } else if !declares_sub_grant(m, key) {
+                c.error(
+                    format!("{path}[{i}]"),
+                    IssueCode::MissingPermission,
+                    format!("`{key}` is not a permission the manifest declares"),
+                );
+            }
+        }
+    }
+}
+
 /// Most executables of one `tools` permission (`git` and `docker`).
 const MAX_TOOLS: usize = 2;
 /// Most subcommands one tool may declare.
@@ -244,6 +345,7 @@ pub(super) fn check(c: &mut Checker, m: &Manifest) {
     }
     host_views(c, m);
     host_variables(c, m);
+    requires_permissions(c, m);
     // Common rule 6: no exfiltration channel next to process authority.
     if m.permission(PermissionKind::Tools).is_some() {
         for (index, permission) in m.permissions.iter().enumerate() {

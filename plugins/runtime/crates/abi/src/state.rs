@@ -272,10 +272,14 @@ impl StateOutcome {
 }
 
 /// Whether `request` is answered inside a state call: reading the
-/// plugin's own storage and settings, the time, and logging. Everything
-/// else (the network, notifications, opening pages, writing storage,
-/// publishing variables, random bytes, the run context) is refused, so a
-/// state call cannot change or send anything.
+/// plugin's own storage and settings, the time, the run context (plugin
+/// API 1.9: a state call's says which key it is, [`key_scope`], and that
+/// nobody started a run), and logging. Everything else (the network,
+/// notifications, opening pages, writing storage, publishing variables,
+/// random bytes, running a tool) is refused, so a state call cannot
+/// change or send anything.
+///
+/// [`key_scope`]: crate::capability::RunContext::key_scope
 pub fn allowed_in_state(request: &CapabilityRequest) -> bool {
     matches!(
         request,
@@ -283,6 +287,7 @@ pub fn allowed_in_state(request: &CapabilityRequest) -> bool {
             | CapabilityRequest::StorageKeys(_)
             | CapabilityRequest::SettingsGet(_)
             | CapabilityRequest::TimeNow(_)
+            | CapabilityRequest::RunContext(_)
             | CapabilityRequest::Log(_)
     )
 }
@@ -404,6 +409,7 @@ mod tests {
             CapabilityRequest::StorageKeys(StoragePrefix { prefix: None }),
             CapabilityRequest::SettingsGet(NoArgs {}),
             CapabilityRequest::TimeNow(NoArgs {}),
+            CapabilityRequest::RunContext(NoArgs {}),
             CapabilityRequest::Log(Log {
                 level: LogLevel::Debug,
                 message: "m".into(),
@@ -421,14 +427,13 @@ mod tests {
             r#"{"op":"variables.publish","args":{"id":"x","value":1}}"#,
             r#"{"op":"variables.clear","args":{}}"#,
             r#"{"op":"url.open","args":{"url":"https://example.com/"}}"#,
-            r#"{"op":"run.context","args":{}}"#,
         ]
         .iter()
         .map(|json| serde_json::from_str(json).unwrap())
         .chain([CapabilityRequest::RandomBytes(RandomBytes { length: 8 })])
         .collect();
         // Every operation is in one list or the other.
-        assert_eq!(refused.len() + 5, 16);
+        assert_eq!(refused.len() + 6, 16);
         for request in refused {
             assert!(!allowed_in_state(&request), "{}", request.op());
         }

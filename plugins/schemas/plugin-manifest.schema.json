@@ -951,6 +951,23 @@
           "items": { "$ref": "#/$defs/dependencyId" },
           "description": "Ids of declared dependencies (usually optional ones) this action needs; while one is missing or disabled only this action is unavailable (plugin API 1.4)."
         },
+        "requiresPermissions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "tools:git:network",
+              "tools:docker:modify",
+              "resources:open",
+              "resources:paths",
+              "projectContext:select",
+              "openUrl:from-params"
+            ]
+          },
+          "description": "Plugin API 1.9: declared sub-grants this action needs. Each one named here is optional: the plugin is enabled without it, and while it is not granted only the actions naming it are unavailable. A high-tier one is off until the user grants it."
+        },
         "title": {
           "type": "object",
           "additionalProperties": false,

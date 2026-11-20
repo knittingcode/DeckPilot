@@ -41,7 +41,7 @@
     },
     "path": {
       "label": "File",
-      "description": "Not supported by the plugin yet: bind the file as a resource and choose it as Folder or file."
+      "description": "A file or folder inside Folder or file, relative to it (src/main.rs). It must stay inside the folder."
     },
     "line": { "label": "Line", "description": "Needs a file." },
     "column": { "label": "Column", "description": "Needs a line." },
@@ -90,14 +90,14 @@
     "no-urls": "No page to open.",
     "too-many-urls": "More pages than can be opened at once.",
     "nothing-opened": "Nothing of the project could be opened.",
-    "path-not-supported": "A file inside a folder cannot be opened by the plugin yet."
+    "invalid-path": "A path leaves the folder, or is given with a file instead of a folder."
   },
   "messages": {
     "opened-in": "opened {{path}} in {{application}}",
     "line-needs-file": "a line needs a file, not a folder",
     "column-needs-line": "a column needs a line",
     "position-range": "a line and column are from 1 to 1000000",
-    "path-not-supported": "a file inside a folder cannot be opened yet: bind the file as a resource and choose it as the folder or file",
+    "path-needs-folder": "a path needs a folder, not a file",
     "no-urls": "no page to open",
     "too-many-urls": "at most 10 pages can be opened at once",
     "too-many-roles": "at most 10 other pages",

@@ -48,6 +48,14 @@ pub(crate) struct LegacyModule {
     /// Instances, bindings or nodes whose value a `ParamRule` cannot
     /// translate, by action name and parameter (never the value).
     pub untranslatable: Vec<String>,
+    /// Instances, bindings or nodes that set a parameter the plugin cannot
+    /// honour ([`ParamRule::Unsupported`]), by action name and parameter:
+    /// they do not stop the migration, they are unavailable after it until
+    /// the value is cleared, and the journal says which.
+    pub unsupported: Vec<String>,
+    /// Data of the module's beyond its row and instances is in use (a
+    /// profile's projects, for `projects`; [`super::Extraction`]).
+    pub data_in_use: bool,
     /// The credentials the built-in uses, per credential setting.
     pub credentials: Vec<LegacyCredential>,
 }
@@ -82,6 +90,12 @@ impl LegacyModule {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LegacySnapshot {
     pub modules: Vec<LegacyModule>,
+    /// The encrypted backup `pre-plugin-extraction` of `deckpilot.db`
+    /// (its file name), or why it could not be written, taken by the
+    /// service task when a module of the extraction set is in use
+    /// ([`super::Extraction`]). `None`: nothing to back up (no such module
+    /// in use, or no encrypted database on disk).
+    pub backup: Option<Result<String, String>>,
 }
 
 impl LegacySnapshot {
@@ -122,7 +136,14 @@ impl LegacySnapshot {
                 })
                 .unwrap_or_default();
             let plan = plan_for(&module);
-            let (instances, untranslatable) = usage(&profiles, &aliases, &config);
+            let Usage {
+                instances,
+                untranslatable,
+                unsupported,
+            } = usage(&profiles, &aliases, &config);
+            let data_in_use = plan
+                .and_then(|plan| plan.extraction)
+                .is_some_and(|extraction| extraction.projects_data && uses_projects(&profiles));
             let credentials = plan
                 .map(|plan| {
                     plan.credentials
@@ -152,11 +173,36 @@ impl LegacySnapshot {
                 builtin_types,
                 instances,
                 untranslatable,
+                unsupported,
+                data_in_use,
                 credentials,
             });
         }
-        Ok(Self { modules })
+        Ok(Self {
+            modules,
+            backup: None,
+        })
     }
+
+    /// Whether a module of the extraction set is in use here, so the
+    /// backup before its first cut-over is due ([`super::Extraction`]).
+    pub fn needs_backup(&self) -> bool {
+        self.modules.iter().any(|m| {
+            m.plan.is_some_and(|plan| plan.extraction.is_some())
+                && m.manifest.is_some()
+                && m.enabled
+                && (m.row.is_some() || m.instances > 0 || m.data_in_use)
+        })
+    }
+}
+
+/// Whether a profile has projects, or a document refers to the
+/// `projects` module's variables by their canonical ids.
+fn uses_projects(profiles: &[Profile]) -> bool {
+    profiles.iter().any(|profile| {
+        !profile.projects.is_empty()
+            || serde_json::to_string(profile).is_ok_and(|doc| doc.contains("projects.current."))
+    })
 }
 
 fn load_profiles(store: &SqliteStore) -> Result<Vec<Profile>, StorageError> {
@@ -198,17 +244,23 @@ fn translatable(value: &ParameterValue, key: &str, config: &ActionParameters) ->
         || config.get(key) == Some(value)
 }
 
+/// What the stored documents do with a module's legacy types.
+struct Usage {
+    instances: usize,
+    untranslatable: Vec<String>,
+    unsupported: Vec<String>,
+}
+
 /// How many stored instances use the uses types, and every instance,
 /// binding override or workflow node a rule cannot translate (a value
 /// other than empty or the module's setting, or a mapping, which is only
-/// known at run time).
-fn usage(
-    profiles: &[Profile],
-    aliases: &[ActionAlias],
-    config: &ActionParameters,
-) -> (usize, Vec<String>) {
+/// known at run time) or that sets a parameter the plugin cannot honour.
+fn usage(profiles: &[Profile], aliases: &[ActionAlias], config: &ActionParameters) -> Usage {
     let mut instances = 0;
     let mut problems = Vec::new();
+    let mut unsupported = Vec::new();
+    let set =
+        |value: &ParameterValue| !matches!(value, ParameterValue::Text(t) if t.trim().is_empty());
     for profile in profiles {
         let mut uses = BTreeMap::new();
         for instance in &profile.actions {
@@ -223,11 +275,18 @@ fn usage(
             if let Ok(Value::String(id)) = serde_json::to_value(instance.id) {
                 uses.insert(id, (instance.name.clone(), alias));
             }
-            for ParamRule::DropIfDefault(key) in alias.params {
-                if let Some(value) = instance.parameters.get(key)
-                    && !translatable(value, key, config)
-                {
-                    problems.push(format!("`{}` sets `{key}`", instance.name));
+            for rule in alias.params {
+                let Some(value) = instance.parameters.get(rule.key()) else {
+                    continue;
+                };
+                match *rule {
+                    ParamRule::DropIfDefault(key) if !translatable(value, key, config) => {
+                        problems.push(format!("`{}` sets `{key}`", instance.name));
+                    }
+                    ParamRule::Unsupported(key) if set(value) => {
+                        unsupported.push(format!("`{}` sets `{key}`", instance.name));
+                    }
+                    _ => {}
                 }
             }
         }
@@ -251,15 +310,25 @@ fn usage(
                     .and_then(|v| serde_json::from_value::<ActionParameters>(v).ok())
                     .unwrap_or_default();
                 let mappings = object.get("mappings").and_then(Value::as_object);
-                for ParamRule::DropIfDefault(key) in alias.params {
-                    if overrides
-                        .get(key)
-                        .is_some_and(|v| !translatable(v, key, config))
-                    {
-                        problems.push(format!("a use of `{name}` overrides `{key}`"));
+                for rule in alias.params {
+                    let (list, value_problem) = match *rule {
+                        ParamRule::DropIfDefault(key) => (
+                            &mut problems,
+                            overrides
+                                .get(key)
+                                .is_some_and(|v| !translatable(v, key, config)),
+                        ),
+                        ParamRule::Unsupported(key) => {
+                            (&mut unsupported, overrides.get(key).is_some_and(set))
+                        }
+                        ParamRule::Keep(_) | ParamRule::Rename(..) => continue,
+                    };
+                    let key = rule.key();
+                    if value_problem {
+                        list.push(format!("a use of `{name}` overrides `{key}`"));
                     }
-                    if mappings.is_some_and(|m| m.contains_key(*key)) {
-                        problems.push(format!("a workflow node maps `{key}` of `{name}`"));
+                    if mappings.is_some_and(|m| m.contains_key(key)) {
+                        list.push(format!("a workflow node maps `{key}` of `{name}`"));
                     }
                 }
             });
@@ -267,7 +336,13 @@ fn usage(
     }
     problems.sort();
     problems.dedup();
-    (instances, problems)
+    unsupported.sort();
+    unsupported.dedup();
+    Usage {
+        instances,
+        untranslatable: problems,
+        unsupported,
+    }
 }
 
 /// Calls `visit` for every JSON object in `value`.

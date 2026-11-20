@@ -117,6 +117,8 @@ fn a_state_call_reads_and_nothing_else_whatever_is_granted() {
         r#"{"op":"settings.get","args":{}}"#,
         r#"{"op":"time.now","args":{}}"#,
         r#"{"op":"log","args":{"level":"debug","message":"m"}}"#,
+        // Plugin API 1.9: which key this is (`keyScope`), nothing else.
+        r#"{"op":"run.context","args":{}}"#,
     ] {
         assert!(
             s.authorize_state(&request(allowed)).is_allowed(),
@@ -135,7 +137,6 @@ fn a_state_call_reads_and_nothing_else_whatever_is_granted() {
         r#"{"op":"variables.publish","args":{"id":"x","value":1}}"#,
         r#"{"op":"variables.clear","args":{}}"#,
         r#"{"op":"random.bytes","args":{"length":8}}"#,
-        r#"{"op":"run.context","args":{}}"#,
     ];
     for json in refused {
         let decision = s.authorize_state(&request(json));

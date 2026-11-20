@@ -346,7 +346,8 @@
               "type": "resource",
               "kinds": [
                 "directory",
-                "file"
+                "file",
+                "dockerEnvironment"
               ]
             }
           },
@@ -459,7 +460,8 @@
               "type": "resource",
               "kinds": [
                 "directory",
-                "file"
+                "file",
+                "dockerEnvironment"
               ]
             }
           },
@@ -540,7 +542,14 @@
           "idempotent": true,
           "cancellable": true,
           "effect": "modifies"
-        }
+        },
+        "state": {
+          "refresh": "every",
+          "intervalSeconds": 5
+        },
+        "requiresPermissions": [
+          "tools:docker:modify"
+        ]
       },
       {
         "id": "compose-down",
@@ -557,7 +566,8 @@
               "type": "resource",
               "kinds": [
                 "directory",
-                "file"
+                "file",
+                "dockerEnvironment"
               ]
             }
           },
@@ -639,7 +649,14 @@
           "idempotent": true,
           "cancellable": true,
           "effect": "modifies"
-        }
+        },
+        "state": {
+          "refresh": "every",
+          "intervalSeconds": 5
+        },
+        "requiresPermissions": [
+          "tools:docker:modify"
+        ]
       },
       {
         "id": "compose-restart",
@@ -656,7 +673,8 @@
               "type": "resource",
               "kinds": [
                 "directory",
-                "file"
+                "file",
+                "dockerEnvironment"
               ]
             }
           },
@@ -737,7 +755,14 @@
           "idempotent": false,
           "cancellable": true,
           "effect": "modifies"
-        }
+        },
+        "state": {
+          "refresh": "every",
+          "intervalSeconds": 5
+        },
+        "requiresPermissions": [
+          "tools:docker:modify"
+        ]
       },
       {
         "id": "logs",
@@ -799,7 +824,8 @@
               "type": "resource",
               "kinds": [
                 "directory",
-                "file"
+                "file",
+                "dockerEnvironment"
               ]
             }
           },
@@ -941,7 +967,6 @@
       "not-user-initiated": "t:errors.not-user-initiated",
       "context-unsupported": "t:errors.context-unsupported",
       "project-name-unsupported": "t:errors.project-name-unsupported",
-      "docker-environment-missing": "t:errors.docker-environment-missing",
       "cancelled": "t:errors.cancelled",
       "resource-unbound": "t:errors.resource-unbound",
       "resource-role-missing": "t:errors.resource-role-missing",

@@ -474,6 +474,27 @@ impl Agent {
         consent
     }
 
+    /// Enables the plugin with the user's consent to every permission it
+    /// needs, none of the optional ones (plugin API 1.9,
+    /// `requiresPermissions`); the grant keys.
+    pub async fn enable_required(&self) -> Vec<String> {
+        let consent: Vec<String> = self
+            .details()
+            .await
+            .permissions
+            .iter()
+            .filter(|p| !p.optional)
+            .map(|p| p.key.clone())
+            .collect();
+        self.ok(Request::EnablePlugin {
+            plugin: self.id.into(),
+            consent: consent.clone(),
+        })
+        .await;
+        self.wait_state(PluginState::Enabled).await;
+        consent
+    }
+
     pub async fn disable(&self) {
         self.ok(Request::DisablePlugin {
             plugin: self.id.into(),

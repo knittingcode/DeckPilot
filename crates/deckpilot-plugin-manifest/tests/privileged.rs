@@ -676,3 +676,108 @@ fn the_two_schema_copies_are_identical() {
          plugin-manifest.schema.json"
     );
 }
+
+/// `requiresPermissions` (plugin API 1.9): an action names declared
+/// sub-grants it needs, which makes them optional for enabling; anything
+/// else is refused, by the model and by the schema alike.
+#[test]
+fn actions_name_the_optional_sub_grants_they_need() {
+    let docker = || {
+        let mut value = with_permission("^1.9", docker_tools());
+        value["contributes"]["actions"][0]["requiresPermissions"] = json!(["tools:docker:modify"]);
+        value
+    };
+    let value = docker();
+    assert!(schema_ok(&value));
+    let manifest = parse(&value);
+    manifest.validate_bundled().unwrap();
+    assert_eq!(
+        manifest.contributes.actions()[0].requires_permissions(),
+        ["tools:docker:modify"]
+    );
+    assert_eq!(
+        manifest
+            .optional_permissions()
+            .into_iter()
+            .collect::<Vec<_>>(),
+        ["tools:docker:modify"]
+    );
+    // Without the field: nothing is optional, and it is never written.
+    let plain = parse(&with_permission("^1.9", docker_tools()));
+    assert!(plain.optional_permissions().is_empty());
+    assert!(
+        !serde_json::to_string(&plain)
+            .unwrap()
+            .contains("requiresPermissions")
+    );
+
+    for (what, edit, path, code) in [
+        (
+            "a required grant",
+            json!(["tools:docker"]),
+            "contributes.actions[0].requiresPermissions[0]",
+            IssueCode::InvalidValue,
+        ),
+        (
+            "an unknown key",
+            json!(["filesystem"]),
+            "contributes.actions[0].requiresPermissions[0]",
+            IssueCode::InvalidValue,
+        ),
+        (
+            "a sub-grant the manifest does not declare",
+            json!(["tools:docker:modify", "resources:open"]),
+            "contributes.actions[0].requiresPermissions[1]",
+            IssueCode::MissingPermission,
+        ),
+        (
+            "twice",
+            json!(["tools:docker:modify", "tools:docker:modify"]),
+            "contributes.actions[0].requiresPermissions[1]",
+            IssueCode::Duplicate,
+        ),
+        (
+            "empty",
+            json!([]),
+            "contributes.actions[0].requiresPermissions",
+            IssueCode::Count,
+        ),
+    ] {
+        let mut value = docker();
+        value["contributes"]["actions"][0]["requiresPermissions"] = edit;
+        let errors = parse(&value).validate_bundled().unwrap_err();
+        assert!(errors.has(path, code), "{what}: {errors:?}");
+        if what != "a sub-grant the manifest does not declare" {
+            assert!(!schema_ok(&value), "{what}");
+        }
+    }
+    // Below plugin API 1.9 it is refused.
+    let mut old: Value = serde_json::from_str(EXAMPLE).unwrap();
+    old["contributes"]["actions"][0]["requiresPermissions"] = json!(["tools:docker:modify"]);
+    let errors = parse(&old).validate().unwrap_err();
+    assert!(
+        errors.has(
+            "contributes.actions[0].requiresPermissions",
+            IssueCode::Conflict
+        ),
+        "{errors:?}"
+    );
+}
+
+/// From plugin API 1.9 a key of an action that changes something may show
+/// state (a state call only reads what the plugin stored); below it the
+/// manifest is refused as before.
+#[test]
+fn state_on_a_modifying_action_needs_plugin_api_1_9() {
+    let mut value = first_party("^1.9");
+    value["contributes"]["actions"][0]["node"]["effect"] = json!("modifies");
+    assert!(value["contributes"]["actions"][0]["state"].is_object());
+    parse(&value).validate_bundled().unwrap();
+    let mut old: Value = serde_json::from_str(EXAMPLE).unwrap();
+    old["contributes"]["actions"][0]["node"]["effect"] = json!("modifies");
+    let errors = parse(&old).validate().unwrap_err();
+    assert!(
+        errors.has("contributes.actions[0].state", IssueCode::Conflict),
+        "{errors:?}"
+    );
+}

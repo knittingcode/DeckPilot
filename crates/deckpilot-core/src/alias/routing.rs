@@ -470,3 +470,149 @@ fn reserved_ids_never_register() {
     assert!(!id("deckpilot.cores").is_reserved());
     assert!(!id("core").is_reserved());
 }
+
+/// The extraction set (`module-migration.md` §11 D2, D4): while the
+/// migration waits for the user's consent, the legacy type is unavailable
+/// with that reason, the built-in compiled in or not, the plugin there or
+/// not; the module's other types are not affected.
+#[test]
+fn a_migration_waiting_for_consent_leaves_the_type_unavailable() {
+    let waiting = LegacyRouting::new().with(id("legacy"), LegacyRoute::AwaitingConsent);
+    for (builtin, plugin) in [(true, true), (true, false), (false, true)] {
+        let registry = modules(builtin, plugin.then(PluginFixture::new), waiting.clone());
+        let name = if plugin { "Legacy plugin" } else { "Legacy" };
+        let reason = format!(
+            "{name} (`deckpilot.legacy`) waits for your consent: allow it in Settings › Plugins"
+        );
+        assert_eq!(
+            outcome(&registry),
+            AliasOutcome::Unavailable {
+                reason: reason.clone()
+            },
+            "{builtin} {plugin}"
+        );
+        assert_eq!(
+            run(&registry, &fetch(), &message("hi")),
+            format!("refused: action type `legacy.fetch` is unavailable: {reason}")
+        );
+        assert!(matches!(
+            registry.availability(&fetch()),
+            Availability::ModuleDisabled { .. }
+        ));
+        if builtin {
+            assert_eq!(
+                run(&registry, &other(), &message("hi")),
+                "builtin: hi [message]"
+            );
+        }
+    }
+}
+
+/// A handler that reports the parameters it got, `key=value` sorted.
+struct Keys(crate::ActionType);
+
+impl crate::ActionHandler for Keys {
+    fn definition(&self) -> &crate::ActionType {
+        &self.0
+    }
+
+    fn execute(
+        &self,
+        parameters: &ActionParameters,
+        _context: &ExecutionContext<'_>,
+    ) -> crate::ActionResult {
+        let keys: Vec<String> = parameters
+            .iter()
+            .map(|(key, value)| format!("{key}={}", serde_json::to_string(value).unwrap()))
+            .collect();
+        crate::ActionResult::success(keys.join(" "))
+    }
+}
+
+/// `Rename`, `Keep` and `Unsupported` as the alias handler applies them:
+/// the legacy type keeps the legacy key, the plugin gets its own; a kept
+/// parameter passes unchanged; an unsupported value is refused when saved
+/// and when run, never dropped; an empty one passes.
+#[test]
+fn renamed_kept_and_unsupported_parameters_reach_the_plugin_as_declared() {
+    use crate::{ParameterKind, ParameterSpec, ResourceKey, ResourceRef};
+    let spec = |key: &str, kind: ParameterKind| ParameterSpec {
+        key: key.into(),
+        label: key.into(),
+        description: None,
+        kind,
+        required: false,
+        default: None,
+    };
+    let mut plugin = plugin_fetch();
+    plugin.parameters = vec![
+        spec("repository", ParameterKind::Resource { kind: None }),
+        spec("projectId", ParameterKind::Project),
+        spec(
+            "projectName",
+            ParameterKind::Text {
+                multiline: false,
+                max_length: Some(64),
+            },
+        ),
+    ];
+    let alias = ActionAlias {
+        params: &[
+            ParamRule::Keep("repository"),
+            ParamRule::Rename("project_id", "projectId"),
+            ParamRule::Unsupported("projectName"),
+        ],
+        ..FIXTURE_ALIASES[0]
+    };
+    let handler = crate::registry::AliasHandler::new(&alias, Box::new(Keys(plugin)), None, None);
+    let keys: Vec<&str> = crate::ActionHandler::definition(&handler)
+        .parameters
+        .iter()
+        .map(|p| p.key.as_str())
+        .collect();
+    assert_eq!(keys, ["repository", "project_id", "projectName"]);
+    let profile = Profile::new("Work");
+    let project = crate::ProjectId::new();
+    let machine = MachineConfig::new(Os::Linux);
+    let context = ExecutionContext::new(&profile, None, &machine);
+    let repository = ParameterValue::Resource(ResourceRef::Fixed {
+        key: ResourceKey::new("shop.repo").unwrap(),
+    });
+    let stored = ActionParameters::new()
+        .with("repository", repository.clone())
+        .with("project_id", ParameterValue::Project(project))
+        .with("projectName", ParameterValue::Text(" ".into()));
+    let ran = crate::ActionHandler::execute(&handler, &stored, &context);
+    assert_eq!(
+        ran.status,
+        crate::ActionStatus::Succeeded,
+        "{}",
+        ran.message
+    );
+    assert_eq!(
+        ran.message,
+        format!(
+            "projectId={} projectName={} repository={}",
+            serde_json::to_string(&ParameterValue::Project(project)).unwrap(),
+            serde_json::to_string(&ParameterValue::Text(" ".into())).unwrap(),
+            serde_json::to_string(&repository).unwrap()
+        )
+    );
+    assert_eq!(crate::ActionHandler::validate(&handler, &stored), []);
+
+    let named = stored.with("projectName", ParameterValue::Text("shop".into()));
+    let refused = crate::ActionHandler::execute(&handler, &named, &context);
+    assert_eq!(refused.status, crate::ActionStatus::Failed);
+    assert!(
+        refused
+            .message
+            .starts_with("parameter `projectName` is not supported by the plugin providing"),
+        "{}",
+        refused.message
+    );
+    assert_eq!(crate::ActionHandler::validate(&handler, &named).len(), 1);
+    assert_eq!(
+        crate::ActionHandler::check(&handler, &named, &profile).len(),
+        1
+    );
+}

@@ -108,11 +108,7 @@ esac
         log = log.display()
     );
     let path = bin.join("git");
-    std::fs::write(&path, script).unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    support::fakes::write_script(&path, &script);
     path
 }
 

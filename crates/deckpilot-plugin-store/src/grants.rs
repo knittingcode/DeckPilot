@@ -411,12 +411,36 @@ fn key_covers(old: &GrantKey, new: &GrantKey) -> bool {
     }
 }
 
-/// The normalized grants a manifest declares.
+/// The normalized grants a manifest declares, and which of them are
+/// optional: the sub-grants its actions name in `requiresPermissions`
+/// (plugin API 1.9). Enabling needs every other one; while an optional one
+/// is not granted only the actions naming it are unavailable.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct GrantSet(BTreeMap<GrantKey, GrantScope>);
+pub struct GrantSet(BTreeMap<GrantKey, GrantScope>, BTreeSet<GrantKey>);
 
 impl GrantSet {
     pub fn from_manifest(manifest: &Manifest) -> Self {
+        let mut set = Self::declared(manifest);
+        set.1 = manifest
+            .optional_permissions()
+            .into_iter()
+            .filter_map(|key| key.parse::<GrantKey>().ok())
+            .filter(|key| set.0.contains_key(key))
+            .collect();
+        set
+    }
+
+    /// Whether enabling can do without `key` (`requiresPermissions`).
+    pub fn is_optional(&self, key: &GrantKey) -> bool {
+        self.1.contains(key)
+    }
+
+    /// The optional keys ([`GrantSet::is_optional`]).
+    pub fn optional(&self) -> impl Iterator<Item = &GrantKey> {
+        self.1.iter()
+    }
+
+    fn declared(manifest: &Manifest) -> Self {
         let mut set = Self::default();
         for permission in &manifest.permissions {
             match permission {
@@ -895,8 +919,26 @@ impl PermissionDiff {
 }
 
 /// The declared keys that are not granted with at least the declared scope:
-/// what blocks enabling.
+/// what blocks enabling. An optional key ([`GrantSet::is_optional`]) never
+/// does: [`missing_optional_grants`] lists those.
 pub fn missing_grants(stored: &[StoredGrant], declared: &GrantSet) -> Vec<GrantKey> {
+    not_granted(stored, declared)
+        .filter(|key| !declared.is_optional(key))
+        .collect()
+}
+
+/// The optional keys of `declared` that are not granted with at least the
+/// declared scope: what the actions naming them wait for.
+pub fn missing_optional_grants(stored: &[StoredGrant], declared: &GrantSet) -> Vec<GrantKey> {
+    not_granted(stored, declared)
+        .filter(|key| declared.is_optional(key))
+        .collect()
+}
+
+fn not_granted<'a>(
+    stored: &'a [StoredGrant],
+    declared: &'a GrantSet,
+) -> impl Iterator<Item = GrantKey> + 'a {
     declared
         .iter()
         .filter(|(key, scope)| {
@@ -905,7 +947,6 @@ pub fn missing_grants(stored: &[StoredGrant], declared: &GrantSet) -> Vec<GrantK
             })
         })
         .map(|(key, _)| key.clone())
-        .collect()
 }
 
 #[cfg(test)]
@@ -1342,6 +1383,74 @@ mod tests {
                 "notifications".parse().unwrap()
             ]
         );
+    }
+
+    /// Plugin API 1.9's `requiresPermissions`: a sub-grant an action names
+    /// is optional, so it never blocks enabling and is listed on its own;
+    /// every other grant still does.
+    #[test]
+    fn sub_grants_actions_name_are_optional_for_enabling() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/example-manifest.json")).unwrap();
+        value["engines"]["pluginApi"] = "^1.9".into();
+        let permissions = value["permissions"].as_array_mut().unwrap();
+        permissions.retain(|p| p["kind"] != "network" && p["kind"] != "credentials");
+        permissions.push(
+            serde_json::json!({"kind": "tools", "justification": "Runs docker.",
+            "tools": [{"executable": "docker", "modify": true, "subcommands": [
+                {"name": "ps"}, {"name": "compose up", "options": ["--detach"]}]}]}),
+        );
+        let manifest = |value: &serde_json::Value| Manifest::from_json(&value.to_string()).unwrap();
+        let modify: GrantKey = "tools:docker:modify".parse().unwrap();
+        let read: GrantKey = "tools:docker".parse().unwrap();
+
+        // Not named: required, as before.
+        let declared = GrantSet::from_manifest(&manifest(&value));
+        assert!(!declared.is_optional(&modify));
+        assert!(missing_grants(&[], &declared).contains(&modify));
+
+        value["contributes"]["actions"][0]["requiresPermissions"] =
+            serde_json::json!(["tools:docker:modify"]);
+        let declared = GrantSet::from_manifest(&manifest(&value));
+        assert!(declared.is_optional(&modify));
+        assert!(!declared.is_optional(&read));
+        assert_eq!(declared.optional().collect::<Vec<_>>(), [&modify]);
+        let missing = missing_grants(&[], &declared);
+        assert!(missing.contains(&read));
+        assert!(!missing.contains(&modify));
+        assert_eq!(
+            missing_optional_grants(&[], &declared),
+            std::slice::from_ref(&modify)
+        );
+        let granted: Vec<StoredGrant> = declared
+            .iter()
+            .filter(|(key, _)| **key != modify)
+            .map(|(key, scope)| row(&key.to_string(), scope.clone(), GrantStatus::Granted))
+            .collect();
+        assert_eq!(missing_grants(&granted, &declared), []);
+        assert_eq!(
+            missing_optional_grants(&granted, &declared),
+            std::slice::from_ref(&modify)
+        );
+        // Revoked is not granted either.
+        let mut revoked = granted.clone();
+        revoked.push(row(
+            "tools:docker:modify",
+            GrantScope::ToolModify,
+            GrantStatus::Revoked,
+        ));
+        assert_eq!(missing_grants(&revoked, &declared), []);
+        assert_eq!(
+            missing_optional_grants(&revoked, &declared),
+            std::slice::from_ref(&modify)
+        );
+        let mut all = granted;
+        all.push(row(
+            "tools:docker:modify",
+            GrantScope::ToolModify,
+            GrantStatus::Granted,
+        ));
+        assert_eq!(missing_optional_grants(&all, &declared), []);
     }
 
     #[test]

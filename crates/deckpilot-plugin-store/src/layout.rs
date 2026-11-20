@@ -27,6 +27,11 @@ pub const DATABASE_FILE: &str = "plugins.db";
 const LOCK_FILE: &str = ".lock";
 const STAGING_DIR: &str = ".staging";
 const TRASH_DIR: &str = ".trash";
+/// How long [`Layout::lock`] waits for a lock that looks held: a child
+/// process being started holds a copy of a just-released lock only until
+/// it runs its program.
+const LOCK_PATIENCE: std::time::Duration = std::time::Duration::from_secs(2);
+const LOCK_RETRY: std::time::Duration = std::time::Duration::from_millis(10);
 
 /// Paths under `<data dir>/plugins`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +96,13 @@ impl Layout {
     /// Takes the exclusive lock of the plugin directory (one writer per data
     /// directory). Released when the returned file is dropped, also when
     /// the process dies.
+    ///
+    /// The lock belongs to the open file, which a child process that this
+    /// process is starting at that moment (on any thread) shares until it
+    /// runs its program, when the descriptor closes (close-on-exec). So a
+    /// lock just released by dropping a manager can still look held for a
+    /// moment: it is tried again for up to [`LOCK_PATIENCE`] before the
+    /// directory counts as another writer's.
     pub(crate) fn lock(&self) -> Result<File> {
         let path = self.lock_file();
         let file = OpenOptions::new()
@@ -99,12 +111,18 @@ impl Layout {
             .write(true)
             .open(&path)
             .map_err(|e| StoreError::io(&path, &e))?;
-        match file.try_lock() {
-            Ok(()) => Ok(file),
-            Err(fs::TryLockError::WouldBlock) => {
-                Err(StoreError::Locked(self.root.display().to_string()))
+        let until = std::time::Instant::now() + LOCK_PATIENCE;
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(file),
+                Err(fs::TryLockError::WouldBlock) if std::time::Instant::now() < until => {
+                    std::thread::sleep(LOCK_RETRY);
+                }
+                Err(fs::TryLockError::WouldBlock) => {
+                    return Err(StoreError::Locked(self.root.display().to_string()));
+                }
+                Err(fs::TryLockError::Error(e)) => return Err(StoreError::io(&path, &e)),
             }
-            Err(fs::TryLockError::Error(e)) => Err(StoreError::io(&path, &e)),
         }
     }
 

@@ -21,9 +21,14 @@
 //!   canonical argv: options as `--name=value`, `--` before positionals
 //!   where the tool reads them as names, its own fixed prefix first.
 //! * **Working directory.** Only a handle this invocation issued (X1/X2):
-//!   a directory for git; a directory or a compose file for docker; for
-//!   docker's commands outside compose also a Docker environment binding,
-//!   whose context is then used.
+//!   a directory for git; a directory or a compose file for docker (also
+//!   a Docker environment binding whose value is such a path, as the
+//!   built-in's compose role allowed); for docker's commands outside
+//!   compose also a Docker environment binding, whose context is then
+//!   used, or no handle at all ([`Target::Unbound`]): `ps`, `logs` of a
+//!   container, `version`, `context show` and `compose version` read no
+//!   folder, and run in an empty folder the agent made for them
+//!   ([`neutral_directory`]).
 //! * **Environment.** Cleared, then [`BASE_ENVIRONMENT`] from the agent's
 //!   own environment, `LC_ALL=C`, and each tool's own allowlist (`git.rs`,
 //!   `docker.rs`). Nothing from the plugin; no stdin.
@@ -254,6 +259,13 @@ impl Checked {
             Tool::Docker => true,
         }
     }
+
+    /// Whether the run may go without a handle: docker's commands that
+    /// read no folder. Compose's project commands need their bound folder
+    /// or file, and git always works in a repository.
+    pub fn runs_unbound(&self) -> bool {
+        self.tool == Tool::Docker && !docker::is_project(self.spec.subcommand)
+    }
 }
 
 /// The kind of the working directory handle.
@@ -273,6 +285,52 @@ pub(crate) enum Target {
     File(PathBuf),
     /// A Docker context name.
     DockerEnvironment(String),
+    /// No handle: docker's commands that read no folder, in an empty
+    /// folder of the agent's own, with the host-held context.
+    Unbound,
+}
+
+/// The empty folder docker's commands without a handle run in: made by
+/// the agent in the system's temporary folder, readable by this user only,
+/// named with 64 random bits, and made again if it is gone or anything
+/// has appeared in it. Never a folder of the user's or the plugin's
+/// choosing.
+pub(crate) fn neutral_directory() -> Result<PathBuf, Denial> {
+    static NEUTRAL: Mutex<Option<PathBuf>> = Mutex::new(None);
+    let mut kept = NEUTRAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let usable = |dir: &Path| {
+        std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir())
+            && std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_none())
+    };
+    if let Some(dir) = kept.as_ref().filter(|dir| usable(dir)) {
+        return Ok(dir.clone());
+    }
+    let unavailable = || {
+        Denial::new(
+            codes::SPAWN_FAILED,
+            "the agent could not make an empty folder to run docker in",
+        )
+    };
+    let mut bytes = [0_u8; 8];
+    getrandom::fill(&mut bytes).map_err(|_| unavailable())?;
+    let name = bytes.iter().fold(String::with_capacity(16), |mut out, b| {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{b:02x}");
+        out
+    });
+    let dir = std::env::temp_dir().join(format!("deckpilot-empty-{name}"));
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    // `create`, never `create_all`: a folder that exists already is not
+    // the agent's.
+    builder.create(&dir).map_err(|_| unavailable())?;
+    if let Some(old) = kept.replace(dir.clone()) {
+        let _ = std::fs::remove_dir(old);
+    }
+    Ok(dir)
 }
 
 pub(crate) fn executable_of(tool: Tool) -> ToolExecutable {
@@ -634,6 +692,14 @@ impl ToolHost {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         Self::unconfigured().with_settings(&settings)
+    }
+
+    /// As [`from_agent`](Self::from_agent), without the user's settings:
+    /// a test never reads the process-wide settings that another test's
+    /// agent may have configured meanwhile ([`configure`]).
+    #[cfg(test)]
+    pub fn for_test() -> Self {
+        Self::unconfigured()
     }
 
     fn unconfigured() -> Self {

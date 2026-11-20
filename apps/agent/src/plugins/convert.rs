@@ -71,13 +71,28 @@ pub fn permission(
     scope: &GrantScope,
     status: ipc::PermissionStatus,
 ) -> ipc::PluginPermission {
+    let name = key.to_string();
+    let optional = manifest.optional_permissions().contains(name.as_str());
+    let actions = if optional {
+        manifest
+            .contributes
+            .actions()
+            .iter()
+            .filter(|a| a.requires_permissions().contains(&name))
+            .map(|a| a.id.clone())
+            .collect()
+    } else {
+        Vec::new()
+    };
     ipc::PluginPermission {
-        key: key.to_string(),
+        key: name,
         kind: key.kind.as_str().to_owned(),
         tier: tier(scope.tier()),
         status,
         scope: serde_json::to_value(scope).unwrap_or(serde_json::Value::Null),
         justification: justification(manifest, key),
+        optional,
+        actions,
     }
 }
 
@@ -112,16 +127,53 @@ pub fn unavailable(record: &PluginRecord) -> Option<String> {
 
 /// Why the actions of a plugin cannot run on keys and in workflows: as
 /// [`unavailable`], and also while a declared permission is not granted
-/// (revoked after enabling). The plugin stays enabled meanwhile, and
+/// (revoked after enabling), except an optional one (plugin API 1.9,
+/// [`unmet_permissions`]). The plugin stays enabled meanwhile, and
 /// `invokePluginAction` still runs it (its capability calls are denied).
 pub fn unavailable_with(record: &PluginRecord, stored: &[StoredGrant]) -> Option<String> {
     unavailable(record).or_else(|| {
         let manifest = &record.active()?.manifest;
         permissions(manifest, stored)
             .into_iter()
-            .find(|p| p.status != ipc::PermissionStatus::Granted)
+            .find(|p| !p.optional && p.status != ipc::PermissionStatus::Granted)
             .map(|p| format!("the permission `{}` is not granted", p.key))
     })
+}
+
+/// Why each action that names an optional permission in
+/// `requiresPermissions` (plugin API 1.9) cannot run while its plugin can:
+/// the first of them that is not granted. The other actions run.
+pub fn unmet_permissions(
+    manifest: &Manifest,
+    stored: &[StoredGrant],
+) -> std::collections::BTreeMap<String, String> {
+    let missing: Vec<String> = deckpilot_plugin_store::missing_optional_grants(
+        stored,
+        &deckpilot_plugin_store::GrantSet::from_manifest(manifest),
+    )
+    .iter()
+    .map(GrantKey::to_string)
+    .collect();
+    if missing.is_empty() {
+        return std::collections::BTreeMap::new();
+    }
+    manifest
+        .contributes
+        .actions()
+        .iter()
+        .filter_map(|action| {
+            let key = action
+                .requires_permissions()
+                .iter()
+                .find(|key| missing.contains(key))?;
+            Some((action.id.clone(), needs_permission(key)))
+        })
+        .collect()
+}
+
+/// The reason of an action waiting for the optional permission `key`.
+pub fn needs_permission(key: &str) -> String {
+    format!("needs the permission `{key}`: allow it in Settings › Plugins")
 }
 
 fn action_info(
@@ -150,11 +202,12 @@ pub fn action_entries(
         return Vec::new();
     };
     let reason = unavailable_with(record, stored);
+    let unmet = unmet_permissions(m, stored);
     m.contributes
         .actions()
         .iter()
         .map(|action| ipc::PluginActionEntry {
-            action: action_info(m, action, reason.as_ref()),
+            action: action_info(m, action, reason.as_ref().or(unmet.get(&action.id))),
             manifest: serde_json::to_value(action).ok(),
             too_large: false,
         })
@@ -167,10 +220,11 @@ pub fn summary(record: &PluginRecord, stored: &[StoredGrant]) -> ipc::PluginSumm
     let reason = unavailable_with(record, stored);
     let actions = manifest
         .map(|m| {
+            let unmet = unmet_permissions(m, stored);
             m.contributes
                 .actions()
                 .iter()
-                .map(|action| action_info(m, action, reason.as_ref()))
+                .map(|action| action_info(m, action, reason.as_ref().or(unmet.get(&action.id))))
                 .collect()
         })
         .unwrap_or_default();

@@ -11,7 +11,9 @@
 //!   permissions ask for consent, then each of the three actions runs as
 //!   the user started it, and opens exactly the bindings it names;
 //! * `nothing_opens_in_a_run_the_user_did_not_start`: the same actions
-//!   from a scheduled workflow are refused and nothing is launched.
+//!   from a scheduled workflow are refused and nothing is launched;
+//! * `a_path_inside_the_bound_folder_opens_and_nothing_outside_it`: the
+//!   built-in's `path` inside the bound folder, and nothing outside it.
 //!
 //! The plugin is pinned as a `default`-class plugin: `bundled.json`
 //! releases it as `migration`, which only the migration engine installs
@@ -79,6 +81,7 @@ struct Fixture {
     scheduled: deckpilot_core::WorkflowId,
 }
 
+#[allow(clippy::too_many_lines)] // every binding and instance, in one place
 fn fixture(dir: &Path) -> Fixture {
     let (repo, file) = checkout(dir);
     let mut machine = MachineConfig::new(Os::current());
@@ -375,5 +378,77 @@ async fn nothing_opens_in_a_run_the_user_did_not_start() {
     assert!(error.message.contains("the user started"), "{record:#?}");
     assert_eq!(env.launched(), Vec::<(String, Vec<String>)>::new());
     env.assert_no_page_opened();
+    agent.stop().await;
+}
+
+/// The built-in's `path`: a file inside the bound folder opens at a line
+/// in the bound editor by its real path; a path that leaves the folder,
+/// by `..` or through a link, or does not exist opens nothing.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_path_inside_the_bound_folder_opens_and_nothing_outside_it() {
+    let dir = support::TempDir::new("plugins-workspace-path-fixture");
+    let mut f = fixture(dir.path());
+    let secret = dir.path().join("secret");
+    std::fs::create_dir_all(&secret).unwrap();
+    std::fs::write(secret.join("id_rsa"), "key").unwrap();
+    std::os::unix::fs::symlink(&secret, f.repo.join("out")).unwrap();
+    let id = PLUGIN.id;
+    let mut at = |path: &str| {
+        first_party::instance(
+            &mut f.profile,
+            id,
+            "open-in-editor",
+            &[
+                ("application", fixed("tools.code")),
+                ("location", fixed("shop.repo")),
+                ("path", ParameterValue::Text(path.into())),
+                ("editor", ParameterValue::Choice("zed".into())),
+                ("line", ParameterValue::Integer(4)),
+            ],
+        )
+    };
+    let inside = at("src/main.rs");
+    let up = at("../shop/src/main.rs");
+    let link = at("out/id_rsa");
+    let missing = at("src/missing.rs");
+    let folder = at("src");
+    let env = Env::new(
+        "plugins-workspace-path",
+        PLUGIN,
+        BundleClass::Default,
+        Some((&f.profile, Some(f.project))),
+        Some(&f.machine),
+    );
+    let agent = env.start().await;
+    agent.seeded().await;
+    agent.enable().await;
+
+    let opened = agent.run_action(inside).await;
+    assert!(opened.ok, "{opened:?}\n{}", agent.log());
+    assert_eq!(opened.message, "opened shop.repo/src/main.rs in tools.code");
+    assert_eq!(opened.data["path"], "shop.repo/src/main.rs");
+    assert_eq!(opened.data["located"], "true");
+    assert_eq!(
+        env.launched(),
+        [(EDITOR.to_owned(), vec![format!("{}:4", f.file.display())])]
+    );
+
+    for (instance, code) in [
+        (up, "invalid-parameters"),
+        (link, "invalid-path"),
+        (missing, "not-found"),
+        (folder, "invalid-position"),
+    ] {
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        let refused = agent.run_action(instance).await;
+        assert!(!refused.ok, "{refused:?}");
+        assert_eq!(refused.code.as_deref(), Some(code), "{refused:?}");
+        assert!(
+            !refused.message.contains(&*dir.path().to_string_lossy()),
+            "{refused:?}"
+        );
+    }
+    assert_eq!(env.launched().len(), 1, "{:?}", env.launched());
     agent.stop().await;
 }

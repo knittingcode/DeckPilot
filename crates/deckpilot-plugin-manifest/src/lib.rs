@@ -70,7 +70,7 @@ pub use integrity::{
 pub use locale::LOCALIZATION_API;
 pub use model::*;
 pub use path_rules::{MAX_PATH_LEN, check_relative as check_relative_path};
-pub use validate::{GENERATED_SETTING_KEY, SHARED_ERROR_CODES};
+pub use validate::{GENERATED_SETTING_KEY, OPTIONAL_PERMISSIONS, SHARED_ERROR_CODES};
 pub use visual::{
     GRADIENT_COLORS, MAX_BACKGROUND_BYTES, MAX_BACKGROUND_SIDE, MAX_VISUAL_ASSET_ID,
     MAX_VISUAL_ASSET_NAME, MAX_VISUAL_BACKGROUNDS, MAX_VISUAL_ICON_BYTES, MAX_VISUAL_ICON_SIDE,

@@ -1379,6 +1379,21 @@ mod first_party {
         manifest
     }
 
+    /// A plugin API 1.9 manifest, valid only as a bundled first-party
+    /// plugin (the first-party publisher gate, X12).
+    fn bundled_manifest(text: &str) -> Manifest {
+        let manifest = Manifest::from_json(text).expect("the manifest parses");
+        manifest
+            .validate_bundled()
+            .expect("the manifest is a valid bundled first-party manifest");
+        assert!(
+            manifest.validate_first_party().is_err(),
+            "{} is valid only as a bundled plugin",
+            manifest.id
+        );
+        manifest
+    }
+
     fn snake_case(key: &str) -> String {
         let mut out = String::with_capacity(key.len() + 4);
         for c in key.chars() {
@@ -1423,7 +1438,12 @@ mod first_party {
         let parameters = action
             .parameters
             .iter()
-            .map(|p| core_spec(serde_json::to_value(p).unwrap()))
+            .map(|p| match &p.kind {
+                deckpilot_plugin_manifest::ParameterKind::Resource { kinds } => {
+                    resource_spec(p, kinds)
+                }
+                _ => core_spec(serde_json::to_value(p).unwrap()),
+            })
             .collect();
         let mut node: NodeSpec = action.node.as_ref().map_or_else(NodeSpec::default, |n| {
             serde_json::from_value(serde_json::to_value(n).unwrap()).expect("the node converts")
@@ -1447,6 +1467,32 @@ mod first_party {
             deprecated: action.deprecated.unwrap_or(false),
             controls: None,
             node,
+        }
+    }
+
+    /// A `resource` parameter (plugin API 1.9) as the agent converts it
+    /// (`apps/agent/src/plugins/engine.rs` `resource_spec`): one kind for
+    /// the editor when the manifest accepts exactly one the core knows,
+    /// else any; no default.
+    fn resource_spec(
+        parameter: &deckpilot_plugin_manifest::Parameter,
+        kinds: &[deckpilot_plugin_manifest::ResourceKind],
+    ) -> ParameterSpec {
+        use deckpilot_core::ResourceKind as Core;
+        use deckpilot_plugin_manifest::ResourceKind as Declared;
+        let kind = match kinds {
+            [Declared::Directory] => Some(Core::Directory),
+            [Declared::Application] => Some(Core::Application),
+            [Declared::DockerEnvironment] => Some(Core::DockerEnvironment),
+            _ => None,
+        };
+        ParameterSpec {
+            key: parameter.key.clone(),
+            label: parameter.label.clone(),
+            description: parameter.description.clone(),
+            kind: ParameterKind::Resource { kind },
+            required: parameter.required,
+            default: None,
         }
     }
 
@@ -2032,6 +2078,382 @@ mod first_party {
                 .collect::<Vec<_>>(),
             [deckpilot_plugin_manifest::PermissionKind::Notifications]
         );
+    }
+
+    const GIT_MANIFEST: &str = include_str!("../../../plugins/first-party/git/manifest.json");
+    const DOCKER_MANIFEST: &str = include_str!("../../../plugins/first-party/docker/manifest.json");
+    const WORKSPACE_MANIFEST: &str =
+        include_str!("../../../plugins/first-party/workspace/manifest.json");
+    const PROJECTS_MANIFEST: &str =
+        include_str!("../../../plugins/first-party/projects/manifest.json");
+
+    /// What the extraction's cut-over (WP-C1) checks of a module and its
+    /// plugin, from the shipped block of `ACTION_ALIASES`: every built-in
+    /// action has its alias and every plugin action is the target of one;
+    /// §5.3's rules hold under the alias's parameter rules
+    /// (`alias::incompatibilities`, which the agent's health check and the
+    /// registry check before routing); each rule names what it claims (a
+    /// `Keep` a resource on both sides, a `Rename` the built-in's key and
+    /// the plugin's, an `Unsupported` a parameter both declare); no
+    /// built-in parameter is lost, none is a credential; and the plugin's
+    /// settings are the module's but for `not_kept` (the host's or a
+    /// grant's now).
+    #[allow(clippy::too_many_lines)] // One contract, check by check.
+    fn honours_the_extraction_contract(
+        manifest: &Manifest,
+        module: &dyn FeatureModule,
+        not_kept: &[&str],
+        known: &[&str],
+    ) -> Vec<&'static ActionAlias> {
+        let name = module.manifest().id.to_string();
+        let aliases: Vec<&'static ActionAlias> =
+            ACTION_ALIASES.iter().filter(|a| a.module == name).collect();
+        let builtin = builtin_types(module);
+        assert_eq!(
+            aliases.iter().map(|a| a.legacy).collect::<BTreeSet<_>>(),
+            builtin.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            "every built-in action of {name} has its alias"
+        );
+        let plugin: BTreeMap<String, ActionType> = manifest
+            .contributes
+            .actions()
+            .iter()
+            .map(|a| {
+                let t = plugin_type(manifest.id.as_str(), a);
+                (t.id.to_string(), t)
+            })
+            .collect();
+        assert_eq!(
+            aliases.iter().map(|a| a.target).collect::<BTreeSet<_>>(),
+            plugin.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            "every action of {} is the target of an alias",
+            manifest.id
+        );
+        let mut problems = Vec::new();
+        for alias in &aliases {
+            assert_eq!(alias.plugin, manifest.id.as_str());
+            assert_eq!(alias.since, "0.10.0", "{}", alias.legacy);
+            let old = &builtin[alias.legacy];
+            let new = &plugin[alias.target];
+            for problem in alias::incompatibilities(alias, old, new) {
+                problems.push(format!("{}: {problem}", alias.legacy));
+            }
+            let find =
+                |t: &ActionType, key: &str| t.parameters.iter().find(|p| p.key == key).cloned();
+            for rule in alias.params {
+                let (legacy, plugin_key) = (rule.key(), rule.plugin_key().unwrap());
+                let (before, after) = (find(old, legacy), find(new, plugin_key));
+                assert!(
+                    before.is_some() && after.is_some(),
+                    "{}: the rule {rule:?} names `{legacy}` of the built-in and `{plugin_key}` \
+                     of the plugin",
+                    alias.legacy
+                );
+                match rule {
+                    ParamRule::Keep(_) => {
+                        assert!(
+                            matches!(
+                                before.as_ref().unwrap().kind,
+                                ParameterKind::Resource { .. }
+                            ) && matches!(after.unwrap().kind, ParameterKind::Resource { .. }),
+                            "{}: `{legacy}` is kept as a resource",
+                            alias.legacy
+                        );
+                        // The manifest accepts the built-in's kind (the
+                        // core sees several kinds as any).
+                        if let ParameterKind::Resource { kind: Some(kind) } = before.unwrap().kind {
+                            let declared = declared_kinds(manifest, alias.target, plugin_key);
+                            assert!(
+                                declared.contains(&kind),
+                                "{}: `{legacy}` accepts {kind:?} ({declared:?})",
+                                alias.legacy
+                            );
+                        }
+                    }
+                    ParamRule::Rename(from, to) => {
+                        assert_ne!(from, to);
+                        assert!(
+                            find(new, from).is_none(),
+                            "{}: `{from}` is gone",
+                            alias.legacy
+                        );
+                    }
+                    ParamRule::Unsupported(_) => {}
+                    ParamRule::DropIfDefault(_) => {
+                        panic!("{}: the extraction drops nothing", alias.legacy)
+                    }
+                }
+            }
+            for parameter in &old.parameters {
+                assert_ne!(
+                    parameter.kind,
+                    ParameterKind::Credential,
+                    "{}: `{}`",
+                    alias.legacy,
+                    parameter.key
+                );
+                // Every resource parameter of the built-in is kept.
+                if matches!(parameter.kind, ParameterKind::Resource { .. }) {
+                    assert!(
+                        matches!(alias.rule(&parameter.key), Some(ParamRule::Keep(_))),
+                        "{}: the resource `{}` has a `Keep` rule",
+                        alias.legacy,
+                        parameter.key
+                    );
+                }
+            }
+            assert_eq!(new.deprecated, old.deprecated, "{}", alias.legacy);
+        }
+        mirrors_extracted_settings(module, manifest, not_kept, &mut problems);
+        // Exactly the known gaps: a gap that is fixed must leave the list.
+        assert_eq!(
+            problems.iter().map(String::as_str).collect::<Vec<_>>(),
+            known,
+            "the contract of {} differs from its known gaps",
+            manifest.id
+        );
+        aliases
+    }
+
+    /// The plugin's settings are the module's but for `not_kept`, with the
+    /// same kind, default, `required` and portability (labels may be the
+    /// plugin's translations); what differs, in `problems`.
+    fn mirrors_extracted_settings(
+        module: &dyn FeatureModule,
+        manifest: &Manifest,
+        not_kept: &[&str],
+        problems: &mut Vec<String>,
+    ) {
+        let config = &module.manifest().config;
+        let scopes = &module.manifest().portability.settings;
+        let mut kept = Vec::new();
+        for setting in manifest.contributes.settings() {
+            let spec = core_spec(serde_json::to_value(setting).unwrap());
+            let old = config
+                .iter()
+                .find(|c| c.key == spec.key)
+                .unwrap_or_else(|| panic!("setting `{}` is not the module's", spec.key));
+            for (field, same) in [
+                ("kind", spec.kind == old.kind),
+                ("default", spec.default == old.default),
+                ("required", spec.required == old.required),
+            ] {
+                if !same {
+                    problems.push(format!("setting `{}`: the {field} differs", spec.key));
+                }
+            }
+            let portable = matches!(
+                setting.portability,
+                Some(deckpilot_plugin_manifest::Portability::Portable)
+            );
+            assert_eq!(
+                portable,
+                scopes[&spec.key] == SettingScope::Portable,
+                "{}",
+                spec.key
+            );
+            kept.push(spec.key);
+        }
+        let mut left: Vec<&str> = config
+            .iter()
+            .map(|c| c.key.as_str())
+            .filter(|k| !kept.iter().any(|kept| kept == k))
+            .collect();
+        left.sort_unstable();
+        assert_eq!(left, not_kept, "{}", manifest.id);
+    }
+
+    /// Known gaps between a plugin and its built-in, each a finding of the
+    /// contract check (and so of the agent's health check before a
+    /// cut-over, which fails and leaves the built-in serving while it is
+    /// compiled in). Fixing one fails the test until it leaves the list.
+    ///
+    /// Docker: the plugin's `composeRole` is at most 64 characters, the
+    /// built-in's 1024. Not an action's contract: a saved role longer than
+    /// 64 makes the migration `not_eligible` (the settings copy refuses it),
+    /// so nothing is cut short.
+    const DOCKER_GAPS: &[&str] = &["setting `composeRole`: the kind differs"];
+    /// Workspace: `line` and `column` stop at 1,000,000 (the built-in's
+    /// `MAX_POSITION` is 10,000,000), and the `path` output is text, not a
+    /// path. The migration fails its contract check and the built-in keeps
+    /// serving until `plugins/first-party/workspace` matches.
+    const WORKSPACE_GAPS: &[&str] = &[
+        "workspace.open-in-editor: parameter `line`: its kind or constraints are narrower",
+        "workspace.open-in-editor: parameter `column`: its kind or constraints are narrower",
+        "workspace.open-in-editor: output `path` has another kind",
+    ];
+    /// Projects: a plugin action never changes the run's project (the
+    /// agent registers every plugin action with `changesContext` off; the
+    /// plugin's `project.select` switches the active project, not the
+    /// workflow's), so a workflow node after `projects.select` or `cycle`
+    /// would keep the old project; and the plugin declares no dial
+    /// controls, which stored dial bindings of `cycle`, `next` and
+    /// `previous` use. The migration fails its contract check and the
+    /// built-in keeps serving until the host and the plugin close both.
+    const PROJECTS_GAPS: &[&str] = &[
+        "projects.cycle: the node's `changesContext` differs",
+        "projects.cycle: encoder: press is no longer supported",
+        "projects.cycle: encoder: rotate-clockwise is no longer supported",
+        "projects.cycle: encoder: rotate-counter-clockwise is no longer supported",
+        "projects.cycle: encoder: click is no longer supported",
+        "projects.select: the node's `changesContext` differs",
+        "projects.next: the node's `changesContext` differs",
+        "projects.next: encoder: press is no longer supported",
+        "projects.next: encoder: rotate-clockwise is no longer supported",
+        "projects.next: encoder: rotate-counter-clockwise is no longer supported",
+        "projects.next: encoder: click is no longer supported",
+        "projects.previous: the node's `changesContext` differs",
+        "projects.previous: encoder: press is no longer supported",
+        "projects.previous: encoder: rotate-clockwise is no longer supported",
+        "projects.previous: encoder: rotate-counter-clockwise is no longer supported",
+        "projects.previous: encoder: click is no longer supported",
+    ];
+
+    /// `deckpilot.git` replaces the built-in `git`: `repository` kept as a
+    /// resource handle, `project_id` its `projectId`, `application` of
+    /// `open-repository` kept. `gitExecutable` is the host's (`tool.run`),
+    /// not the plugin's.
+    #[test]
+    fn the_git_plugin_honours_the_builtin_contract() {
+        let manifest = bundled_manifest(GIT_MANIFEST);
+        assert_eq!(manifest.id.as_str(), "deckpilot.git");
+        let aliases = honours_the_extraction_contract(
+            &manifest,
+            &git::GitModule::new(),
+            &[git::EXECUTABLE],
+            &[],
+        );
+        assert_eq!(aliases.len(), 6);
+        assert_eq!(module_variables(&git::GitModule::new()), 0);
+        assert_eq!(manifest.contributes.variables().len(), 0);
+    }
+
+    /// `deckpilot.docker` replaces the built-in `docker`: `compose` kept,
+    /// `project_id` its `projectId`, `projectName` declared but never
+    /// honoured (the host pins the Compose project; a value is refused,
+    /// never dropped). `dockerExecutable` and `context` are the host's,
+    /// `allowStateChanges` is the `tools:docker:modify` grant.
+    #[test]
+    fn the_docker_plugin_honours_the_builtin_contract() {
+        let manifest = bundled_manifest(DOCKER_MANIFEST);
+        assert_eq!(manifest.id.as_str(), "deckpilot.docker");
+        let aliases = honours_the_extraction_contract(
+            &manifest,
+            &docker::DockerModule::new(),
+            &[
+                docker::ALLOW_STATE_CHANGES,
+                docker::CONTEXT,
+                docker::EXECUTABLE,
+            ],
+            DOCKER_GAPS,
+        );
+        let refused: Vec<&str> = aliases
+            .iter()
+            .filter(|a| a.params.contains(&ParamRule::Unsupported("projectName")))
+            .map(|a| a.legacy)
+            .collect();
+        assert_eq!(
+            refused,
+            [
+                "docker.compose-status",
+                "docker.compose-up",
+                "docker.compose-down",
+                "docker.compose-restart",
+                "docker.logs",
+            ]
+        );
+        assert_eq!(manifest.contributes.variables().len(), 0);
+    }
+
+    /// `deckpilot.workspace` replaces the built-in `workspace`: the
+    /// editor, folder and browser resources kept; no settings.
+    #[test]
+    fn the_workspace_plugin_honours_the_builtin_contract() {
+        let manifest = bundled_manifest(WORKSPACE_MANIFEST);
+        assert_eq!(manifest.id.as_str(), "deckpilot.workspace");
+        let aliases = honours_the_extraction_contract(
+            &manifest,
+            &workspace::WorkspaceModule::new(),
+            &[],
+            WORKSPACE_GAPS,
+        );
+        assert_eq!(aliases.len(), 3);
+        assert_eq!(manifest.contributes.variables().len(), 0);
+    }
+
+    /// `deckpilot.projects` replaces the built-in `projects`: `project_id`
+    /// its `projectId`, the deprecated `next`, `previous` and `active`
+    /// same-name deprecated actions, `wrapAround` the plugin's; and its
+    /// host-published variables are the module's `projects.current.*`
+    /// (`MODULE_VARIABLE_ALIASES`, WP-C2).
+    #[test]
+    fn the_projects_plugin_honours_the_builtin_contract() {
+        let manifest = bundled_manifest(PROJECTS_MANIFEST);
+        assert_eq!(manifest.id.as_str(), "deckpilot.projects");
+        let module = projects::ProjectsModule::new();
+        let aliases = honours_the_extraction_contract(&manifest, &module, &[], PROJECTS_GAPS);
+        assert_eq!(aliases.len(), 9);
+        let declared: BTreeSet<String> = module
+            .manifest()
+            .variables
+            .iter()
+            .map(|v| v.id.to_string())
+            .collect();
+        let moved: BTreeSet<String> = deckpilot_core::variables::MODULE_VARIABLE_ALIASES
+            .iter()
+            .map(|a| a.legacy.to_owned())
+            .collect();
+        assert_eq!(declared, moved, "every variable of the module moved");
+        let plugin: BTreeSet<String> = manifest
+            .contributes
+            .variables()
+            .iter()
+            .map(|v| format!("plugins.deckpilot.projects.{}", v.id))
+            .collect();
+        let canonical: BTreeSet<String> = deckpilot_core::variables::MODULE_VARIABLE_ALIASES
+            .iter()
+            .map(|a| {
+                assert_eq!(a.plugin, "deckpilot.projects");
+                a.canonical.to_owned()
+            })
+            .collect();
+        assert_eq!(
+            plugin, canonical,
+            "the plugin declares every moved variable"
+        );
+    }
+
+    /// The core kinds a manifest's resource parameter accepts.
+    fn declared_kinds(
+        manifest: &Manifest,
+        target: &str,
+        key: &str,
+    ) -> Vec<deckpilot_core::ResourceKind> {
+        use deckpilot_core::ResourceKind as Core;
+        use deckpilot_plugin_manifest::ResourceKind as Declared;
+        let action = manifest
+            .contributes
+            .actions()
+            .iter()
+            .find(|a| format!("{}.{}", manifest.id, a.id) == target)
+            .unwrap();
+        let parameter = action.parameters.iter().find(|p| p.key == key).unwrap();
+        let deckpilot_plugin_manifest::ParameterKind::Resource { kinds } = &parameter.kind else {
+            return Vec::new();
+        };
+        kinds
+            .iter()
+            .filter_map(|kind| match kind {
+                Declared::Directory => Some(Core::Directory),
+                Declared::Application => Some(Core::Application),
+                Declared::DockerEnvironment => Some(Core::DockerEnvironment),
+                Declared::File => None,
+            })
+            .collect()
+    }
+
+    fn module_variables(module: &dyn FeatureModule) -> usize {
+        module.manifest().variables.len()
     }
 
     /// The comparison finds what it claims to find.

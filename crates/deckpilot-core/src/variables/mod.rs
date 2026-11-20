@@ -33,10 +33,11 @@ pub use expression::{
     references_in_expression,
 };
 pub use registry::{
-    ALIASES, ContextDevice, DeclaredScope, Deprecation, LiveState, MODULE_NAMESPACES, NoLiveState,
-    PLUGIN_ROOT, RESERVED_ROOTS, Requirement, VariableAlias, VariableDeclaration,
-    VariableEnvironment, VariableId, VariableOwner, VariableRegistry, VariableRegistryError,
-    VariableSource, module_namespace,
+    ALIASES, ContextDevice, DeclaredScope, Deprecation, LiveState, MODULE_NAMESPACES,
+    MODULE_VARIABLE_ALIASES, ModuleVariableAlias, NoLiveState, PLUGIN_ROOT, RESERVED_ROOTS,
+    Requirement, VariableAlias, VariableDeclaration, VariableEnvironment, VariableId,
+    VariableOwner, VariableRegistry, VariableRegistryError, VariableSource, module_namespace,
+    module_variable_alias,
 };
 pub use resolution::{
     DeviceContext, ExecutionDependencies, MissingReason, PreviewItem, ProjectResolver,

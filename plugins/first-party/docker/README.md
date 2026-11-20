@@ -23,7 +23,7 @@ declares and parses the JSON.
 
 | Kind | Declared | Tier | Why |
 | --- | --- | --- | --- |
-| `tools` | docker `context show`, `version` (`--format`), `compose version` (`--short`), `ps` (`--no-trunc`, `--format`, `--all`, `--filter`), `compose ps` (`--format`, `--all`), `compose logs` (`--tail`, `--since`, `--no-color`), `logs` (`--tail`, `--since`); with `modify: true` only `compose up` (`--detach`), `compose down` (`--remove-orphans`), `compose restart` | high (`tools:docker`), high (`tools:docker:modify`) | what the built-in runs; never `--project-name`, `-f`, `--context` (the agent's), never `start`/`stop`/`restart` of single containers (the built-in has no such action) |
+| `tools` | docker `context show`, `version` (`--format`), `compose version` (`--short`), `ps` (`--no-trunc`, `--format`, `--all`, `--filter`), `compose ps` (`--format`, `--all`), `compose logs` (`--tail`, `--since`, `--no-color`), `logs` (`--tail`, `--since`); with `modify: true` only `compose up` (`--detach`), `compose down` (`--remove-orphans`), `compose restart` | high (`tools:docker`), high (`tools:docker:modify`, optional: only Compose up, down and restart name it in `requiresPermissions`; off until the user allows it) | what the built-in runs; never `--project-name`, `-f`, `--context` (the agent's), never `start`/`stop`/`restart` of single containers (the built-in has no such action) |
 | `resources` | (labels only) | medium | the Compose folder or file and the Docker environment handles; the plugin never sees a path |
 | `profile` | `read: ["project"]` | medium | the active project's key for `projectKey` |
 | `device` | `state: true` | low | key states |
@@ -34,7 +34,7 @@ Optional dependency on `deckpilot.projects` (the compose role).
 
 | Built-in | Plugin | Definition | Results |
 | --- | --- | --- | --- |
-| `docker.status` | `deckpilot.docker.status` | `context`; new optional `environment` (a Docker environment or folder resource) | identical outputs and messages; `available: false` with the built-in's reasons |
+| `docker.status` | `deckpilot.docker.status` | `context`; new optional `environment` (a Docker environment or folder resource) | identical outputs and messages; `available: false` with the built-in's reasons; without `environment` no resource is needed |
 | `docker.containers` | `deckpilot.docker.containers` | `all`, `name`, `context`; new `environment` | identical; a `name` filter must be a valid container name (`invalid-name`) |
 | `docker.compose-status` | `deckpilot.docker.compose-status` | `compose` (folder or file), `projectId` (was `project_id`), `projectName`, `context` | identical |
 | `docker.compose-up` | `deckpilot.docker.compose-up` | as `compose-status`, `services` | identical; `changes-disabled` without `tools:docker:modify`, `not-user-initiated` outside a run the user or their work session started |
@@ -45,11 +45,11 @@ Optional dependency on `deckpilot.projects` (the compose role).
 
 **Differences, stated plainly**
 
-- **Where Docker runs.** Every `tool.run` needs a handle. `status`,
-  `containers` and container logs run in the `environment` parameter (its
-  context is used), else the Compose project the action or the project
-  names; with none of them they fail with `docker-environment-missing`
-  (the built-in ran without any resource).
+- **Where Docker runs.** `status`, `containers` and container logs run in
+  the `environment` parameter (its context is used), else, as with the
+  built-in, without any resource or project: the agent runs them with its
+  context in an empty folder of its own (`tool.run` without a handle).
+  Compose's commands run in their Compose project.
 - **`context` parameter.** The agent decides the context; an action's
   `context` must be the one Docker runs in there, else
   `context-unsupported` (bind a Docker environment for it instead).
@@ -58,22 +58,22 @@ Optional dependency on `deckpilot.projects` (the compose role).
   with `project-name-unsupported` rather than acting on another project.
   The `project` output stays declared but is never set.
 - **Compose resources** must be a folder with a `compose.yaml`
-  (`compose.yml`, `docker-compose.y(a)ml`) or a compose file binding; a
-  compose role bound as a Docker environment no longer works.
+  (`compose.yml`, `docker-compose.y(a)ml`) or a compose file binding, also
+  bound as a Docker environment whose value is that folder or file (as the
+  built-in's compose role allowed).
 - **Logs** read at most 1,000 lines (the agent's `--tail` bound), also
   when `lines` asks for up to 2,000.
 - **Key state.** No `tool.run` in a state call: keys show what the last
-  run of the action found (`src/state.rs`), read back every 5 s; a
-  Compose change reads `compose ps` afterwards so the project's
-  `compose-status` keys follow it. The agent allows key state only for
-  read-only actions, so `compose-up`, `compose-down` and
-  `compose-restart` keys show none (the built-in's up/down toggle is
-  gone). Keys that differ only in their resources share one stored state.
-- **The modify sub-grant is all or nothing for now.** Enabling needs every
-  declared permission, `tools:docker:modify` included, and while it is
-  revoked the agent lists every action of the plugin as unavailable,
-  reads included (`apps/agent/tests/plugins_docker.rs`). "Off by default"
-  (X3c) needs the agent to treat sub-grants as optional.
+  run of the action found (`src/state.rs`), read back every 5 s, per key
+  (the agent's `keyScope` of the key's resources). A Compose change reads
+  `compose ps` afterwards so the project's status, up, down and restart
+  keys follow it; up and down keys show the built-in's toggle.
+- **The modify sub-grant is optional and off by default** (X3c). The
+  plugin is enabled without `tools:docker:modify`; until the user allows
+  it, Compose up, down and restart are listed as unavailable ("needs the
+  permission `tools:docker:modify`") and never reach docker, while every
+  read works; revoking it again stops only them
+  (`apps/agent/tests/plugins_docker.rs`).
 
 ## Tests
 

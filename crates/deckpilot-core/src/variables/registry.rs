@@ -421,6 +421,66 @@ pub const ALIASES: [VariableAlias; 9] = {
     ]
 };
 
+/// A module variable that moved to a first-party plugin with its module
+/// (`docs/marketplace/module-migration.md` §5.4; the extraction of
+/// 2026-11-20, WP-C2): the legacy id keeps parsing (its namespace stays in
+/// [`MODULE_NAMESPACES`]) and resolving. While the legacy module provides
+/// it, it is the module's; otherwise, when the plugin declares it, it
+/// resolves as the plugin's `canonical` (unavailable with the plugin while
+/// the plugin cannot run), and with neither it is unavailable as before.
+/// Stored references are never rewritten. The core aliases
+/// of [`ALIASES`] chain to these: `system.project.current.id` is
+/// `projects.current.id`, which is the plugin's once the module is gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModuleVariableAlias {
+    /// The stored id, `projects.current.id`.
+    pub legacy: &'static str,
+    /// The plugin's id, `plugins.deckpilot.projects.current.id`.
+    pub canonical: &'static str,
+    /// The legacy owner, `projects`.
+    pub module: &'static str,
+    /// The plugin, `deckpilot.projects`.
+    pub plugin: &'static str,
+    /// The app version that added the alias.
+    pub since: &'static str,
+}
+
+/// Every module variable alias: the `projects` module's
+/// `projects.current.{id,key,name}`, which `deckpilot.projects` declares
+/// as host-published variables (X7).
+pub const MODULE_VARIABLE_ALIASES: [ModuleVariableAlias; 3] = {
+    const fn projects(legacy: &'static str, canonical: &'static str) -> ModuleVariableAlias {
+        ModuleVariableAlias {
+            legacy,
+            canonical,
+            module: "projects",
+            plugin: "deckpilot.projects",
+            since: "0.10.0",
+        }
+    }
+    [
+        projects(
+            "projects.current.id",
+            "plugins.deckpilot.projects.current.id",
+        ),
+        projects(
+            "projects.current.key",
+            "plugins.deckpilot.projects.current.key",
+        ),
+        projects(
+            "projects.current.name",
+            "plugins.deckpilot.projects.current.name",
+        ),
+    ]
+};
+
+/// The module variable alias of `id`, if it has one.
+pub fn module_variable_alias(id: &VariableId) -> Option<&'static ModuleVariableAlias> {
+    MODULE_VARIABLE_ALIASES
+        .iter()
+        .find(|alias| alias.legacy == id.as_str())
+}
+
 impl SystemVariable {
     /// The alias entry of a deprecated id, `None` for a core variable.
     pub fn alias(self) -> Option<&'static VariableAlias> {
@@ -817,6 +877,11 @@ impl VariableRegistry {
         if environment.context.profile != environment.profile.id {
             return Resolution::Missing(MissingReason::OtherProfile);
         }
+        if let Some(alias) = module_variable_alias(id)
+            && let Some(resolution) = self.resolve_moved(id, alias, environment)
+        {
+            return resolution;
+        }
         let Some(registered) = self.variables.get(id) else {
             return match self.namespace_owner(id.owner_namespace()) {
                 Some(_) => Resolution::Missing(MissingReason::UnknownVariable),
@@ -841,6 +906,34 @@ impl VariableRegistry {
             },
         };
         checked(&registered.declaration, source.as_ref(), environment)
+    }
+
+    /// A module variable that moved to a plugin ([`ModuleVariableAlias`]),
+    /// when its legacy module cannot provide it (disabled, or not
+    /// registered) and the plugin declares it: the plugin's resolution,
+    /// available or not. `None`: the legacy module provides it, or the
+    /// plugin is not registered either, which resolves as before (the
+    /// legacy owner unavailable).
+    fn resolve_moved(
+        &self,
+        id: &VariableId,
+        alias: &ModuleVariableAlias,
+        environment: &VariableEnvironment<'_>,
+    ) -> Option<Resolution> {
+        let provided = self.variables.get(id).is_some_and(|registered| {
+            registered
+                .owner
+                .module()
+                .and_then(|module| self.modules.get(module))
+                .is_some_and(|entry| entry.unavailable.is_none())
+        });
+        if provided {
+            return None;
+        }
+        let canonical = VariableId::new(alias.canonical).ok()?;
+        self.variables
+            .contains_key(&canonical)
+            .then(|| self.resolve(&canonical, environment))
     }
 
     /// The value of a legacy id, exactly as before the registry, whatever

@@ -118,10 +118,15 @@ pub const FIRST_PARTY_PUBLISHER: &str = deckpilot_plugin_manifest::FIRST_PARTY_P
 /// without `DECKPILOT_BUNDLED_PINS` pins nothing and would refuse nothing;
 /// [`is_bundled_id`] also covers whatever the pins of a build name.
 pub const BUNDLED_PLUGIN_IDS: &[&str] = &[
+    "deckpilot.docker",
+    "deckpilot.git",
     "deckpilot.github",
     "deckpilot.gitlab",
     "deckpilot.jira",
     "deckpilot.notifications",
+    "deckpilot.projects",
+    "deckpilot.workflows",
+    "deckpilot.workspace",
 ];
 
 /// Whether `id` is a bundled plugin: in [`BUNDLED_PLUGIN_IDS`] or pinned

@@ -7,16 +7,16 @@
 //! **What changed.** The built-in read Docker for a shown key every 30 s.
 //! The agent allows no `tool.run` in a plugin's state call and gives it no
 //! resource handle, so a key shows what the last run found: each run
-//! stores the state in the plugin's storage, under what a state call also
-//! sees (the action's `context`, the `name` filter, `projectId` and
-//! `projectName`), and the state call reads it back every 5 s. A Compose
+//! stores the state in the plugin's storage, under the key's scope (the
+//! agent's token for the key's resources, `run.context`'s `keyScope`, the
+//! same in its state call) and what a state call also sees (the action's
+//! `context`, the `name` filter, `projectId` and `projectName`), and the
+//! state call reads it back every 5 s. Keys that differ only in their
+//! `compose` or `environment` resource are different keys. A Compose
 //! change reads `compose ps` afterwards, so the project's `compose-status`
-//! keys follow it. The agent allows a key state only for read-only
-//! actions: `compose-up`, `compose-down` and `compose-restart` keys show
-//! no state any more (the built-in's toggle on up and down keys is gone).
-//! A key that has not run yet shows its own design. Keys that differ only in
-//! their resource parameters (`compose`, `environment`) share one stored
-//! state: the state call cannot tell them apart.
+//! keys and its up, down and restart keys follow it; up and down keys show
+//! the built-in's toggle (on while every container runs). A key that has
+//! not run yet shows its own design.
 
 use deckpilot_plugin_sdk::ParamValue;
 use deckpilot_plugin_sdk::prelude::*;
@@ -47,24 +47,31 @@ fn digest(parts: &[Option<String>]) -> String {
     format!("{hash:016x}")
 }
 
-pub fn status_key(args: &Args<'_>) -> String {
+pub fn status_key(ctx: &mut Context<'_>, args: &Args<'_>) -> String {
     format!(
         "keyState.status.{}",
-        digest(&[optional(args, crate::CONTEXT)])
+        digest(&[ctx.key_scope(), optional(args, crate::CONTEXT)])
     )
 }
 
-pub fn containers_key(args: &Args<'_>) -> String {
+pub fn containers_key(ctx: &mut Context<'_>, args: &Args<'_>) -> String {
     format!(
         "keyState.containers.{}",
-        digest(&[optional(args, "name"), optional(args, crate::CONTEXT)])
+        digest(&[
+            ctx.key_scope(),
+            optional(args, "name"),
+            optional(args, crate::CONTEXT),
+        ])
     )
 }
 
-pub fn compose_key(args: &Args<'_>) -> String {
+/// The same for every Compose action of a key's project: the status, up,
+/// down and restart keys of one binding share it.
+pub fn compose_key(ctx: &mut Context<'_>, args: &Args<'_>) -> String {
     format!(
         "keyState.compose.{}",
         digest(&[
+            ctx.key_scope(),
             optional(args, crate::PROJECT),
             optional(args, "projectName"),
             optional(args, crate::CONTEXT),
@@ -157,24 +164,35 @@ pub fn compose_state(running: u32, total: u32, toggle: bool) -> KeyState {
     }
 }
 
-fn recall(ctx: &mut Context<'_>, key: &str) -> Result<KeyState, PluginError> {
+/// The stored state of `key`; `toggle`: an up or down key.
+fn recall(ctx: &mut Context<'_>, key: &str, toggle: bool) -> Result<KeyState, PluginError> {
     Ok(match ctx.storage_get_as::<Stored>(key)? {
         None => KeyState::new(),
         Some(Stored::Available(available)) => availability_state(available),
         Some(Stored::Running(running)) => containers_state(running),
-        Some(Stored::Compose { running, total }) => compose_state(running, total, false),
+        Some(Stored::Compose { running, total }) => compose_state(running, total, toggle),
         Some(Stored::Failed { code, message }) => return Err(PluginError::new(code, message)),
     })
 }
 
 pub fn status(ctx: &mut Context<'_>, args: &Args<'_>) -> Result<KeyState, PluginError> {
-    recall(ctx, &status_key(args))
+    let key = status_key(ctx, args);
+    recall(ctx, &key, false)
 }
 
 pub fn containers(ctx: &mut Context<'_>, args: &Args<'_>) -> Result<KeyState, PluginError> {
-    recall(ctx, &containers_key(args))
+    let key = containers_key(ctx, args);
+    recall(ctx, &key, false)
 }
 
 pub fn compose_status(ctx: &mut Context<'_>, args: &Args<'_>) -> Result<KeyState, PluginError> {
-    recall(ctx, &compose_key(args))
+    let key = compose_key(ctx, args);
+    recall(ctx, &key, false)
+}
+
+/// Up and down keys: the project's state with the built-in's toggle. Read
+/// only: a state call never starts or stops anything.
+pub fn compose_toggle(ctx: &mut Context<'_>, args: &Args<'_>) -> Result<KeyState, PluginError> {
+    let key = compose_key(ctx, args);
+    recall(ctx, &key, true)
 }

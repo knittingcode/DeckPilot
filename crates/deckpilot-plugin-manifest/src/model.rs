@@ -1109,6 +1109,13 @@ pub struct Action {
     /// unavailable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requires_dependencies: Option<Vec<String>>,
+    /// Optional sub-grants this action needs (plugin API 1.9): grant keys
+    /// of [`OPTIONAL_PERMISSIONS`](crate::OPTIONAL_PERMISSIONS) the
+    /// manifest declares. A sub-grant an action names here is optional:
+    /// the plugin is enabled without it, and while it is not granted only
+    /// the actions naming it are unavailable ("needs the permission …").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires_permissions: Option<Vec<String>>,
     /// What running the action does to the page or layout a device shows,
     /// for the editor's interactive preview (plugin API 1.7): data only.
     /// The editor moves its own view; the plugin is never called for it.

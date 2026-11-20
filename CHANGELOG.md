@@ -239,6 +239,24 @@ released either. 0.6.0 is the first version intended for publication.
   handle label, exit status and byte counts, never by value. A program that
   leaves its process group no longer keeps a run waiting past its time
   limit.
+- Plugin API 1.9: optional permissions. An action can name the sub-grants
+  it needs (`requiresPermissions`: `tools:docker:modify`,
+  `tools:git:network`, `resources:open`, `resources:paths`,
+  `projectContext:select`, `openUrl:from-params`); the plugin is enabled
+  without them, and only the actions naming one wait for it ("needs the
+  permission …") until it is granted. The consent dialog and Settings ›
+  Plugins show each one with its own switch, off by default when it is
+  high risk. Docker's Compose up, down and restart name
+  `tools:docker:modify`, so the Docker plugin's reads work without it.
+- Plugin API 1.9: docker's `ps`, `logs` of a container, `version` and
+  `context show` run without a resource, in an empty folder of the
+  agent's own (the Docker plugin's status, containers and logs no longer
+  need a Docker environment or a project); `resource.open` opens a file or
+  folder inside a bound folder (`path`, kept inside it, links included),
+  so the Workspace plugin's `path` works as the built-in's; a key state
+  call can read which key it is (`run.context`'s `keyScope`), so Git and
+  Docker keys that differ only in their resources keep their own state,
+  and Compose up and down keys show their toggle again.
 
 ### Changed
 

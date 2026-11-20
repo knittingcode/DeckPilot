@@ -112,7 +112,7 @@ until their host side lands (WP-A4 to WP-A6).
 
 | Kind | Fields | Grant keys and tiers | Allows |
 | --- | --- | --- | --- |
-| `tools` | `tools`: 1-2 of `{executable, subcommands, network?, modify?}` ([below](#tools)) | `tools:git`, `tools:docker` (**high**); `tools:git:network` (**high**); `tools:docker:modify` (**high**, off by default) | `tool.run` of the declared subcommands and options |
+| `tools` | `tools`: 1-2 of `{executable, subcommands, network?, modify?}` ([below](#tools)) | `tools:git`, `tools:docker` (**high**); `tools:git:network` (**high**); `tools:docker:modify` (**high**, off by default: optional when actions name it in `requiresPermissions`) | `tool.run` of the declared subcommands and options; docker reads that need no folder also without a handle |
 | `resources` | `paths`, `open` (booleans) | `resources` (medium); `resources:paths` (medium); `resources:open` (**high**) | `resource.resolve` (labels only; with `paths` the bound path); `resource.open` in runs the user started |
 | `openUrl` with `fromParams: true` | `hosts` may then be empty | `openUrl:from-params` (medium) | `url.openParam`: the literal http or https URL the user stored in the invocation's own parameter, in runs the user started |
 | `projectContext` | `select` (boolean) | `projectContext` (medium); `projectContext:select` (**high**) | `project.current`, `project.list`; with `select`, `project.select` and `project.cycle` in runs the user started |

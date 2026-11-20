@@ -28,7 +28,7 @@
     },
     "environment": {
       "label": "Docker environment",
-      "description": "A Docker environment resource (its context is used) or a folder. Empty: the Compose project of the action or of the project."
+      "description": "A Docker environment resource (its context is used) or a folder. Empty: DeckPilot's Docker context, as without the plugin."
     },
     "all": {
       "label": "Include stopped",
@@ -40,7 +40,7 @@
     },
     "compose": {
       "label": "Compose project",
-      "description": "A resource bound to the Compose file or its folder. Empty: the project's compose resource."
+      "description": "A resource bound to the Compose file or its folder (also as a Docker environment). Empty: the project's compose resource."
     },
     "projectId": {
       "label": "Project",
@@ -112,10 +112,10 @@
     "description": "Docker availability, containers, Compose projects and logs, in the Docker context you bound."
   },
   "dependencies": {
-    "projects": "Without a Compose project parameter the actions use the compose resource of the workflow's project; without Projects there is no project, and only keys with a Compose project or Docker environment work."
+    "projects": "Without a Compose project parameter the Compose actions use the compose resource of the workflow's project; without Projects there is no project, and only Compose keys with a Compose project work."
   },
   "permissions": {
-    "tools": "Runs your own docker in the Docker environments and Compose folders you bound, to read whether Docker is available, the containers, a Compose project's state and the last lines of a log (docker context show, version, ps, logs, compose ps and logs). With the separate permission to start, stop and restart containers, Compose up, down and restart change your Compose projects, only when you or your work session start them; down never removes volumes or images.",
+    "tools": "Runs your own docker in the Docker environments and Compose folders you bound, to read whether Docker is available, the containers, a Compose project's state and the last lines of a log (docker context show, version, ps, logs, compose ps and logs). With the separate permission to start, stop and restart containers, which is off until you allow it, Compose up, down and restart change your Compose projects, only when you or your work session start them; down never removes volumes or images.",
     "resources": "Uses the Compose folders and files and the Docker environments you bound on this computer, by name; the plugin never sees their paths.",
     "profile": "Reads the active project's key to report which project a Compose project belongs to.",
     "device": "Shows whether Docker is available, how many containers run and whether a Compose project is up on their keys, as their last run found it."
@@ -145,7 +145,6 @@
     "not-user-initiated": "Containers are started and stopped only in runs you or your work session started.",
     "context-unsupported": "The action names another Docker context than the one Docker runs in here.",
     "project-name-unsupported": "A Compose project name cannot be chosen per action.",
-    "docker-environment-missing": "No Docker environment, Compose project or project resource says where Docker runs.",
     "cancelled": "The run was stopped.",
     "resource-unbound": "The resource is not bound on this computer.",
     "resource-role-missing": "The project does not define the Compose resource.",

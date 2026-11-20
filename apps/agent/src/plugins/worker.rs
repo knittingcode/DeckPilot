@@ -93,6 +93,8 @@ pub(super) enum Message {
         plugin: String,
         action: String,
         params: Params,
+        /// Which key it is ([`RunContext::key_scope`]).
+        scope: Option<String>,
         abort: AbortSignal,
         reply: mpsc::SyncSender<StateReply>,
     },
@@ -148,6 +150,7 @@ impl Invoker {
         plugin: String,
         action: String,
         params: Params,
+        scope: Option<String>,
         abort: AbortSignal,
     ) -> Option<Receiver<StateReply>> {
         let (reply, answer) = mpsc::sync_channel(1);
@@ -156,6 +159,7 @@ impl Invoker {
                 plugin,
                 action,
                 params,
+                scope,
                 abort,
                 reply,
             })
@@ -353,11 +357,12 @@ impl State {
                 plugin,
                 action,
                 params,
+                scope,
                 abort,
                 reply,
             } => {
                 if let Some(service) = &mut self.service {
-                    service.key_state_for_engine(&plugin, &action, params, abort, reply);
+                    service.key_state_for_engine(&plugin, &action, params, scope, abort, reply);
                 } else {
                     let error = self.unavailable();
                     let _ = reply.try_send(Err(EngineFailure {

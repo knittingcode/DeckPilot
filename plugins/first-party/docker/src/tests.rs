@@ -77,7 +77,9 @@ struct Agent {
     /// How a change outside such a run is refused.
     not_user: &'static str,
     settings: Value,
-    runs: Vec<(String, Vec<String>, Option<u32>)>,
+    /// Which key this is (`run.context`'s `keyScope`), as the agent says.
+    scope: Option<&'static str>,
+    runs: Vec<(Option<String>, Vec<String>, Option<u32>)>,
     storage: BTreeMap<String, Value>,
 }
 
@@ -119,6 +121,7 @@ impl Default for Agent {
             user: true,
             not_user: "not-user-initiated: containers are started and stopped only in runs you or your work session started",
             settings: json!({"composeRole": "compose", "timeoutSeconds": 300}),
+            scope: None,
             runs: Vec::new(),
             storage: BTreeMap::new(),
         }
@@ -161,7 +164,14 @@ fn host(agent: &Shared) -> MockHost {
                         Some(label) => handle(label, "file", COMPOSE_HANDLE),
                     },
                     (None, Some("compose")) => {
-                        assert_eq!(r.kinds, [ResourceKind::Directory, ResourceKind::File]);
+                        assert_eq!(
+                            r.kinds,
+                            [
+                                ResourceKind::Directory,
+                                ResourceKind::File,
+                                ResourceKind::DockerEnvironment
+                            ]
+                        );
                         match agent.role {
                             Ok(label) => handle(label, "directory", COMPOSE_HANDLE),
                             Err(text) => refusal(text),
@@ -170,6 +180,10 @@ fn host(agent: &Shared) -> MockHost {
                     other => panic!("unexpected resolve {other:?}"),
                 }
             }
+            CapabilityRequest::RunContext(_) => CallResult::Ok(match agent.scope {
+                Some(scope) => json!({"trigger": "key", "keyScope": scope}),
+                None => json!({"trigger": "key"}),
+            }),
             CapabilityRequest::ProfileRead(_) => CallResult::Ok(match agent.active {
                 Some((id, key)) => json!({"project": {"id": id, "key": key, "name": key}}),
                 None => json!({}),
@@ -280,12 +294,9 @@ fn the_definition_matches_the_manifest() {
         ]
     );
     for action in plugin.actions() {
-        // Key state only for the read-only actions (the agent's rule).
-        let reads = !matches!(
-            action.id(),
-            "logs" | "compose-up" | "compose-down" | "compose-restart"
-        );
-        assert_eq!(action.has_state(), reads, "{}", action.id());
+        // Every key but a logs key shows state (the Compose changes their
+        // project's, read back only).
+        assert_eq!(action.has_state(), action.id() != "logs", "{}", action.id());
         // Nothing offers removing volumes or images.
         assert!(
             !action
@@ -305,6 +316,19 @@ fn the_definition_matches_the_manifest() {
         assert_eq!(
             action["node"]["effect"] == "modifies",
             modifies,
+            "{}",
+            action["id"]
+        );
+        // Only the changes need the modify sub-grant, which is optional:
+        // the plugin runs without it (X3c, off by default).
+        assert_eq!(
+            action["requiresPermissions"] == json!(["tools:docker:modify"]),
+            modifies,
+            "{}",
+            action["id"]
+        );
+        assert!(
+            modifies || action.get("requiresPermissions").is_none(),
             "{}",
             action["id"]
         );
@@ -490,14 +514,9 @@ fn availability_is_an_answer_not_a_failure() {
     assert_eq!(status["serverOs"], "linux");
     assert_eq!(status["clientVersion"], "29.1.0");
     assert_eq!(status["composeVersion"], "2.30.0");
-    // Without an environment parameter: the project's Compose folder.
-    assert!(
-        agent
-            .borrow()
-            .runs
-            .iter()
-            .all(|(cwd, ..)| cwd == COMPOSE_HANDLE)
-    );
+    // Without an environment parameter: no resource at all, as with the
+    // built-in (the agent's own empty folder and context).
+    assert!(agent.borrow().runs.iter().all(|(cwd, ..)| cwd.is_none()));
 
     for (stderr, reason) in [
         (
@@ -567,7 +586,7 @@ fn the_context_is_the_agents() {
             .borrow()
             .runs
             .iter()
-            .all(|(cwd, ..)| cwd == ENV_HANDLE)
+            .all(|(cwd, ..)| cwd.as_deref() == Some(ENV_HANDLE))
     );
     let (_, same) = run(&agent, "containers", json!({"context": "remote-prod"})).unwrap();
     assert_eq!(same["context"], "remote-prod");
@@ -655,11 +674,19 @@ fn compose_projects_come_from_resources() {
         codes::COMPOSE_FILE_NOT_FOUND
     );
     agent.borrow_mut().refusal = None;
-    // Status and containers without any resource.
+    // Status, containers and container logs need no resource and no
+    // project (the built-in's parity); Compose's commands do.
     agent.borrow_mut().role = Err("no-active-project: no project is active");
+    agent.borrow_mut().active = None;
+    agent.borrow_mut().runs.clear();
+    run(&agent, "status", json!({})).unwrap();
+    run(&agent, "containers", json!({})).unwrap();
+    record(&agent, "logs --tail=100 -- web-1", ok("x\n"));
+    run(&agent, "logs", json!({"container": "web-1"})).unwrap();
+    assert!(agent.borrow().runs.iter().all(|(cwd, ..)| cwd.is_none()));
     assert_eq!(
-        run(&agent, "status", json!({})).unwrap_err().0,
-        codes::ENVIRONMENT_MISSING
+        run(&agent, "compose-status", json!({})).unwrap_err().0,
+        "no-active-project"
     );
 }
 
@@ -863,11 +890,31 @@ fn keys_show_the_last_run() {
         StateOutcome::Ok(state) => assert_eq!(state.indicator, Some(Indicator::Ok)),
         other => panic!("{other:?}"),
     }
-    for action in ["logs", "compose-up", "compose-down", "compose-restart"] {
-        assert!(
-            matches!(key_state(&agent, action, json!({})), StateOutcome::Error(_)),
-            "{action}"
-        );
+    assert!(matches!(
+        key_state(&agent, "logs", json!({})),
+        StateOutcome::Error(_)
+    ));
+    // Up and down keys read the project's state with the built-in's
+    // toggle; restart keys without one. Nothing runs for them either.
+    assert_eq!(
+        key_state(&agent, "compose-up", json!({})),
+        StateOutcome::Ok(
+            KeyState::new()
+                .detail("1/2 up")
+                .indicator(Indicator::Warning)
+                .toggle(false)
+        )
+    );
+    match key_state(&agent, "compose-down", json!({})) {
+        StateOutcome::Ok(state) => assert_eq!(state.toggle, Some(false)),
+        other => panic!("{other:?}"),
+    }
+    match key_state(&agent, "compose-restart", json!({})) {
+        StateOutcome::Ok(state) => {
+            assert_eq!(state.detail.as_deref(), Some("1/2 up"));
+            assert_eq!(state.toggle, None);
+        }
+        other => panic!("{other:?}"),
     }
     assert_eq!(runs(&agent).len(), before);
     // Another project's keys are their own.
@@ -888,6 +935,11 @@ fn keys_show_the_last_run() {
         key_state(&agent, "compose-status", json!({})),
         StateOutcome::Ok(KeyState::new().detail("1/1 up").indicator(Indicator::Ok))
     );
+    // The up key's toggle is on now.
+    match key_state(&agent, "compose-up", json!({})) {
+        StateOutcome::Ok(state) => assert_eq!(state.toggle, Some(true)),
+        other => panic!("{other:?}"),
+    }
     // The engine is down: red.
     record(
         &agent,
@@ -903,6 +955,48 @@ fn keys_show_the_last_run() {
         StateOutcome::Ok(state) => assert_eq!(state.indicator, Some(Indicator::Error)),
         other => panic!("{other:?}"),
     }
+}
+
+/// Keys that differ only in their resources are different keys: the
+/// agent's key scope (`run.context`) is part of where a run stores its
+/// state, and a state call reads it back under its own.
+#[test]
+fn keys_of_different_resources_keep_their_own_state() {
+    const SHOP: &str = "00112233445566778899aabbccddeeff";
+    const CMS: &str = "ffeeddccbbaa99887766554433221100";
+    let agent = agent();
+    agent.borrow_mut().scope = Some(SHOP);
+    run(&agent, "compose-status", json!({})).unwrap();
+    agent.borrow_mut().scope = Some(CMS);
+    record(
+        &agent,
+        "compose ps --all --format=json",
+        ok(r#"{"Name":"cms-web-1","Service":"web","State":"running","Status":"Up"}"#),
+    );
+    run(&agent, "compose-status", json!({})).unwrap();
+    let detail = |scope| {
+        agent.borrow_mut().scope = Some(scope);
+        match key_state(&agent, "compose-status", json!({})) {
+            StateOutcome::Ok(state) => state.detail,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(detail(SHOP).as_deref(), Some("1/2 up"));
+    assert_eq!(detail(CMS).as_deref(), Some("1/1 up"));
+    // A key the agent says nothing about has not run.
+    agent.borrow_mut().scope = None;
+    assert_eq!(
+        key_state(&agent, "compose-status", json!({})),
+        StateOutcome::Ok(KeyState::new())
+    );
+    // Status keys of two Docker environments, too.
+    agent.borrow_mut().scope = Some(SHOP);
+    run(&agent, "status", json!({})).unwrap();
+    agent.borrow_mut().scope = Some(CMS);
+    assert_eq!(
+        key_state(&agent, "status", json!({})),
+        StateOutcome::Ok(KeyState::new())
+    );
 }
 
 #[test]

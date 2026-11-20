@@ -56,9 +56,9 @@ Error codes: the built-in's (`not-found`, `not-a-repository`,
   repository every 30 s by itself. Every run of the action (a press, a
   workflow node) stores what it found (`src/state.rs`), and the key shows
   that, read back every 5 s; a failed run shows as an error, a key that
-  has not run yet shows its own design. Keys that differ only in their
-  `repository` resource share one stored state (the state call sees only
-  `projectId`).
+  has not run yet shows its own design. State is kept per key: under the
+  agent's `keyScope` of the key's `repository` binding (and the active
+  project where it follows it) and `projectId`.
 - **`projectKey`** comes from the active project (`profile.read`): a role
   resolved for another project named in `projectId`, and a `repository`
   parameter that is itself a project role, report none.

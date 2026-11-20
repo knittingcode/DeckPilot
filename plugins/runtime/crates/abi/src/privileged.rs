@@ -39,6 +39,9 @@ pub const MAX_TOOL_TIMEOUT_MS: u32 = 1_800_000;
 pub const MAX_POSITION: u32 = 1_000_000;
 /// Highest `index` of `url.openParam` (a `lines` parameter of at most 10).
 pub const MAX_URL_PARAM_INDEX: u32 = 9;
+/// Longest relative `path` of `resource.open`, in bytes (the built-in
+/// workspace module's `path` parameter).
+pub const MAX_OPEN_PATH: usize = 1024;
 
 /// The kinds of machine resource (the manifest's `resource.kinds`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -114,6 +117,12 @@ pub struct Position {
 #[serde(deny_unknown_fields)]
 pub struct ResourceOpen {
     pub handle: String,
+    /// A file or folder inside the folder of `handle` (a `directory`
+    /// handle only), relative to it: `/`-separated names, never absolute,
+    /// never `..`. The agent opens it only when it exists and, by name
+    /// and by where links lead, stays inside the binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     /// A handle of kind `application`; the system's default handler when
     /// absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -152,8 +161,12 @@ pub struct ToolRun {
     /// The subcommand first, then its options and positionals. Never a
     /// shell string.
     pub args: Vec<String>,
-    /// A handle of kind `directory` (or `file` for a compose file).
-    pub cwd: String,
+    /// A handle of kind `directory` (or `file` for a compose file). Absent
+    /// only for docker's commands that read no folder (`ps`, `logs` of a
+    /// container, `version`, `context show`, `compose version`): the
+    /// agent runs them in an empty folder of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u32>,
 }
@@ -294,6 +307,18 @@ pub fn is_handle(handle: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+/// A relative path inside a bound folder: names separated by `/`, none
+/// empty, `.` or `..`, no backslash, colon or control character, not
+/// absolute. The agent checks it again where it resolves it.
+fn is_relative_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.contains(['\\', ':'])
+        && !path.chars().any(char::is_control)
+        && path
+            .split('/')
+            .all(|name| !name.is_empty() && name != "." && name != "..")
+}
+
 /// A parameter key or role: a lowercase letter, then letters and digits.
 pub fn is_param_key(key: &str) -> bool {
     let mut chars = key.chars();
@@ -342,6 +367,14 @@ impl ResourceOpen {
         if !is_handle(&self.handle) || self.with.as_deref().is_some_and(|h| !is_handle(h)) {
             return Err(RequestError::Invalid("handle"));
         }
+        if let Some(path) = &self.path {
+            if path.len() > MAX_OPEN_PATH {
+                return Err(RequestError::TooLarge("path"));
+            }
+            if !is_relative_path(path) {
+                return Err(RequestError::Invalid("path"));
+            }
+        }
         if let Some(position) = self.position {
             let in_range = |n: u32| (1..=MAX_POSITION).contains(&n);
             if !in_range(position.line) || position.column.is_some_and(|c| !in_range(c)) {
@@ -364,7 +397,7 @@ impl ToolRun {
         {
             return Err(RequestError::Invalid("args"));
         }
-        if !is_handle(&self.cwd) {
+        if self.cwd.as_deref().is_some_and(|cwd| !is_handle(cwd)) {
             return Err(RequestError::Invalid("cwd"));
         }
         if self
@@ -428,10 +461,20 @@ mod tests {
                 ),
             ),
             (
+                "resource.open",
+                format!(
+                    r#"{{"op":"resource.open","args":{{"handle":"{HANDLE}","path":"src/main.rs","with":"{HANDLE}","editor":"zed"}}}}"#
+                ),
+            ),
+            (
                 "tool.run",
                 format!(
                     r#"{{"op":"tool.run","args":{{"tool":"git","args":["status","--porcelain=v2","--branch","-z"],"cwd":"{HANDLE}","timeoutMs":10000}}}}"#
                 ),
+            ),
+            (
+                "tool.run",
+                r#"{"op":"tool.run","args":{"tool":"docker","args":["ps","--all"]}}"#.to_owned(),
             ),
             (
                 "url.openParam",
@@ -487,7 +530,7 @@ mod tests {
             CapabilityRequest::ToolRun(ToolRun {
                 tool: Tool::Git,
                 args,
-                cwd: cwd.into(),
+                cwd: Some(cwd.into()),
                 timeout_ms,
             })
             .validate()
@@ -507,6 +550,15 @@ mod tests {
         ] {
             assert!(run(status(), cwd, None).is_err(), "{cwd}");
         }
+        // Without a handle: the agent decides whether the command may run
+        // in its own empty folder.
+        let unbound = ToolRun {
+            tool: Tool::Docker,
+            args: vec!["ps".into()],
+            cwd: None,
+            timeout_ms: None,
+        };
+        assert!(CapabilityRequest::ToolRun(unbound).validate().is_ok());
         assert!(run(status(), HANDLE, Some(0)).is_err());
         assert!(run(status(), HANDLE, Some(MAX_TOOL_TIMEOUT_MS + 1)).is_err());
 
@@ -537,12 +589,47 @@ mod tests {
         let open = |position: Option<Position>| {
             CapabilityRequest::ResourceOpen(ResourceOpen {
                 handle: HANDLE.into(),
+                path: None,
                 with: None,
                 position,
                 editor: None,
             })
             .validate()
         };
+        let open_path = |path: &str| {
+            CapabilityRequest::ResourceOpen(ResourceOpen {
+                handle: HANDLE.into(),
+                path: Some(path.into()),
+                with: None,
+                position: None,
+                editor: None,
+            })
+            .validate()
+        };
+        for inside in [
+            "src/main.rs",
+            "README.md",
+            "-rf",
+            "a b/c.txt",
+            ".github/x.yml",
+        ] {
+            assert!(open_path(inside).is_ok(), "{inside}");
+        }
+        for outside in [
+            "",
+            "/etc/passwd",
+            "../secret",
+            "src/../../x",
+            "./src",
+            "src//x",
+            "src/",
+            "C:/x",
+            "src\\x",
+            "a\nb",
+        ] {
+            assert!(open_path(outside).is_err(), "{outside:?}");
+        }
+        assert!(open_path(&"a".repeat(MAX_OPEN_PATH + 1)).is_err());
         assert!(
             open(Some(Position {
                 line: 1,
@@ -586,7 +673,7 @@ mod tests {
         let run = |tool, args: &[&str]| ToolRun {
             tool,
             args: args.iter().map(|a| (*a).to_owned()).collect(),
-            cwd: HANDLE.into(),
+            cwd: Some(HANDLE.into()),
             timeout_ms: None,
         };
         assert_eq!(

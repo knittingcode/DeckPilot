@@ -258,8 +258,23 @@ fn agent(world: World) -> Agent {
                 if world.throttle_from.is_some_and(|from| n >= from) {
                     return CallResult::error(CallErrorCode::Throttled, "rate limited");
                 }
+                // Like the agent: a line needs a file (here: a path with a
+                // dot in its last name).
+                if o.position.is_some()
+                    && o.path
+                        .as_deref()
+                        .is_some_and(|p| !p.rsplit('/').next().unwrap_or_default().contains('.'))
+                {
+                    return CallResult::error(
+                        CallErrorCode::BadRequest,
+                        "invalid-position: a line needs a file, not a folder",
+                    );
+                }
                 seen.borrow_mut().push(Opened::Resource {
-                    what: label_of(&o.handle, &handles),
+                    what: match &o.path {
+                        Some(path) => format!("{}/{path}", label_of(&o.handle, &handles)),
+                        None => label_of(&o.handle, &handles),
+                    },
                     with: o.with.as_ref().map(|w| label_of(w, &handles)),
                     position: o.position,
                     editor: o.editor,
@@ -332,6 +347,66 @@ fn resource(
 }
 
 // ------------------------------------------------------- open-in-editor
+
+/// The built-in's `path`: a file inside the bound folder (the agent checks
+/// that it stays inside), at a line; a path with a bound file is refused
+/// before anything opens.
+#[test]
+fn open_in_editor_opens_a_path_inside_the_bound_folder() {
+    let world = |location| World {
+        params: [
+            ("application", ResourceKind::Application),
+            ("location", location),
+        ]
+        .into(),
+        ..World::default()
+    };
+    let mut agent = agent(world(ResourceKind::Directory));
+    let (ok, _, message, data) = agent.run(
+        "open-in-editor",
+        json!({"application": "a".repeat(32), "location": "b".repeat(32),
+               "path": " src/main.rs ", "editor": "zed", "line": 7}),
+    );
+    assert!(ok, "{message}");
+    assert_eq!(
+        message,
+        "opened location-binding/src/main.rs in application-binding"
+    );
+    assert_eq!(data["path"], "location-binding/src/main.rs");
+    assert_eq!(data["located"], "true");
+    assert_eq!(
+        agent.opened(),
+        [Opened::Resource {
+            what: "location-binding/src/main.rs".into(),
+            with: Some("application-binding".into()),
+            position: Some(Position {
+                line: 7,
+                column: None
+            }),
+            editor: Some(EditorPlan::Zed),
+        }]
+    );
+    // A folder inside the folder, without a line.
+    let mut agent = self::agent(world(ResourceKind::Directory));
+    let (ok, _, _, data) = agent.run(
+        "open-in-editor",
+        json!({"application": "a".repeat(32), "location": "b".repeat(32), "path": "docs"}),
+    );
+    assert!(ok);
+    assert_eq!(data["path"], "location-binding/docs");
+
+    let mut agent = self::agent(world(ResourceKind::File));
+    let (ok, code, message, _) = agent.run(
+        "open-in-editor",
+        json!({"application": "a".repeat(32), "location": "b".repeat(32), "path": "x.rs"}),
+    );
+    assert!(!ok);
+    assert_eq!(
+        (code.as_str(), message.as_str()),
+        (codes::INVALID_PATH, messages::PATH_NEEDS_FOLDER.1)
+    );
+    assert_eq!(agent.opened(), []);
+}
 
 #[test]
 fn open_in_editor_opens_a_bound_file_at_a_line_in_the_bound_editor() {
@@ -438,10 +513,11 @@ fn open_in_editor_refuses_what_the_built_in_refuses() {
             codes::INVALID_POSITION,
             "a column needs a line",
         ),
+        // The agent refuses a line for a folder inside the folder.
         (
-            with(json!({"path": "src/main.rs"})),
-            codes::PATH_NOT_SUPPORTED,
-            messages::PATH_NOT_SUPPORTED.1,
+            with(json!({"path": "src", "line": 3})),
+            codes::INVALID_POSITION,
+            "a line needs a file, not a folder",
         ),
     ] {
         let mut agent = agent(world());

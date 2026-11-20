@@ -28,7 +28,7 @@
     },
     "environment": {
       "label": "Środowisko Dockera",
-      "description": "Zasób środowiska Dockera (używany jest jego kontekst) lub folder. Puste: projekt Compose akcji lub projektu."
+      "description": "Zasób środowiska Dockera (używany jest jego kontekst) lub folder. Puste: kontekst Dockera w DeckPilocie, jak bez wtyczki."
     },
     "all": {
       "label": "Także zatrzymane",
@@ -40,7 +40,7 @@
     },
     "compose": {
       "label": "Projekt Compose",
-      "description": "Zasób przypisany do pliku Compose lub jego folderu. Puste: zasób compose projektu."
+      "description": "Zasób przypisany do pliku Compose lub jego folderu (także jako środowisko Dockera). Puste: zasób compose projektu."
     },
     "projectId": {
       "label": "Projekt",
@@ -112,10 +112,10 @@
     "description": "Dostępność Dockera, kontenery, projekty Compose i logi, w przypisanym kontekście Dockera."
   },
   "dependencies": {
-    "projects": "Bez parametru projektu Compose akcje używają zasobu compose projektu przepływu; bez Projektów nie ma projektu i działają tylko klawisze z wybranym projektem Compose lub środowiskiem Dockera."
+    "projects": "Bez parametru projektu Compose akcje Compose używają zasobu compose projektu przepływu; bez Projektów nie ma projektu i działają tylko klawisze Compose z wybranym projektem Compose."
   },
   "permissions": {
-    "tools": "Uruchamia Twój własny docker w przypisanych środowiskach Dockera i folderach Compose, aby odczytać dostępność Dockera, kontenery, stan projektu Compose i ostatnie wiersze logu (docker context show, version, ps, logs, compose ps i logs). Z osobną zgodą na uruchamianie, zatrzymywanie i restartowanie kontenerów akcje Compose up, down i restart zmieniają Twoje projekty Compose, tylko gdy uruchomisz je Ty lub Twoja sesja pracy; down nigdy nie usuwa wolumenów ani obrazów.",
+    "tools": "Uruchamia Twój własny docker w przypisanych środowiskach Dockera i folderach Compose, aby odczytać dostępność Dockera, kontenery, stan projektu Compose i ostatnie wiersze logu (docker context show, version, ps, logs, compose ps i logs). Z osobną zgodą na uruchamianie, zatrzymywanie i restartowanie kontenerów, wyłączoną, dopóki na nią nie pozwolisz, akcje Compose up, down i restart zmieniają Twoje projekty Compose, tylko gdy uruchomisz je Ty lub Twoja sesja pracy; down nigdy nie usuwa wolumenów ani obrazów.",
     "resources": "Używa przypisanych na tym komputerze folderów i plików Compose oraz środowisk Dockera, po nazwie; wtyczka nigdy nie widzi ich ścieżek.",
     "profile": "Odczytuje klucz aktywnego projektu, aby podać, do którego projektu należy projekt Compose.",
     "device": "Pokazuje na klawiszach, czy Docker jest dostępny, ile kontenerów działa i czy projekt Compose działa, tak jak zastał to ostatni przebieg."
@@ -145,7 +145,6 @@
     "not-user-initiated": "Kontenery są uruchamiane i zatrzymywane tylko w przebiegach uruchomionych przez Ciebie lub Twoją sesję pracy.",
     "context-unsupported": "Akcja wskazuje inny kontekst Dockera niż ten, w którym Docker tu działa.",
     "project-name-unsupported": "Nazwy projektu Compose nie można wybrać dla akcji.",
-    "docker-environment-missing": "Żadne środowisko Dockera, projekt Compose ani zasób projektu nie wskazuje, gdzie działa Docker.",
     "cancelled": "Przebieg został zatrzymany.",
     "resource-unbound": "Zasób nie jest przypisany na tym komputerze.",
     "resource-role-missing": "Projekt nie określa zasobu Compose.",

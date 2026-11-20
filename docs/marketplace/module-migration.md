@@ -1634,6 +1634,62 @@ repositories; never a real docker):
   holds no network grant (common rule 6). A path with `:` before an `@`
   may be shortened more than needed (over-redaction, never under).
 
+*As implemented, follow-up of 2026-11-20 (host gaps found while building
+the first-party plugins).*
+
+- **Docker reads without a handle.** `ps`, `logs` of a container,
+  `version`, `context show` and `compose version` read no folder; a
+  `tool.run` of one of them may omit `cwd` (`ToolRun.cwd` is optional in
+  the ABI, `Context::run_tool_unbound` in the SDK). The agent then runs it
+  with its host-held context in an empty folder it made itself
+  (`<temp>/deckpilot-empty-<64 random bits>`, mode 0700, created with
+  `create`, never reused once anything appeared in it); a Docker
+  environment handle now runs in that folder too, instead of the system's
+  temporary folder. Compose's project commands and every git command still
+  need their handle (`tool-invalid-cwd` without one). This gives
+  `deckpilot.docker`'s `status`, `containers` and container `logs` the
+  built-in's behaviour (no resource, no project). *Tests:*
+  `reads_need_no_resource` (`apps/agent/tests/plugins_docker.rs`), the
+  ABI's `requests_are_bounded`.
+- **A Compose project bound as a Docker environment.** As the built-in's
+  compose role allowed, a `dockerEnvironment` binding whose value is an
+  absolute path of an existing folder or file is, for Compose's project
+  commands, that folder or file (by its real path, with M2's compose file
+  rules); any other Docker environment stays a context name, and is
+  refused for Compose.
+- **`tools:docker:modify` is optional and off by default (X3c).** An
+  action names the sub-grants it needs in `requiresPermissions` (plugin
+  API 1.9, one of `tools:git:network`, `tools:docker:modify`,
+  `resources:open`, `resources:paths`, `projectContext:select`,
+  `openUrl:from-params`, declared by the manifest). A sub-grant an action
+  names is optional: enabling, a plan's activation and an update's
+  activation need every other grant only (`GrantSet::is_optional`,
+  `missing_grants`); while it is not granted only the actions naming it
+  are unavailable ("needs the permission `…`: allow it in Settings ›
+  Plugins") and refused before the plugin runs; granting it makes them
+  available, revoking it again stops only them. The consent dialog and
+  Settings › Plugins show it with its own check, off by default for a high
+  tier one. `deckpilot.docker`'s Compose up, down and restart name
+  `tools:docker:modify`. The broker still refuses every call without the
+  grant (deny by default). *Tests:*
+  `changing_containers_is_a_separate_grant_off_by_default`, the store's
+  `sub_grants_actions_name_are_optional_for_enabling`, the manifest's
+  `actions_name_the_optional_sub_grants_they_need`, the desktop's
+  `review-dialog.test.tsx`.
+- **Key state per key.** A state call still runs no `tool.run` and gets no
+  handle, but `run.context` is now answered in it, with the key's
+  `keyScope`: 128 bits of SHA-256 of the plugin id, each `resource`
+  parameter with its stored reference (never a path) and, where a binding
+  follows the active project (a role, or an empty parameter), the active
+  project's id. Every run with the same bindings (a press, a workflow
+  node) gets the same scope, so the git and docker plugins keep and read
+  state per key. A key of an action that changes something may show state
+  from plugin API 1.9 (rule 6): Compose up and down keys show the
+  built-in's toggle again, as a read of what the last run stored. *Tests:*
+  `the_key_scope_names_the_bindings_of_a_key` (engine), the plugins'
+  `keys_of_different_*_keep_their_own_state`, broker
+  `a_state_call_reads_and_nothing_else_whatever_is_granted`.
+
 #### X4 `resource.open`
 
 *Purpose.* `workspace.open-in-editor`, `workspace.open-project` and
@@ -1676,6 +1732,21 @@ trust model.
 `..` or symlink escape, and a path outside the location are each refused.
 It is refused from a schedule, an event or startup run. The rate limits
 hold. The editor argv matches the fixtures for each plan.
+
+*As implemented, follow-up of 2026-11-20: `path`.* `resource.open
+{handle, path?, …}` opens a file or folder inside a `directory` handle,
+for the built-in workspace's `path`: a relative path of `/`-separated
+names (no `..`, `.`, empty name, backslash, colon or control character,
+at most 1,024 bytes; the ABI refuses anything else), joined with
+`join_inside` and resolved with `existing_inside` (`bound_inside`): it must
+exist and its real path stay inside the binding, so a `..` or a link that
+leads out is `invalid-path`. The agent opens it by its canonical absolute
+path (never starting with `-`); a line needs a file (`invalid-position`),
+and a `path` with a handle that is not a folder is refused. The record
+says that a relative path was opened, never which. *Tests:*
+`a_path_inside_a_bound_folder_opens_and_nothing_outside_it` (executor)
+and `a_path_inside_the_bound_folder_opens_and_nothing_outside_it`
+(`apps/agent/tests/plugins_workspace.rs`).
 
 *Decision of 2026-11-20 (WP-A5, coordinator within the owner's
 authorization): URL roles.* A project's URL role (a binding of kind `url`)

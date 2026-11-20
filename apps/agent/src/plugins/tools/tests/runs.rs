@@ -102,14 +102,36 @@ impl Tree {
     fn fake(&self, name: &str, body: &str) -> PathBuf {
         let path = self.path("bin").join(name);
         let toplevel = if name == "git" { TOPLEVEL } else { "" };
-        std::fs::write(&path, format!("#!/bin/sh\n{toplevel}{body}")).unwrap();
-        std::fs::set_permissions(
-            &path,
-            <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
-        )
-        .unwrap();
+        write_script(&path, &format!("#!/bin/sh\n{toplevel}{body}"));
         path
     }
+}
+
+/// Writes the executable script `path` without this process ever holding
+/// it open for writing. A child process that another test starts at that
+/// moment shares every descriptor of this process until it runs its
+/// program, and starting a script while a writable descriptor of it is
+/// open anywhere fails ("text file busy" on Linux). Here only a helper
+/// shell writes the file, and it has exited when this returns.
+fn write_script(path: &Path, script: &str) {
+    use std::io::Write as _;
+    let mut writer = std::process::Command::new("/bin/sh")
+        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    writer
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(script.as_bytes())
+        .unwrap();
+    assert!(
+        writer.wait().unwrap().success(),
+        "{} not written",
+        path.display()
+    );
 }
 
 fn binding(key: &str, kind: Core, value: &Path) -> MachineResourceBinding {
@@ -325,7 +347,7 @@ fn git_fixture(tree: &Tree, body: &str, grants: &str) -> Fixture {
     let git = tree.fake("git", body);
     Fixture::new(
         grants,
-        ToolHost::from_agent()
+        ToolHost::for_test()
             .with_environment(AGENT_ENV)
             .with_executable(Tool::Git, git),
     )
@@ -569,7 +591,7 @@ fn only_the_tools_own_executable_runs() {
     for executable in [PathBuf::from("/bin/sh"), sh_named_git, not_git] {
         let fixture = Fixture::new(
             GIT,
-            ToolHost::from_agent()
+            ToolHost::for_test()
                 .with_environment(AGENT_ENV)
                 .with_executable(Tool::Git, &executable),
         );
@@ -598,7 +620,7 @@ fn only_the_tools_own_executable_runs() {
     );
     let fixture = Fixture::new(
         GIT,
-        ToolHost::from_agent().with_environment(&[("PATH", &path)]),
+        ToolHost::for_test().with_environment(&[("PATH", &path)]),
     );
     let (mut executor, handles) = fixture.invocation(key(), &bindings);
     let out = output(&fixture.call(
@@ -736,7 +758,7 @@ fn docker_compose_gets_the_bound_file_and_the_host_held_context() {
     let fixture = docker_fixture(
         &tree,
         DOCKER_MODIFY,
-        ToolHost::from_agent()
+        ToolHost::for_test()
             .with_environment(AGENT_ENV)
             .with_docker_context("colima"),
     );
@@ -797,7 +819,7 @@ fn docker_compose_gets_the_bound_file_and_the_host_held_context() {
 #[test]
 fn docker_outside_compose_may_use_a_docker_environment_and_its_ssh_agent() {
     let tree = Tree::new();
-    let host = ToolHost::from_agent().with_environment(&[
+    let host = ToolHost::for_test().with_environment(&[
         ("PATH", "/usr/bin:/bin"),
         ("DOCKER_HOST", "ssh://me@build-box"),
         ("SSH_AUTH_SOCK", "/tmp/agent.sock"),
@@ -859,7 +881,7 @@ fn docker_logs_are_capped_at_64_kib() {
     let docker = tree.fake("docker", "head -c 500000 /dev/zero | tr '\\0' 'l'\n");
     let fixture = Fixture::new(
         DOCKER,
-        ToolHost::from_agent()
+        ToolHost::for_test()
             .with_environment(AGENT_ENV)
             .with_executable(Tool::Docker, docker),
     );
@@ -894,7 +916,7 @@ fn modifying_is_off_by_default_and_only_in_runs_the_user_started() {
     let fixture = docker_fixture(
         &tree,
         DOCKER,
-        ToolHost::from_agent().with_environment(AGENT_ENV),
+        ToolHost::for_test().with_environment(AGENT_ENV),
     );
     for args in [
         &["compose", "up", "--detach"][..],
@@ -916,7 +938,7 @@ fn modifying_is_off_by_default_and_only_in_runs_the_user_started() {
     let fixture = docker_fixture(
         &tree,
         DOCKER_MODIFY,
-        ToolHost::from_agent().with_environment(AGENT_ENV),
+        ToolHost::for_test().with_environment(AGENT_ENV),
     );
     for run in [
         RunContext::workflow(RunCause::Schedule, None),
@@ -1025,7 +1047,7 @@ fn every_run_is_audited_by_names_never_by_values() {
 
 #[test]
 fn tool_run_is_refused_in_a_state_call() {
-    let fixture = Fixture::new(GIT, ToolHost::from_agent());
+    let fixture = Fixture::new(GIT, ToolHost::for_test());
     let session = fixture.broker.session(fixture.plugin.clone());
     let request: CapabilityRequest =
         serde_json::from_value(tool_run("git", &["status"], super::HANDLE)).unwrap();
@@ -1078,7 +1100,7 @@ fn real_git_fixture(git: &Path, home: &Path, grants: &str) -> Fixture {
     let home = home.display().to_string();
     Fixture::new(
         grants,
-        ToolHost::from_agent()
+        ToolHost::for_test()
             .with_environment(&[("PATH", "/usr/bin:/bin"), ("HOME", &home)])
             .with_executable(Tool::Git, git),
     )
@@ -1149,15 +1171,10 @@ fn a_work_tree_outside_the_binding_is_refused() {
         tree.path("").display()
     );
     let git = tree.path("bin").join("git");
-    std::fs::write(&git, format!("#!/bin/sh\n{fake}")).unwrap();
-    std::fs::set_permissions(
-        &git,
-        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
-    )
-    .unwrap();
+    write_script(&git, &format!("#!/bin/sh\n{fake}"));
     let fixture = Fixture::new(
         GIT,
-        ToolHost::from_agent()
+        ToolHost::for_test()
             .with_environment(AGENT_ENV)
             .with_executable(Tool::Git, &git),
     );
@@ -1231,16 +1248,10 @@ fn a_hostile_repository_cannot_run_gpg_on_log() {
     signed_commit(&git, &home, &repo);
     let pwned = tree.path("pwned");
     let evil = repo.join(".git/evil.sh");
-    std::fs::write(
+    write_script(
         &evil,
-        format!("#!/bin/sh\necho gpg >> '{}'\nexit 1\n", pwned.display()),
-    )
-    .unwrap();
-    std::fs::set_permissions(
-        &evil,
-        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
-    )
-    .unwrap();
+        &format!("#!/bin/sh\necho gpg >> '{}'\nexit 1\n", pwned.display()),
+    );
     setup_git(&git, &home, &repo, &["config", "log.showSignature", "true"]);
     setup_git(
         &git,
@@ -1302,7 +1313,7 @@ fn remote_helper_transports_never_run() {
     let home_text = home.display().to_string();
     let fixture = Fixture::new(
         GIT_NETWORK,
-        ToolHost::from_agent()
+        ToolHost::for_test()
             .with_environment(&[("PATH", &path), ("HOME", &home_text)])
             .with_executable(Tool::Git, &git),
     );
@@ -1331,7 +1342,7 @@ fn compose_on_a_folder_runs_the_folders_own_file_only() {
     let fixture = docker_fixture(
         &tree,
         DOCKER,
-        ToolHost::from_agent().with_environment(AGENT_ENV),
+        ToolHost::for_test().with_environment(AGENT_ENV),
     );
     let root = tree.path("dk");
     for dir in ["bound", "b2"] {

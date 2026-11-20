@@ -15,8 +15,15 @@
 //! * [`changes_run_only_in_runs_the_user_started`]: Compose down from a
 //!   scheduled workflow is refused (`not-user-initiated`) and docker never
 //!   sees it;
-//! * [`nothing_runs_without_consent`]: before the consent and while
-//!   `tools:docker:modify` is revoked nothing runs.
+//! * [`nothing_runs_without_consent`]: before the consent nothing runs;
+//! * [`changing_containers_is_a_separate_grant_off_by_default`], where
+//!   the plugin is enabled without `tools:docker:modify` (X3c, optional: only
+//!   the Compose changes name it); the reads run, the changes are listed
+//!   unavailable ("needs the permission") and never reach docker until the
+//!   user grants it, and revoking it again stops only them;
+//! * [`reads_need_no_resource`], where status, containers and container logs
+//!   run without a Docker environment or a project, as with the built-in,
+//!   in an empty folder of the agent's own.
 //!
 //! The plugin is pinned as a `default`-class plugin: `bundled.json`
 //! releases it as `migration` (its routing from the legacy `docker.*` ids
@@ -68,6 +75,8 @@ fn fake_docker(bin: &Path, log: &Path) {
         r#"#!/bin/sh
 printf '%s\n' "$@" >> '{log}'
 echo '@@end@@' >> '{log}'
+pwd -P >> '{log}.cwd'
+ls -A >> '{log}.cwd'
 ctx=default
 if [ "$1" = "--context" ]; then ctx=$2; shift 2; fi
 case "$1" in
@@ -100,12 +109,7 @@ esac
 "#,
         log = log.display()
     );
-    let path = bin.join("docker");
-    std::fs::write(&path, script).unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    support::fakes::write_script(&bin.join("docker"), &script);
 }
 
 fn calls(log: &Path) -> Vec<Vec<String>> {
@@ -125,6 +129,10 @@ struct Fixture {
     bin: PathBuf,
     log: PathBuf,
     status: ActionInstanceId,
+    /// Status without a Docker environment.
+    plain_status: ActionInstanceId,
+    /// Container logs without a Docker environment.
+    plain_logs: ActionInstanceId,
     containers: ActionInstanceId,
     compose_status: ActionInstanceId,
     up: ActionInstanceId,
@@ -178,6 +186,11 @@ fn fixture(dir: &Path) -> Fixture {
         first_party::instance(&mut profile, id, action, params)
     };
     let status = add("status", &[("environment", fixed("remote.docker"))]);
+    let plain_status = add("status", &[]);
+    let plain_logs = add(
+        "logs",
+        &[("container", ParameterValue::Text("web-1".into()))],
+    );
     let containers = add(
         "containers",
         &[
@@ -215,6 +228,8 @@ fn fixture(dir: &Path) -> Fixture {
         bin,
         log,
         status,
+        plain_status,
+        plain_logs,
         containers,
         compose_status,
         up,
@@ -264,7 +279,7 @@ async fn every_action_runs_through_tool_run() {
     let agent = env.start().await;
 
     // ---- seeded, waiting for consent: running docker is high tier, and
-    // changing containers a separate high-tier grant.
+    // changing containers a separate high-tier grant (optional).
     let summary = agent.seeded().await;
     assert_ne!(summary.state, PluginState::Enabled, "{}", agent.log());
     assert_eq!(summary.actions.len(), 7);
@@ -478,14 +493,11 @@ async fn nothing_runs_without_consent() {
     assert_eq!(calls(&f.log).len(), 0, "docker ran before the consent");
     agent.enable().await;
     assert!(agent.run_action(f.status).await.ok);
-
-    // While the modify sub-grant is revoked the agent lists every action
-    // of the plugin as unavailable, reads included, and docker never
-    // starts (see README: the sub-grant is all or nothing for now).
+    // Revoking the read grant stops every action.
     agent
         .ok(Request::RevokePluginPermission {
             plugin: PLUGIN.id.into(),
-            permission: "tools:docker:modify".into(),
+            permission: "tools:docker".into(),
         })
         .await;
     let before = calls(&f.log).len();
@@ -493,12 +505,196 @@ async fn nothing_runs_without_consent() {
         let refused = agent.run_action(action).await;
         assert!(!refused.ok, "{refused:?}");
         assert!(
-            refused
-                .message
-                .contains("`tools:docker:modify` is not granted"),
+            refused.message.contains("`tools:docker` is not granted"),
             "{refused:?}"
         );
     }
     assert_eq!(calls(&f.log).len(), before);
+    agent.stop().await;
+}
+
+/// The availability of the plugin's actions, by action id.
+async fn availability(agent: &first_party::Agent) -> Vec<(String, Option<String>)> {
+    agent
+        .details()
+        .await
+        .summary
+        .actions
+        .iter()
+        .map(|a| {
+            assert_eq!(a.available, a.unavailable_reason.is_none(), "{a:?}");
+            (a.action.clone(), a.unavailable_reason.clone())
+        })
+        .collect()
+}
+
+const CHANGES: [&str; 3] = ["compose-up", "compose-down", "compose-restart"];
+
+/// X3c: changing containers is a separate grant, off by default. The
+/// plugin is enabled without it; only the Compose changes wait for it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn changing_containers_is_a_separate_grant_off_by_default() {
+    let dir = support::TempDir::new("plugins-docker-optional-fixture");
+    let f = fixture(dir.path());
+    let env = env("plugins-docker-optional", &f);
+    let agent = env.start().await;
+    agent.seeded().await;
+    let details = agent.details().await;
+    let modify = details
+        .permissions
+        .iter()
+        .find(|p| p.key == "tools:docker:modify")
+        .expect("the modify sub-grant");
+    assert!(modify.optional, "{modify:?}");
+    assert_eq!(modify.tier, PermissionTier::High);
+    assert_eq!(modify.actions, CHANGES);
+    assert!(
+        details
+            .permissions
+            .iter()
+            .filter(|p| p.key != "tools:docker:modify")
+            .all(|p| !p.optional),
+        "{:?}",
+        details.permissions
+    );
+
+    // ---- enabled with the required grants only.
+    let consent = agent.enable_required().await;
+    assert!(!consent.iter().any(|k| k == "tools:docker:modify"));
+    let needs = "needs the permission `tools:docker:modify`";
+    for (action, reason) in availability(&agent).await {
+        if CHANGES.contains(&action.as_str()) {
+            let reason = reason.unwrap_or_default();
+            assert!(reason.contains(needs), "{action}: {reason}");
+        } else {
+            assert_eq!(reason, None, "{action}");
+        }
+    }
+    // The reads run; the changes never reach docker.
+    let status = agent.run_action(f.status).await;
+    assert!(
+        status.ok,
+        "{status:?}
+{}",
+        agent.log()
+    );
+    assert!(agent.run_action(f.compose_status).await.ok);
+    let before = calls(&f.log).len();
+    for change in [f.up, f.down, f.restart] {
+        let refused = agent.run_action(change).await;
+        assert!(!refused.ok, "{refused:?}");
+        assert!(refused.message.contains(needs), "{refused:?}");
+    }
+    assert_eq!(calls(&f.log).len(), before, "docker saw a change");
+
+    // ---- granted: the changes run.
+    agent
+        .ok(Request::GrantPluginPermissions {
+            plugin: PLUGIN.id.into(),
+            permissions: vec!["tools:docker:modify".into()],
+        })
+        .await;
+    assert!(
+        availability(&agent).await.iter().all(|(_, r)| r.is_none()),
+        "{:?}",
+        availability(&agent).await
+    );
+    let up = agent.run_action(f.up).await;
+    assert!(
+        up.ok,
+        "{up:?}
+{}",
+        agent.log()
+    );
+
+    // ---- revoked again: only the changes stop.
+    agent
+        .ok(Request::RevokePluginPermission {
+            plugin: PLUGIN.id.into(),
+            permission: "tools:docker:modify".into(),
+        })
+        .await;
+    assert_eq!(
+        agent.summary().await.map(|s| s.state),
+        Some(PluginState::Enabled)
+    );
+    for (action, reason) in availability(&agent).await {
+        assert_eq!(
+            reason.is_some(),
+            CHANGES.contains(&action.as_str()),
+            "{action}: {reason:?}"
+        );
+    }
+    assert!(agent.run_action(f.containers).await.ok);
+    let before = calls(&f.log).len();
+    let refused = agent.run_action(f.down).await;
+    assert!(refused.message.contains(needs), "{refused:?}");
+    assert_eq!(calls(&f.log).len(), before);
+    agent.stop().await;
+}
+
+/// Status, containers and container logs read no folder: without a Docker
+/// environment and without a project they run, as the built-in did, in
+/// an empty folder of the agent's own; Compose still needs its project.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reads_need_no_resource() {
+    let dir = support::TempDir::new("plugins-docker-unbound-fixture");
+    let mut f = fixture(dir.path());
+    // No project is active.
+    f.profile.projects.clear();
+    let env = Env::new(
+        "plugins-docker-unbound",
+        PLUGIN,
+        BundleClass::Default,
+        Some((&f.profile, None)),
+        Some(&f.machine),
+    );
+    let mut env = env;
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let mut dirs = vec![f.bin.clone()];
+    dirs.extend(std::env::split_paths(&path));
+    env.extra_env
+        .push(("PATH".into(), std::env::join_paths(dirs).unwrap()));
+    let agent = env.start().await;
+    agent.seeded().await;
+    agent.enable_required().await;
+    let status = agent.run_action(f.plain_status).await;
+    assert!(
+        status.ok,
+        "{status:?}
+{}",
+        agent.log()
+    );
+    assert_eq!(status.data["context"], "default");
+    assert!(agent.run_action(f.containers).await.ok);
+    let logs = agent.run_action(f.plain_logs).await;
+    assert!(logs.ok, "{logs:?}");
+    assert_eq!(
+        calls(&f.log).pop().unwrap(),
+        ["logs", "--tail=100", "--", "web-1"]
+    );
+    // Every run was in one empty folder the agent made, never a folder of
+    // the user's.
+    let cwd = std::fs::read_to_string(f.log.with_extension("log.cwd")).unwrap();
+    let folders: std::collections::BTreeSet<&str> = cwd.lines().collect();
+    assert_eq!(folders.len(), 1, "{cwd}");
+    let folder = folders.first().unwrap();
+    assert!(
+        Path::new(folder)
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with("deckpilot-empty-")),
+        "{folder}"
+    );
+    assert!(
+        !folder.starts_with(&*dir.path().to_string_lossy()),
+        "{folder}"
+    );
+    // Compose needs its project.
+    let refused = agent.run_action(f.compose_status).await;
+    assert_eq!(
+        refused.code.as_deref(),
+        Some("no-active-project"),
+        "{refused:?}"
+    );
     agent.stop().await;
 }

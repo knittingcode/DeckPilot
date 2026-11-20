@@ -741,9 +741,24 @@ fn the_snapshot_reads_nothing_without_aliases() {
             .iter()
             .map(|m| m.module.as_str())
             .collect::<Vec<_>>(),
-        ["github", "gitlab", "jira", "notifications"]
+        [
+            "docker",
+            "git",
+            "github",
+            "gitlab",
+            "jira",
+            "notifications",
+            "projects",
+            "workspace"
+        ]
     );
-    let github = &shipped.modules[0];
+    // None of the extraction set is used by this data: no backup is due.
+    assert!(!shipped.needs_backup());
+    let github = shipped
+        .modules
+        .iter()
+        .find(|m| m.module.as_str() == "github")
+        .unwrap();
     assert_eq!(github.module.as_str(), "github");
     assert_eq!(github.plugin.as_str(), "deckpilot.github");
     assert_eq!(github.aliases.len(), 6);
@@ -1063,6 +1078,7 @@ static ENTERED: MigrationPlan = MigrationPlan {
     }),
     private_network: Some("allowPrivateHost"),
     open_url_hosts: &[],
+    extraction: None,
 };
 
 /// The server the user entered in the built-in.
@@ -1739,4 +1755,580 @@ fn the_gitlab_and_jira_plans_take_a_server_the_user_entered() {
         local.contains("`siteUrl` is not a server a plugin can reach"),
         "{local}"
     );
+}
+
+// ------------------------------------------- the extraction (WP-C1)
+
+/// The modules extracted on 2026-11-20 (`git`, `docker`, `workspace`,
+/// `projects`) against their shipped plans, aliases and the real
+/// manifests of `plugins/first-party/<module>` (a minimal ABI module stands
+/// in for each `plugin.wasm`; `tests/plugins_cutover.rs` runs the real
+/// Git plugin end to end).
+mod extraction {
+    use super::*;
+
+    const MODULES: [&str; 4] = ["git", "docker", "workspace", "projects"];
+    const BACKUP: &str = "deckpilot-pre-plugin-extraction-1.db";
+
+    fn plugin(module: &str) -> PluginId {
+        PluginId::parse(&format!("deckpilot.{module}")).unwrap()
+    }
+
+    fn source(module: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../plugins/first-party")
+            .join(module)
+    }
+
+    /// A configuration store and the application resources.
+    struct Shipped {
+        root: tempfile::TempDir,
+        config: SqliteStore,
+        profile: Profile,
+    }
+
+    impl Shipped {
+        fn new() -> Self {
+            Self {
+                root: tempfile::tempdir().unwrap(),
+                config: SqliteStore::open_in_memory().unwrap(),
+                profile: Profile::new("Work"),
+            }
+        }
+
+        /// The built-in's `modules` row, enabled, with `config`.
+        fn save(&self, module: &str, config: &[(&str, ParameterValue)]) {
+            let parameters = config
+                .iter()
+                .fold(ActionParameters::new(), |p, (k, v)| p.with(*k, v.clone()));
+            self.config
+                .set_module_state(
+                    &ModuleId::new(module).unwrap(),
+                    &ModuleSettings {
+                        enabled: true,
+                        config: parameters,
+                    },
+                )
+                .unwrap();
+        }
+
+        /// An instance of the legacy `action` in the profile.
+        fn uses(&mut self, name: &str, action: &str, parameters: &[(&str, ParameterValue)]) {
+            let parameters = parameters
+                .iter()
+                .fold(ActionParameters::new(), |p, (k, v)| p.with(*k, v.clone()));
+            self.profile.actions.push(ActionInstance {
+                id: ActionInstanceId::new(),
+                name: name.into(),
+                action_type: ActionTypeId::new(action).unwrap(),
+                parameters,
+                description: String::new(),
+                icon: None,
+                label: None,
+            });
+            self.config.save_profile(&self.profile).unwrap();
+        }
+
+        fn open(&self) -> PluginManager {
+            PluginManager::open(
+                &self.root.path().join("data"),
+                &StoreKey::from_bytes([0x24; 32]),
+                ManagerOptions::default(),
+            )
+            .unwrap()
+        }
+
+        /// The four plugins as `build.sh` stages them (manifest, licence,
+        /// icons, locales), each pinned with class `migration`.
+        fn bundle(&self) -> Bundle {
+            let bundled = self.root.path().join("resources").join(BUNDLED_DIR);
+            let mut pinned = Vec::new();
+            for module in MODULES {
+                let id = plugin(module);
+                let dir = bundled.join(id.as_str());
+                let _ = std::fs::remove_dir_all(&dir);
+                std::fs::create_dir_all(dir.join("assets")).unwrap();
+                std::fs::create_dir_all(dir.join("locales")).unwrap();
+                let manifest: Value = serde_json::from_slice(
+                    &std::fs::read(source(module).join("manifest.json")).unwrap(),
+                )
+                .unwrap();
+                let mut files = vec!["manifest.json".to_owned(), "LICENSE".to_owned()];
+                files.extend(
+                    manifest["icons"]
+                        .as_object()
+                        .unwrap()
+                        .values()
+                        .map(|v| v.as_str().unwrap().to_owned()),
+                );
+                files.extend(
+                    manifest["locales"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|tag| format!("locales/{}.json", tag.as_str().unwrap())),
+                );
+                for file in files {
+                    std::fs::copy(source(module).join(&file), dir.join(&file)).unwrap();
+                }
+                let version = manifest["version"].as_str().unwrap();
+                std::fs::write(
+                    dir.join("plugin.wasm"),
+                    deckpilot_plugin_package::wasm::minimal_abi_module_with_note(version),
+                )
+                .unwrap();
+                pinned.push((id, Version::parse(version).unwrap(), BundleClass::Migration));
+            }
+            Bundle {
+                dir: Some(bundled.clone()),
+                pins: Pins::compute(&bundled, &pinned).unwrap(),
+                trust: Ok(()),
+            }
+        }
+
+        /// What the service task hands the worker, with the backup it took.
+        fn snapshot(&self, backup: Option<Result<String, String>>) -> LegacySnapshot {
+            let mut registry = deckpilot_modules::builtin(Os::current());
+            registry.apply_states(&self.config.module_states().unwrap());
+            let mut snapshot = LegacySnapshot::read(&self.config, &registry).unwrap();
+            snapshot.backup = backup;
+            snapshot
+        }
+
+        fn backed_up(&self) -> LegacySnapshot {
+            self.snapshot(Some(Ok(BACKUP.into())))
+        }
+    }
+
+    fn phase(manager: &PluginManager, module: &str) -> Option<ModuleMigration> {
+        manager.store().module_migration(module).unwrap()
+    }
+
+    fn route_of(manager: &PluginManager, bundle: &Bundle, module: &str) -> LegacyRoute {
+        routing(manager, bundle).route(&ModuleId::new(module).unwrap())
+    }
+
+    fn granted(manager: &PluginManager, module: &str) -> Vec<(String, String)> {
+        manager
+            .store()
+            .grants(&plugin(module))
+            .unwrap()
+            .into_iter()
+            .filter(|g| g.status == GrantStatus::Granted)
+            .map(|g| (g.key.to_string(), g.decided_by))
+            .collect()
+    }
+
+    fn consent_to(
+        manager: &mut PluginManager,
+        bundle: &Bundle,
+        snapshot: &LegacySnapshot,
+        module: &str,
+    ) {
+        decide(manager, bundle, snapshot, &Decision::Consent(module.into())).unwrap();
+    }
+
+    fn text(value: &str) -> ParameterValue {
+        ParameterValue::Text(value.into())
+    }
+
+    /// D4: nothing is installed for a module this computer does not use,
+    /// and nothing is backed up.
+    #[test]
+    fn a_user_with_no_use_of_a_module_gets_nothing_installed() {
+        let mut env = Shipped::new();
+        env.uses("Note", "general.log", &[]);
+        let bundle = env.bundle();
+        let snapshot = env.snapshot(None);
+        assert!(!snapshot.needs_backup());
+        let mut manager = env.open();
+        start(&mut manager, &bundle, &snapshot);
+        for module in MODULES {
+            let record = phase(&manager, module).unwrap();
+            assert_eq!(record.phase, MigrationPhase::NotEligible, "{module}");
+            assert_eq!(
+                record.reason.as_deref(),
+                Some("the built-in module is not used on this computer"),
+                "{module}"
+            );
+            assert!(
+                manager.store().plugin(&plugin(module)).unwrap().is_none(),
+                "{module}"
+            );
+            assert_eq!(
+                route_of(&manager, &bundle, module),
+                LegacyRoute::Builtin,
+                "{module}"
+            );
+        }
+        assert_eq!(manager.store().host_setting(BACKUP_NOTE).unwrap(), None);
+        assert_eq!(manager.store().host_setting("tools.git").unwrap(), None);
+    }
+
+    /// Git, end to end through the engine: eligible by its keys; installed
+    /// and waiting for the high tier with its keys unavailable (no
+    /// fallback while it waits) and `deckpilot.db` untouched; the user's
+    /// consent cuts it over after the backup is journaled; reruns change
+    /// nothing; the user's disable withdraws it.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one migration, step by step
+    fn git_waits_unavailable_for_consent_then_runs_through_the_plugin() {
+        let mut env = Shipped::new();
+        env.save(
+            "git",
+            &[
+                ("gitExecutable", text("/opt/git/bin/git")),
+                ("networkTimeoutSeconds", ParameterValue::Integer(60)),
+                ("repositoryRole", text("code")),
+            ],
+        );
+        env.uses(
+            "Branch",
+            "git.status",
+            &[(
+                "project_id",
+                ParameterValue::Project(deckpilot_core::ProjectId::new()),
+            )],
+        );
+        let stored = env.config.load_profile(env.profile.id).unwrap().unwrap();
+        let bundle = env.bundle();
+        let snapshot = env.backed_up();
+        assert!(snapshot.needs_backup());
+        let mut manager = env.open();
+        start(&mut manager, &bundle, &snapshot);
+
+        let record = phase(&manager, "git").unwrap();
+        assert_eq!(record.phase, MigrationPhase::AwaitingConsent, "{record:?}");
+        let reason = record.reason.unwrap();
+        for item in ["tools:git", "tools:git:network", "resources:open"] {
+            assert!(reason.contains(item), "{reason}");
+        }
+        assert_eq!(
+            route_of(&manager, &bundle, "git"),
+            LegacyRoute::AwaitingConsent
+        );
+        let info = info(&manager, &bundle, Some(&snapshot), "git").unwrap();
+        assert_eq!(info.route, ipc::MigrationRoute::PluginWithdrawn);
+        assert!(
+            info.route_reason
+                .unwrap()
+                .contains("waits for your consent")
+        );
+        // Derived: the low tier and the medium tier the built-in used;
+        // never the high tier.
+        let derived: BTreeSet<String> = granted(&manager, "git")
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(
+            derived,
+            BTreeSet::from([
+                "device:state".to_owned(),
+                "profile".to_owned(),
+                "resources".to_owned(),
+                "resources:paths".to_owned(),
+            ]),
+            "{derived:?}"
+        );
+        // The plugin's settings; the host's tool settings; no backup yet.
+        assert_eq!(
+            manager.store().settings(&plugin("git")).unwrap(),
+            BTreeMap::from([
+                ("networkTimeoutSeconds".to_owned(), json!(60)),
+                ("repositoryRole".to_owned(), json!("code")),
+            ])
+        );
+        assert_eq!(
+            manager.store().host_setting("tools.git").unwrap(),
+            Some(json!({"gitExecutable": "/opt/git/bin/git", "networkTimeoutSeconds": 60}))
+        );
+        assert_eq!(manager.store().host_setting(BACKUP_NOTE).unwrap(), None);
+        // `deckpilot.db`'s profile is exactly as stored.
+        assert_eq!(
+            env.config.load_profile(env.profile.id).unwrap().unwrap(),
+            stored
+        );
+
+        consent_to(&mut manager, &bundle, &snapshot, "git");
+        let record = phase(&manager, "git").unwrap();
+        assert_eq!(record.phase, MigrationPhase::CutOver, "{record:?}");
+        assert_eq!(route_of(&manager, &bundle, "git"), LegacyRoute::Plugin);
+        assert_eq!(
+            manager.store().host_setting(BACKUP_NOTE).unwrap(),
+            Some(json!({"file": BACKUP}))
+        );
+        for key in ["tools:git", "tools:git:network", "resources:open"] {
+            assert!(
+                granted(&manager, "git")
+                    .contains(&(key.to_owned(), "user:migration:git".to_owned())),
+                "{key}"
+            );
+        }
+        assert_eq!(
+            manager
+                .store()
+                .plugin(&plugin("git"))
+                .unwrap()
+                .unwrap()
+                .state,
+            PluginState::Enabled
+        );
+
+        // Reruns: nothing changes, the backup is journaled once.
+        let done = phase(&manager, "git").unwrap();
+        for _ in 0..2 {
+            drop(manager);
+            manager = env.open();
+            start(
+                &mut manager,
+                &bundle,
+                &env.snapshot(Some(Ok("another.db".into()))),
+            );
+        }
+        assert_eq!(phase(&manager, "git").unwrap(), done);
+        assert_eq!(
+            manager.store().host_setting(BACKUP_NOTE).unwrap(),
+            Some(json!({"file": BACKUP}))
+        );
+        assert_eq!(
+            env.config.load_profile(env.profile.id).unwrap().unwrap(),
+            stored
+        );
+
+        // The user's disable: unavailable, no fallback.
+        manager.disable_by_user(&plugin("git")).unwrap();
+        assert_eq!(
+            route_of(&manager, &bundle, "git"),
+            LegacyRoute::PluginWithdrawn
+        );
+    }
+
+    /// A decline keeps the keys unavailable (recoverable) until Retry asks
+    /// again; a backup that could not be written fails the cut-over, and
+    /// the built-in serves while it is compiled in.
+    #[test]
+    fn a_decline_waits_and_a_failed_backup_falls_back() {
+        let mut env = Shipped::new();
+        env.uses("Branch", "git.branch", &[]);
+        let bundle = env.bundle();
+        let snapshot = env.backed_up();
+        let mut manager = env.open();
+        start(&mut manager, &bundle, &snapshot);
+        decide(
+            &mut manager,
+            &bundle,
+            &snapshot,
+            &Decision::Decide {
+                module: "git".into(),
+                approve: BTreeSet::new(),
+                decline: BTreeSet::from([GrantKey::new(PermissionKind::Tools, "git")]),
+            },
+        )
+        .unwrap();
+        let record = phase(&manager, "git").unwrap();
+        assert_eq!(record.phase, MigrationPhase::NotEligible);
+        assert_eq!(
+            route_of(&manager, &bundle, "git"),
+            LegacyRoute::AwaitingConsent
+        );
+        start(&mut manager, &bundle, &snapshot);
+        assert_eq!(
+            route_of(&manager, &bundle, "git"),
+            LegacyRoute::AwaitingConsent
+        );
+        let reason = info(&manager, &bundle, Some(&snapshot), "git")
+            .unwrap()
+            .route_reason
+            .unwrap();
+        assert!(reason.contains("you declined"), "{reason}");
+        decide(
+            &mut manager,
+            &bundle,
+            &snapshot,
+            &Decision::Retry("git".into()),
+        )
+        .unwrap();
+        assert_eq!(
+            phase(&manager, "git").unwrap().phase,
+            MigrationPhase::AwaitingConsent
+        );
+
+        // The backup failed: consent given, but no cut-over.
+        let failing = env.snapshot(Some(Err("disk full".into())));
+        consent_to(&mut manager, &bundle, &failing, "git");
+        let record = phase(&manager, "git").unwrap();
+        assert_eq!(record.phase, MigrationPhase::Failed, "{record:?}");
+        assert!(record.reason.unwrap().contains("could not be backed up"));
+        assert_eq!(route_of(&manager, &bundle, "git"), LegacyRoute::Builtin);
+        assert_eq!(manager.store().host_setting(BACKUP_NOTE).unwrap(), None);
+        // The next start with a backup retries and waits no more.
+        start(&mut manager, &bundle, &snapshot);
+        assert_eq!(
+            phase(&manager, "git").unwrap().phase,
+            MigrationPhase::CutOver
+        );
+    }
+
+    /// Docker: `tools:docker:modify` is offered only when
+    /// `allowStateChanges` was on, never derived; its tool settings are
+    /// the host's; a stored `projectName` does not stop the migration and
+    /// is named in the journal (that key is unavailable until cleared).
+    #[test]
+    fn docker_offers_modify_only_when_the_builtin_allowed_changes() {
+        let modify = GrantKey::new(PermissionKind::Tools, "docker:modify");
+        for allowed in [false, true] {
+            let mut env = Shipped::new();
+            env.save(
+                "docker",
+                &[
+                    ("dockerExecutable", text("/usr/local/bin/docker")),
+                    ("context", text("colima")),
+                    ("timeoutSeconds", ParameterValue::Integer(900)),
+                    ("allowStateChanges", ParameterValue::Boolean(allowed)),
+                ],
+            );
+            env.uses("Up", "docker.compose-up", &[("projectName", text("shop"))]);
+            let bundle = env.bundle();
+            let snapshot = env.backed_up();
+            let mut manager = env.open();
+            start(&mut manager, &bundle, &snapshot);
+            let record = phase(&manager, "docker").unwrap();
+            assert_eq!(record.phase, MigrationPhase::AwaitingConsent, "{record:?}");
+            let reason = record.reason.unwrap();
+            assert!(reason.contains("tools:docker"), "{reason}");
+            assert_eq!(reason.contains("tools:docker:modify"), allowed, "{reason}");
+            assert!(reason.contains("`Up` sets `projectName`"), "{reason}");
+            let items: Vec<String> = info(&manager, &bundle, Some(&snapshot), "docker")
+                .unwrap()
+                .consent
+                .into_iter()
+                .map(|item| item.key)
+                .collect();
+            assert_eq!(items.contains(&modify.to_string()), allowed, "{items:?}");
+            assert_eq!(
+                manager.store().host_setting("tools.docker").unwrap(),
+                Some(json!({
+                    "context": "colima",
+                    "dockerExecutable": "/usr/local/bin/docker",
+                    "timeoutSeconds": 900,
+                }))
+            );
+            assert_eq!(
+                manager.store().settings(&plugin("docker")).unwrap(),
+                BTreeMap::from([("timeoutSeconds".to_owned(), json!(900))])
+            );
+            consent_to(&mut manager, &bundle, &snapshot, "docker");
+            let modify_granted = granted(&manager, "docker")
+                .iter()
+                .any(|(key, _)| *key == modify.to_string());
+            assert_eq!(modify_granted, allowed);
+            if allowed {
+                let record = phase(&manager, "docker").unwrap();
+                assert_eq!(record.phase, MigrationPhase::CutOver, "{record:?}");
+                assert!(record.reason.unwrap().contains("`Up` sets `projectName`"));
+                assert_eq!(route_of(&manager, &bundle, "docker"), LegacyRoute::Plugin);
+            }
+        }
+    }
+
+    /// A plugin whose actions cannot replace the built-in's (the known
+    /// gaps of `crates/deckpilot-modules/tests/contracts.rs`) fails before
+    /// the user is asked: nothing waits, the built-in serves, and it is
+    /// retried at the next start. Projects counts its projects as use.
+    #[test]
+    fn a_plugin_that_cannot_replace_the_builtin_fails_with_fallback() {
+        let mut env = Shipped::new();
+        env.profile.projects.push(deckpilot_core::Project::new(
+            deckpilot_core::ProjectKey::new("SHOP").unwrap(),
+            "Shop",
+        ));
+        env.uses("Edit", "workspace.open-urls", &[]);
+        let bundle = env.bundle();
+        let snapshot = env.backed_up();
+        let projects = snapshot
+            .modules
+            .iter()
+            .find(|m| m.module.as_str() == "projects")
+            .unwrap();
+        assert!(projects.data_in_use && projects.instances == 0);
+        let mut manager = env.open();
+        start(&mut manager, &bundle, &snapshot);
+        for (module, gap) in [
+            (
+                "workspace",
+                "`deckpilot.workspace.open-in-editor` cannot replace",
+            ),
+            ("projects", "`deckpilot.projects.cycle` cannot replace"),
+        ] {
+            let record = phase(&manager, module).unwrap();
+            assert_eq!(record.phase, MigrationPhase::Failed, "{module}: {record:?}");
+            let reason = record.reason.unwrap();
+            assert!(
+                reason.starts_with("health check: ") && reason.contains(gap),
+                "{reason}"
+            );
+            assert_eq!(
+                route_of(&manager, &bundle, module),
+                LegacyRoute::Builtin,
+                "{module}"
+            );
+            assert_eq!(
+                manager
+                    .store()
+                    .plugin(&plugin(module))
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                PluginState::Disabled
+            );
+            assert!(
+                !granted(&manager, module)
+                    .iter()
+                    .any(|(_, by)| by.starts_with("user:")),
+                "{module}"
+            );
+        }
+        // Retried at the next start, failing the same way.
+        start(&mut manager, &bundle, &snapshot);
+        assert_eq!(phase(&manager, "projects").unwrap().attempts, 2);
+    }
+
+    /// The extraction plans and their aliases agree: one plan per
+    /// extracted module, each of the four bundled with class `migration`.
+    #[test]
+    fn every_extracted_module_has_its_plan() {
+        for module in MODULES {
+            let plan = plan_for(module).unwrap();
+            assert!(plan.extraction.is_some(), "{module}");
+            assert!(plan.credentials.is_empty() && plan.origin.is_none());
+            assert!(
+                deckpilot_core::alias::ACTION_ALIASES
+                    .iter()
+                    .any(|a| a.module == module && a.plugin == plugin(module).as_str()),
+                "{module}"
+            );
+        }
+        for module in ["github", "gitlab", "jira", "notifications"] {
+            assert!(plan_for(module).unwrap().extraction.is_none(), "{module}");
+        }
+        let released: Value = serde_json::from_slice(
+            &std::fs::read(source("bundled.json").with_file_name("bundled.json")).unwrap(),
+        )
+        .unwrap();
+        for module in MODULES {
+            assert!(
+                released["plugins"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!({"path": module, "class": "migration"})),
+                "{module}"
+            );
+        }
+        assert!(
+            released["plugins"]
+                .as_array()
+                .unwrap()
+                .contains(&json!({"path": "workflows", "class": "default"}))
+        );
+    }
 }

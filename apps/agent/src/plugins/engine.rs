@@ -465,13 +465,16 @@ impl PluginActionHandler {
             .iter()
             .filter_map(|(_, value)| matches!(value, ParameterValue::Resource(_)).then_some(value))
             .collect();
+        // A key whose binding follows the active project is another key
+        // in another project.
+        let scope = key_scope(&self.plugin, &self.definition, parameters, context);
         let key = KeyId {
             plugin: self.plugin.clone(),
             action: self.action.clone(),
-            params: if references.is_empty() {
+            params: if references.is_empty() && scope.is_none() {
                 serde_json::to_string(&params).unwrap_or_default()
             } else {
-                serde_json::to_string(&(&params, references)).unwrap_or_default()
+                serde_json::to_string(&(&params, references, &scope)).unwrap_or_default()
             },
         };
         let book = self.invoker.book();
@@ -491,8 +494,8 @@ impl PluginActionHandler {
             }
         }
         // The turn is always given back, whatever happens while asking.
-        let asked =
-            catch_unwind(AssertUnwindSafe(|| self.ask(params, context))).unwrap_or_else(|_| {
+        let asked = catch_unwind(AssertUnwindSafe(|| self.ask(params, scope, context)))
+            .unwrap_or_else(|_| {
                 Asked::Failed(StateError::new(
                     "plugin-host-failed",
                     "the key's state could not be read",
@@ -501,13 +504,14 @@ impl PluginActionHandler {
         book.finish(&key, asked, Instant::now())
     }
 
-    fn ask(&self, params: Params, context: &ExecutionContext<'_>) -> Asked {
+    fn ask(&self, params: Params, scope: Option<String>, context: &ExecutionContext<'_>) -> Asked {
         let failed = |code: &str, message: &str| Asked::Failed(StateError::new(code, message));
         let abort = AbortSignal::new();
         let Some(answer) = self.invoker.key_state(
             self.plugin.clone(),
             self.action.clone(),
             params,
+            scope,
             abort.clone(),
         ) else {
             return Asked::Quiet;
@@ -559,12 +563,18 @@ impl PluginActionHandler {
             context.provenance(),
         );
         let abort = AbortSignal::new();
+        let run = run_context(context).with_key_scope(key_scope(
+            &self.plugin,
+            &self.definition,
+            parameters,
+            context,
+        ));
         let Some(answer) = self.invoker.invoke(
             self.plugin.clone(),
             self.action.clone(),
             params,
             resources,
-            run_context(context),
+            run,
             abort.clone(),
         ) else {
             return ActionResult::error(
@@ -712,6 +722,63 @@ fn run_context(context: &ExecutionContext<'_>) -> RunContext {
         Some(RunOrigin::Simulated) | None => direct(RunTrigger::Other),
     }
     .bounded()
+}
+
+/// Which key this is for its key state ([`RunContext::key_scope`], plugin
+/// API 1.9): 128 bits of the SHA-256 of the plugin id, each `resource`
+/// parameter of the action with its stored reference (never its path), and
+/// the active project's id when a binding follows it (a project role, or a
+/// parameter left empty, which the plugin resolves through the project's
+/// role). The same for a key's state call and for every run with the same
+/// bindings; `None` when the action has no `resource` parameter.
+fn key_scope(
+    plugin: &str,
+    definition: &ActionType,
+    parameters: &ActionParameters,
+    context: &ExecutionContext<'_>,
+) -> Option<String> {
+    use sha2::Digest as _;
+    use std::fmt::Write as _;
+    let resources: Vec<&str> = definition
+        .parameters
+        .iter()
+        .filter(|spec| matches!(spec.kind, deckpilot_core::ParameterKind::Resource { .. }))
+        .map(|spec| spec.key.as_str())
+        .collect();
+    if resources.is_empty() {
+        return None;
+    }
+    let mut hash = sha2::Sha256::new();
+    hash.update(b"deckpilot.key-scope.v1\0");
+    hash.update(plugin.as_bytes());
+    let mut follows_project = false;
+    for key in resources {
+        hash.update(b"\0");
+        hash.update(key.as_bytes());
+        hash.update(b"=");
+        if let Some(ParameterValue::Resource(reference)) = parameters.get(key) {
+            follows_project |= matches!(reference, deckpilot_core::ResourceRef::ProjectRole { .. });
+            hash.update(serde_json::to_vec(reference).unwrap_or_default());
+        } else {
+            follows_project = true;
+            hash.update(b"unset");
+        }
+    }
+    if follows_project {
+        hash.update(b"\0project=");
+        if let Ok(Some(project)) = context.project() {
+            hash.update(project.id.to_string().as_bytes());
+        }
+    }
+    let digest = hash.finalize();
+    Some(
+        digest[..16]
+            .iter()
+            .fold(String::with_capacity(32), |mut out, b| {
+                let _ = write!(out, "{b:02x}");
+                out
+            }),
+    )
 }
 
 /// Resolved parameters as ABI 1 values. Plugins see texts, integers and
@@ -972,6 +1039,111 @@ mod tests {
                 "{operation} {target:?}"
             );
         }
+    }
+
+    /// Plugin API 1.9's key scope: the same for every action of a plugin
+    /// with the same bindings and for every run, different for another
+    /// binding, another plugin and, when a binding follows the active
+    /// project, another project; none without `resource` parameters.
+    #[test]
+    fn the_key_scope_names_the_bindings_of_a_key() {
+        use deckpilot_core::{
+            MachineConfig, Profile, Project, ProjectKey, ResourceKey, ResourceRef,
+        };
+        let action = |id: &str| -> Action {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "name": id, "description": "d", "category": "c",
+                "parameters": [{"key": "compose", "label": "C", "required": false,
+                    "kind": {"type": "resource", "kinds": ["directory"]}}]
+            }))
+            .unwrap()
+        };
+        let definition = |id: &str| action_type("deckpilot.docker", &action(id)).unwrap();
+        let fixed = |key: &str| {
+            ActionParameters::new().with(
+                "compose",
+                ParameterValue::Resource(ResourceRef::Fixed {
+                    key: ResourceKey::new(key).unwrap(),
+                }),
+            )
+        };
+        let profile = Profile::new("P");
+        let shop = Project::new(ProjectKey::new("SHOP").unwrap(), "Shop");
+        let cms = Project::new(ProjectKey::new("CMS").unwrap(), "Cms");
+        let machine = MachineConfig::new(deckpilot_core::Os::Linux);
+        let in_shop = ExecutionContext::new(&profile, Some(&shop), &machine);
+        let in_cms = ExecutionContext::new(&profile, Some(&cms), &machine);
+        let scope = |plugin: &str, id: &str, params: &ActionParameters, ctx| {
+            key_scope(plugin, &definition(id), params, ctx).unwrap()
+        };
+        let a = scope(
+            "deckpilot.docker",
+            "compose-up",
+            &fixed("shop.compose"),
+            &in_shop,
+        );
+        assert_eq!(a.len(), 32);
+        assert!(
+            a.bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        );
+        // The status and the up key of one project share it, in any project.
+        assert_eq!(
+            a,
+            scope(
+                "deckpilot.docker",
+                "compose-status",
+                &fixed("shop.compose"),
+                &in_cms
+            )
+        );
+        assert_ne!(
+            a,
+            scope(
+                "deckpilot.docker",
+                "compose-up",
+                &fixed("cms.compose"),
+                &in_shop
+            )
+        );
+        assert_ne!(
+            a,
+            scope(
+                "deckpilot.other",
+                "compose-up",
+                &fixed("shop.compose"),
+                &in_shop
+            )
+        );
+        // A role, or no binding (the project's role then), follows the
+        // active project.
+        let role = ActionParameters::new().with(
+            "compose",
+            ParameterValue::Resource(ResourceRef::ProjectRole {
+                role: "compose".into(),
+            }),
+        );
+        for params in [role, ActionParameters::new()] {
+            assert_ne!(
+                scope("deckpilot.docker", "compose-up", &params, &in_shop),
+                scope("deckpilot.docker", "compose-up", &params, &in_cms)
+            );
+        }
+        // No path is part of it, and an action without resources has none.
+        let plain: Action = serde_json::from_value(serde_json::json!({
+            "id": "status", "name": "s", "description": "d", "category": "c", "parameters": []
+        }))
+        .unwrap();
+        let plain = action_type("deckpilot.docker", &plain).unwrap();
+        assert_eq!(
+            key_scope(
+                "deckpilot.docker",
+                &plain,
+                &ActionParameters::new(),
+                &in_shop
+            ),
+            None
+        );
     }
 
     #[test]

@@ -8,12 +8,13 @@
 //! (only storage, settings, time and log), and a state call gets no
 //! resource handle. So a key shows what the last run of its action found
 //! (a press, a workflow node, `runAction`): each run of `status` or
-//! `branch` stores the state in the plugin's storage, under the action and
-//! the one parameter a state call also sees, `projectId`; the state call
-//! only reads it back, every 5 s. A key that has not run yet shows its
-//! own design. Keys whose `repository` parameter names different folders
-//! but that share `projectId` share one stored state (the last run wins):
-//! the state call cannot tell them apart.
+//! `branch` stores the state in the plugin's storage, under the action,
+//! the key's scope (the agent's token for the key's `repository` binding,
+//! and the active project where that follows it: `run.context`'s
+//! `keyScope`, the same in the key's state call) and `projectId`; the
+//! state call only reads it back, every 5 s. Keys that differ only in
+//! their `repository` are different keys. A key that has not run yet
+//! shows its own design.
 
 use deckpilot_plugin_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -28,9 +29,14 @@ pub enum Stored {
     Failed { code: String, message: String },
 }
 
-/// The storage key of `kind` (`status`, `branch`) for keys with `project`.
-pub fn storage_key(kind: &str, project: Option<&str>) -> String {
-    format!("keyState.{kind}.{}", project.unwrap_or_default())
+/// The storage key of `kind` (`status`, `branch`) for the keys of `scope`
+/// ([`Context::key_scope`]) with `project`.
+pub fn storage_key(kind: &str, scope: Option<&str>, project: Option<&str>) -> String {
+    format!(
+        "keyState.{kind}.{}.{}",
+        scope.unwrap_or_default(),
+        project.unwrap_or_default()
+    )
 }
 
 /// The key state for `status`. With `changes`: an indicator, green when
@@ -82,8 +88,18 @@ pub fn remember_status(
     project: Option<&str>,
     read: Result<&Status, &PluginError>,
 ) {
-    store(ctx, storage_key("status", project), &stored(read, true));
-    store(ctx, storage_key("branch", project), &stored(read, false));
+    let scope = ctx.key_scope();
+    let scope = scope.as_deref();
+    store(
+        ctx,
+        storage_key("status", scope, project),
+        &stored(read, true),
+    );
+    store(
+        ctx,
+        storage_key("branch", scope, project),
+        &stored(read, false),
+    );
 }
 
 /// After a `branch` run: the branch key's state.
@@ -92,12 +108,18 @@ pub fn remember_branch(
     project: Option<&str>,
     read: Result<&Status, &PluginError>,
 ) {
-    store(ctx, storage_key("branch", project), &stored(read, false));
+    let scope = ctx.key_scope();
+    store(
+        ctx,
+        storage_key("branch", scope.as_deref(), project),
+        &stored(read, false),
+    );
 }
 
 fn recall(ctx: &mut Context<'_>, kind: &str, args: &Args<'_>) -> Result<KeyState, PluginError> {
     let project: Option<String> = args.get(crate::PROJECT)?;
-    match ctx.storage_get_as::<Stored>(storage_key(kind, project.as_deref()))? {
+    let scope = ctx.key_scope();
+    match ctx.storage_get_as::<Stored>(storage_key(kind, scope.as_deref(), project.as_deref()))? {
         None => Ok(KeyState::new()),
         Some(Stored::State(state)) => Ok(state),
         Some(Stored::Failed { code, message }) => Err(PluginError::new(code, message)),

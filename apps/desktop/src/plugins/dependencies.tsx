@@ -328,7 +328,7 @@ export function InstallPlanDialog({
             {(step.permissions ?? []).length > 0 && (
               <PermissionList
                 label={t("marketplace:installed.permissionsOf", { name: step.name })}
-                grants={(step.permissions ?? []).map(grantOfInfo)}
+                grants={(step.permissions ?? []).map((info) => grantOfInfo(info))}
                 renderControl={(grant) => {
                   const info = (step.permissions ?? []).find((p) => p.key === grant.key)
                   if (info?.status === "granted") {

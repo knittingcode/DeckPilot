@@ -560,6 +560,8 @@ impl PluginService {
             let touched = super::migration::start(&mut self.manager, &self.bundle, &snapshot);
             self.after_migration(&touched, &before, None);
         }
+        // The host-held tool settings the migration keeps (`tool.run`).
+        super::tool_settings::held(&self.manager);
         self.snapshot = Some(snapshot);
     }
 
@@ -689,7 +691,12 @@ impl PluginService {
                 let shown = self.locales.manifest(record.id.as_str(), active, &dir);
                 let manifest = &shown;
                 let grants = store.grants(&record.id).unwrap_or_default();
-                let (missing, action_unmet) = self.unmet(&active.manifest, &graph);
+                let (missing, mut action_unmet) = self.unmet(&active.manifest, &graph);
+                // An optional permission not granted (plugin API 1.9):
+                // only the actions that need it wait.
+                for (action, why) in convert::unmet_permissions(&active.manifest, &grants) {
+                    action_unmet.entry(action).or_insert(why);
+                }
                 let default_names = active
                     .manifest
                     .contributes
@@ -2354,6 +2361,12 @@ impl PluginService {
             if let Some(why) = convert::unavailable_with(&record, &grants) {
                 return Err(error(ErrorCode::Failed, reason::NOT_ENABLED, why));
             }
+            if let Some(why) = record
+                .active()
+                .and_then(|a| convert::unmet_permissions(&a.manifest, &grants).remove(action))
+            {
+                return Err(error(ErrorCode::Failed, reason::NOT_ENABLED, why));
+            }
         }
         self.check_verdict(&record)?;
         let active = record
@@ -2615,7 +2628,8 @@ impl PluginService {
     /// key states (`key_state.rs`). Prepared like an action of the engine
     /// (enabled, granted, verdict, the declaration); asked only while the
     /// plugin's lane is idle, with [`STATE_CALL_TIMEOUT`] of wall clock
-    /// and a run nobody started. The answer goes to `reply`; a failed
+    /// and a run nobody started (of the key `scope`, which the plugin
+    /// reads with `run.context`). The answer goes to `reply`; a failed
     /// state call is not written to the plugin's failure log (a key
     /// shows it), only a crash counts, in the supervisor.
     ///
@@ -2629,6 +2643,7 @@ impl PluginService {
         plugin: &str,
         action: &str,
         params: Params,
+        scope: Option<String>,
         abort: AbortSignal,
         reply: std::sync::mpsc::SyncSender<StateReply>,
     ) {
@@ -2662,7 +2677,9 @@ impl PluginService {
                 action: action.to_owned(),
                 params,
                 timeout: super::key_state::STATE_CALL_TIMEOUT,
-                executor: prepared.executor.with_run(RunContext::unknown()),
+                executor: prepared
+                    .executor
+                    .with_run(RunContext::unknown().with_key_scope(scope)),
                 abort,
                 reply: Reply::State(done),
             }),

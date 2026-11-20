@@ -17,11 +17,12 @@
 //!   `url.openParam` (X5): the plugin names the parameter and the line, the
 //!   agent opens the literal value (http or https only).
 //!
-//! **What differs from the built-in** (host gaps, the report of WP-B3):
-//! `resource.open` has no relative path inside a folder, so `path` is
-//! refused (`path-not-supported`) and a file is opened as a bound `file`
-//! resource; pages always open in the default browser (`browser` is
-//! accepted and noted); outputs name the bindings, never the paths.
+//! **What differs from the built-in**: pages always open in the default
+//! browser (`browser` is accepted and noted); outputs name the bindings,
+//! never the paths (`path` is the binding's name and the relative path).
+//! A `path` inside the folder is opened by the agent (`resource.open`'s
+//! `path`), which refuses one that leaves the folder, by `..` or through
+//! a link, and one that does not exist.
 #![deny(unsafe_code)]
 
 use deckpilot_plugin_sdk::prelude::*;
@@ -50,7 +51,8 @@ pub mod codes {
     pub const NO_URLS: &str = "no-urls";
     pub const TOO_MANY_URLS: &str = "too-many-urls";
     pub const NOTHING_OPENED: &str = "nothing-opened";
-    pub const PATH_NOT_SUPPORTED: &str = "path-not-supported";
+    /// A `path` outside the folder, or with a file instead of a folder.
+    pub const INVALID_PATH: &str = "invalid-path";
     /// Shared codes the actions use.
     pub const NO_ACTIVE_PROJECT: &str = "no-active-project";
     pub const INVALID_URL: &str = "invalid-url";
@@ -66,11 +68,8 @@ pub mod messages {
     pub const COLUMN_NEEDS_LINE: (&str, &str) = ("column-needs-line", "a column needs a line");
     pub const POSITION_RANGE: (&str, &str) =
         ("position-range", "a line and column are from 1 to 1000000");
-    pub const PATH_NOT_SUPPORTED: (&str, &str) = (
-        "path-not-supported",
-        "a file inside a folder cannot be opened yet: bind the file as a resource and choose it \
-         as the folder or file",
-    );
+    pub const PATH_NEEDS_FOLDER: (&str, &str) =
+        ("path-needs-folder", "a path needs a folder, not a file");
     pub const NO_URLS: (&str, &str) = ("no-urls", "no page to open");
     pub const TOO_MANY_URLS: (&str, &str) =
         ("too-many-urls", "at most 10 pages can be opened at once");
@@ -103,7 +102,7 @@ pub mod messages {
         LINE_NEEDS_FILE,
         COLUMN_NEEDS_LINE,
         POSITION_RANGE,
-        PATH_NOT_SUPPORTED,
+        PATH_NEEDS_FOLDER,
         NO_URLS,
         TOO_MANY_URLS,
         TOO_MANY_ROLES,
@@ -292,10 +291,7 @@ fn resource_param(
 
 fn open_in_editor(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
     let position = position(ctx, args.get("line")?, args.get("column")?)?;
-    if optional(args, "path")?.is_some() {
-        let message = say(ctx, messages::PATH_NOT_SUPPORTED, &[]);
-        return Err(PluginError::new(codes::PATH_NOT_SUPPORTED, message));
-    }
+    let path = optional(args, "path")?;
     let application = resource_param(ctx, "application", &[ResourceKind::Application])?
         .ok_or_else(|| {
             PluginError::new(
@@ -313,7 +309,12 @@ fn open_in_editor(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
             .resource_role(REPOSITORY_ROLE, &[ResourceKind::Directory])
             .map_err(|e| failed(&e))?,
     };
-    if position.is_some() && location.kind == ResourceKind::Directory {
+    if path.is_some() && location.kind != ResourceKind::Directory {
+        let message = say(ctx, messages::PATH_NEEDS_FOLDER, &[]);
+        return Err(PluginError::new(codes::INVALID_PATH, message));
+    }
+    // Inside the folder the agent knows whether the path is a file.
+    if position.is_some() && path.is_none() && location.kind == ResourceKind::Directory {
         let message = say(ctx, messages::LINE_NEEDS_FILE, &[]);
         return Err(PluginError::new(codes::INVALID_POSITION, message));
     }
@@ -321,22 +322,35 @@ fn open_in_editor(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
     let plan = editor_plan(&editor);
     ctx.open_resource(ResourceOpen {
         handle: location.handle.clone(),
+        path: path.clone(),
         with: Some(application.handle.clone()),
         position,
         editor: Some(plan),
     })
-    .map_err(|e| failed(&e))?;
+    .map_err(|e| {
+        let refused = failed(&e);
+        if refused.code() == codes::INVALID_POSITION {
+            let message = say(ctx, messages::LINE_NEEDS_FILE, &[]);
+            PluginError::new(codes::INVALID_POSITION, message)
+        } else {
+            refused
+        }
+    })?;
     let located = position.is_some() && passes_a_line(plan);
+    let shown = match &path {
+        Some(path) => format!("{}/{path}", location.label),
+        None => location.label.clone(),
+    };
     let message = say(
         ctx,
         messages::OPENED_IN,
         &[
-            ("path", arg(location.label.as_str())),
+            ("path", arg(shown.as_str())),
             ("application", arg(application.label.as_str())),
         ],
     );
     Ok(Output::message(message)
-        .with("path", location.label)
+        .with("path", shown)
         .with("application", application.label)
         .with("located", located))
 }
@@ -479,6 +493,7 @@ fn open_project(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
             (Found::Bound(folder), Found::Bound(application)) => {
                 let open = ResourceOpen {
                     handle: folder.handle,
+                    path: None,
                     with: Some(application.handle),
                     position: None,
                     editor: Some(plan),
@@ -489,6 +504,7 @@ fn open_project(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
     }
     let page = |handle: ResourceHandle| ResourceOpen {
         handle: handle.handle,
+        path: None,
         with: None,
         position: None,
         editor: None,

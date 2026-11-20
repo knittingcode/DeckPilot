@@ -833,6 +833,28 @@ impl<'a> Context<'a> {
         serde_json::from_value(v).map_err(|_| malformed("run.context", "a run context"))
     }
 
+    /// Which key this is, for its key state (plugin API 1.9,
+    /// [`RunContext::key_scope`]): a token of the invocation's resource
+    /// bindings, the same in the key's state call (where `run.context` is
+    /// answered too) and in every run with the same bindings. `None` when
+    /// the action has no `resource` parameter or the agent does not say.
+    /// Keep a key's state under it and the action's own parameters.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    /// use deckpilot_plugin_sdk::CallResult;
+    ///
+    /// let scope = "0123456789abcdef0123456789abcdef";
+    /// let mut host = MockHost::new(move |_| CallResult::Ok(serde_json::json!({
+    ///     "trigger": "other", "keyScope": scope,
+    /// })));
+    /// let mut ctx = host.context();
+    /// assert_eq!(ctx.key_scope().as_deref(), Some(scope));
+    /// ```
+    pub fn key_scope(&mut self) -> Option<String> {
+        self.run_context().ok()?.bounded().key_scope
+    }
+
     /// The time now: the agent's wall clock (UTC) and the local UTC offset
     /// (plugin API 1.1). Needs no permission; at most 20 calls a second.
     /// The clock is the system's, so it can jump; ask again rather than

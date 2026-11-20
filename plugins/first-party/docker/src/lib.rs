@@ -13,15 +13,20 @@
 //! 1.9): the agent runs the user's own `docker`, adds the Docker context
 //! (of a bound Docker environment, or DeckPilot's setting) and, for
 //! Compose, the bound folder or file itself, with a cleared environment
-//! and its time and output limits (logs at most 64 KiB). The plugin only
-//! chooses the subcommands and options its manifest declares and parses
-//! the output. Starting, stopping and restarting a Compose project need
-//! their own grant (`tools:docker:modify`, which replaces the built-in's
-//! `allowStateChanges`) and a run the user (or their work session)
-//! started; `compose down` never removes volumes or images.
+//! and its time and output limits (logs at most 64 KiB). Status,
+//! containers and container logs need no resource, as with the built-in:
+//! without a Docker environment the agent runs them in an empty folder of
+//! its own. The plugin only chooses the subcommands and options its
+//! manifest declares and parses the output. Starting, stopping and
+//! restarting a Compose project need their own grant
+//! (`tools:docker:modify`, which replaces the built-in's
+//! `allowStateChanges`), which is optional and off until the user allows
+//! it (the actions name it in `requiresPermissions`), and a run the user
+//! (or their work session) started; `compose down` never removes volumes
+//! or images.
 //!
 //! **Key state.** The agent allows no `tool.run` in a state call: keys
-//! show what the last run found ([`state`]).
+//! show what the last run found ([`state`]), per key.
 #![deny(unsafe_code)]
 
 use deckpilot_plugin_sdk::prelude::*;
@@ -81,9 +86,6 @@ pub mod codes {
     pub const CONTEXT_UNSUPPORTED: &str = "context-unsupported";
     /// `projectName`: the agent decides the Compose project name.
     pub const PROJECT_NAME_UNSUPPORTED: &str = "project-name-unsupported";
-    /// Neither a Docker environment, a Compose project nor a project's
-    /// Compose resource says where Docker runs.
-    pub const ENVIRONMENT_MISSING: &str = "docker-environment-missing";
     pub const NO_ACTIVE_PROJECT: &str = "no-active-project";
     pub const CANCELLED: &str = "cancelled";
 }
@@ -120,12 +122,21 @@ pub fn plugin() -> Plugin {
                 .state(state::containers),
         )
         .action(compose(Action::new("compose-status", compose_status)).state(state::compose_status))
-        .action(compose(Action::new("compose-up", compose_up)).param(services()))
+        .action(
+            compose(Action::new("compose-up", compose_up))
+                .param(services())
+                .state(state::compose_toggle),
+        )
         .action(
             compose(Action::new("compose-down", compose_down))
-                .param(Param::boolean("removeOrphans").default(false)),
+                .param(Param::boolean("removeOrphans").default(false))
+                .state(state::compose_toggle),
         )
-        .action(compose(Action::new("compose-restart", compose_restart)).param(services()))
+        .action(
+            compose(Action::new("compose-restart", compose_restart))
+                .param(services())
+                .state(state::compose_status),
+        )
         .action(
             compose(
                 Action::new("logs", logs)
@@ -238,21 +249,31 @@ pub fn names(args: &Args<'_>) -> Result<(), PluginError> {
     Ok(())
 }
 
-/// Where Docker runs: a handle of this invocation, its label, and the
-/// project the Compose resource came from.
+/// Where Docker runs: a handle of this invocation (none for the commands
+/// that read no folder: the agent's empty folder and context), its label,
+/// and the project the Compose resource came from.
 #[derive(Debug, Clone)]
 pub struct Target {
-    pub handle: String,
-    pub label: String,
+    pub handle: Option<String>,
+    pub label: Option<String>,
     pub project_key: Option<String>,
 }
 
 impl Target {
     fn of(handle: ResourceHandle, project_key: Option<String>) -> Self {
         Self {
-            handle: handle.handle,
-            label: handle.label,
+            handle: Some(handle.handle),
+            label: Some(handle.label),
             project_key,
+        }
+    }
+
+    /// No resource: the agent's own empty folder, with its context.
+    fn unbound() -> Self {
+        Self {
+            handle: None,
+            label: None,
+            project_key: None,
         }
     }
 }
@@ -287,15 +308,20 @@ fn param_handle(
 }
 
 /// The Compose project, as the built-in finds it: the `compose` parameter
-/// (a folder or a Compose file), else the `projectId` parameter's project
-/// or the run's own, and its Compose resource (setting `composeRole`).
+/// (a folder, a Compose file, or a Docker environment bound to one of
+/// them), else the `projectId` parameter's project or the run's own, and
+/// its Compose resource (setting `composeRole`), of the same kinds.
 /// `with_param`: the action has the `compose` parameter.
 pub fn compose_target(
     ctx: &mut Context<'_>,
     args: &Args<'_>,
     with_param: bool,
 ) -> Result<Target, PluginError> {
-    const KINDS: [ResourceKind; 2] = [ResourceKind::Directory, ResourceKind::File];
+    const KINDS: [ResourceKind; 3] = [
+        ResourceKind::Directory,
+        ResourceKind::File,
+        ResourceKind::DockerEnvironment,
+    ];
     if with_param && let Some(handle) = param_handle(ctx, COMPOSE, &KINDS)? {
         return Ok(Target::of(handle, None));
     }
@@ -319,40 +345,17 @@ pub fn compose_target(
 }
 
 /// Where Docker runs outside Compose: the `environment` parameter (a
-/// Docker environment, whose context is used, or a folder), else the
-/// Compose project the action names or the project's.
-pub fn environment_target(
-    ctx: &mut Context<'_>,
-    args: &Args<'_>,
-    compose_param: bool,
-) -> Result<Target, PluginError> {
-    if let Some(handle) = param_handle(
+/// Docker environment, whose context is used, or a folder), else nowhere
+/// in particular, as with the built-in: the agent runs `ps`, `logs` of a
+/// container, `version` and `context show` in an empty folder of its own,
+/// with DeckPilot's Docker context.
+pub fn environment_target(ctx: &mut Context<'_>) -> Result<Target, PluginError> {
+    Ok(param_handle(
         ctx,
         ENVIRONMENT,
         &[ResourceKind::DockerEnvironment, ResourceKind::Directory],
-    )? {
-        return Ok(Target::of(handle, None));
-    }
-    compose_target(ctx, args, compose_param).map_err(|e| {
-        if [
-            codes::NO_ACTIVE_PROJECT,
-            "resource-role-missing",
-            "resource-unbound",
-        ]
-        .contains(&e.code())
-        {
-            fail(
-                codes::ENVIRONMENT_MISSING,
-                format!(
-                    "Docker runs only where you bound it: choose a Docker environment (or a \
-                     Compose project) for the action ({})",
-                    e.message()
-                ),
-            )
-        } else {
-            e
-        }
-    })
+    )?
+    .map_or_else(Target::unbound, |handle| Target::of(handle, None)))
 }
 
 fn project_key(ctx: &mut Context<'_>, explicit: Option<&str>) -> Option<String> {
@@ -407,8 +410,11 @@ fn docker(
     timeout_ms: Option<u32>,
     modifies: bool,
 ) -> Result<ToolOutput, PluginError> {
-    ctx.run_tool(Tool::Docker, args, &target.handle, timeout_ms)
-        .map_err(|e| tool_failure(&e, modifies))
+    match &target.handle {
+        Some(handle) => ctx.run_tool(Tool::Docker, args, handle, timeout_ms),
+        None => ctx.run_tool_unbound(Tool::Docker, args, timeout_ms),
+    }
+    .map_err(|e| tool_failure(&e, modifies))
 }
 
 /// Runs docker and turns a failure into its classified error.
@@ -494,17 +500,14 @@ fn with_compose(output: Output, target: &Target) -> Output {
 fn status(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
     names(args)?;
     let result = status_of(ctx, args);
-    state::remember(
-        ctx,
-        &state::status_key(args),
-        result.as_ref().map(state::availability),
-    );
+    let key = state::status_key(ctx, args);
+    state::remember(ctx, &key, result.as_ref().map(state::availability));
     result
 }
 
 /// Never fails because Docker is unavailable: that is the answer.
 fn status_of(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
-    let target = environment_target(ctx, args, false)?;
+    let target = environment_target(ctx)?;
     let unavailable = |reason: &PluginError, context: Option<&str>| {
         let mut output = Output::message(format!("Docker is not available: {}", reason.message()))
             .with("available", false)
@@ -608,16 +611,13 @@ fn lines(containers: &[Container]) -> String {
 fn containers(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
     names(args)?;
     let result = containers_of(ctx, args);
-    state::remember(
-        ctx,
-        &state::containers_key(args),
-        result.as_ref().map(state::running),
-    );
+    let key = state::containers_key(ctx, args);
+    state::remember(ctx, &key, result.as_ref().map(state::running));
     result
 }
 
 fn containers_of(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
-    let target = environment_target(ctx, args, false)?;
+    let target = environment_target(ctx)?;
     let context = context_name(ctx, args, &target)?;
     let all: bool = args.get("all")?;
     let filter = optional(args, "name").map(|name| format!("--filter=name={name}"));
@@ -670,9 +670,10 @@ fn compose_status(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
         let containers = compose_ps(ctx, &target)?;
         Ok((describe_compose(&containers, &context, &target), containers))
     })();
+    let key = state::compose_key(ctx, args);
     state::remember(
         ctx,
-        &state::compose_key(args),
+        &key,
         result.as_ref().map(|(_, c)| state::compose_counts(c)),
     );
     result.map(|(output, _)| output)
@@ -754,14 +755,12 @@ fn change(ctx: &mut Context<'_>, args: &Args<'_>, change: Change) -> ActionResul
         .clamp(10, 1800);
     let timeout = u32::try_from(timeout * 1000).unwrap_or(300_000);
     let output = checked(ctx, &target, &command, Some(timeout), true)?;
-    // The keys of this project show the new state: one read after the
-    // change (best effort).
+    // The keys of this project (its status keys and the up, down and
+    // restart keys with their toggle) show the new state: one read after
+    // the change (best effort).
     if let Ok(containers) = compose_ps(ctx, &target) {
-        state::remember(
-            ctx,
-            &state::compose_key(args),
-            Ok(state::compose_counts(&containers)),
-        );
+        let key = state::compose_key(ctx, args);
+        state::remember(ctx, &key, Ok(state::compose_counts(&containers)));
     }
     let what = if services.is_empty() || change == Change::Down {
         "the project".to_owned()
@@ -793,7 +792,7 @@ fn logs(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
     let (command, target, compose) = match (optional(args, "container"), optional(args, "service"))
     {
         (Some(container), None) => {
-            let target = environment_target(ctx, args, true)?;
+            let target = environment_target(ctx)?;
             let mut command = vec!["logs".to_owned(), tail];
             command.extend(since);
             command.extend(["--".into(), container]);

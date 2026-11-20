@@ -41,6 +41,7 @@ fn resolve() -> CapabilityRequest {
 fn open() -> CapabilityRequest {
     CapabilityRequest::ResourceOpen(ResourceOpen {
         handle: HANDLE.into(),
+        path: None,
         with: None,
         position: None,
         editor: None,
@@ -51,7 +52,7 @@ fn run(tool: Tool, args: &[&str]) -> CapabilityRequest {
     CapabilityRequest::ToolRun(ToolRun {
         tool,
         args: args.iter().map(|a| (*a).to_owned()).collect(),
-        cwd: HANDLE.into(),
+        cwd: Some(HANDLE.into()),
         timeout_ms: None,
     })
 }

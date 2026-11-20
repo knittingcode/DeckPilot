@@ -124,6 +124,22 @@ mod test_launcher {
     }
 }
 
+/// The real absolute path of `path`, without the `\\?\` prefix Windows
+/// adds to a plain drive path (which editors do not all read).
+fn canonical(path: &std::path::Path) -> Option<PathBuf> {
+    let real = std::fs::canonicalize(path).ok()?;
+    #[cfg(windows)]
+    {
+        let text = real.to_string_lossy();
+        if let Some(plain) = text.strip_prefix(r"\\?\")
+            && plain.as_bytes().get(1) == Some(&b':')
+        {
+            return Some(PathBuf::from(plain));
+        }
+    }
+    Some(real)
+}
+
 /// A refusal: its reason code, its ABI code and a message that names
 /// labels and origins only.
 #[derive(Debug)]
@@ -352,29 +368,14 @@ impl Executor {
         if target.kind == ResourceKind::Url {
             return self.open_bound_url(request, &target.value, details);
         }
-        let path: PathBuf = match target.kind {
-            ResourceKind::Directory => self
-                .bound_inside(plugin, &request.handle, None, true)
-                .map_err(Refused::from_result)?,
-            ResourceKind::File => {
-                deckpilot_core::paths::existing(PathBuf::from(&target.value), false).map_err(
-                    |_| {
-                        Refused::new(
-                            deckpilot_core::paths::codes::NOT_FOUND,
-                            CallErrorCode::Failed,
-                            format!("the file bound as `{}` does not exist", target.label),
-                        )
-                    },
-                )?
-            }
-            ResourceKind::Application | ResourceKind::DockerEnvironment | ResourceKind::Url => {
-                return Err(Refused::new(
-                    "resource-kind-mismatch",
-                    CallErrorCode::NotPermitted,
-                    format!("`{}` is not a folder or a file", target.label),
-                ));
-            }
-        };
+        if request.path.is_some() && target.kind != ResourceKind::Directory {
+            return Err(Refused::new(
+                deckpilot_core::paths::codes::INVALID_PATH,
+                CallErrorCode::BadRequest,
+                format!("a path needs a folder, and `{}` is not one", target.label),
+            ));
+        }
+        let path = self.location(plugin, request, &target, details)?;
         // Bound paths are absolute, so an argument made of one never reads
         // as an option.
         if !path.is_absolute() || path.to_string_lossy().starts_with('-') {
@@ -382,6 +383,13 @@ impl Executor {
                 deckpilot_core::paths::codes::INVALID_PATH,
                 CallErrorCode::NotPermitted,
                 format!("`{}` is not bound to an absolute path", target.label),
+            ));
+        }
+        if request.position.is_some() && request.path.is_some() && path.is_dir() {
+            return Err(Refused::new(
+                launch::codes::INVALID_POSITION,
+                CallErrorCode::BadRequest,
+                "a line needs a file, not a folder",
             ));
         }
         let position = match request.position {
@@ -437,6 +445,57 @@ impl Executor {
         };
         self.count_resource_open()?;
         self.launch(&plan)
+    }
+
+    /// The folder or file `request` opens: the bound one, or with `path`
+    /// a file or folder inside a bound folder, by its real path.
+    fn location(
+        &self,
+        plugin: &PluginId,
+        request: &ResourceOpen,
+        target: &super::resources::Issued,
+        details: &mut Vec<(&'static str, String)>,
+    ) -> Result<PathBuf, Refused> {
+        Ok(match target.kind {
+            ResourceKind::Directory => match request.path.as_deref() {
+                None => self
+                    .bound_inside(plugin, &request.handle, None, true)
+                    .map_err(Refused::from_result)?,
+                // A file or folder inside the binding, by name and by where
+                // links lead; opened by its real path.
+                Some(relative) => {
+                    details.push(("path", "relative".into()));
+                    let inside = self
+                        .bound_inside(plugin, &request.handle, Some(relative), false)
+                        .map_err(Refused::from_result)?;
+                    canonical(&inside).ok_or_else(|| {
+                        Refused::new(
+                            deckpilot_core::paths::codes::NOT_FOUND,
+                            CallErrorCode::Failed,
+                            format!("the path does not exist in `{}`", target.label),
+                        )
+                    })?
+                }
+            },
+            ResourceKind::File => {
+                deckpilot_core::paths::existing(PathBuf::from(&target.value), false).map_err(
+                    |_| {
+                        Refused::new(
+                            deckpilot_core::paths::codes::NOT_FOUND,
+                            CallErrorCode::Failed,
+                            format!("the file bound as `{}` does not exist", target.label),
+                        )
+                    },
+                )?
+            }
+            ResourceKind::Application | ResourceKind::DockerEnvironment | ResourceKind::Url => {
+                return Err(Refused::new(
+                    "resource-kind-mismatch",
+                    CallErrorCode::NotPermitted,
+                    format!("`{}` is not a folder or a file", target.label),
+                ));
+            }
+        })
     }
 
     fn count_resource_open(&self) -> Result<(), Refused> {

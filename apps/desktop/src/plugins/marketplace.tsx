@@ -37,7 +37,7 @@ import {
   updateCandidates,
   type UpdateCandidate,
 } from "./model"
-import { grantOfInfo, grantsOf } from "./permissions"
+import { actionNamesOf, grantOfInfo, grantsOf } from "./permissions"
 import { PermissionReviewDialog, type ReviewRequest } from "./review-dialog"
 import {
   InstallPlanDialog,
@@ -302,7 +302,7 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
       publisher: item.summary.publisher,
       version: item.summary.version,
       items: item.permissions.map((info) => ({
-        grant: grantOfInfo(info),
+        grant: grantOfInfo(info, actionNamesOf(item.summary.actions)),
         state: info.status === "granted" ? "granted" : "new",
       })),
       confirm: (consent) =>

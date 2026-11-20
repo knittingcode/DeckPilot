@@ -906,6 +906,13 @@ impl ModuleRegistry {
         match self.routing.route(&module) {
             LegacyRoute::Builtin => return AliasOutcome::Builtin,
             LegacyRoute::PluginWithdrawn => return withdrawn(),
+            LegacyRoute::AwaitingConsent => {
+                return AliasOutcome::Unavailable {
+                    reason: format!(
+                        "{name} waits for your consent: allow it in Settings › Plugins"
+                    ),
+                };
+            }
             LegacyRoute::Plugin => {}
         }
         let fault = match plugin {
@@ -975,8 +982,10 @@ impl ModuleRegistry {
                 AliasOutcome::Plugin => return Availability::Available,
                 AliasOutcome::Unavailable { .. } => {
                     let plugin = alias.plugin_id();
-                    let withdrawn =
-                        self.routing.route(&alias.module_id()) == LegacyRoute::PluginWithdrawn;
+                    let withdrawn = matches!(
+                        self.routing.route(&alias.module_id()),
+                        LegacyRoute::PluginWithdrawn | LegacyRoute::AwaitingConsent
+                    );
                     return match self.modules.get(&plugin) {
                         Some(entry) => Availability::ModuleDisabled {
                             name: entry.module.manifest().name.clone(),

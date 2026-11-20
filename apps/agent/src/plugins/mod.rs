@@ -49,6 +49,8 @@ mod registry;
 #[cfg(feature = "plugins")]
 mod service;
 #[cfg(feature = "plugins")]
+mod tool_settings;
+#[cfg(feature = "plugins")]
 mod tools;
 #[cfg(feature = "plugins")]
 mod variables;
@@ -432,9 +434,14 @@ impl PluginRuntime {
 
     /// Hands the module migration engine what `deckpilot.db` says about
     /// the modules with an alias block (`modules`: the built-in modules
-    /// just loaded, before plugins are registered). Reads `deckpilot.db`,
-    /// never writes it; nothing is read while no alias exists. The first
-    /// snapshot after the plugin store opened runs the migration.
+    /// just loaded, before plugins are registered). Reads `deckpilot.db`
+    /// and never changes it; nothing is read while no alias exists. The
+    /// first snapshot after the plugin store opened runs the migration.
+    ///
+    /// When a module of the extraction set is in use here, the encrypted
+    /// backup `pre-plugin-extraction` of `deckpilot.db` is written first,
+    /// once (a copy next to the database; `module-migration.md` §7 X13):
+    /// its first cut-over waits for it.
     pub(crate) fn migrate(
         &self,
         store: &deckpilot_storage::SqliteStore,
@@ -444,7 +451,19 @@ impl PluginRuntime {
         if let Some(worker) = &self.worker {
             match migration::LegacySnapshot::read(store, modules) {
                 Ok(snapshot) if snapshot.modules.is_empty() => {}
-                Ok(snapshot) => worker.migrate(snapshot),
+                Ok(mut snapshot) => {
+                    if snapshot.needs_backup() {
+                        snapshot.backup = match store.named_backup(migration::BACKUP_LABEL) {
+                            Ok(file) => file.map(Ok),
+                            Err(error) => {
+                                tracing::warn!(%error,
+                                    "deckpilot.db cannot be backed up before the move to plugins");
+                                Some(Err(error.to_string()))
+                            }
+                        };
+                    }
+                    worker.migrate(snapshot);
+                }
                 Err(error) => {
                     tracing::warn!(%error, "the modules that can migrate cannot be read");
                 }
@@ -469,10 +488,7 @@ impl PluginRuntime {
                     .find(|m| m.manifest.id.as_str() == id)
                     .map(|m| &m.config_values)
             };
-            tools::configure(tools::ToolSettings::from_modules(
-                config("git"),
-                config("docker"),
-            ));
+            tool_settings::builtins(config("git"), config("docker"));
         }
         #[cfg(feature = "plugins")]
         if let Some(worker) = &self.worker {

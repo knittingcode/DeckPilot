@@ -194,7 +194,7 @@ pub(super) fn plan(
                 .parent()
                 .map(Path::to_path_buf)
                 .ok_or_else(|| Denial::new(codes::INVALID_CWD, "the file has no folder"))?,
-            Target::DockerEnvironment(_) => std::env::temp_dir(),
+            Target::DockerEnvironment(_) | Target::Unbound => super::neutral_directory()?,
         }
     };
     for (name, value) in &checked.options {
@@ -287,7 +287,7 @@ pub(super) fn compose_project(target: &Target) -> Result<ComposeProject, Denial>
             })?;
             (dir, file)
         }
-        Target::DockerEnvironment(_) => {
+        Target::DockerEnvironment(_) | Target::Unbound => {
             return Err(Denial::new(
                 codes::INVALID_CWD,
                 "a compose command runs only in a compose file or folder handle",

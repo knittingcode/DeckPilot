@@ -28,6 +28,7 @@ use crate::{MANIFEST_VERSION, path_rules};
 
 #[path = "privileged.rs"]
 mod privileged;
+pub use privileged::OPTIONAL_PERMISSIONS;
 pub(crate) use privileged::first_party_only;
 
 /// Error codes every plugin may return without declaring them (`SharedCode`
@@ -1163,16 +1164,24 @@ fn actions(c: &mut Checker, m: &Manifest) {
                 1,
                 86_400,
             );
-            // Rule 6.
+            // Rule 6. From plugin API 1.9 a key of an action that changes
+            // something may show state too (a toggle): a state call only
+            // reads what the plugin stored, whatever its action does.
             if action
                 .node
                 .as_ref()
                 .is_some_and(|n| n.effect() != Effect::ReadOnly)
+                && m.engines.plugin_api.minimum < crate::model::PRIVILEGED_API
             {
                 c.error(
                     format!("{path}.state"),
                     IssueCode::Conflict,
-                    "button state needs a readOnly action (node.effect)",
+                    format!(
+                        "button state needs a readOnly action (node.effect), or plugin API \
+                         {}: set engines.pluginApi to `^{}`",
+                        crate::model::PRIVILEGED_API,
+                        crate::model::PRIVILEGED_API
+                    ),
                 );
             }
         }

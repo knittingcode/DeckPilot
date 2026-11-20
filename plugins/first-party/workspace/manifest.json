@@ -395,7 +395,7 @@
       "no-urls": "t:errors.no-urls",
       "too-many-urls": "t:errors.too-many-urls",
       "nothing-opened": "t:errors.nothing-opened",
-      "path-not-supported": "t:errors.path-not-supported"
+      "invalid-path": "t:errors.invalid-path"
     }
   }
 }

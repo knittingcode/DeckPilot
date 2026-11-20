@@ -662,6 +662,7 @@ fn open_repository(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
     };
     ctx.open_resource(ResourceOpen {
         handle: repository.handle.clone(),
+        path: None,
         with,
         position: None,
         editor: None,

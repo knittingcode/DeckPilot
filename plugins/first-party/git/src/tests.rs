@@ -73,6 +73,8 @@ struct Agent {
     resolves: Vec<deckpilot_plugin_sdk::ResourceResolve>,
     storage: BTreeMap<String, Value>,
     opened: Vec<ResourceOpen>,
+    /// Which key this is (`run.context`'s `keyScope`), as the agent says.
+    scope: Option<&'static str>,
 }
 
 impl Default for Agent {
@@ -90,6 +92,7 @@ impl Default for Agent {
             resolves: Vec::new(),
             storage: BTreeMap::new(),
             opened: Vec::new(),
+            scope: None,
         }
     }
 }
@@ -140,13 +143,21 @@ fn host(agent: &Shared) -> MockHost {
                     other => panic!("unexpected resolve {other:?}"),
                 }
             }
+            CapabilityRequest::RunContext(_) => CallResult::Ok(match agent.scope {
+                Some(scope) => json!({"trigger": "key", "keyScope": scope}),
+                None => json!({"trigger": "key"}),
+            }),
             CapabilityRequest::ProfileRead(_) => CallResult::Ok(match agent.active {
                 Some((id, key)) => json!({"project": {"id": id, "key": key, "name": key}}),
                 None => json!({}),
             }),
             CapabilityRequest::ToolRun(run) => {
                 assert_eq!(run.tool, Tool::Git);
-                assert_eq!(run.cwd, HANDLE, "git runs only in the repository's handle");
+                assert_eq!(
+                    run.cwd.as_deref(),
+                    Some(HANDLE),
+                    "git runs only in the repository's handle"
+                );
                 agent.runs.push(run.args.clone());
                 agent.timeouts.push(run.timeout_ms);
                 if let Some((code, text)) = agent.tool_refusal {
@@ -776,6 +787,7 @@ fn opening_a_repository() {
         opened,
         [ResourceOpen {
             handle: HANDLE.into(),
+            path: None,
             with: Some(APP.into()),
             position: None,
             editor: None
@@ -894,6 +906,44 @@ fn keys_show_the_last_run() {
         key_state(&agent, "changes", json!({})),
         StateOutcome::Error(_)
     ));
+}
+
+/// Keys that differ only in their `repository` are different keys: the
+/// agent's key scope is part of where a run stores its state, and a state
+/// call reads it back under its own.
+#[test]
+fn keys_of_different_repositories_keep_their_own_state() {
+    const SHOP_KEY: &str = "00112233445566778899aabbccddeeff";
+    const CMS_KEY: &str = "ffeeddccbbaa99887766554433221100";
+    let agent = agent();
+    let status = |branch: &str| {
+        ok(&z(&[
+            &format!("# branch.oid {OID}"),
+            &format!("# branch.head {branch}"),
+        ]))
+    };
+    agent.borrow_mut().scope = Some(SHOP_KEY);
+    record(&agent, &status_args("all"), status("main"));
+    run(&agent, "status", json!({})).unwrap();
+    agent.borrow_mut().scope = Some(CMS_KEY);
+    record(&agent, &status_args("all"), status("develop"));
+    run(&agent, "status", json!({})).unwrap();
+    let shown = |scope, action| {
+        agent.borrow_mut().scope = Some(scope);
+        match key_state(&agent, action, json!({})) {
+            StateOutcome::Ok(state) => state.detail,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(shown(SHOP_KEY, "status").as_deref(), Some("main"));
+    assert_eq!(shown(CMS_KEY, "status").as_deref(), Some("develop"));
+    assert_eq!(shown(SHOP_KEY, "branch").as_deref(), Some("main"));
+    assert_eq!(shown(CMS_KEY, "branch").as_deref(), Some("develop"));
+    agent.borrow_mut().scope = None;
+    assert_eq!(
+        key_state(&agent, "status", json!({})),
+        StateOutcome::Ok(KeyState::new())
+    );
 }
 
 #[test]

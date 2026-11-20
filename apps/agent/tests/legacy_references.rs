@@ -15,6 +15,15 @@
 //! The current agent must do exactly the same with the database and must
 //! not rewrite a stored row while doing it.
 //!
+//! `movedReferences` and `movedReferencesModulesDisabled` were added with
+//! the extraction's variable aliases (WP-C2), recorded by this agent: the
+//! legacy `system.project.current.*` keep their values with or without the
+//! `projects` module, `projects.current.*` follow the module (and resolve
+//! as `deckpilot.projects`'s once the module cannot and the plugin
+//! declares them; without the plugin, as here, as before), and the
+//! plugin's own ids are unavailable, owned by the plugin, while it is not
+//! installed.
+//!
 //! The key images (`frames`) are digests of the renderer's pixels. They
 //! were recorded again when keys got the Inter font and their actions'
 //! icons: the faces this agent shows for the database, drawn with the
@@ -449,6 +458,53 @@ async fn click(
     }
 }
 
+/// The references whose owner moved with the extraction (WP-C2): the
+/// legacy `system.project.current.*`, the `projects` module's
+/// `projects.current.*` (which resolve as `deckpilot.projects`'s
+/// `plugins.deckpilot.projects.current.*` once the module cannot provide
+/// them and the plugin declares them) and the plugin's own ids.
+const MOVED_REFERENCES: [&str; 6] = [
+    "system.project.current.key",
+    "system.project.current.id",
+    "projects.current.key",
+    "projects.current.name",
+    "plugins.deckpilot.projects.current.key",
+    "plugins.deckpilot.projects.current.name",
+];
+
+/// What [`MOVED_REFERENCES`] resolve to in a preview of `profile`.
+async fn previews(agent: &TestAgent, profile: &Profile) -> Value {
+    let items = MOVED_REFERENCES
+        .iter()
+        .map(|reference| deckpilot_core::variables::PreviewItem {
+            reference: (*reference).to_owned(),
+            expected: None,
+        })
+        .collect();
+    let previews = match agent
+        .request(Request::PreviewReferences {
+            context: Box::new(deckpilot_core::variables::ResolutionContext::preview(
+                profile.id,
+            )),
+            items,
+        })
+        .await
+        .unwrap()
+    {
+        Response::ReferencePreviews { previews } => previews,
+        other => panic!("unexpected {other:?}"),
+    };
+    MOVED_REFERENCES
+        .iter()
+        .zip(previews)
+        .map(|(reference, preview)| {
+            let status = serde_json::to_string(&preview.status).unwrap();
+            ((*reference).to_owned(), Value::String(status))
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into()
+}
+
 async fn set_enabled(agent: &TestAgent, data: &Data, module: &str, enabled: bool) {
     data.store()
         .set_module_state(
@@ -518,9 +574,11 @@ async fn observe(data: &Data) -> Value {
         .await
         .unwrap();
     let other_project = run_actions(&agent, &profile).await;
+    let references = previews(&agent, &profile).await;
     set_enabled(&agent, data, "projects", false).await;
     set_enabled(&agent, data, "work-session", false).await;
     let modules_disabled = run_actions(&agent, &profile).await;
+    let references_modules_disabled = previews(&agent, &profile).await;
     let flow_modules_disabled = run_workflow(&agent, &profile, "Legacy flow").await;
     agent.shutdown().await;
 
@@ -534,6 +592,8 @@ async fn observe(data: &Data) -> Value {
         "otherProject": other_project,
         "modulesDisabled": modules_disabled,
         "flowModulesDisabled": flow_modules_disabled,
+        "movedReferences": references,
+        "movedReferencesModulesDisabled": references_modules_disabled,
     })
 }
 

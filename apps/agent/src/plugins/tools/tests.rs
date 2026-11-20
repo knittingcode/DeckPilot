@@ -35,7 +35,7 @@ fn run(tool: Tool, args: &[&str]) -> ToolRun {
     ToolRun {
         tool,
         args: args.iter().map(|a| (*a).to_owned()).collect(),
-        cwd: HANDLE.into(),
+        cwd: Some(HANDLE.into()),
         timeout_ms: None,
     }
 }
@@ -628,14 +628,14 @@ fn runs_per_plugin_are_bounded_and_one_modifies_at_a_time() {
 
 #[test]
 fn the_executable_must_be_the_tools_own() {
-    let host = ToolHost::from_agent()
+    let host = ToolHost::for_test()
         .with_environment(&[("PATH", "")])
         .with_executable(Tool::Git, "git");
     assert_eq!(
         host.executable(Tool::Git).unwrap_err().code,
         codes::INVALID_EXECUTABLE
     );
-    let host = ToolHost::from_agent()
+    let host = ToolHost::for_test()
         .with_environment(&[])
         .with_executable(Tool::Docker, "/nonexistent/bin/docker");
     assert_eq!(
@@ -644,7 +644,7 @@ fn the_executable_must_be_the_tools_own() {
     );
     // Without a setting the agent's PATH is searched (and, on macOS,
     // Homebrew's and Docker Desktop's folders), never a relative entry.
-    let host = ToolHost::from_agent().with_environment(&[("PATH", ".:bin")]);
+    let host = ToolHost::for_test().with_environment(&[("PATH", ".:bin")]);
     assert!(
         host.search_path(Tool::Docker)
             .iter()
@@ -654,7 +654,7 @@ fn the_executable_must_be_the_tools_own() {
 
 #[test]
 fn each_class_has_its_time_limit_which_the_plugin_may_only_shorten() {
-    let host = ToolHost::from_agent().with_timeouts(1, 99_999);
+    let host = ToolHost::for_test().with_timeouts(1, 99_999);
     let limit = |tool, args: &[&str], requested| host.timeout(&passes(tool, args), requested);
     assert_eq!(limit(Tool::Git, &["status"], None), GIT_READ_TIMEOUT);
     assert_eq!(
@@ -674,7 +674,7 @@ fn each_class_has_its_time_limit_which_the_plugin_may_only_shorten() {
         limit(Tool::Git, &["status"], Some(600_000)),
         GIT_READ_TIMEOUT
     );
-    let defaults = ToolHost::from_agent();
+    let defaults = ToolHost::for_test();
     assert_eq!(
         defaults.timeout(&passes(Tool::Git, &["ls-remote", "origin"]), None),
         Duration::from_secs(20)
@@ -811,8 +811,7 @@ fn credentials_in_queries_and_passwords_with_slashes_are_redacted() {
 /// folder.
 #[test]
 fn only_absolute_path_entries_reach_the_child() {
-    let host =
-        ToolHost::from_agent().with_environment(&[("PATH", "/usr/bin::.:relative/bin:/bin")]);
+    let host = ToolHost::for_test().with_environment(&[("PATH", "/usr/bin::.:relative/bin:/bin")]);
     let env = host.environment(&[], Path::new("/opt/tools/git"));
     let path = env
         .iter()
@@ -861,7 +860,7 @@ fn the_users_module_settings_are_the_hosts() {
             modify_seconds: Some(5000),
         }
     );
-    let host = ToolHost::from_agent()
+    let host = ToolHost::for_test()
         .with_environment(&[])
         .with_settings(&settings);
     assert_eq!(host.docker_context.as_deref(), Some("colima"));

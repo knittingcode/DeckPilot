@@ -104,7 +104,10 @@ impl Context<'_> {
 
     /// Opens a bound location, optionally in a bound application, at a
     /// line and column (op `resource.open`, plugin API 1.9). Needs
-    /// `resources.open` and a run the user started; 1 per second.
+    /// `resources.open` and a run the user started; 1 per second. With
+    /// [`ResourceOpen::path`] it opens a file or folder inside a bound
+    /// folder, which the agent opens only when it exists inside the
+    /// binding (by name and by where links lead).
     pub fn open_resource(&mut self, request: ResourceOpen) -> Result<(), CapabilityError> {
         let request = CapabilityRequest::ResourceOpen(request);
         if let Err(problem) = request.validate() {
@@ -150,7 +153,45 @@ impl Context<'_> {
             &CapabilityRequest::ToolRun(ToolRun {
                 tool,
                 args: args.iter().map(|a| (*a).to_owned()).collect(),
-                cwd: cwd.to_owned(),
+                cwd: Some(cwd.to_owned()),
+                timeout_ms,
+            }),
+            "a tool's output",
+        )
+    }
+
+    /// [`Context::run_tool`] without a handle, for docker's commands that
+    /// read no folder: `ps`, `logs` of a container, `version`, `context
+    /// show` and `compose version`. The agent runs them in an empty folder
+    /// of its own, with its Docker context; Compose's project commands and
+    /// every git command need a handle and are refused without one.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    /// use deckpilot_plugin_sdk::{CallResult, CapabilityRequest, Tool};
+    ///
+    /// let mut host = MockHost::new(|req| match req {
+    ///     CapabilityRequest::ToolRun(run) if run.cwd.is_none() => {
+    ///         CallResult::Ok(serde_json::json!({"exit": 0, "stdout": "default\n"}))
+    ///     }
+    ///     _ => CallResult::Ok(serde_json::Value::Null),
+    /// });
+    /// let mut ctx = host.context();
+    /// let out = ctx.run_tool_unbound(Tool::Docker, &["context", "show"], None).unwrap();
+    /// assert_eq!(out.stdout.trim(), "default");
+    /// ```
+    pub fn run_tool_unbound(
+        &mut self,
+        tool: Tool,
+        args: &[&str],
+        timeout_ms: Option<u32>,
+    ) -> Result<ToolOutput, CapabilityError> {
+        self.checked(
+            "tool.run",
+            &CapabilityRequest::ToolRun(ToolRun {
+                tool,
+                args: args.iter().map(|a| (*a).to_owned()).collect(),
+                cwd: None,
                 timeout_ms,
             }),
             "a tool's output",

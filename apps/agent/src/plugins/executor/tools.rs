@@ -2,7 +2,8 @@
 //! §7): the user's own `git` or `docker`, with the host's policy, fixed
 //! prefix, environment and limits (`crate::plugins::tools`), in the
 //! directory of a resource handle of this invocation
-//! ([`Executor::bound_inside`]).
+//! ([`Executor::bound_inside`]), or, for docker's commands that read no
+//! folder, without one, in an empty folder of the agent's own.
 //!
 //! The broker allowed the call for its tool and sub-grant; here the agent
 //! checks again, before anything runs: the plugin's active manifest must
@@ -157,7 +158,20 @@ impl Executor {
                 "containers are started and stopped only in runs you or your work session started",
             ));
         }
-        let (target, label) = self.target(plugin, &request.cwd, &checked)?;
+        let (target, label) = match request.cwd.as_deref() {
+            Some(handle) => self.target(plugin, handle, &checked)?,
+            None if checked.runs_unbound() => (Target::Unbound, "(none)".to_owned()),
+            None => {
+                return Err(Denial::new(
+                    codes::INVALID_CWD,
+                    format!(
+                        "`{} {}` runs only in a bound folder: pass a handle",
+                        checked.tool.as_str(),
+                        checked.spec.subcommand
+                    ),
+                ));
+            }
+        };
         notes.add("label", label);
         let plan = host::plan(&self.tools, &checked, &target, request.timeout_ms)?;
         let deadline = interrupt.map(CallInterrupt::deadline);
@@ -230,6 +244,26 @@ impl Executor {
             CallResult::Ok(_) => Denial::new(codes::INVALID_CWD, "the handle is not usable"),
         };
         let issued = self.bound(plugin, handle).map_err(not_permitted)?;
+        // A Compose project bound as a Docker environment (the built-in's
+        // compose role accepted one): its value is the folder or file.
+        let project_path = (issued.kind == ResourceKind::DockerEnvironment
+            && checked.tool == deckpilot_plugin_abi::privileged::Tool::Docker
+            && !checked.runs_unbound())
+        .then(|| std::path::Path::new(issued.value.trim()))
+        .filter(|path| path.is_absolute())
+        .and_then(|path| std::fs::canonicalize(path).ok());
+        if let Some(real) = project_path {
+            return if real.is_dir() {
+                Ok((Target::Directory(real), issued.label))
+            } else if real.is_file() {
+                Ok((Target::File(real), issued.label))
+            } else {
+                Err(Denial::new(
+                    codes::INVALID_CWD,
+                    format!("`{}` is not a compose folder or file", issued.label),
+                ))
+            };
+        }
         let kind = match issued.kind {
             ResourceKind::Directory => TargetKind::Directory,
             ResourceKind::File => TargetKind::File,

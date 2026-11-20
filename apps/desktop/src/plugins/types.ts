@@ -171,6 +171,14 @@ export interface GrantInfo {
   status: PermissionStatus
   scope: unknown
   justification?: string
+  /**
+   * Plugin API 1.9: optional for enabling (an action names it in
+   * `requiresPermissions`). The plugin runs without it; only `actions`
+   * wait for it.
+   */
+  optional?: boolean
+  /** The ids of the actions that need this optional permission. */
+  actions?: string[]
 }
 
 export interface PluginActionInfo {

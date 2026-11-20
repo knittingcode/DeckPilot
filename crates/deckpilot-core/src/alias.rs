@@ -44,9 +44,14 @@ pub const FIRST_PARTY_PUBLISHER: &str = "deckpilot";
 pub const RESERVED_MODULE_IDS: [&str; 3] =
     ["deckpilot.core", "deckpilot.project", "deckpilot.resource"];
 
-/// How a parameter of the legacy type that the plugin cannot declare is
-/// translated (§5.3). Applied to the parameters after overrides and
-/// mappings, so it covers instances, bindings and workflow nodes alike.
+/// How a parameter of the legacy type reaches the plugin (§5.3, X10).
+/// Applied to the parameters after overrides and mappings, so it covers
+/// instances, bindings and workflow nodes alike. A parameter without a
+/// rule is passed on unchanged, under its own key.
+///
+/// No rule ever drops a value the plugin would need or guesses one: a
+/// value a rule cannot translate fails the run and is refused when it is
+/// saved, with a reason, and the migration names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParamRule {
     /// The parameter (a `credential` override) is dropped when it is empty
@@ -54,12 +59,40 @@ pub enum ParamRule {
     /// uses its own credential slot. Any other value cannot be translated:
     /// the run fails, and the agent does not migrate such a module.
     DropIfDefault(&'static str),
+    /// A `resource` parameter, passed on unchanged: the stored reference
+    /// goes to the host's resolver, which gives the plugin a handle and
+    /// never a path (plugin API 1.9, X1). The contract requires a
+    /// resource parameter on both sides.
+    Keep(&'static str),
+    /// The parameter is the plugin's `.1` (a manifest key is camel case:
+    /// `project_id` is `projectId`): the value is passed on unchanged
+    /// under that key. The legacy type keeps the legacy key, so stored
+    /// instances, overrides and mappings stay valid.
+    Rename(&'static str, &'static str),
+    /// The plugin declares the parameter but cannot honour any value of
+    /// it (Docker's `projectName`: the host pins the Compose project).
+    /// Empty passes; any other value fails the run and is refused when
+    /// saved, rather than being dropped or replaced by a guess.
+    Unsupported(&'static str),
 }
 
 impl ParamRule {
+    /// The legacy parameter's key.
     pub const fn key(self) -> &'static str {
         match self {
-            Self::DropIfDefault(key) => key,
+            Self::DropIfDefault(key)
+            | Self::Keep(key)
+            | Self::Rename(key, _)
+            | Self::Unsupported(key) => key,
+        }
+    }
+
+    /// The key the plugin gets the value under; `None` when it is dropped.
+    pub const fn plugin_key(self) -> Option<&'static str> {
+        match self {
+            Self::DropIfDefault(_) => None,
+            Self::Keep(key) | Self::Unsupported(key) => Some(key),
+            Self::Rename(_, to) => Some(to),
         }
     }
 }
@@ -111,9 +144,28 @@ impl ActionAlias {
         ModuleId::new(self.plugin).expect("validated alias")
     }
 
-    /// Whether the parameter `key` of the legacy type is translated.
+    /// Whether the parameter `key` of the legacy type does not reach the
+    /// plugin as it is: dropped ([`ParamRule::DropIfDefault`]) or renamed
+    /// ([`ParamRule::Rename`]).
     pub fn translates(&self, key: &str) -> bool {
-        self.params.iter().any(|rule| rule.key() == key)
+        matches!(
+            self.rule(key),
+            Some(ParamRule::DropIfDefault(_) | ParamRule::Rename(..))
+        )
+    }
+
+    /// The rule of the legacy parameter `key`, if it has one.
+    pub fn rule(&self, key: &str) -> Option<ParamRule> {
+        self.params.iter().copied().find(|rule| rule.key() == key)
+    }
+
+    /// The key the plugin gets the legacy parameter `key` under: its own
+    /// unless renamed; `None` when the parameter is dropped.
+    pub fn plugin_key<'a>(&self, key: &'a str) -> Option<&'a str> {
+        match self.rule(key) {
+            Some(rule) => rule.plugin_key(),
+            None => Some(key),
+        }
     }
 }
 
@@ -233,7 +285,187 @@ pub const ACTION_ALIASES: &[ActionAlias] = &[
         "notifications.workflow-summary",
         "deckpilot.notifications.workflow-summary",
     ),
+    // The extraction of 2026-11-20 (WP-C1, `module-migration.md` §11 D1):
+    // `git`, `docker`, `workspace` and `projects` to their first-party
+    // plugins (plugin API 1.9), each contract checked by
+    // `crates/deckpilot-modules/tests/contracts.rs`. A manifest key is
+    // camel case, so `project_id` reaches the plugin as `projectId`;
+    // resource parameters are kept and resolved by the host to handles
+    // (X1, X10); Docker's `projectName` is never honoured by the plugin
+    // (the host pins the Compose project, X3 M3), so a value of it is
+    // refused instead of being dropped.
+    //
+    // Git (`plugins/first-party/git`).
+    extracted("git", "git.status", "deckpilot.git.status", GIT),
+    extracted("git", "git.branch", "deckpilot.git.branch", GIT),
+    extracted("git", "git.changes", "deckpilot.git.changes", GIT),
+    extracted("git", "git.last-commit", "deckpilot.git.last-commit", GIT),
+    extracted(
+        "git",
+        "git.remote-status",
+        "deckpilot.git.remote-status",
+        GIT,
+    ),
+    extracted(
+        "git",
+        "git.open-repository",
+        "deckpilot.git.open-repository",
+        GIT_OPEN,
+    ),
+    // Docker (`plugins/first-party/docker`).
+    extracted("docker", "docker.status", "deckpilot.docker.status", &[]),
+    extracted(
+        "docker",
+        "docker.containers",
+        "deckpilot.docker.containers",
+        &[],
+    ),
+    extracted(
+        "docker",
+        "docker.compose-status",
+        "deckpilot.docker.compose-status",
+        COMPOSE,
+    ),
+    extracted(
+        "docker",
+        "docker.compose-up",
+        "deckpilot.docker.compose-up",
+        COMPOSE,
+    ),
+    extracted(
+        "docker",
+        "docker.compose-down",
+        "deckpilot.docker.compose-down",
+        COMPOSE,
+    ),
+    extracted(
+        "docker",
+        "docker.compose-restart",
+        "deckpilot.docker.compose-restart",
+        COMPOSE,
+    ),
+    extracted("docker", "docker.logs", "deckpilot.docker.logs", COMPOSE),
+    // Workspace (`plugins/first-party/workspace`).
+    extracted(
+        "workspace",
+        "workspace.open-in-editor",
+        "deckpilot.workspace.open-in-editor",
+        EDITOR,
+    ),
+    extracted(
+        "workspace",
+        "workspace.open-urls",
+        "deckpilot.workspace.open-urls",
+        BROWSER,
+    ),
+    extracted(
+        "workspace",
+        "workspace.open-project",
+        "deckpilot.workspace.open-project",
+        BROWSER,
+    ),
+    // Projects (`plugins/first-party/projects`); the deprecated `next`,
+    // `previous` and `active` stay same-name deprecated plugin actions.
+    extracted(
+        "projects",
+        "projects.cycle",
+        "deckpilot.projects.cycle",
+        &[],
+    ),
+    extracted(
+        "projects",
+        "projects.select",
+        "deckpilot.projects.select",
+        PROJECT,
+    ),
+    extracted(
+        "projects",
+        "projects.current",
+        "deckpilot.projects.current",
+        &[],
+    ),
+    extracted(
+        "projects",
+        "projects.repository",
+        "deckpilot.projects.repository",
+        PROJECT,
+    ),
+    extracted(
+        "projects",
+        "projects.documentation",
+        "deckpilot.projects.documentation",
+        PROJECT,
+    ),
+    extracted(
+        "projects",
+        "projects.resolve-resource",
+        "deckpilot.projects.resolve-resource",
+        PROJECT,
+    ),
+    extracted("projects", "projects.next", "deckpilot.projects.next", &[]),
+    extracted(
+        "projects",
+        "projects.previous",
+        "deckpilot.projects.previous",
+        &[],
+    ),
+    extracted(
+        "projects",
+        "projects.active",
+        "deckpilot.projects.active",
+        &[],
+    ),
 ];
+
+/// `project_id` of the built-ins is the plugins' `projectId`.
+const PROJECT_ID: ParamRule = ParamRule::Rename("project_id", "projectId");
+/// Git's repository folder and project.
+const GIT: &[ParamRule] = &[ParamRule::Keep("repository"), PROJECT_ID];
+/// `git.open-repository`: also the application to open it in.
+const GIT_OPEN: &[ParamRule] = &[
+    ParamRule::Keep("repository"),
+    PROJECT_ID,
+    ParamRule::Keep("application"),
+];
+/// Docker's Compose actions: the Compose resource, the project and the
+/// project name the plugin cannot honour.
+const COMPOSE: &[ParamRule] = &[
+    ParamRule::Keep("compose"),
+    PROJECT_ID,
+    ParamRule::Unsupported("projectName"),
+];
+/// `workspace.open-in-editor`: the editor and the folder.
+const EDITOR: &[ParamRule] = &[ParamRule::Keep("application"), ParamRule::Keep("location")];
+/// `workspace.open-urls` and `open-project`: the browser.
+const BROWSER: &[ParamRule] = &[ParamRule::Keep("browser")];
+/// The projects actions that name a project.
+const PROJECT: &[ParamRule] = &[PROJECT_ID];
+
+/// One alias of a module extracted on 2026-11-20 (`git`, `docker`,
+/// `workspace`, `projects`) to `deckpilot.<module>`.
+const fn extracted(
+    module: &'static str,
+    legacy: &'static str,
+    target: &'static str,
+    params: &'static [ParamRule],
+) -> ActionAlias {
+    // `deckpilot.<module>`, which `validate` checks.
+    let plugin = match module.as_bytes() {
+        b"git" => "deckpilot.git",
+        b"docker" => "deckpilot.docker",
+        b"workspace" => "deckpilot.workspace",
+        b"projects" => "deckpilot.projects",
+        _ => panic!("not a module of the extraction"),
+    };
+    ActionAlias {
+        legacy,
+        target,
+        module,
+        plugin,
+        since: "0.10.0",
+        params,
+    }
+}
 
 /// One alias of the `github` block.
 const fn github(legacy: &'static str, target: &'static str, credential: bool) -> ActionAlias {
@@ -380,10 +612,22 @@ pub const fn validate(aliases: &[ActionAlias]) -> Result<(), AliasError> {
             if key.is_empty() {
                 return error!("a parameter rule names a parameter");
             }
+            if let ParamRule::Rename(_, to) = alias.params[rule]
+                && (to.is_empty() || equal(to.as_bytes(), key))
+            {
+                return error!("a parameter is renamed to another, non-empty key");
+            }
             let mut other = 0;
             while other < rule {
                 if equal(alias.params[other].key().as_bytes(), key) {
                     return error!("a parameter has at most one rule");
+                }
+                if let (Some(a), Some(b)) = (
+                    alias.params[other].plugin_key(),
+                    alias.params[rule].plugin_key(),
+                ) && equal(a.as_bytes(), b.as_bytes())
+                {
+                    return error!("two parameters reach the plugin under one key");
                 }
                 other += 1;
             }
@@ -474,6 +718,12 @@ pub enum LegacyRoute {
     /// The module was migrated and the user then disabled or uninstalled
     /// the plugin. That choice is respected: no fallback to the built-in.
     PluginWithdrawn,
+    /// The module moves to its plugin without a fallback (the extraction
+    /// of 2026-11-20, `module-migration.md` §11 D2, D4): its migration
+    /// waits for the user's consent, or the user declined it. The legacy
+    /// action types are unavailable until the user allows it, and come
+    /// back unchanged then (stored documents are never rewritten).
+    AwaitingConsent,
 }
 
 /// The [`LegacyRoute`] of every migrated module. Modules without an entry
@@ -542,11 +792,20 @@ pub fn incompatibilities(
 ) -> Vec<String> {
     let mut problems = Vec::new();
     for spec in &builtin.parameters {
-        if alias.translates(&spec.key) {
+        // Dropped parameters are not the plugin's; renamed ones are
+        // compared with the plugin's key.
+        let Some(key) = alias.plugin_key(&spec.key) else {
             continue;
-        }
-        let Some(other) = target.parameters.iter().find(|p| p.key == spec.key) else {
-            problems.push(format!("parameter `{}` is missing", spec.key));
+        };
+        let Some(other) = target.parameters.iter().find(|p| p.key == key) else {
+            if key == spec.key {
+                problems.push(format!("parameter `{}` is missing", spec.key));
+            } else {
+                problems.push(format!(
+                    "parameter `{}` (the plugin's `{key}`) is missing",
+                    spec.key
+                ));
+            }
             continue;
         };
         if let Err(reason) = kind_compatible(&spec.kind, &other.kind) {
@@ -555,9 +814,22 @@ pub fn incompatibilities(
         if !spec.required && is_required(other) {
             problems.push(format!("parameter `{}` became required", spec.key));
         }
+        if matches!(alias.rule(&spec.key), Some(ParamRule::Keep(_)))
+            && !(matches!(spec.kind, ParameterKind::Resource { .. })
+                && matches!(other.kind, ParameterKind::Resource { .. }))
+        {
+            problems.push(format!(
+                "parameter `{}` is kept as a resource, which it is not on both sides",
+                spec.key
+            ));
+        }
     }
     for spec in &target.parameters {
-        if !builtin.parameters.iter().any(|p| p.key == spec.key) && is_required(spec) {
+        let declared = builtin
+            .parameters
+            .iter()
+            .any(|p| alias.plugin_key(&p.key) == Some(spec.key.as_str()));
+        if !declared && is_required(spec) {
             problems.push(format!("new parameter `{}` is required", spec.key));
         }
     }
@@ -645,7 +917,12 @@ fn kind_compatible(builtin: &ParameterKind, plugin: &ParameterKind) -> Result<()
         (K::Choice { options: b }, K::Choice { options: p }) => {
             b.iter().collect::<BTreeSet<_>>() == p.iter().collect::<BTreeSet<_>>()
         }
-        (K::Resource { kind: b }, K::Resource { kind: p }) => b == p,
+        // A plugin's resource parameter of several kinds is any kind in
+        // the editor (`None`); the host checks the declared kinds when it
+        // issues the handle. Alias targets are first-party plugins whose
+        // manifests the contract tests check to declare the built-in's
+        // kind (`crates/deckpilot-modules/tests/contracts.rs`).
+        (K::Resource { kind: b }, K::Resource { kind: p }) => p.is_none() || b == p,
         (
             K::Lines {
                 max_items: bi,
@@ -720,10 +997,12 @@ mod tests {
         validate(entries).map_err(|e| e.reason)
     }
 
-    /// The shipped table: GitHub's block (P9) and the notifications
-    /// block (P10), nothing else.
+    /// The shipped table: GitHub's block (P9), GitLab's and Jira's (P11),
+    /// the notifications block (P10) and the extraction's blocks (WP-C1),
+    /// nothing else.
     #[test]
-    fn the_shipped_table_is_the_github_and_notifications_blocks() {
+    #[allow(clippy::too_many_lines)] // One table, block by block.
+    fn the_shipped_table_is_the_cut_over_blocks() {
         assert_eq!(validate(ACTION_ALIASES), Ok(()));
         let legacy: Vec<&str> = ACTION_ALIASES.iter().map(|a| a.legacy).collect();
         assert_eq!(
@@ -747,9 +1026,36 @@ mod tests {
                 "jira.open",
                 "notifications.show",
                 "notifications.workflow-summary",
+                "git.status",
+                "git.branch",
+                "git.changes",
+                "git.last-commit",
+                "git.remote-status",
+                "git.open-repository",
+                "docker.status",
+                "docker.containers",
+                "docker.compose-status",
+                "docker.compose-up",
+                "docker.compose-down",
+                "docker.compose-restart",
+                "docker.logs",
+                "workspace.open-in-editor",
+                "workspace.open-urls",
+                "workspace.open-project",
+                "projects.cycle",
+                "projects.select",
+                "projects.current",
+                "projects.repository",
+                "projects.documentation",
+                "projects.resolve-resource",
+                "projects.next",
+                "projects.previous",
+                "projects.active",
             ]
         );
+        let project = ParamRule::Rename("project_id", "projectId");
         for alias in ACTION_ALIASES {
+            let name = alias.legacy.split_once('.').unwrap().1;
             let (plugin, params): (&str, &[ParamRule]) = match alias.module {
                 "github" if alias.legacy == "github.open" => ("deckpilot.github", &[]),
                 "github" => (
@@ -764,10 +1070,46 @@ mod tests {
                 "jira" if alias.legacy == "jira.open" => ("deckpilot.jira", &[]),
                 "jira" => ("deckpilot.jira", &[ParamRule::DropIfDefault("credential")]),
                 "notifications" => ("deckpilot.notifications", &[]),
+                "git" if name == "open-repository" => (
+                    "deckpilot.git",
+                    &[
+                        ParamRule::Keep("repository"),
+                        project,
+                        ParamRule::Keep("application"),
+                    ],
+                ),
+                "git" => ("deckpilot.git", &[ParamRule::Keep("repository"), project]),
+                "docker" if name == "status" || name == "containers" => ("deckpilot.docker", &[]),
+                "docker" => (
+                    "deckpilot.docker",
+                    &[
+                        ParamRule::Keep("compose"),
+                        project,
+                        ParamRule::Unsupported("projectName"),
+                    ],
+                ),
+                "workspace" if name == "open-in-editor" => (
+                    "deckpilot.workspace",
+                    &[ParamRule::Keep("application"), ParamRule::Keep("location")],
+                ),
+                "workspace" => ("deckpilot.workspace", &[ParamRule::Keep("browser")]),
+                "projects"
+                    if ["select", "repository", "documentation", "resolve-resource"]
+                        .contains(&name) =>
+                {
+                    ("deckpilot.projects", &[project])
+                }
+                "projects" => ("deckpilot.projects", &[]),
                 other => panic!("an unexpected block: {other}"),
             };
             assert_eq!(alias.plugin, plugin, "{}", alias.legacy);
             assert_eq!(alias.params, params, "{}", alias.legacy);
+            let since = if ["git", "docker", "workspace", "projects"].contains(&alias.module) {
+                "0.10.0"
+            } else {
+                "0.6.0"
+            };
+            assert_eq!(alias.since, since, "{}", alias.legacy);
         }
         let found = alias_of(&ActionTypeId::new("github.pull-requests").unwrap()).unwrap();
         assert_eq!(found.target, "deckpilot.github.pull-requests");
@@ -777,7 +1119,65 @@ mod tests {
         assert_eq!(found.target, "deckpilot.gitlab.merge-requests");
         let found = alias_of(&ActionTypeId::new("jira.issues").unwrap()).unwrap();
         assert_eq!(found.target, "deckpilot.jira.issues");
+        let found = alias_of(&ActionTypeId::new("git.status").unwrap()).unwrap();
+        assert_eq!(found.target, "deckpilot.git.status");
+        assert_eq!(found.plugin_key("project_id"), Some("projectId"));
+        assert_eq!(found.plugin_key("repository"), Some("repository"));
+        assert!(found.translates("project_id") && !found.translates("repository"));
+        let found = alias_of(&ActionTypeId::new("projects.next").unwrap()).unwrap();
+        assert_eq!(found.target, "deckpilot.projects.next");
         assert_eq!(alias_of(&ActionTypeId::new("http.request").unwrap()), None);
+        assert_eq!(
+            alias_of(&ActionTypeId::new("work-session.start").unwrap()),
+            None
+        );
+    }
+
+    /// A rename names another non-empty key, and no two parameters reach
+    /// the plugin under one key.
+    #[test]
+    fn rename_rules_are_checked() {
+        let ok = alias(
+            "github.pull-requests",
+            "deckpilot.github.pull-requests",
+            "github",
+        );
+        for (params, expect) in [
+            (
+                &[ParamRule::Rename("project_id", "")][..],
+                Err("a parameter is renamed to another, non-empty key"),
+            ),
+            (
+                &[ParamRule::Rename("project_id", "project_id")][..],
+                Err("a parameter is renamed to another, non-empty key"),
+            ),
+            (
+                &[
+                    ParamRule::Keep("projectId"),
+                    ParamRule::Rename("project_id", "projectId"),
+                ][..],
+                Err("two parameters reach the plugin under one key"),
+            ),
+            (
+                &[
+                    ParamRule::Rename("project_id", "projectId"),
+                    ParamRule::Rename("project_id", "project"),
+                ][..],
+                Err("a parameter has at most one rule"),
+            ),
+            (
+                &[
+                    ParamRule::Keep("repository"),
+                    ParamRule::Rename("project_id", "projectId"),
+                    ParamRule::Unsupported("projectName"),
+                    ParamRule::DropIfDefault("credential"),
+                ][..],
+                Ok(()),
+            ),
+        ] {
+            let params: &'static [ParamRule] = Box::leak(params.to_vec().into_boxed_slice());
+            assert_eq!(check(&[ActionAlias { params, ..ok }]), expect, "{params:?}");
+        }
     }
 
     /// Every entry, shipped or fixture, parses as the ids it stands for.
@@ -1082,6 +1482,85 @@ mod tests {
         assert_eq!(
             incompatibilities(alias, &builtin, &missing),
             ["parameter `message` is missing", "output `body` is missing"]
+        );
+    }
+
+    /// The contract follows the rules: a renamed parameter is compared
+    /// under the plugin's key, a kept one must be a resource on both
+    /// sides, and an unsupported one must still be declared.
+    #[test]
+    fn rules_shape_the_contract() {
+        let spec = |key: &str, kind: ParameterKind| ParameterSpec {
+            key: key.into(),
+            label: key.into(),
+            description: None,
+            kind,
+            required: false,
+            default: None,
+        };
+        let resource = ParameterKind::Resource {
+            kind: Some(crate::ResourceKind::Directory),
+        };
+        let text = ParameterKind::Text {
+            multiline: false,
+            max_length: Some(64),
+        };
+        let mut builtin = plugin_fetch();
+        builtin.id = ActionTypeId::new("legacy.fetch").unwrap();
+        builtin.parameters = vec![
+            spec("repository", resource.clone()),
+            spec("project_id", ParameterKind::Project),
+            spec("projectName", text.clone()),
+        ];
+        let mut target = plugin_fetch();
+        target.parameters = vec![
+            spec("repository", resource.clone()),
+            spec("projectId", ParameterKind::Project),
+            spec("projectName", text.clone()),
+        ];
+        let rules = ActionAlias {
+            params: &[
+                ParamRule::Keep("repository"),
+                ParamRule::Rename("project_id", "projectId"),
+                ParamRule::Unsupported("projectName"),
+            ],
+            ..FIXTURE_ALIASES[0]
+        };
+        assert_eq!(
+            incompatibilities(&rules, &builtin, &target),
+            Vec::<String>::new()
+        );
+        // Without the rename the key is missing, and the plugin's is new.
+        let plain = ActionAlias {
+            params: &[],
+            ..rules
+        };
+        assert_eq!(
+            incompatibilities(&plain, &builtin, &target),
+            ["parameter `project_id` is missing"]
+        );
+        let mut required = target.clone();
+        required.parameters[1].required = true;
+        assert_eq!(
+            incompatibilities(&plain, &builtin, &required),
+            [
+                "parameter `project_id` is missing",
+                "new parameter `projectId` is required"
+            ]
+        );
+        // Renamed but gone, kept but not a resource, unsupported but gone.
+        let mut broken = target.clone();
+        broken.parameters[0].kind = text.clone();
+        broken.parameters.remove(2);
+        broken.parameters.remove(1);
+        assert_eq!(
+            incompatibilities(&rules, &builtin, &broken),
+            [
+                "parameter `repository`: its kind or constraints are narrower",
+                "parameter `repository` is kept as a resource, which it is not on both sides",
+                "parameter `project_id` (the plugin's `projectId`) is missing",
+                "parameter `projectName` is missing",
+            ]
         );
     }
 

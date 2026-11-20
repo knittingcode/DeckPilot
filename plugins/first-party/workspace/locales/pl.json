@@ -41,7 +41,7 @@
     },
     "path": {
       "label": "Plik",
-      "description": "Wtyczka jeszcze tego nie obsługuje: przypisz plik jako zasób i wybierz go jako folder lub plik."
+      "description": "Plik lub folder wewnątrz pola Folder lub plik, względem niego (src/main.rs). Musi pozostać wewnątrz folderu."
     },
     "line": { "label": "Wiersz", "description": "Wymaga pliku." },
     "column": { "label": "Kolumna", "description": "Wymaga wiersza." },
@@ -90,14 +90,14 @@
     "no-urls": "Brak strony do otwarcia.",
     "too-many-urls": "Więcej stron, niż można otworzyć naraz.",
     "nothing-opened": "Nie udało się otworzyć niczego z projektu.",
-    "path-not-supported": "Wtyczka nie może jeszcze otworzyć pliku wewnątrz folderu."
+    "invalid-path": "Ścieżka wychodzi poza folder albo podano ją przy pliku zamiast folderu."
   },
   "messages": {
     "opened-in": "otwarto {{path}} w {{application}}",
     "line-needs-file": "wiersz wymaga pliku, nie folderu",
     "column-needs-line": "kolumna wymaga wiersza",
     "position-range": "wiersz i kolumna mają wartość od 1 do 1000000",
-    "path-not-supported": "nie można jeszcze otworzyć pliku wewnątrz folderu: przypisz plik jako zasób i wybierz go jako folder lub plik",
+    "path-needs-folder": "ścieżka wymaga folderu, nie pliku",
     "no-urls": "brak strony do otwarcia",
     "too-many-urls": "naraz można otworzyć najwyżej 10 stron",
     "too-many-roles": "najwyżej 10 innych stron",

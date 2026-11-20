@@ -230,6 +230,19 @@ pub const MIGRATIONS: &[&str] = &[
         installed_at INTEGER NOT NULL
     ) STRICT;
     ",
+    // 6: values the host keeps for itself and never hands to a plugin
+    // (`docs/marketplace/module-migration.md` §7 X3, X13): the user's git
+    // and docker settings that `tool.run` uses, migrated from the built-in
+    // modules so they outlive them, and the migration journal's notes
+    // (the backup taken before the first extraction cut-over). Additive;
+    // no plugin owns a row.
+    r"
+    CREATE TABLE host_settings (
+        key        TEXT PRIMARY KEY CHECK (length(key) BETWEEN 1 AND 64),
+        value_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+    ) STRICT;
+    ",
 ];
 
 /// Encrypted backups of the plugin database written before a schema
@@ -732,7 +745,8 @@ mod tests {
                 )
                 .unwrap();
         }
-        let upgraded = Database::open(&path, &key, DEFAULT_BUSY_TIMEOUT).unwrap();
+        let upgraded =
+            Database::open_as(&path, &key, DEFAULT_BUSY_TIMEOUT, &MIGRATIONS[..5]).unwrap();
         assert_eq!(upgraded.schema_version().unwrap(), 5);
         let kept: i64 = upgraded
             .connection()

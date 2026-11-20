@@ -695,13 +695,24 @@ impl Session {
     /// The decision point for a capability request made **inside a state
     /// call**: only the operations of
     /// [`allowed_in_state`](deckpilot_plugin_abi::state::allowed_in_state)
-    /// (reading the plugin's own storage and settings, the time, a log
-    /// line), each still subject to its own grants and rate limits.
-    /// Everything else is denied with [`DenyReason::NotInStateCall`]
+    /// (reading the plugin's own storage and settings, the time, the run
+    /// context, a log line), each still subject to its own grants and rate
+    /// limits. Everything else is denied with [`DenyReason::NotInStateCall`]
     /// before any rate limit, and audited.
     pub fn authorize_state(&self, request: &CapabilityRequest) -> Decision {
+        self.authorize_state_in(request, None)
+    }
+
+    /// [`Session::authorize_state`] with the state call's run context,
+    /// which `run.context` answers (nobody started a run; the key's scope,
+    /// plugin API 1.9).
+    pub fn authorize_state_in(
+        &self,
+        request: &CapabilityRequest,
+        context: Option<&RunContext>,
+    ) -> Decision {
         if deckpilot_plugin_abi::state::allowed_in_state(request) {
-            return self.authorize_in(request, None);
+            return self.authorize_in(request, context);
         }
         let decision = Decision::Deny(DenyReason::NotInStateCall);
         self.broker

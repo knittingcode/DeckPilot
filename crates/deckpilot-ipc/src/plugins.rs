@@ -467,6 +467,15 @@ pub struct PluginPermission {
     /// The manifest's justification, shown for consent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
+    /// Optional for enabling (plugin API 1.9: an action names it in
+    /// `requiresPermissions`): the plugin runs without it, and only the
+    /// actions in `actions` wait for it. Granted on its own; a high-tier
+    /// one is off until the user turns it on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional: bool,
+    /// The ids of the actions that need this optional permission.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
 }
 
 /// One action a plugin contributes.
@@ -954,9 +963,11 @@ pub enum MigrationRoute {
     /// The plugin handles them (the built-in takes over if the plugin
     /// breaks).
     Plugin,
-    /// The user disabled or uninstalled the plugin after the cut-over:
-    /// they are unavailable, with no fallback
-    /// ([`ModuleMigrationInfo::route_reason`] says why).
+    /// They are unavailable, with no fallback
+    /// ([`ModuleMigrationInfo::route_reason`] says why): the user disabled
+    /// or uninstalled the plugin after the cut-over, or (a module of the
+    /// extraction of 2026-11-20: git, docker, workspace, projects) its
+    /// migration waits for the user's consent or the user declined it.
     PluginWithdrawn,
     /// A route added by a newer agent.
     #[serde(other)]
@@ -1784,6 +1795,8 @@ mod tests {
                     status: PermissionStatus::NotGranted,
                     scope: serde_json::json!({"type": "credential"}),
                     justification: Some("Reads your pull requests.".into()),
+                    optional: false,
+                    actions: Vec::new(),
                 },
                 import: Some(CredentialImport {
                     setting: "credential".into(),

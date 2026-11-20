@@ -480,6 +480,7 @@ fn nothing_opens_in_runs_the_user_did_not_start() {
         let allowed = Allowed::ResourceOpen {
             request: ResourceOpen {
                 handle: handles["repository"].clone(),
+                path: None,
                 with: None,
                 position: None,
                 editor: None,
@@ -886,4 +887,129 @@ fn only_text_and_list_parameters_are_kept_for_urls() {
     // Without a provenance nothing is literal.
     let unknown = InvocationResources::default().with_urls(&definition, &parameters, None);
     assert!(unknown.urls.values().all(|p| !p.literal));
+}
+
+/// The built-in workspace's `path`: a file or folder inside a bound folder
+/// opens by its real absolute path, at a line for a file; a path that
+/// leaves the folder (`..`, a link out of it), does not exist, comes with a
+/// handle that is not a folder, or asks for a line in a folder is refused
+/// before anything starts. The record names the binding, never the path.
+#[test]
+#[allow(clippy::too_many_lines)] // one fixture, every case
+fn a_path_inside_a_bound_folder_opens_and_nothing_outside_it() {
+    let fixture = Fixture::granted();
+    let root = fixture.tree.0.clone();
+    std::fs::create_dir_all(root.join("secret")).unwrap();
+    std::fs::write(root.join("secret/key.pem"), "key").unwrap();
+    std::os::unix::fs::symlink(root.join("secret"), root.join("repo/out")).unwrap();
+    std::os::unix::fs::symlink(
+        root.join("repo/src/main.rs"),
+        root.join("repo/main-link.rs"),
+    )
+    .unwrap();
+    let real = |relative: &str| {
+        std::fs::canonicalize(root.join(relative))
+            .unwrap()
+            .display()
+            .to_string()
+    };
+
+    let (mut executor, handles) = fixture.key();
+    ok(&fixture.call(
+        &mut executor,
+        PLUGIN,
+        &open(&json!({
+            "handle": handles["repository"],
+            "path": "src/main.rs",
+            "with": handles["editor"],
+            "position": {"line": 9},
+            "editor": "zed",
+        })),
+    ));
+    // A link that stays inside opens what it leads to; a folder without a
+    // line opens with the system's handler.
+    ok(&fixture.call(
+        &mut executor,
+        PLUGIN,
+        &open(
+            &json!({"handle": handles["repository"], "path": "main-link.rs",
+                      "with": handles["editor"]}),
+        ),
+    ));
+    ok(&fixture.call(
+        &mut executor,
+        PLUGIN,
+        &open(&json!({"handle": handles["repository"], "path": "src"})),
+    ));
+    let main = real("repo/src/main.rs");
+    assert!(main.starts_with('/'));
+    assert_eq!(
+        fixture.plans(),
+        [
+            ("/usr/bin/code".to_owned(), vec![format!("{main}:9")]),
+            ("/usr/bin/code".to_owned(), vec![main.clone()]),
+            ("xdg-open".to_owned(), vec![real("repo/src")]),
+        ]
+    );
+    let records = fixture.records();
+    assert_eq!(
+        records[0].record.details,
+        [
+            ("label", "shop.repository".to_owned()),
+            ("path", "relative".to_owned()),
+            ("with", "code".to_owned()),
+            ("editor", "zed".to_owned()),
+            ("located", "true".to_owned()),
+        ]
+    );
+
+    for (args, expected) in [
+        // Out of the folder by name: the ABI refuses it before the broker.
+        (
+            json!({"handle": handles["repository"], "path": "../notes.md"}),
+            (CallErrorCode::BadRequest, "invalid-request".to_owned()),
+        ),
+        // Out of the folder through a link.
+        (
+            json!({"handle": handles["repository"], "path": "out/key.pem"}),
+            (CallErrorCode::NotPermitted, "invalid-path".to_owned()),
+        ),
+        (
+            json!({"handle": handles["repository"], "path": "src/missing.rs"}),
+            (CallErrorCode::Failed, "not-found".to_owned()),
+        ),
+        // A path needs a folder handle.
+        (
+            json!({"handle": handles["file"], "path": "x"}),
+            (CallErrorCode::BadRequest, "invalid-path".to_owned()),
+        ),
+        (
+            json!({"handle": handles["editor"], "path": "x"}),
+            (CallErrorCode::BadRequest, "invalid-path".to_owned()),
+        ),
+        // A line needs a file.
+        (
+            json!({"handle": handles["repository"], "path": "src", "position": {"line": 2},
+                   "with": handles["editor"], "editor": "vscode"}),
+            (CallErrorCode::BadRequest, "invalid-position".to_owned()),
+        ),
+    ] {
+        let result = fixture.call(&mut executor, PLUGIN, &open(&args));
+        let (code, reason) = match &result {
+            CallResult::Error(e)
+                if e.code == CallErrorCode::BadRequest && !e.message.contains(':') =>
+            {
+                (e.code, "invalid-request".to_owned())
+            }
+            _ => refused(&result),
+        };
+        assert_eq!((code, reason), expected, "{args}");
+    }
+    assert_eq!(fixture.plans().len(), 3);
+    for entry in fixture.records() {
+        for (_, value) in &entry.record.details {
+            assert!(!value.contains(&*root.to_string_lossy()), "{value}");
+            assert!(!value.contains("key.pem"), "{value}");
+        }
+    }
 }

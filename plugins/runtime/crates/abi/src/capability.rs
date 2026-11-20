@@ -234,7 +234,21 @@ pub struct RunContext {
     /// node of a workflow graph.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<RunSummary>,
+    /// Which key this is, for its key state (plugin API 1.9): an opaque
+    /// token, [`KEY_SCOPE_LEN`] lowercase hex digits, of the plugin and the
+    /// invocation's resource bindings (each `resource` parameter's binding,
+    /// and the active project where it names a project's role). It is the
+    /// same in a key's state call and in every run of an action of the
+    /// plugin with the same bindings (a key press, a workflow node), and
+    /// differs between keys that differ only in their resources. A plugin
+    /// keeps a key's state under it together with its own parameters.
+    /// Absent when the action has no `resource` parameter. Never a path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_scope: Option<String>,
 }
+
+/// Characters of [`RunContext::key_scope`].
+pub const KEY_SCOPE_LEN: usize = 32;
 
 impl RunContext {
     /// A run that was not started by a workflow.
@@ -243,6 +257,7 @@ impl RunContext {
             trigger,
             cause: None,
             run: None,
+            key_scope: None,
         }
     }
 
@@ -252,7 +267,15 @@ impl RunContext {
             trigger: RunTrigger::Workflow,
             cause: Some(cause),
             run,
+            key_scope: None,
         }
+    }
+
+    /// The same run of the key `scope` ([`RunContext::key_scope`]).
+    #[must_use]
+    pub fn with_key_scope(mut self, scope: Option<String>) -> Self {
+        self.key_scope = scope;
+        self
     }
 
     /// What nobody said anything about: not started by the user.
@@ -277,6 +300,14 @@ impl RunContext {
     /// node ids cut, at most [`MAX_RUN_FAILED_NODES`] node ids.
     #[must_use]
     pub fn bounded(mut self) -> Self {
+        if self.key_scope.as_deref().is_some_and(|scope| {
+            scope.len() != KEY_SCOPE_LEN
+                || !scope
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        }) {
+            self.key_scope = None;
+        }
         if let Some(run) = &mut self.run {
             run.workflow = run
                 .workflow
