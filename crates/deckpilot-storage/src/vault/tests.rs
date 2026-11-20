@@ -689,3 +689,81 @@ fn polling_the_state_never_disturbs_a_setup_in_progress() {
         assert!(vault.unlock_system(&keys).unwrap().matches(&key));
     }
 }
+
+/// What a failed encryption of a legacy database must leave: the plain
+/// database in place with all its data, no key file, no encrypted copy and
+/// no key in the store; and a second attempt succeeds.
+fn assert_untouched_and_retry(vault: &Vault, keys: &MemoryKeyStore, profile: &Profile) {
+    assert_eq!(vault.state().unwrap(), DatabaseState::Plaintext);
+    assert!(!vault.has_key_file());
+    assert!(!vault.replacement().exists());
+    assert!(!vault.legacy_copy_path().exists());
+    assert_eq!(keys.ids().len(), 0, "a key was left in the store");
+    assert_filled(
+        &SqliteStore::open(vault.database(), &Encryption::None).unwrap(),
+        profile,
+    );
+    let (key, legacy) = vault.encrypt_plaintext_system(keys).unwrap();
+    assert!(file_contains(&legacy, MARKER));
+    assert_filled(&open(vault, &key), profile);
+}
+
+#[test]
+fn a_failed_swap_leaves_the_legacy_database_as_it_was() {
+    for step in [
+        SwapStep::KeepOriginal,
+        SwapStep::MoveSideFiles,
+        SwapStep::MoveCopyIntoPlace,
+    ] {
+        let dir = Dir::new();
+        let vault = dir.vault();
+        let keys = MemoryKeyStore::new();
+        let profile = plaintext_database(&vault);
+        FAIL_SWAP_AT.with(|fail| fail.set(Some(step)));
+        let error = vault.encrypt_plaintext_system(&keys).unwrap_err();
+        FAIL_SWAP_AT.with(|fail| fail.set(None));
+        assert!(error.to_string().contains("injected"), "{step:?}: {error}");
+        assert_untouched_and_retry(&vault, &keys, &profile);
+    }
+}
+
+/// On Windows a file that another connection keeps open cannot be renamed
+/// (SQLite opens files without `FILE_SHARE_DELETE`); the virus scanner or
+/// the search indexer holding a freshly written file has the same effect
+/// for a moment. Encrypting a legacy database must then either succeed or
+/// fail within the bounded retry with a clear error and nothing changed —
+/// never hang, and never leave a key file or a copy behind. Elsewhere an
+/// open connection does not stop a rename, and the encryption succeeds.
+#[test]
+fn encrypting_a_legacy_database_that_is_still_open_never_hangs() {
+    let dir = Dir::new();
+    let vault = dir.vault();
+    let keys = MemoryKeyStore::new();
+    let profile = plaintext_database(&vault);
+    let other = SqliteStore::open(vault.database(), &Encryption::None).unwrap();
+    let started = std::time::Instant::now();
+    let result = vault.encrypt_plaintext_system(&keys);
+    let took = started.elapsed();
+    assert!(
+        took < crate::files::RETRY_FOR + std::time::Duration::from_secs(15),
+        "took {took:?}"
+    );
+    drop(other);
+    // Only Windows refuses to rename a file that is open.
+    assert_eq!(
+        result.as_ref().err().map(ToString::to_string).is_some(),
+        cfg!(windows),
+        "{:?}",
+        result.as_ref().err()
+    );
+    match result {
+        Ok((key, legacy)) => {
+            assert!(file_contains(&legacy, MARKER));
+            assert_filled(&open(&vault, &key), &profile);
+        }
+        Err(error) => {
+            assert!(error.to_string().contains("in use"), "{error}");
+            assert_untouched_and_retry(&vault, &keys, &profile);
+        }
+    }
+}

@@ -52,6 +52,7 @@ impl Watchdog {
     /// Watches the test `name` for at most `limit`.
     pub fn new(name: impl Into<String>, limit: Duration) -> Self {
         install_panic_hook();
+        super::agent_log::test_started();
         let name = name.into();
         let (done, finished) = mpsc::channel::<()>();
         let step = Arc::new(Mutex::new("starting".to_owned()));
@@ -111,5 +112,10 @@ impl Drop for Watchdog {
 pub async fn within<T>(what: &str, limit: Duration, future: impl Future<Output = T>) -> T {
     tokio::time::timeout(limit, future)
         .await
-        .unwrap_or_else(|_| panic!("{what} did not finish within {limit:?}"))
+        .unwrap_or_else(|_| {
+            panic!(
+                "{what} did not finish within {limit:?}\nthe agents' log:\n{}",
+                super::agent_log::test_log()
+            )
+        })
 }

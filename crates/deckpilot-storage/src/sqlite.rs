@@ -116,6 +116,10 @@ fn retry_busy(mut step: impl FnMut() -> rusqlite::Result<()>) -> Result<()> {
     }
 }
 
+/// Opening a database that takes longer than this is logged with where
+/// the time went.
+const SLOW_OPEN: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Backups kept per database; older ones are removed after a new one is
 /// verified.
 const KEPT_BACKUPS: usize = 5;
@@ -211,6 +215,7 @@ impl SqliteStore {
         path: Option<PathBuf>,
         encryption: &Encryption,
     ) -> Result<Self> {
+        let started = std::time::Instant::now();
         apply_key(&connection, encryption)?;
         connection.busy_timeout(BUSY_TIMEOUT)?;
         connection.pragma_update(None, "foreign_keys", true)?;
@@ -239,7 +244,16 @@ impl SqliteStore {
             path,
             encryption: encryption.clone(),
         };
+        let prepared = started.elapsed();
         store.migrate()?;
+        let took = started.elapsed();
+        if took >= SLOW_OPEN {
+            tracing::warn!(
+                prepare_ms = prepared.as_millis(),
+                total_ms = took.as_millis(),
+                "opening the database took long"
+            );
+        }
         Ok(store)
     }
 
@@ -420,7 +434,7 @@ impl SqliteStore {
         let written = export_database(&self.connection, &partial, Some(key))
             .and_then(|()| failpoint(Failpoint::Backup))
             .and_then(|()| verify_copy(&partial, &Encryption::Key(key.clone()), version))
-            .and_then(|()| std::fs::rename(&partial, &target).map_err(StorageError::Io));
+            .and_then(|()| crate::files::rename(&partial, &target).map_err(StorageError::Io));
         if let Err(error) = written {
             remove_partial_backups(&dir);
             return Err(error);
@@ -1420,9 +1434,11 @@ pub(crate) fn export_database(
     // Never attempt the export on a connection that cannot do it: refused
     // before the target is touched.
     crate::engine::check_complete(connection)?;
-    if target.exists() {
-        std::fs::remove_file(target).map_err(StorageError::Io)?;
-    }
+    // A stale copy (and its journal) from an earlier attempt.
+    crate::files::remove(target).map_err(StorageError::Io)?;
+    let mut journal = target.as_os_str().to_owned();
+    journal.push("-journal");
+    crate::files::remove(PathBuf::from(journal)).map_err(StorageError::Io)?;
     let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     let target_name = target.to_string_lossy().into_owned();
     let literal = key.map(raw_key_literal);
