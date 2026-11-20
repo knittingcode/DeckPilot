@@ -409,7 +409,7 @@ impl Driver for Gui {
         // Toolbar › Settings (a view of the main window, so it is driven
         // on every platform) › Background Agent › Stop agent.
         self.settings();
-        self.wait(&button("Appearance"));
+        self.wait(&button("Background Agent"));
         self.screenshot("11-settings");
         self.click(&button("Background Agent"));
         self.click(&button("Stop agent"));
