@@ -6,6 +6,7 @@ use std::path::Path;
 
 use deckpilot_core::Os;
 use deckpilot_core::launch::{self, LaunchError, LaunchPlan, OpenTarget};
+use deckpilot_core::paths;
 use deckpilot_module_system::support::{self, Failure};
 
 /// Highest line or column accepted.
@@ -166,7 +167,7 @@ pub fn editor_plan(
 /// A page to open in a browser: the System module's URL rules, and only
 /// `http` or `https`.
 pub fn browser_url(text: &str) -> Result<String, Failure> {
-    let url = support::web_url(text)?;
+    let url = paths::web_url(text)?;
     if url.starts_with("http://") || url.starts_with("https://") {
         Ok(url)
     } else {

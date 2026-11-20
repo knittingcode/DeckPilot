@@ -37,6 +37,7 @@ use deckpilot_plugin_manifest::Action;
 use deckpilot_plugin_supervisor::AbortSignal;
 use tracing::warn;
 
+use super::executor::resources::InvocationResources;
 use super::key_state::{Asked, KeyId, Turn};
 use super::variables::{PluginVariableSource, PublishedVariables, declarations};
 use super::worker::{EngineFailure, Invoker};
@@ -101,7 +102,9 @@ impl CatalogPlugin {
 }
 
 /// A plugin as a feature module: no capabilities (a plugin reaches
-/// nothing of DeckPilot's but through the broker), no settings, pages,
+/// nothing of DeckPilot's but through the broker; only a plugin with
+/// `resource` parameters has its handler read the profile and the
+/// bindings, to resolve them for the invocation), no settings, pages,
 /// windows or migrations. Its variables are those it declares, in its
 /// namespace (`plugins.<publisherCamel>.<nameCamel>.…`), resolved from
 /// the values it published (`variables.rs`). Enabled exactly when its
@@ -146,7 +149,14 @@ impl PluginModule {
                 description: plugin.description.clone(),
                 platforms: Vec::new(),
                 pages: Vec::new(),
-                capabilities: Vec::new(),
+                capabilities: if takes_resources(&plugin.actions) {
+                    vec![
+                        deckpilot_core::Capability::ProfileRead,
+                        deckpilot_core::Capability::MachineResources,
+                    ]
+                } else {
+                    Vec::new()
+                },
                 config: Vec::new(),
                 // Only while it runs: a plugin that cannot run (for lack
                 // of one of them, say) does not hold its dependencies.
@@ -222,17 +232,11 @@ pub(crate) fn action_type(plugin: &str, action: &Action) -> Result<ActionType, S
         .parameters
         .iter()
         .map(|parameter| {
-            // Plugin API 1.9's resource parameters (X1) reach a plugin as
-            // handles, which this agent does not issue yet (WP-A3).
-            if matches!(
-                parameter.kind,
-                deckpilot_plugin_manifest::ParameterKind::Resource { .. }
-            ) {
-                return Err(format!(
-                    "parameter `{}`: resource parameters are not implemented by this version \
-                     of DeckPilot",
-                    parameter.key
-                ));
+            // Plugin API 1.9's resource parameters (X1): a core resource
+            // parameter, which the engine resolves for the invocation and
+            // the plugin receives as a handle (`executor/resources.rs`).
+            if let deckpilot_plugin_manifest::ParameterKind::Resource { kinds } = &parameter.kind {
+                return Ok(resource_spec(parameter, kinds));
             }
             // Through `core_spec`: the kind's constraints (`maxLength`, …)
             // are camel case in the manifest and snake case in the core.
@@ -283,6 +287,46 @@ pub(crate) fn action_type(plugin: &str, action: &Action) -> Result<ActionType, S
             bindings: controls.as_sets(),
         }),
         node,
+    })
+}
+
+/// A `resource` parameter as the core's: one kind for the editor when the
+/// manifest accepts exactly one the core knows (a file is the core's
+/// `other`, so any binding is offered for it); the executor checks the
+/// declared kinds again when it issues a handle. No default.
+fn resource_spec(
+    parameter: &deckpilot_plugin_manifest::Parameter,
+    kinds: &[deckpilot_plugin_manifest::ResourceKind],
+) -> deckpilot_core::ParameterSpec {
+    use deckpilot_core::ResourceKind as Core;
+    use deckpilot_plugin_manifest::ResourceKind as Declared;
+    let kind = match kinds {
+        [Declared::Directory] => Some(Core::Directory),
+        [Declared::Application] => Some(Core::Application),
+        [Declared::DockerEnvironment] => Some(Core::DockerEnvironment),
+        _ => None,
+    };
+    deckpilot_core::ParameterSpec {
+        key: parameter.key.clone(),
+        label: parameter.label.clone(),
+        description: parameter.description.clone(),
+        kind: deckpilot_core::ParameterKind::Resource { kind },
+        required: parameter.required,
+        default: None,
+    }
+}
+
+/// Whether an action of the plugin declares a `resource` parameter: its
+/// module then reads the profile and this computer's bindings, so the
+/// engine can resolve them for the invocation (never the plugin itself).
+fn takes_resources(actions: &[Action]) -> bool {
+    actions.iter().any(|action| {
+        action.parameters.iter().any(|p| {
+            matches!(
+                p.kind,
+                deckpilot_plugin_manifest::ParameterKind::Resource { .. }
+            )
+        })
     })
 }
 
@@ -408,10 +452,20 @@ impl PluginActionHandler {
     ) -> Result<ButtonState, StateError> {
         let params =
             params(parameters).map_err(|problem| StateError::new("invalid-parameters", problem))?;
+        // Resource parameters never reach a state call (no handles
+        // there), but keys bound to different resources are different keys.
+        let references: Vec<&ParameterValue> = parameters
+            .iter()
+            .filter_map(|(_, value)| matches!(value, ParameterValue::Resource(_)).then_some(value))
+            .collect();
         let key = KeyId {
             plugin: self.plugin.clone(),
             action: self.action.clone(),
-            params: serde_json::to_string(&params).unwrap_or_default(),
+            params: if references.is_empty() {
+                serde_json::to_string(&params).unwrap_or_default()
+            } else {
+                serde_json::to_string(&(&params, references)).unwrap_or_default()
+            },
         };
         let book = self.invoker.book();
         // The plugin's keys take turns; state calls are short, so the
@@ -492,11 +546,13 @@ impl PluginActionHandler {
             Ok(params) => params,
             Err(problem) => return ActionResult::error("invalid-parameters", problem),
         };
+        let resources = InvocationResources::of(parameters, context);
         let abort = AbortSignal::new();
         let Some(answer) = self.invoker.invoke(
             self.plugin.clone(),
             self.action.clone(),
             params,
+            resources,
             run_context(context),
             abort.clone(),
         ) else {
@@ -648,10 +704,13 @@ fn run_context(context: &ExecutionContext<'_>) -> RunContext {
 }
 
 /// Resolved parameters as ABI 1 values. Plugins see texts, integers and
-/// booleans; a project parameter is the project's id.
+/// booleans; a project parameter is the project's id. A resource
+/// parameter is left out: it travels as [`InvocationResources`], and the
+/// plugin receives a handle for it (`executor/resources.rs`).
 fn params(parameters: &ActionParameters) -> Result<Params, String> {
     parameters
         .iter()
+        .filter(|(_, value)| !matches!(value, ParameterValue::Resource(_)))
         .map(|(key, value)| {
             let value = match value {
                 ParameterValue::Text(text) | ParameterValue::Choice(text) => {
@@ -987,5 +1046,51 @@ mod tests {
         assert_eq!(params["city"], ParamValue::String("berlin".into()));
         assert_eq!(text(&ParamValue::Number(21.5)), "21.5");
         assert_eq!(text(&ParamValue::List(vec![ParamValue::Integer(1)])), "[1]");
+    }
+
+    /// Plugin API 1.9 (X1): a `resource` parameter is a core resource
+    /// parameter (one kind for the editor when the manifest names exactly
+    /// one the core knows), its value never travels as a plugin value, and
+    /// only such a plugin's module reads the profile and the bindings.
+    #[test]
+    fn resource_parameters_become_core_resources_and_travel_apart() {
+        use deckpilot_core::{ResourceKind as Core, ResourceRef};
+        let mut action = sample().contributes.actions()[0].clone();
+        let declare = |kinds: serde_json::Value| -> deckpilot_plugin_manifest::Parameter {
+            serde_json::from_value(serde_json::json!({
+                "key": "repository", "label": "Repository", "required": true,
+                "kind": {"type": "resource", "kinds": kinds}
+            }))
+            .unwrap()
+        };
+        for (kinds, core) in [
+            (serde_json::json!(["directory"]), Some(Core::Directory)),
+            (serde_json::json!(["application"]), Some(Core::Application)),
+            (serde_json::json!(["file"]), None),
+            (serde_json::json!(["directory", "file"]), None),
+        ] {
+            action.parameters = vec![declare(kinds.clone())];
+            let declared = action_type("deckpilot.git", &action).unwrap();
+            let spec = &declared.parameters[0];
+            assert_eq!(
+                spec.kind,
+                deckpilot_core::ParameterKind::Resource { kind: core },
+                "{kinds}"
+            );
+            assert!(spec.required && spec.default.is_none());
+        }
+        let parameters = ActionParameters::new()
+            .with("name", ParameterValue::Text("Ada".into()))
+            .with(
+                "repository",
+                ParameterValue::Resource(ResourceRef::ProjectRole {
+                    role: "repository".into(),
+                }),
+            );
+        let values = params(&parameters).unwrap();
+        assert_eq!(values.keys().collect::<Vec<_>>(), ["name"]);
+
+        assert!(takes_resources(std::slice::from_ref(&action)));
+        assert!(!takes_resources(sample().contributes.actions()));
     }
 }

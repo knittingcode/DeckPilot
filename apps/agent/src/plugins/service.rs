@@ -26,7 +26,7 @@ use deckpilot_ipc::plugins::{
 use deckpilot_ipc::{ErrorCode, IpcError, Request, Response, plugin_answers};
 use deckpilot_plugin_abi::capability::{RunContext, RunTrigger};
 use deckpilot_plugin_abi::protocol::{Enforcement, SandboxReport};
-use deckpilot_plugin_abi::{ActionOutcome, Params};
+use deckpilot_plugin_abi::{ActionOutcome, ParamValue, Params};
 use deckpilot_plugin_broker::{
     AuditDecision, AuditRecord, AuditSink, Broker, RateLimits, SystemClock,
 };
@@ -53,6 +53,7 @@ use super::bundled::{self, Bundle};
 use super::convert;
 use super::data;
 use super::engine::CatalogPlugin;
+use super::executor::resources::InvocationResources;
 use super::executor::{DataAccess, Executor, Opener, OwnVariables, SharedData, Transport};
 use super::lane::{Done, Ended, Job, Lane, LaneEnd, LaneError, Reply, StateDone};
 use super::locales::Locales;
@@ -85,8 +86,9 @@ const INVALID_PARAMETERS: &str = "invalid-parameters";
 /// `resources`, `projectContext`, `hostViews`, `openUrl.fromParams`,
 /// `resource` parameters, the `workflows` and `projects` views, status
 /// items and dashboard cards; `docs/marketplace/module-migration.md` §7)
-/// and their capability operations, which this agent refuses as not
-/// implemented until their host side lands (WP-A3 to WP-A6).
+/// and their capability operations: `resource` parameters and
+/// `resource.resolve` are carried out, the others refused as not
+/// implemented until their host side lands (WP-A4 to WP-A6).
 /// A plugin whose manifest asks for a higher minor is `incompatible`.
 const PLUGIN_API: ApiLevel = ApiLevel::new(1, 9);
 /// Longest any invocation may take, whatever the manifest says.
@@ -426,6 +428,10 @@ struct Prepared {
     executor: Executor,
     /// The action's parameter schema, for validating the parameters.
     definition: deckpilot_core::ActionType,
+    /// The declared kinds of each `resource` parameter (plugin API 1.9).
+    resource_kinds: BTreeMap<String, Vec<deckpilot_plugin_abi::privileged::ResourceKind>>,
+    /// The active version, for the audit.
+    version: String,
 }
 
 /// Why the plugin store could not be opened.
@@ -2363,6 +2369,8 @@ impl PluginService {
         let node = declaration.node.clone().unwrap_or_default();
         let timeout = Duration::from_millis(node.timeout_ms()).min(MAX_INVOCATION);
         let outputs = super::lane::declared_outputs(&declaration);
+        let resource_kinds = super::executor::resources::declared(&declaration);
+        let version = active.manifest.version.to_string();
         let dir = self.manager.layout().resolve(&active.install_dir);
         // Notifications and dialogs are titled with the name the app shows.
         let name = self.locales.manifest(id.as_str(), active, &dir).name;
@@ -2404,6 +2412,8 @@ impl PluginService {
                 outputs,
                 executor,
                 definition,
+                resource_kinds,
+                version,
             },
         ))
     }
@@ -2435,9 +2445,14 @@ impl PluginService {
             outputs,
             executor,
             definition,
+            ..
         } = prepared;
-        // Checked against the manifest before the host sees anything.
-        let params = match data::normalize_params(&definition, &params) {
+        // Checked against the manifest before the host sees anything. A
+        // resource parameter cannot be given here (no key or workflow
+        // resolves it).
+        let params = match data::missing_resource(&definition, |_| false)
+            .map_or_else(|| data::normalize_params(&definition, &params), Err)
+        {
             Ok(params) => params,
             Err(problem) => {
                 let _ = reply.send(Ok(Response::PluginActionResult {
@@ -2487,11 +2502,16 @@ impl PluginService {
         clippy::needless_pass_by_value,
         reason = "the worker hands its message's parameters over; they are validated into new ones"
     )]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one worker message, handed over field by field"
+    )]
     pub fn invoke_for_engine(
         &mut self,
         plugin: &str,
         action: &str,
         params: Params,
+        resources: InvocationResources,
         run: RunContext,
         abort: AbortSignal,
         reply: std::sync::mpsc::SyncSender<EngineReply>,
@@ -2513,17 +2533,37 @@ impl PluginService {
             outputs,
             executor,
             definition,
+            resource_kinds,
+            version,
         } = prepared;
-        let params = match data::normalize_params(&definition, &params) {
-            Ok(params) => params,
-            Err(message) => {
-                let _ = reply.try_send(Err(EngineFailure {
-                    code: INVALID_PARAMETERS.to_owned(),
-                    message,
-                }));
-                return;
-            }
+        let mut params =
+            match data::missing_resource(&definition, |key| resources.params.contains_key(key))
+                .map_or_else(|| data::normalize_params(&definition, &params), Err)
+            {
+                Ok(params) => params,
+                Err(message) => {
+                    let _ = reply.try_send(Err(EngineFailure {
+                        code: INVALID_PARAMETERS.to_owned(),
+                        message,
+                    }));
+                    return;
+                }
+            };
+        // Resource parameters reach the plugin as handles of this
+        // invocation only (plugin API 1.9, X1); with the Projects feature
+        // off no project role resolves.
+        let resources = if self.projects_enabled() {
+            resources
+        } else {
+            resources.without_projects()
         };
+        let (executor, handles) =
+            executor.with_resources(record.id.as_str(), &version, resource_kinds, resources);
+        params.extend(
+            handles
+                .into_iter()
+                .map(|(key, handle)| (key, ParamValue::String(handle))),
+        );
         let id = record.id.to_string();
         let name = action.to_owned();
         let done: Done = Box::new(move |result| {
@@ -2548,6 +2588,14 @@ impl PluginService {
             }),
             Err(e) => done(Err(LaneError::Refused(e))),
         }
+    }
+
+    /// Whether the Projects feature is on (the built-in `projects`
+    /// module, enabled): only then do plugins' project roles resolve.
+    fn projects_enabled(&self) -> bool {
+        self.builtins
+            .get("projects")
+            .is_some_and(|module| module.enabled && module.supported)
     }
 
     /// The state of a key bound to a plugin action, for the engine's live

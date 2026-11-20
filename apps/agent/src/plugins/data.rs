@@ -113,11 +113,26 @@ fn normalize(
 /// schema before anything is sent to the host: unknown parameters, wrong
 /// types, values out of range, choices not offered and missing required
 /// parameters are refused, and defaults are filled in.
+///
+/// Resource parameters (plugin API 1.9) are not values: the engine
+/// resolves them and the plugin receives handles
+/// (`executor/resources.rs`), so they are left out here, and a value
+/// given for one is refused as unknown ([`missing_resource`] checks the
+/// required ones).
 pub fn normalize_params(definition: &ActionType, params: &Params) -> Result<Params, String> {
     let values: BTreeMap<String, Value> = params
         .iter()
         .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap_or(Value::Null)))
         .collect();
+    let without_resources;
+    let definition = if definition.parameters.iter().any(is_resource) {
+        let mut schema = definition.clone();
+        schema.parameters.retain(|spec| !is_resource(spec));
+        without_resources = schema;
+        &without_resources
+    } else {
+        definition
+    };
     let normalized = normalize(definition, &values).map_err(|problems| {
         format!(
             "the parameters of {} do not match its declaration: {}",
@@ -133,6 +148,26 @@ pub fn normalize_params(definition: &ActionType, params: &Params) -> Result<Para
                 .ok_or_else(|| format!("parameter `{key}` is not a value a plugin can receive"))
         })
         .collect()
+}
+
+fn is_resource(spec: &ParameterSpec) -> bool {
+    matches!(spec.kind, ParameterKind::Resource { .. })
+}
+
+/// The first required resource parameter of `definition` for which
+/// `present` says the invocation has no value, as the problem to report.
+pub fn missing_resource(definition: &ActionType, present: impl Fn(&str) -> bool) -> Option<String> {
+    definition
+        .parameters
+        .iter()
+        .find(|spec| is_resource(spec) && spec.required && !present(&spec.key))
+        .map(|spec| {
+            format!(
+                "the parameters of {} do not match its declaration: the resource `{}` must be \
+                 set on a key or in a workflow",
+                definition.id, spec.key
+            )
+        })
 }
 
 // ------------------------------------------------------------- settings
@@ -419,6 +454,39 @@ mod tests {
 
     fn params(json: Value) -> Params {
         serde_json::from_value(json).unwrap()
+    }
+
+    /// Resource parameters (plugin API 1.9) are not values: they are left
+    /// out of the check, a value given for one is refused, and a required
+    /// one must come from the key or workflow.
+    #[test]
+    fn resource_parameters_are_not_values() {
+        let mut definition = greet();
+        definition.parameters.push(ParameterSpec {
+            key: "repository".into(),
+            label: "Repository".into(),
+            description: None,
+            kind: ParameterKind::Resource { kind: None },
+            required: true,
+            default: None,
+        });
+        let ok =
+            normalize_params(&definition, &params(serde_json::json!({"name": "Ada"}))).unwrap();
+        assert!(!ok.contains_key("repository"));
+        assert!(
+            normalize_params(
+                &definition,
+                &params(serde_json::json!({"name": "Ada", "repository": "/etc"}))
+            )
+            .is_err()
+        );
+        let missing = missing_resource(&definition, |_| false).unwrap();
+        assert!(missing.contains("`repository`"), "{missing}");
+        assert_eq!(
+            missing_resource(&definition, |key| key == "repository"),
+            None
+        );
+        assert_eq!(missing_resource(&greet(), |_| false), None);
     }
 
     #[test]

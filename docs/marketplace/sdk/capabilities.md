@@ -433,10 +433,15 @@ for every other plugin they are denied. They need
 `"engines": { "pluginApi": "^1.9" }` (`PRIVILEGED_API_LEVEL` in the SDK).
 
 **Status: the ABI, the SDK and the broker's decisions are in place; the
-agent does not carry the operations out yet.** An allowed call is answered
-`unsupported-op` ("… is not implemented by this version of DeckPilot",
-`CapabilityErrorKind::Unsupported`) until the host side lands (WP-A3 to
-WP-A6 of the extraction).
+agent carries out `resource` parameters and `resource.resolve`.** Every
+other allowed call is answered `unsupported-op` ("… is not implemented by
+this version of DeckPilot", `CapabilityErrorKind::Unsupported`) until its
+host side lands (WP-A4 to WP-A6 of the extraction). A refused
+`resource.resolve` starts its message with the reason code:
+`no-active-project` (`unavailable`; also with the Projects feature off),
+`resource-not-set` (`unavailable`), `resource-unbound`,
+`resource-role-missing`, `not-found` (`failed`), `resource-kind-mismatch`
+and `not-permitted` (`not-permitted`), `throttled`.
 
 | Operation | `Context` | Needs | Run origin | Rate |
 | --- | --- | --- | --- | --- |
@@ -451,7 +456,14 @@ WP-A6 of the extraction).
 - A resource **handle** is 128 random bits (32 lowercase hex characters),
   bound to the plugin and the invocation; the guest never receives a path
   (unless `resources:paths`). A `resource` parameter of an action reaches
-  the guest as such a handle.
+  the guest as such a handle (a string parameter value) when it resolved to
+  a binding of one of its declared kinds; otherwise it is absent and
+  `resource.resolve {param}` says why. The label is the binding's key. A
+  binding of kind `directory`, `application` or `dockerEnvironment` is that
+  kind; one of kind `other` whose value is an absolute path is a `file`. A
+  `directory` or `file` must exist. A role resolves in the run's project,
+  or with `projectId` in a project the action's own project parameter
+  names.
 - `tool.run` takes an **argument array**, never a shell string, starting
   with the subcommand (an array that starts with an option is refused,
   `NoSubcommand`). The working directory is a handle. The executable, the

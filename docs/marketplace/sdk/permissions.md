@@ -106,8 +106,9 @@ in general, a shell, the file system, the workflows engine and plugin UI
 stay never grantable for every publisher.
 
 **Status:** the manifest, the grants, the ABI, the SDK and the broker are
-in place; the agent answers the operations as not implemented until their
-host side lands (WP-A3 to WP-A6).
+in place; the agent carries out `resource` parameters and
+`resource.resolve`, and answers the other operations as not implemented
+until their host side lands (WP-A4 to WP-A6).
 
 | Kind | Fields | Grant keys and tiers | Allows |
 | --- | --- | --- | --- |

@@ -705,8 +705,8 @@ fn origin_of(host: &str) -> Option<String> {
 /// plugin (granted ∩ declared). Kinds the broker does not decide
 /// (variables, background, `device:icons`, `hostViews`) are not passed;
 /// their capabilities do not exist in ABI 1. Plugin API 1.9's kinds and
-/// the profile read are passed, and the executor refuses their operations
-/// as not implemented until their host side lands. An
+/// the profile read are passed; the executor carries out what has landed
+/// (`executor/`) and refuses the rest as not implemented. An
 /// `openUrl` grant is passed per exact host, like `network`; a wildcard
 /// host is not (the broker opens exact origins only).
 pub fn approved(effective: &[(GrantKey, GrantScope)]) -> (ApprovedPermissions, Vec<String>) {
@@ -801,9 +801,8 @@ pub fn approved_with(
 /// plugins only, which the manifest rules and the store guarantee) and of
 /// the `profile` read: one per tool with its sub-grants, one for the
 /// resources, one for the project context. A sub-grant whose tool grant
-/// was revoked gives nothing. The agent does not carry these operations
-/// out yet (`executor.rs`), so a call the broker allows is answered as
-/// not implemented.
+/// was revoked gives nothing. The executor carries the operations out
+/// (`executor/`), answering those not landed yet as not implemented.
 fn privileged(effective: &[(GrantKey, GrantScope)]) -> Vec<ApprovedPermission> {
     use deckpilot_plugin_abi::privileged::Tool;
     use deckpilot_plugin_broker::ProfileScope;

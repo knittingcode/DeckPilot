@@ -194,8 +194,11 @@ released either. 0.6.0 is the first version intended for publication.
   `openUrl.fromParams`, `resource` parameters and the `workflows` and
   `projects` views, with their grant tiers, capability operations, broker
   checks and SDK calls. Only plugins shipped inside the app can declare
-  them; third-party and registry packages are refused. The agent does not
-  carry the operations out yet and answers them as not implemented.
+  them; third-party and registry packages are refused. The agent carries
+  out `resource` parameters and `resource.resolve` (opaque handles bound to
+  one invocation and plugin, labels only, the declared kinds only, project
+  roles only with an active project and Projects on, audited) and answers
+  the other operations as not implemented.
 
 ### Changed
 

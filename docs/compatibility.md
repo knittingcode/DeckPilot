@@ -103,8 +103,9 @@ capability operations `resource.resolve`, `resource.open`, `tool.run`,
 `url.openParam`, `project.current`, `project.list`, `project.select`,
 `project.cycle` and `profile.read` are compatible additions within ABI 1
 (a guest that does not use them never sends them; an older agent refuses
-them as unknown). This agent reports plugin API 1.9 and answers those
-operations as not implemented until their host side lands; an agent of 1.8
+them as unknown). This agent reports plugin API 1.9, carries out `resource`
+parameters and `resource.resolve`, and answers the other operations as not
+implemented until their host side lands; an agent of 1.8
 reports a `^1.9` version `incompatible`. The SDK's `LATEST_API_LEVEL` is
 1.9. An older app ignores a navigation entry of an unknown view kind. No
 IPC protocol or document change.

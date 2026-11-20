@@ -71,6 +71,13 @@
 //!   as too many or from https to http, likewise. The kind is a closed
 //!   name, never text of the request; the host passes it on only to
 //!   guests that read it.
+//! * Plugin API 1.9 (`docs/marketplace/module-migration.md` §7), one file
+//!   each: resource handles and `resource.resolve` (`resources.rs`: opaque
+//!   per-invocation handles, never a path without `resources:paths`),
+//!   `tool.run` (`tools.rs`), `resource.open` and `url.openParam`
+//!   (`open.rs`), the project context and `profile.read` (`project.rs`).
+//!   What is not carried out yet is answered `unsupported-op`. Every call
+//!   is audited ([`PrivilegedRecord`]).
 //! * Response headers: only the ABI's allowlist
 //!   ([`RESPONSE_HEADERS`](deckpilot_plugin_abi::capability::RESPONSE_HEADERS):
 //!   caching, pagination and rate-limit headers, never `set-cookie` or an
@@ -100,6 +107,11 @@ use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
 use super::variables::{PublishedVariables, typed};
+
+mod open;
+mod project;
+pub(super) mod resources;
+mod tools;
 
 /// The plugin data connection the executors share; `None` once the store
 /// is closed (configuration locked).
@@ -566,6 +578,95 @@ pub(super) struct Executor {
     /// 1.6); without them the language is English and every key falls
     /// back.
     translator: Option<super::locales::Translator>,
+    /// The invocation's resource handles (plugin API 1.9,
+    /// `resources.rs`); empty until [`Executor::with_resources`].
+    handles: std::sync::Mutex<resources::HandleTable>,
+    /// Where the records of plugin API 1.9's operations go; the agent's
+    /// log by default.
+    audit: PrivilegedAudit,
+}
+
+/// One audit record of a plugin API 1.9 operation the executor carried
+/// out or refused (`docs/marketplace/module-migration.md` §7, common rule
+/// 5): never a secret, an environment value, an output body or a path; a
+/// binding appears only as its label.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PrivilegedRecord {
+    pub plugin: String,
+    pub op: &'static str,
+    /// The grant key the operation used.
+    pub grant: &'static str,
+    /// `None`: carried out; otherwise the reason code it was refused with.
+    pub outcome: Option<&'static str>,
+    pub elapsed: std::time::Duration,
+    /// What the operation names, by label (`role`, `kind`, `label`…).
+    pub details: Vec<(&'static str, String)>,
+}
+
+/// A [`PrivilegedRecord`] with what the executor adds: the plugin's
+/// version and the run's origin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PrivilegedEntry {
+    pub record: PrivilegedRecord,
+    pub version: String,
+    pub origin: String,
+}
+
+/// Where [`PrivilegedEntry`] records go.
+pub(super) type PrivilegedAudit = Arc<dyn Fn(&PrivilegedEntry) + Send + Sync>;
+
+/// The default [`PrivilegedAudit`]: the agent's log.
+fn log_privileged(entry: &PrivilegedEntry) {
+    let PrivilegedEntry {
+        record,
+        version,
+        origin,
+    } = entry;
+    let details = record
+        .details
+        .iter()
+        .map(|(name, value)| format!("{name}={value:?}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let elapsed_ms = u64::try_from(record.elapsed.as_millis()).unwrap_or(u64::MAX);
+    match record.outcome {
+        None => info!(
+            plugin = record.plugin,
+            version,
+            op = record.op,
+            grant = record.grant,
+            origin,
+            elapsed_ms,
+            details,
+            "plugin operation carried out"
+        ),
+        Some(reason) => info!(
+            plugin = record.plugin,
+            version,
+            op = record.op,
+            grant = record.grant,
+            origin,
+            elapsed_ms,
+            details,
+            reason,
+            "plugin operation refused"
+        ),
+    }
+}
+
+/// The run's origin as the audit names it: `key`, `workflow/user`….
+fn origin_name(run: &RunContext) -> String {
+    let name = |value: serde_json::Result<Value>| {
+        value
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "other".into())
+    };
+    let trigger = name(serde_json::to_value(run.trigger));
+    match run.cause {
+        Some(cause) => format!("{trigger}/{}", name(serde_json::to_value(cause))),
+        None => trigger,
+    }
 }
 
 impl std::fmt::Debug for Executor {
@@ -598,7 +699,26 @@ impl Executor {
             run: RunContext::unknown(),
             dialogs: None,
             translator: None,
+            handles: resources::table(),
+            audit: Arc::new(log_privileged),
         }
+    }
+
+    /// Records of plugin API 1.9's operations go to `audit`.
+    #[cfg(test)]
+    pub fn with_audit(mut self, audit: PrivilegedAudit) -> Self {
+        self.audit = audit;
+        self
+    }
+
+    /// Writes the audit record of a plugin API 1.9 operation.
+    fn audit_privileged(&self, record: &PrivilegedRecord) {
+        let version = self.handles().version().to_owned();
+        (self.audit)(&PrivilegedEntry {
+            record: record.clone(),
+            version,
+            origin: origin_name(&self.run),
+        });
     }
 
     /// `locale.get` and `locale.translate` answer from `translator`, and
@@ -1235,19 +1355,7 @@ fn rank(severity: Severity) -> u8 {
 
 /// The answer to a plugin API 1.9 operation this agent does not carry out
 /// yet: `unsupported-op`, which the SDKs report as unsupported.
-fn not_implemented(allowed: &Allowed) -> CallResult {
-    let op = match allowed {
-        Allowed::ResourceResolve { .. } => "resource.resolve",
-        Allowed::ResourceOpen { .. } => "resource.open",
-        Allowed::ToolRun { .. } => "tool.run",
-        Allowed::OpenUrlParam { .. } => "url.openParam",
-        Allowed::ProjectCurrent => "project.current",
-        Allowed::ProjectList => "project.list",
-        Allowed::ProjectSelect { .. } => "project.select",
-        Allowed::ProjectCycle { .. } => "project.cycle",
-        Allowed::ProfileRead { .. } => "profile.read",
-        _ => "this operation",
-    };
+fn not_implemented(op: &str) -> CallResult {
     CallResult::error(
         CallErrorCode::UnsupportedOp,
         format!("{op} is not implemented by this version of DeckPilot"),
@@ -1351,18 +1459,21 @@ impl Executor {
             Allowed::LocaleGet => self.locale(plugin),
             Allowed::LocaleTranslate { request } => self.translate(plugin, request),
             // Plugin API 1.9 (`docs/marketplace/module-migration.md` §7):
-            // the broker decides them, the host side lands with WP-A3 to
-            // WP-A6. Until then each is refused as not implemented, before
-            // anything is resolved, run or opened.
-            Allowed::ResourceResolve { .. }
-            | Allowed::ResourceOpen { .. }
-            | Allowed::ToolRun { .. }
-            | Allowed::OpenUrlParam { .. }
-            | Allowed::ProjectCurrent
+            // the broker decides them; each is carried out in its own
+            // file (`resources.rs`, `tools.rs`, `open.rs`, `project.rs`).
+            Allowed::ResourceResolve { request, paths } => {
+                self.resolve_resource(plugin, request, *paths)
+            }
+            Allowed::ToolRun { request, access } => {
+                self.run_tool(plugin, request, *access, interrupt)
+            }
+            Allowed::ResourceOpen { request } => self.open_resource(plugin, request),
+            Allowed::OpenUrlParam { request } => self.open_url_param(plugin, request),
+            Allowed::ProjectCurrent
             | Allowed::ProjectList
             | Allowed::ProjectSelect { .. }
             | Allowed::ProjectCycle { .. }
-            | Allowed::ProfileRead { .. } => not_implemented(allowed),
+            | Allowed::ProfileRead { .. } => self.project(plugin, allowed),
             Allowed::TimeNow => super::ambient::now(),
             Allowed::RandomBytes { length } => super::ambient::random(*length),
             Allowed::RunContext(context) => serde_json::to_value(context).map_or_else(
@@ -2569,8 +2680,9 @@ mod dialog_tests {
     }
 
     /// Plugin API 1.9's operations: the broker allows them with the
-    /// grants, and this agent refuses each as not implemented (WP-A3 to
-    /// WP-A6 carry them out), so nothing is resolved, run or opened.
+    /// grants, and this agent refuses each but `resource.resolve`
+    /// (`resources.rs`) as not implemented (WP-A4 to WP-A6 carry them
+    /// out), so nothing is run or opened.
     #[test]
     fn privileged_operations_are_refused_as_not_implemented() {
         let fixture = fixture(
@@ -2582,7 +2694,6 @@ mod dialog_tests {
         let handle = "0123456789abcdef0123456789abcdef";
         let interrupt = CallInterrupt::new(None, Instant::now() + Duration::from_secs(60));
         for op in [
-            json!({"op": "resource.resolve", "args": {"role": "repository", "kinds": ["directory"]}}),
             json!({"op": "resource.open", "args": {"handle": handle}}),
             json!({"op": "tool.run", "args": {"tool": "git", "args": ["status"], "cwd": handle}}),
             json!({"op": "tool.run", "args": {"tool": "docker", "args": ["compose", "up"], "cwd": handle}}),

@@ -30,6 +30,7 @@ pub mod layout;
 pub mod module;
 pub mod notify;
 pub mod pages;
+pub mod paths;
 pub mod platform;
 pub mod process;
 pub mod profile;

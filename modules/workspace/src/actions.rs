@@ -5,13 +5,14 @@ use std::sync::Arc;
 
 use deckpilot_core::graph::{ActionEffect, NodeSpec, OutputSpec, ValueKind};
 use deckpilot_core::launch::{self, LaunchPlan, Launcher, OpenTarget};
+use deckpilot_core::paths;
 use deckpilot_core::{
     ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, Capability,
     ExecutionContext, Os, ParameterKind, ParameterSpec, ParameterValue, Profile, ResolveError,
     ResourceKind, ResourceRef,
 };
 use deckpilot_module_system::codes as system_codes;
-use deckpilot_module_system::support::{self, Failure, fail};
+use deckpilot_module_system::support::{Failure, fail};
 
 use crate::codes;
 use crate::editor::{self, EDITORS, Editor, MAX_POSITION, Position};
@@ -353,7 +354,7 @@ impl ActionHandler for WorkspaceAction {
         let mut problems = Vec::new();
         if let Some(path) = optional(parameters, "path")
             && !path.contains("{{")
-            && let Err(failure) = support::join_inside("/", Some(path))
+            && let Err(failure) = paths::join_inside("/", Some(path))
         {
             problems.push(failure.message);
         }
@@ -394,26 +395,26 @@ impl WorkspaceAction {
         context: &ExecutionContext<'_>,
     ) -> Result<ActionResult, Failure> {
         let position = Position::new(parameters.integer("line"), parameters.integer("column"))?;
-        let application = support::resolve(
+        let application = paths::resolve(
             context,
             parameters.resource("application"),
             Some(ResourceKind::Application),
             "editor",
         )?;
         if application.contains(['/', '\\']) {
-            support::existing(application.clone().into(), false)?;
+            paths::existing(application.clone().into(), false)?;
         }
         let repository = ResourceRef::ProjectRole {
             role: REPOSITORY_ROLE.into(),
         };
-        let base = support::resolve(
+        let base = paths::resolve(
             context,
             Some(parameters.resource("location").unwrap_or(&repository)),
             Some(ResourceKind::Directory),
             "folder",
         )?;
         let relative = optional(parameters, "path");
-        let path = support::existing_inside(&base, relative, relative.is_none())?;
+        let path = paths::existing_inside(&base, relative, relative.is_none())?;
         if position.is_some() && path.is_dir() {
             return Err(fail(
                 codes::INVALID_POSITION,
@@ -440,7 +441,7 @@ impl WorkspaceAction {
         parameters
             .resource("browser")
             .map(|reference| {
-                support::resolve(
+                paths::resolve(
                     context,
                     Some(reference),
                     Some(ResourceKind::Application),
@@ -542,7 +543,7 @@ impl WorkspaceAction {
                             format!("{editor_role} is not an application"),
                         ))
                     } else {
-                        support::existing(PathBuf::from(&folder.value), true).and_then(|path| {
+                        paths::existing(PathBuf::from(&folder.value), true).and_then(|path| {
                             let editor =
                                 Editor::parse(parameters.text("editor").unwrap_or("other"));
                             editor::editor_plan(os, editor, &application.value, &path, None)
@@ -558,10 +559,9 @@ impl WorkspaceAction {
             match find(role)? {
                 Found::Missing(why) => missing.push(format!("{role}: {why}")),
                 Found::Value(docs) if docs.kind == ResourceKind::Directory => {
-                    let plan =
-                        support::existing(PathBuf::from(&docs.value), true).and_then(|path| {
-                            launch::plan(os, &OpenTarget::Path(path)).map_err(|e| launch_error(&e))
-                        });
+                    let plan = paths::existing(PathBuf::from(&docs.value), true).and_then(|path| {
+                        launch::plan(os, &OpenTarget::Path(path)).map_err(|e| launch_error(&e))
+                    });
                     attempt(role, plan, &mut missing);
                 }
                 Found::Value(docs) => attempt(

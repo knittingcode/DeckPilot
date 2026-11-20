@@ -28,6 +28,7 @@ use tracing::{info, warn};
 
 use super::PluginSettings;
 use super::engine::CatalogPlugin;
+use super::executor::resources::InvocationResources;
 use super::lane::LaneEnd;
 use super::migration::LegacySnapshot;
 use super::service::{PluginService, closed_status, open_problem, store_unavailable};
@@ -76,6 +77,9 @@ pub(super) enum Message {
         plugin: String,
         action: String,
         params: Params,
+        /// The bindings of its `resource` parameters and the run's
+        /// project roles (plugin API 1.9).
+        resources: Box<InvocationResources>,
         /// What started the run (G8).
         run: RunContext,
         abort: AbortSignal,
@@ -114,6 +118,7 @@ impl Invoker {
         plugin: String,
         action: String,
         params: Params,
+        resources: InvocationResources,
         run: RunContext,
         abort: AbortSignal,
     ) -> Option<Receiver<EngineReply>> {
@@ -123,6 +128,7 @@ impl Invoker {
                 plugin,
                 action,
                 params,
+                resources: Box::new(resources),
                 run,
                 abort,
                 reply,
@@ -324,12 +330,14 @@ impl State {
                 plugin,
                 action,
                 params,
+                resources,
                 run,
                 abort,
                 reply,
             } => {
                 if let Some(service) = &mut self.service {
-                    service.invoke_for_engine(&plugin, &action, params, run, abort, reply);
+                    service
+                        .invoke_for_engine(&plugin, &action, params, *resources, run, abort, reply);
                 } else {
                     let error = self.unavailable();
                     let _ = reply.try_send(Err(EngineFailure {
