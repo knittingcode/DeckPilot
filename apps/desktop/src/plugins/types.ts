@@ -342,6 +342,12 @@ export interface KnownPlugin {
   installed: boolean
   firstSeenAt: number
   lastSeenAt: number
+  /**
+   * A plugin bundled with DeckPilot that the user removed and the agent can
+   * install again from its application bundle (`restoreBundledPlugin`,
+   * agent feature `restoreBundled`); absent from older agents.
+   */
+  restorable?: boolean
 }
 
 /** One declared setting (`contributes.settings.fields`). */
@@ -520,6 +526,77 @@ export type PluginEvent =
   | { type: "changed"; plugin: string; state?: PluginState }
   /** A module migration moved; `listModuleMigrations` has the details. */
   | { type: "migrationChanged"; module: string; plugin: string; phase: MigrationPhase }
+  /** A plugin asks for a dialog (plugin API 1.5; main window only). */
+  | { type: "dialogOpened"; dialog: PluginDialog }
+  /** The agent took a plugin dialog down; it is not answered. */
+  | { type: "dialogClosed"; dialog: string; plugin: string; reason: PluginDialogCloseReason }
+
+// ---- Plugin dialogs (plugin API 1.5, docs/dialogs.md) ----
+//
+// `deckpilot_ipc::plugin_dialogs`: declarative data the agent validated.
+// Every text is plain text and is rendered as text, never as markup.
+
+/** A dialog a plugin asks the app to show. */
+export interface PluginDialog {
+  /** Random, issued by the agent. */
+  id: string
+  plugin: string
+  /** From the installed manifest: who asks, always shown. */
+  pluginName: string
+  spec: PluginDialogSpec
+}
+
+export type PluginDialogType = "confirm" | "alert" | "form" | "selection"
+
+export interface PluginDialogSpec {
+  type: PluginDialogType
+  title: string
+  message?: string
+  /** `form` only. */
+  fields?: PluginDialogField[]
+  /** `selection` only. */
+  options?: PluginDialogOption[]
+  confirmLabel?: string
+  cancelLabel?: string
+  /** `confirm` only. */
+  destructive?: boolean
+  timeoutSeconds: number
+}
+
+export type PluginDialogFieldKind = "text" | "integer" | "boolean" | "choice" | "lines"
+
+export interface PluginDialogField {
+  id: string
+  kind: PluginDialogFieldKind
+  label: string
+  description?: string
+  required?: boolean
+  default?: string | number | boolean | string[]
+  /** `text`; 2,000 when absent. */
+  maxLength?: number
+  /** `text`. */
+  multiline?: boolean
+  /** `integer`. */
+  min?: number
+  max?: number
+  /** `choice`. */
+  options?: { value: string; label: string }[]
+}
+
+export interface PluginDialogOption {
+  id: string
+  label: string
+  description?: string
+}
+
+/** A value of a form field: text and choices are strings, `lines` a list. */
+export type PluginDialogValue = string | number | boolean | string[]
+
+export type PluginDialogAnswer =
+  | { outcome: "confirmed"; values?: Record<string, PluginDialogValue>; selected?: string }
+  | { outcome: "cancelled"; reason: "user" | "appClosed" }
+
+export type PluginDialogCloseReason = "timeout" | "pluginStopped" | "appClosed" | "answered"
 
 // ---- Module migrations (docs/marketplace/module-migration.md §5.5-5.7) ----
 
@@ -648,6 +725,12 @@ export interface MarketplaceSnapshot {
 
 /** The agent feature of dependency plans (`feature::DEPENDENCIES`). */
 export const DEPENDENCIES_FEATURE = "dependencies"
+
+/**
+ * The agent feature of restoring bundled plugins (`feature::RESTORE_BUNDLED`,
+ * protocol 15): `restoreBundledPlugin` and `KnownPlugin.restorable`.
+ */
+export const RESTORE_BUNDLED_FEATURE = "restoreBundled"
 
 /** A dependency's state on this computer. */
 export type DependencyState = "satisfied" | "disabled" | "wrongVersion" | "missing" | "unusable"

@@ -314,7 +314,7 @@ describe("the Switch layout inspector", { timeout: 20_000 }, () => {
     expect(panel).toHaveTextContent("Shows: Teams")
     expect(panel).toHaveTextContent("Only layouts for Stream Deck MK.2 assigned to this profile.")
     // Without a label, the key shows the layout's name.
-    expect(screen.getByRole("textbox", { name: /^Label for/ })).toHaveAttribute(
+    expect(screen.getByRole("textbox", { name: "Key title" })).toHaveAttribute(
       "placeholder",
       "Teams",
     )

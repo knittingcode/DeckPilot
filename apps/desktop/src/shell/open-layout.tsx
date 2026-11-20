@@ -2,6 +2,7 @@ import { useCallback, useContext, useState } from "react"
 import { toast } from "sonner"
 
 import { ConfirmDialog } from "@/components/confirm-dialog"
+import { useTranslation } from "@/i18n"
 import { api } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
 import { failureDetail } from "@/lib/failure"
@@ -37,6 +38,7 @@ export type OpenableLayout = Pick<SharedLayoutSummary, "id" | "name" | "model" |
  * has unsaved changes.
  */
 export function useOpenLayout() {
+  const { t } = useTranslation()
   const { editingProfileId, navigate, profiles, refresh } = useAppContext()
   const selection = useContext(EditorSelectionContext)
   const [pending, setPending] = useState<OpenableLayout | null>(null)
@@ -66,8 +68,26 @@ export function useOpenLayout() {
     [editingProfileId, show],
   )
 
-  const editingName =
-    profiles.profiles.find((p) => p.id === editingProfileId)?.name ?? "this profile"
+  const profileName = profiles.profiles.find((p) => p.id === editingProfileId)?.name
+  // The sentences name the profile being edited; without a name, "this profile".
+  const sentence = {
+    title: (layout: string) =>
+      profileName === undefined
+        ? t("layouts:open.titleThisProfile", { layout })
+        : t("layouts:open.title", { layout, profile: profileName }),
+    description:
+      profileName === undefined
+        ? t("layouts:open.descriptionThisProfile")
+        : t("layouts:open.description", { profile: profileName }),
+    confirm:
+      profileName === undefined
+        ? t("layouts:open.confirmThisProfile")
+        : t("layouts:open.confirm", { profile: profileName }),
+    failed: (layout: string) =>
+      profileName === undefined
+        ? t("layouts:open.failedThisProfile", { layout })
+        : t("layouts:open.failed", { layout, profile: profileName }),
+  }
   const assignAndOpen = () => {
     const layout = pending
     setPending(null)
@@ -81,7 +101,7 @@ export function useOpenLayout() {
             profiles: [
               {
                 profileId: editingProfileId,
-                profileName: editingName,
+                profileName: profileName ?? "",
                 position: 0,
                 isDefault: false,
               },
@@ -91,7 +111,7 @@ export function useOpenLayout() {
         )
       },
       (e: unknown) => {
-        toast.error(`“${layout.name}” was not added to ${editingName}`, {
+        toast.error(sentence.failed(layout.name), {
           description: failureDetail(e),
         })
       },
@@ -104,9 +124,9 @@ export function useOpenLayout() {
       onOpenChange={(next) => {
         if (!next) setPending(null)
       }}
-      title={`Use “${pending?.name ?? ""}” in ${editingName}?`}
-      description={`No profile uses this layout yet. It is added to the layouts of ${editingName} and opens in the Device Editor.`}
-      confirmLabel={`Use in ${editingName}`}
+      title={sentence.title(pending?.name ?? "")}
+      description={sentence.description}
+      confirmLabel={sentence.confirm}
       destructive={false}
       onConfirm={assignAndOpen}
     />

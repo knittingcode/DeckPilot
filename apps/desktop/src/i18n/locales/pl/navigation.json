@@ -1,0 +1,62 @@
+{
+  "toolbar": {
+    "label": "Pasek narzędzi",
+    "location": "Lokalizacja",
+    "pageActions": "Działania strony",
+    "moreActions": "Więcej działań",
+    "progress": "Postęp",
+    "app": "Aplikacja",
+    "marketplace": "Marketplace",
+    "settings": "Ustawienia",
+    "settingsUpdate": "Ustawienia, dostępna jest aktualizacja",
+    "withShortcut": "{{label}} ({{shortcut}})"
+  },
+  "rail": {
+    "label": "Obszar roboczy",
+    "workspace": "Obszar roboczy",
+    "configure": "Konfiguracja"
+  },
+  "pages": {
+    "designer": "Edytor urządzenia",
+    "layouts": "Układy",
+    "dashboard": "Pulpit",
+    "actions": "Biblioteka akcji",
+    "workflows": "Przepływy pracy"
+  },
+  "statusBar": {
+    "label": "Pasek stanu",
+    "more": "Więcej informacji o stanie"
+  },
+  "device": {
+    "choose": "Wybierz urządzenie",
+    "placeholder": "Urządzenie",
+    "selectorConnected": "Urządzenie: {{device}}, podłączone",
+    "selectorNotConnected": "Urządzenie: {{device}}, niepodłączone",
+    "connectedGroup": "Podłączone urządzenia",
+    "connected": "Podłączone",
+    "modelsGroup": "Modele urządzeń",
+    "otherModels": "Inne modele",
+    "models": "Modele",
+    "noModels": "Brak modeli urządzeń",
+    "optionConnected": "Podłączone · {{serial}}",
+    "optionNotInCatalog": "Podłączone · {{serial}} · brak w katalogu urządzeń",
+    "optionNotConnected": "Niepodłączone"
+  },
+  "profile": {
+    "choose": "Wybierz profil do edycji",
+    "selector": "Profil: {{profile}}",
+    "selectorActive": "Profil: {{profile}}, aktywny na urządzeniu",
+    "none": "Brak profilu",
+    "edit": "Edytuj profil",
+    "noProfiles": "Nie ma jeszcze profili",
+    "onDevice": "na urządzeniu",
+    "manage": "Zarządzaj profilami…"
+  },
+  "plugins": {
+    "label": "Wtyczki",
+    "more": "Więcej widoków wtyczek",
+    "moveLeft": "Przesuń w lewo",
+    "moveRight": "Przesuń w prawo",
+    "moveToToolbar": "Przenieś na pasek narzędzi"
+  }
+}

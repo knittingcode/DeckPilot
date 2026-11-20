@@ -2,7 +2,14 @@ import { useEffect, useState } from "react"
 
 import { api } from "@/lib/api"
 import { controlKey } from "@/lib/layout-model"
-import type { ControlFace, DeviceLayout, KeyFace, LivePreview } from "@/lib/types"
+import type {
+  ControlFace,
+  ControlNavigation,
+  DeviceLayout,
+  KeyFace,
+  LivePreview,
+  TextLayoutReport,
+} from "@/lib/types"
 
 /**
  * Faces and key images exactly as the agent would render them (with
@@ -17,6 +24,10 @@ import type { ControlFace, DeviceLayout, KeyFace, LivePreview } from "@/lib/type
  * CSS width times the display's pixel ratio): the renderer draws the
  * images at that size, so they are not scaled up from the device's own
  * 72 pixels or so and stay sharp. `null`: the device's size.
+ *
+ * `reports` says how each key's title comes out on the device (measured at
+ * the device's own size, docs/key-text.md): whether it fits, at which size,
+ * whether it scrolls.
  */
 export function usePreviewFaces(
   profileId: string,
@@ -32,6 +43,13 @@ export function usePreviewFaces(
     images: new Map<string, string>(),
     /** Bindings kept although they cannot run from their control. */
     incompatible: new Map<string, NonNullable<ControlFace["incompatible"]>>(),
+    reports: new Map<string, TextLayoutReport>(),
+    /**
+     * What each control does to the editor's view, as the agent resolves
+     * it (docs/editor-navigation-and-simulation.md): its only source for
+     * the automatic Back key, which is not a binding.
+     */
+    navigation: new Map<string, ControlNavigation>(),
   })
   useEffect(() => {
     let cancelled = false
@@ -47,6 +65,14 @@ export function usePreviewFaces(
             incompatible: new Map(
               result.flatMap((r) =>
                 r.incompatible?.length ? [[controlKey(r.control), r.incompatible] as const] : [],
+              ),
+            ),
+            reports: new Map(
+              result.flatMap((r) => (r.text ? [[controlKey(r.control), r.text] as const] : [])),
+            ),
+            navigation: new Map(
+              result.flatMap((r) =>
+                r.navigation ? [[controlKey(r.control), r.navigation] as const] : [],
               ),
             ),
           })

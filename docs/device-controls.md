@@ -265,12 +265,21 @@ stays the authority.
   control shows `data-drop="rejected"` with a red outline, the reason is
   in a toast and announced (dnd-kit announcements and a live region). A
   compatible drop picks the first free trigger the action can run from.
-- **Inspector.** Each trigger's choices disable actions incompatible with
-  it ("(not on this control)"), from the reason variants: "Does not react
-  to double click on a dial. On a dial it reacts to press, turn right, turn
-  left and click." (`inputUnsupportedByAction`), "The selected … dial has
-  no press; it supports turn actions only." (`inputUnsupportedByControl`).
-  A stored incompatible binding (`preview_layout` `incompatible`) shows
+- **Inspector.** The Inspector shows only what applies: a control's
+  action lists leave out actions that cannot run from it, or that cannot
+  run here at all (a plugin not installed), instead of listing them
+  disabled; one the control already uses stays listed. The gesture
+  editor's per-trigger slots still list an action that is incompatible
+  only with that trigger as disabled ("(not on this control)"), with the
+  reason variants: "Does not react to double click on a dial. On a dial it
+  reacts to press, turn right, turn left and click."
+  (`inputUnsupportedByAction`), "The selected … dial has no press; it
+  supports turn actions only." (`inputUnsupportedByControl`). There are no
+  informational sections without a control: nothing selected, and the
+  folder's protected Back key, show an empty Inspector. A folder key
+  (`docs/data-model.md`, "Folder controls") shows only the folder's
+  settings: no gestures, action lists or placeholders. A stored
+  incompatible binding (`preview_layout` `incompatible`) shows
   "Not run from this control: <reason> It stays assigned but is not run."
 - **Save.** A refusal shows the backend's reason with the trigger named
   as in the editor; bindings kept by `save_layout` (`incompatible`) are

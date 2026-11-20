@@ -3,9 +3,12 @@ import { describe, expect, it } from "vitest"
 import type { ControlBinding, ControlId, DeviceLayout, DeviceModel } from "@/lib/types"
 
 import {
+  BUILTIN_APPEARANCE,
   applyAppearance,
   appearanceOf,
   contrastHint,
+  defaultAppearanceOf,
+  keyColors,
   contrastRatio,
   effectiveUsage,
   iconFileProblem,
@@ -13,10 +16,12 @@ import {
   iconSizeProblem,
   iconUsage,
   normalizeAppearance,
+  normalizeText,
   parseHex,
   sharedAppearance,
   shownBinding,
   withIconFit,
+  withText,
 } from "./appearance"
 import { copyControls, moveControl, pasteControls } from "./editing"
 
@@ -138,6 +143,60 @@ describe("applying an appearance", () => {
       showTitle: true,
       iconId: "mixed",
       iconFit: "mixed",
+      text: {
+        mode: "wrap",
+        size: undefined,
+        align: undefined,
+        maxLines: undefined,
+        overflow: undefined,
+        minSize: undefined,
+        fit: undefined,
+        speed: undefined,
+        pause: undefined,
+      },
+    })
+  })
+
+  it("shares text settings and edits one of them on every key", () => {
+    const l = layout([
+      bind(key(0), { appearance: { text: { mode: "marquee", speed: 60 } } }),
+      bind(key(1), { appearance: { text: { mode: "marquee", speed: 30, align: "left" } } }),
+    ])
+    const shared = sharedAppearance(l, "home", [key(0), key(1)]).text
+    expect(shared.mode).toBe("marquee")
+    expect(shared.speed).toBe("mixed")
+    expect(shared.align).toBe("mixed")
+    const paused = applyAppearance(l, "home", [key(0), key(1)], withText("pause", 500))
+    expect(appearanceOf(paused.layout, "home", key(0)).text).toEqual({
+      mode: "marquee",
+      speed: 60,
+      pause: 500,
+    })
+    expect(appearanceOf(paused.layout, "home", key(1)).text).toEqual({
+      mode: "marquee",
+      speed: 30,
+      align: "left",
+      pause: 500,
+    })
+    // Back to wrapping with nothing else set: no text appearance stored.
+    const wrapped = applyAppearance(l, "home", [key(0)], (a) => ({
+      ...a,
+      text: { mode: "wrap", speed: null },
+    }))
+    expect(appearanceOf(wrapped.layout, "home", key(0))).toEqual({})
+  })
+
+  it("normalizes text appearances", () => {
+    expect(normalizeText({})).toBeNull()
+    expect(normalizeText({ mode: "wrap", size: null })).toBeNull()
+    expect(normalizeText({ maxLines: 2 })).toEqual({ mode: "wrap", maxLines: 2 })
+    expect(normalizeText({ mode: "autoFit", minSize: 8, speed: null })).toEqual({
+      mode: "autoFit",
+      minSize: 8,
+    })
+    // Settings of other modes are kept, so switching back keeps them.
+    expect(normalizeAppearance({ text: { mode: "singleLine", speed: 40 } })).toEqual({
+      text: { mode: "singleLine", speed: 40 },
     })
   })
 
@@ -189,6 +248,44 @@ describe("colours", () => {
     expect(contrastHint("#ffffff", "#949494").level).toBe("low")
     expect(contrastHint("#ffffff", null)).toMatchObject({ level: "poor" })
     expect(contrastHint(null, null).level).toBe("good")
+    // Unset colours are the model's defaults: on a light display, the
+    // default white text is hard to read.
+    const light = {
+      keyBackground: "transparent",
+      textColor: "#ffffff",
+      displayBackground: "#f0f0f0",
+    }
+    expect(contrastHint(null, null, light).level).toBe("poor")
+    expect(contrastHint("transparent", "#000000", light).level).toBe("good")
+  })
+
+  it("resolves unset colours to the device model's defaults, as the renderer does", () => {
+    // Stream Deck: transparent keys on the black display, white text.
+    expect(defaultAppearanceOf(plus)).toEqual(BUILTIN_APPEARANCE)
+    expect(keyColors({})).toEqual({ background: "#000000", text: "#ffffff" })
+    const own = {
+      ...plus,
+      defaultAppearance: {
+        keyBackground: "#102030",
+        textColor: "#FFE000",
+        displayBackground: "#000050",
+      },
+    }
+    const defaults = defaultAppearanceOf(own)
+    expect(keyColors({}, defaults)).toEqual({ background: "#102030", text: "#ffe000" })
+    // A key's own colours win; explicit black and white stay as chosen,
+    // explicit transparent shows the display.
+    expect(keyColors({ background: "#000000" }, defaults).background).toBe("#000000")
+    expect(keyColors({ background: "#ffffff" }, defaults).background).toBe("#ffffff")
+    expect(keyColors({ background: "transparent" }, defaults).background).toBe("#000050")
+    expect(keyColors({ textColor: "#000000" }, defaults).text).toBe("#000000")
+  })
+
+  it("keeps an explicit transparent background when normalizing", () => {
+    expect(normalizeAppearance({ background: "transparent" })).toEqual({
+      background: "transparent",
+    })
+    expect(normalizeAppearance({ background: null })).toBeNull()
   })
 })
 

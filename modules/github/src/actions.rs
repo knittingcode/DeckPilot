@@ -308,6 +308,8 @@ fn definition(kind: Kind) -> ActionType {
         parameters.push(credential_parameter());
     }
     ActionType {
+        editor_navigation: None,
+        title: None,
         id: id(id_value),
         name: name.into(),
         description: description.into(),

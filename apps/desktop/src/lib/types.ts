@@ -410,12 +410,130 @@ export type BindingTarget =
 export type Color = string
 export type FontSize = "small" | "medium" | "large"
 export type TitleAlign = "top" | "middle" | "bottom"
+
+/**
+ * How a key's title is laid out (docs/key-text.md): wrapped (the default),
+ * on one line, fitted by shrinking, or scrolling sideways.
+ */
+export type TextMode = "wrap" | "singleLine" | "autoFit" | "marquee"
+export type TextOverflow = "ellipsis" | "clip"
+export type FitLines = "singleLine" | "multiline"
+export type TextAlign = "left" | "center" | "right"
+
+/**
+ * A title's text mode and its settings; every field optional. Sizes are in
+ * points (pixels on a 72 px key, scaled on other keys), the speed in device
+ * pixels per second, the pause in milliseconds.
+ */
+export interface TextAppearance {
+  mode?: TextMode
+  size?: number | null
+  align?: TextAlign | null
+  /** Wrap and multiline auto fit; default: two lines with an icon, three without. */
+  maxLines?: number | null
+  overflow?: TextOverflow | null
+  minSize?: number | null
+  fit?: FitLines | null
+  speed?: number | null
+  pause?: number | null
+}
+
+/** How a title comes out on the device (`preview_layout` with `render`). */
+export interface TextLayoutReport {
+  mode: TextMode
+  /** All of it is shown (a scrolling title shows it in turn). */
+  fits: boolean
+  /** Drawn cut with `…`, clipped, or with lines left out. */
+  truncated: boolean
+  /** The size it is drawn at, in points. */
+  fontSize: number
+  lines: number
+  /** It scrolls on the device. */
+  needsScroll: boolean
+}
+
+/** One cycle of a scrolling title as the device shows it (`preview_marquee`). */
+export interface MarqueePreview {
+  frames: { image: string; durationMs: number }[]
+  cycleMs: number
+}
 /** fit: whole icon, aspect kept; fill: stretched; crop: covers the key. */
 export type IconFit = "fit" | "fill" | "crop"
 
+/**
+ * A key's background: `#rrggbb`, `"transparent"`, or an asset of the
+ * shared library, `"asset:<id>"` (a gradient or an image: DeckPilot's
+ * `deckpilot.gradient-…`, a plugin's `<plugin>.<id>`, or a profile image's
+ * id). Unset is the device's default.
+ */
+export type KeyBackground = Color
+
+/** What a plugin's visual asset is (`deckpilot_ipc::plugins::VisualAssetKind`). */
+export type VisualAssetKind = "icon" | "imageBackground" | "gradientBackground"
+
+/** One of DeckPilot's own icons (`commands::assets::BuiltinIcon`). */
+export interface BuiltinIcon {
+  /** `deckpilot.<name>`. */
+  id: string
+  /** The Lucide name. */
+  name: string
+  categories: string[]
+  tags: string[]
+  /** White on transparent (`data:` URL). */
+  thumbnail: string
+}
+
+/** One of DeckPilot's own gradients. */
+export interface BuiltinGradient {
+  id: string
+  /** Translated as `editor:assets.gradients.<name>`. */
+  name: string
+  colors: string[]
+  thumbnail: string
+}
+
+/** A plugin's icon or background, as the agent lists it. */
+export interface PluginAsset {
+  /** `<plugin>.<id>`. */
+  id: string
+  plugin: string
+  pluginName: string
+  /** In the app's language. */
+  name: string
+  kind: VisualAssetKind
+  keywords: string[]
+  /** The plugin is enabled: keys draw it. */
+  available: boolean
+  thumbnail?: string | null
+}
+
+/** The shared visual asset library (`visual_library`). */
+export interface VisualLibrary {
+  categories: string[]
+  icons: BuiltinIcon[]
+  gradients: BuiltinGradient[]
+  plugins: PluginAsset[]
+  /** Why plugins' assets are not listed, when they are not. */
+  pluginsProblem?: string | null
+  /** Changes when the plugin assets the previews draw changed. */
+  version: number
+}
+
+/**
+ * How a device model's keys look when they set no colours (mirrors
+ * `deckpilot_device::DefaultAppearance`).
+ */
+export interface DefaultAppearance {
+  keyBackground: KeyBackground
+  textColor: Color
+  /** The display behind the keys: what a transparent key shows. */
+  displayBackground: Color
+}
+
 /** How a key looks; every field optional (see docs/data-model.md). */
 export interface KeyAppearance {
-  background?: Color | null
+  /** Unset: the device model's default (`DefaultAppearance`). */
+  background?: KeyBackground | null
   textColor?: Color | null
   fontSize?: FontSize | null
   /** Default: middle, or bottom when the key has an icon. */
@@ -423,6 +541,35 @@ export interface KeyAppearance {
   /** `false` hides the title and the secondary line. Default: shown. */
   showTitle?: boolean | null
   icon?: { id: string; fit?: IconFit } | null
+  /** The title's text mode (docs/key-text.md); default: wrapped. */
+  text?: TextAppearance | null
+  /** A font of `title_fonts` (`TITLE_FONTS`); default: Inter. */
+  fontFamily?: string | null
+  /** `false` is explicit (it beats a plugin's suggestion); unset: not bold. */
+  bold?: boolean | null
+  italic?: boolean | null
+  underline?: boolean | null
+}
+
+/** A font key titles may use (`deckpilot_core::TitleFont`). */
+export interface TitleFont {
+  id: string
+  name: string
+}
+
+/** Parts of a title's look the editor offers (`deckpilot_core::TitleFeature`). */
+export type TitleFeature = "visibility" | "position" | "font" | "style" | "color" | "layout"
+
+/**
+ * What an action type suggests for its keys' titles (plugin API 1.8,
+ * `deckpilot_core::ActionTitle`); the user's own title and look win.
+ */
+export interface ActionTitle {
+  default?: string
+  dynamic?: boolean
+  position?: TitleAlign
+  /** Omitted: every part. */
+  supports?: TitleFeature[]
 }
 
 /** An image imported into a profile; `png` is base64. */
@@ -467,6 +614,22 @@ export interface LayoutPage {
    * stored when off.
    */
   autoReturn?: boolean
+  /**
+   * Where the Back of a folder page is (`deckpilot_core::folder`): on the
+   * reserved, protected first key, or (`legacy`, and when unset) on the
+   * first free key as before. Ignored on pages in no folder.
+   */
+  back?: { position: BackPosition } | null
+  /** A folder page that leaves itself after `seconds` (1–3600); unset: off. */
+  autoExit?: AutoExit | null
+}
+
+export type BackPosition = "reserved" | "legacy"
+
+export interface AutoExit {
+  enabled: boolean
+  /** Whole seconds, 1–3600. */
+  seconds: number
 }
 
 export interface DeviceLayout {
@@ -481,6 +644,32 @@ export interface DeviceLayout {
    * openPage bindings (use `page_tree`). Set it when editing parents.
    */
   explicitTree?: boolean
+  /**
+   * Bindings set aside from folder keys (`deckpilot_core::folder_control`,
+   * migration 12 or an import): stored, never run. Only kept, moved to a
+   * free key or discarded; saving refuses new or changed entries.
+   */
+  recovered?: RecoveredBindings[]
+}
+
+/** Bindings a folder key had besides opening its folder (`RecoveredBindings`). */
+export interface RecoveredBindings {
+  /** The page of the folder key. */
+  page: string
+  /** The folder key. */
+  control: ControlId
+  /** The folder it opens. */
+  folder: string
+  /** Its original bindings other than the one that opens the folder. */
+  bindings: ControlBinding[]
+  /** Its gesture timings, if it had any. */
+  gestures?: KeyGestureSettings | null
+  /**
+   * `folderControl`: gestures a folder key had besides opening its folder;
+   * `folderLabel`: the title of its own it had (schema 13), which differed
+   * from the folder's name (the binding as it was, title included).
+   */
+  reason: "folderControl" | "folderLabel"
 }
 
 /** One page of `page_tree`. */
@@ -494,6 +683,8 @@ export interface PageNode {
   depth: number
   /** The key the runtime adds as Back because the page has none. */
   automaticBack: ControlId | null
+  /** The folder's protected system Back key (its reserved key), if it has one. */
+  systemBack?: ControlId | null
 }
 
 export interface PageTree {
@@ -858,6 +1049,8 @@ export interface DeviceModel {
   support: "descriptorOnly" | "unverified" | "verified"
   /** Per-platform verification status with evidence (docs/devices.md). */
   verification: PlatformVerification[]
+  /** Colours of keys that set none; absent: the built-in defaults. */
+  defaultAppearance?: DefaultAppearance | null
 }
 
 export type Platform = "macos" | "windows" | "linux"
@@ -958,6 +1151,8 @@ export interface ControlFace {
    * with the reason (docs/device-controls.md). Omitted when there are none.
    */
   incompatible?: { trigger: Trigger; reason: IncompatibilityReason; message: string }[]
+  /** With `render`: how the title comes out on the device. */
+  text?: TextLayoutReport
 }
 
 export type ConnectionState = "connected" | "disconnected"
@@ -988,7 +1183,42 @@ export interface DeviceInfo {
    * active profile; absent when there is none (and from older agents).
    */
   previousLayout?: string
+  /** The id of the page shown (`page` is its name); absent from older agents. */
+  pageId?: string
 }
+
+/**
+ * Where the editor shows the device in a live preview (IPC protocol 16,
+ * docs/editor-navigation-and-simulation.md): a page stack of a layout, or
+ * Back to previous layout.
+ */
+export type LiveNavigation =
+  { type: "show"; layout: string; stack: string[] } | { type: "layoutBack" }
+
+/** What a device shows, as the agent reports it to a live preview session. */
+export interface DeviceNavigation {
+  profile: string | null
+  layout: string | null
+  /** The pages it went through, the page shown last. */
+  stack: string[]
+  connected: boolean
+  /** It shows the session's profile and layout (the editor's draft). */
+  inScope: boolean
+  /** Grows with every state reported: the higher of two is newer. */
+  seq: number
+}
+
+/** What the live preview session reports (`commands/live_preview.rs`). */
+export type LiveSyncUpdate =
+  | { kind: "started"; navigation: DeviceNavigation; resumed: boolean }
+  | { kind: "applied"; revision: number }
+  | { kind: "navigated"; navigation: DeviceNavigation; own: boolean }
+  | { kind: "refused"; reason: string | null; message: string }
+  | { kind: "ended"; reason: string }
+  | { kind: "disconnected" }
+  | { kind: "unsupported" }
+
+export type LiveSyncEvent = LiveSyncUpdate & { session: number }
 
 export interface ProfileInfo {
   id: string
@@ -1052,6 +1282,11 @@ export type AgentCapability =
   | "variableRegistry"
   | "plugins"
   | "keyStates"
+  | "pluginDialogs"
+  | "locale"
+  | "simulateInput"
+  | "restoreBundled"
+  | "livePreview"
 
 /** What became of the agent's reload after a save (`commands/reload.rs`). */
 export type AgentReload =
@@ -1781,3 +2016,74 @@ export interface ProfileLayoutEntry {
   /** Keys that cannot run in this profile (a workflow or project of another profile), in words. */
   unavailable: string[]
 }
+
+/*
+ * Interactive device preview (docs/editor-navigation-and-simulation.md):
+ * what a key does to the editor's view, declared as data, and simulated
+ * presses that the agent runs through its own pipeline. Added as one block;
+ * `ActionType` and `ControlFace` gain their optional fields by interface
+ * merging.
+ */
+
+/** The navigation operations an action type may declare (an allowlist). */
+export type NavigationOperation =
+  "folder.open" | "folder.back" | "page.next" | "page.previous" | "layout.switch" | "layout.back"
+
+/** An action type's declared editor navigation: data only, never run by the editor. */
+export interface EditorNavigation {
+  operation: NavigationOperation
+  /** `folder.open`: the parameter holding a page id; `layout.switch`: a layout id. */
+  targetParameter?: string
+  /** `layout.switch` only: the parameter holding the page of that layout. */
+  pageParameter?: string
+}
+
+/** What pressing a control does to the editor's view, resolved for a preview face. */
+export interface ControlNavigation {
+  operation: NavigationOperation
+  /** `folder.open` (and `layout.switch` with a page): the page. */
+  page?: string
+  /** `layout.switch`: the layout. */
+  layout?: string
+  /** The automatic Back key of a folder page without one; not a binding of the layout. */
+  automatic?: boolean
+  /** The folder's protected system Back on its reserved key (always with `automatic`). */
+  system?: boolean
+}
+
+export interface ActionType {
+  /** Omitted for actions that do not navigate. */
+  editorNavigation?: EditorNavigation
+  /** A plugin's title suggestions (plugin API 1.8); omitted for built-in types. */
+  title?: ActionTitle
+}
+
+export interface ControlFace {
+  /** Omitted for controls that do not navigate. */
+  navigation?: ControlNavigation
+}
+
+export type PressKind = "single" | "double" | "long"
+
+export type SimulatedTrigger = "press" | "release" | "click" | "doubleClick" | "longPress" | "other"
+
+/** The agent's refusals, and the app's own `agentNotRunning` and `unsupported` (agent before protocol 14). */
+export type SimulationRefusal =
+  | "locked"
+  | "noActiveProfile"
+  | "deviceNotConnected"
+  | "wrongProfile"
+  | "wrongLayout"
+  | "wrongPage"
+  | "unknownControl"
+  | "incompatibleControl"
+  | "failed"
+  | "other"
+  | "agentNotRunning"
+  | "unsupported"
+
+/** What `simulate_press` did. */
+export type SimulatePressResult =
+  | { status: "ran"; dispatched: SimulatedTrigger[] }
+  | { status: "confirmationRequired"; actionNames: string[]; reason: string }
+  | { status: "refused"; code: SimulationRefusal; message: string }

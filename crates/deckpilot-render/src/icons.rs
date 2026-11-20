@@ -15,7 +15,8 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use deckpilot_core::{
-    Icon, IconData, IconFit, IconId, MAX_ICON_BYTES, MAX_ICON_NAME, MAX_ICON_SIZE, Profile,
+    AssetId, AssetRef, Gradient, Icon, IconData, IconFit, IconId, MAX_ICON_BYTES, MAX_ICON_NAME,
+    MAX_ICON_SIZE, Profile,
 };
 use image::imageops::FilterType;
 use image::{ImageFormat, ImageReader, Limits, RgbaImage};
@@ -24,6 +25,11 @@ use image::{ImageFormat, ImageReader, Limits, RgbaImage};
 pub const MAX_IMPORT_BYTES: usize = 2 * 1024 * 1024;
 /// Largest width and height of an imported file, in pixels.
 pub const MAX_SOURCE_SIZE: u32 = 4096;
+/// Largest image file a plugin may ship as a visual asset (an icon or a
+/// background), in bytes.
+pub const MAX_ASSET_BYTES: usize = 1024 * 1024;
+/// Largest width and height of a plugin's image asset, in pixels.
+pub const MAX_ASSET_SIDE: u32 = 1024;
 /// Most memory a decoder may allocate for one image.
 pub const MAX_DECODE_ALLOC: u64 = 80 * 1024 * 1024;
 
@@ -223,32 +229,129 @@ pub fn scale(image: &RgbaImage, width: u32, height: u32, fit: IconFit) -> RgbaIm
     }
 }
 
-/// The decoded icons of a profile, by id. Icons that cannot be decoded
-/// are left out (their keys show no icon).
+/// Decodes a plugin's image asset (PNG or JPEG, by content) with limits:
+/// at most [`MAX_ASSET_BYTES`] and [`MAX_ASSET_SIDE`] pixels a side.
+pub fn decode_asset(bytes: &[u8]) -> Result<RgbaImage, IconError> {
+    if bytes.len() > MAX_ASSET_BYTES {
+        return Err(IconError::TooLarge);
+    }
+    let Ok(format @ (ImageFormat::Png | ImageFormat::Jpeg)) = image::guess_format(bytes) else {
+        return Err(IconError::UnsupportedFormat);
+    };
+    decode(bytes, format, MAX_ASSET_SIDE)
+}
+
+/// A library asset the renderer draws from data it was given: a plugin's
+/// image (decoded) or gradient. DeckPilot's own icons and gradients are
+/// compiled in and need none.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LibraryAsset {
+    Image(Arc<RgbaImage>),
+    Gradient(Gradient),
+}
+
+/// What a background asset is drawn from.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum BackgroundLayer<'a> {
+    Image(&'a RgbaImage),
+    Gradient(&'a Gradient),
+}
+
+/// The images keys may show, by reference: the profile's decoded icons
+/// (My Icons) and the library assets of plugins that are available now.
+/// Icons that cannot be decoded and assets that are not here are left out
+/// (their keys show no icon, or their default background).
 #[derive(Debug, Clone, Default)]
-pub struct Icons(HashMap<IconId, Arc<RgbaImage>>);
+pub struct Icons {
+    profile: HashMap<IconId, Arc<RgbaImage>>,
+    library: HashMap<AssetId, LibraryAsset>,
+}
+
+/// The built-in gradients, kept for [`Icons::background`].
+static BUILTIN_GRADIENTS: std::sync::LazyLock<HashMap<AssetId, Gradient>> =
+    std::sync::LazyLock::new(|| {
+        deckpilot_core::BUILTIN_GRADIENTS
+            .iter()
+            .map(|g| (g.id(), g.gradient()))
+            .collect()
+    });
 
 impl Icons {
     pub fn from_profile(profile: &Profile) -> Self {
-        Self(
-            profile
+        Self {
+            profile: profile
                 .icons
                 .iter()
                 .filter_map(|icon| Some((icon.id, Arc::new(pixels(icon).ok()?))))
                 .collect(),
-        )
+            library: HashMap::new(),
+        }
+    }
+
+    /// These icons with `assets` (plugins' assets) added.
+    #[must_use]
+    pub fn with_library(
+        mut self,
+        assets: impl IntoIterator<Item = (AssetId, LibraryAsset)>,
+    ) -> Self {
+        self.library.extend(assets);
+        self
     }
 
     pub fn get(&self, id: IconId) -> Option<&RgbaImage> {
-        self.0.get(&id).map(AsRef::as_ref)
+        self.profile.get(&id).map(AsRef::as_ref)
     }
 
+    /// A plugin's asset, if it is here.
+    pub fn library(&self, id: &AssetId) -> Option<&LibraryAsset> {
+        self.library.get(id)
+    }
+
+    /// Whether `reference` can be drawn now: a profile image that decoded,
+    /// a built-in icon or gradient, a plugin asset that is here.
+    pub fn has(&self, reference: &AssetRef) -> bool {
+        match reference {
+            AssetRef::Profile(id) => self.profile.contains_key(id),
+            AssetRef::Library(id) if id.is_builtin() => {
+                crate::text::has_icon(id.name()) || BUILTIN_GRADIENTS.contains_key(id)
+            }
+            AssetRef::Library(id) => self.library.contains_key(id),
+        }
+    }
+
+    /// The image `reference` shows as an icon: a profile image or a
+    /// plugin's image (a built-in icon is drawn from the font instead).
+    pub fn image(&self, reference: &AssetRef) -> Option<&RgbaImage> {
+        match reference {
+            AssetRef::Profile(id) => self.get(*id),
+            AssetRef::Library(id) => match self.library.get(id)? {
+                LibraryAsset::Image(image) => Some(image),
+                LibraryAsset::Gradient(_) => None,
+            },
+        }
+    }
+
+    /// What the background `reference` is drawn from, if it is here.
+    pub(crate) fn background(&self, reference: &AssetRef) -> Option<BackgroundLayer<'_>> {
+        match reference {
+            AssetRef::Profile(id) => self.get(*id).map(BackgroundLayer::Image),
+            AssetRef::Library(id) if id.is_builtin() => {
+                BUILTIN_GRADIENTS.get(id).map(BackgroundLayer::Gradient)
+            }
+            AssetRef::Library(id) => Some(match self.library.get(id)? {
+                LibraryAsset::Image(image) => BackgroundLayer::Image(image),
+                LibraryAsset::Gradient(gradient) => BackgroundLayer::Gradient(gradient),
+            }),
+        }
+    }
+
+    /// How many profile icons decoded.
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.profile.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.profile.is_empty()
     }
 }
 

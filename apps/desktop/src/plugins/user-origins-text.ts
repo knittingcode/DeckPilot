@@ -1,12 +1,11 @@
 // The words of the consent to a server the user entered (G2).
 
+import { i18n } from "@/i18n"
+
+import { listed } from "./model"
 import type { PluginUserOrigin } from "./types"
 
-/** "A, B and C". */
-export function listed(items: string[]): string {
-  if (items.length <= 1) return items.join("")
-  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1] ?? ""}`
-}
+export { listed }
 
 /** `https://server[:port]` of an origin with a path prefix. */
 function serverOf(origin: string | undefined): string | undefined {
@@ -15,14 +14,34 @@ function serverOf(origin: string | undefined): string | undefined {
   return slash < 0 ? origin : origin.slice(0, slash)
 }
 
+/** The names of secrets in quotes, as a list: “Token” and “Key”. */
+export function quotedList(names: string[]): string {
+  return listed(names.map((name) => i18n.t("plugins:origins.quoted", { name })))
+}
+
 /** What the consent allows, in words. */
 export function consentText(plugin: string, origin: PluginUserOrigin): string {
-  const where = origin.origin ?? "this server"
-  const secrets = origin.credentials?.length
-    ? ` and your ${listed(origin.credentials.map((c) => `“${c}”`))} ${origin.credentials.length === 1 ? "secret" : "secrets"}`
-    : ""
+  const server = origin.origin ?? i18n.t("plugins:origins.consent.thisServer")
+  const credentials = origin.credentials ?? []
+  const ask =
+    credentials.length > 0
+      ? i18n.t("plugins:origins.consent.askWithSecrets", {
+          plugin,
+          server,
+          secrets: quotedList(credentials),
+          count: credentials.length,
+        })
+      : i18n.t("plugins:origins.consent.ask", { plugin, server })
+  const requests = i18n.t(
+    origin.origin?.includes("/", 8)
+      ? "plugins:origins.consent.requestsPath"
+      : "plugins:origins.consent.requests",
+    { methods: origin.methods.join(", ") },
+  )
   const pages = origin.opensPages
-    ? ` It may also open pages of ${serverOf(origin.origin) ?? "this server"} in your browser, in actions you start.`
-    : ""
-  return `Allow ${plugin} to send data${secrets} to ${where}? Requests (${origin.methods.join(", ")}) go to exactly this server${origin.origin?.includes("/", 8) ? " and path" : ""}, nowhere else.${pages}`
+    ? i18n.t("plugins:origins.consent.pages", {
+        server: serverOf(origin.origin) ?? i18n.t("plugins:origins.consent.thisServer"),
+      })
+    : null
+  return [ask, requests, pages].filter(Boolean).join(" ")
 }

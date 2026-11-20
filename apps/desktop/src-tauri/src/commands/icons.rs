@@ -44,6 +44,18 @@ fn info(profile: &Profile, icon: &Icon) -> IconInfo {
     }
 }
 
+/// The fonts a key title may use (`deckpilot_core::TITLE_FONTS`): the
+/// fonts built into the renderer, so the editor offers only what every
+/// device draws alike.
+#[tauri::command]
+pub fn title_fonts() -> Vec<deckpilot_core::TitleFont> {
+    deckpilot_core::TITLE_FONTS
+        .iter()
+        .copied()
+        .filter(|font| deckpilot_render::has_title_font(font.id))
+        .collect()
+}
+
 /// The profile's icons, in import order.
 #[tauri::command]
 pub fn list_icons(
@@ -59,6 +71,27 @@ pub fn list_icons(
         .collect())
 }
 
+/// A refused image, with the reason the frontend translates.
+fn icon_error(error: &icons::IconError) -> CommandError {
+    use icons::IconError as E;
+    let message = error.to_string();
+    match error {
+        E::TooLarge => CommandError::invalid_with(
+            "iconTooLarge",
+            message,
+            [("size", (MAX_IMPORT_BYTES / 1024 / 1024).into())],
+        ),
+        E::UnsupportedFormat => CommandError::invalid("iconFormat", message),
+        E::TooManyPixels => CommandError::invalid_with(
+            "iconTooManyPixels",
+            message,
+            [("size", icons::MAX_SOURCE_SIZE.into())],
+        ),
+        E::Malformed => CommandError::invalid("iconMalformed", message),
+        E::Invalid(_) => CommandError::Invalid(message),
+    }
+}
+
 /// Imports a PNG or JPEG file (`data`: its bytes as base64) as an icon.
 /// Importing the same image again returns the existing icon.
 #[tauri::command]
@@ -70,19 +103,21 @@ pub fn import_icon(
 ) -> CommandResult<IconInfo> {
     // Refuse large files before decoding the base64.
     if data.len() > MAX_IMPORT_BYTES.div_ceil(3) * 4 {
-        return Err(CommandError::Invalid(
-            icons::IconError::TooLarge.to_string(),
-        ));
+        return Err(icon_error(&icons::IconError::TooLarge));
     }
     let bytes = STANDARD
         .decode(data.trim())
-        .map_err(|_| CommandError::Invalid("the file could not be read".into()))?;
-    let icon = icons::import(&name, &bytes).map_err(|e| CommandError::Invalid(e.to_string()))?;
-    modify_profile(&state, profile_id, |profile| {
+        .map_err(|_| CommandError::invalid("fileUnreadable", "the file could not be read"))?;
+    let icon = icons::import(&name, &bytes).map_err(|e| icon_error(&e))?;
+    let imported = modify_profile(&state, profile_id, |profile| {
         let id = profile.add_icon(icon)?;
         let icon = profile.icon(id).ok_or(CommandError::NotFound("icon"))?;
         Ok(info(profile, icon))
-    })
+    })?;
+    // The agent decodes icons when it loads the configuration: so that a
+    // key of the editor's live preview can show the new icon at once.
+    crate::agent::notify_reload(&state.paths);
+    Ok(imported)
 }
 
 /// Deletes an icon that no key shows.
@@ -95,5 +130,7 @@ pub fn delete_icon(
     modify_profile(&state, profile_id, |profile| {
         profile.delete_icon(icon_id)?;
         Ok(())
-    })
+    })?;
+    crate::agent::notify_reload(&state.paths);
+    Ok(())
 }

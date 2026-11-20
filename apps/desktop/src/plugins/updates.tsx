@@ -3,6 +3,7 @@ import { RefreshCw } from "lucide-react"
 import { EmptyState } from "@/components/page"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { useTranslation } from "@/i18n"
 
 import type { MarketplaceActions } from "./marketplace"
 import type { UpdateCandidate } from "./model"
@@ -18,26 +19,25 @@ export function UpdatesView({
   updates: UpdateCandidate[]
   actions: MarketplaceActions
 }) {
+  const { t } = useTranslation()
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-muted-foreground">
-          Updates that ask for new permissions are never applied without your consent.
-        </p>
+        <p className="text-sm text-muted-foreground">{t("marketplace:updates.intro")}</p>
         <Button
           variant="outline"
           size="sm"
           disabled={actions.busy !== null}
           onClick={actions.refresh}
         >
-          <RefreshCw /> Check for updates
+          <RefreshCw /> {t("marketplace:updates.check")}
         </Button>
       </div>
       {actions.blocked && <p className="text-sm text-muted-foreground">{actions.blocked}</p>}
       {updates.length === 0 ? (
-        <EmptyState variant="plain" title="All plugins are up to date" />
+        <EmptyState variant="plain" title={t("marketplace:updates.none")} />
       ) : (
-        <ul className="grid divide-y border-y" aria-label="Available updates">
+        <ul className="grid divide-y border-y" aria-label={t("marketplace:updates.list")}>
           {updates.map((update) => {
             const { summary } = update.plugin
             const to = update.kind === "staged" ? update.pending.version : update.version
@@ -49,7 +49,11 @@ export function UpdatesView({
               <li
                 key={summary.id}
                 className="flex flex-wrap items-center gap-3 py-3"
-                aria-label={`${summary.name} ${summary.version} to ${to}`}
+                aria-label={t("marketplace:updates.item", {
+                  name: summary.name,
+                  from: summary.version,
+                  to,
+                })}
               >
                 <div className="grid min-w-0 flex-1 gap-1">
                   <span className="text-sm font-medium">{summary.name}</span>
@@ -59,7 +63,7 @@ export function UpdatesView({
                 </div>
                 {update.kind === "staged" && (
                   <Badge variant="outline">
-                    Waiting for consent: {more} permission{more === 1 ? "" : "s"}
+                    {t("marketplace:updates.waiting", { count: more })}
                   </Badge>
                 )}
                 <Button
@@ -69,7 +73,9 @@ export function UpdatesView({
                     actions.update(update)
                   }}
                 >
-                  {update.kind === "staged" ? "Review and update" : "Update"}
+                  {update.kind === "staged"
+                    ? t("marketplace:updates.review")
+                    : t("marketplace:updates.update")}
                 </Button>
               </li>
             )

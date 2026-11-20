@@ -674,6 +674,9 @@ const KNOWN_OPS: &[&str] = &[
     "run.context",
     "time.now",
     "random.bytes",
+    "dialog.open",
+    "locale.get",
+    "locale.translate",
 ];
 
 fn abi_error(msg: &str) -> wasmtime::Error {
@@ -711,6 +714,12 @@ fn host_call(mut caller: Caller<'_, HostState>, ptr: i32, len: i32) -> wasmtime:
 
     let mut op = "";
     let reply = match parse_request(&request) {
+        // A dialog needs a run the user started; `dp_init` and
+        // `dp_shutdown` are none (plugin API 1.5).
+        Ok(CapabilityRequest::DialogOpen(_)) if caller.data().in_lifecycle => CallResult::error(
+            CallErrorCode::NotPermitted,
+            "dialogs open only in an action the user started, not in dp_init or dp_shutdown",
+        ),
         // No invocation to relay for: answered here, never sent upstream.
         _ if caller.data().in_lifecycle => CallResult::error(
             CallErrorCode::Unavailable,

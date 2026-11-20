@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest"
 
-import { cleanup, render, screen } from "@testing-library/react"
+import { act, cleanup, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { useState } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
+
+import { i18n } from "@/i18n"
 
 import { ListField, PairsField } from "./structured-fields"
 
@@ -68,5 +70,26 @@ describe("structured fields", () => {
     expect(screen.getByText(/appears more than once/)).toBeInTheDocument()
     await user.type(screen.getByLabelText("Value 2"), "text/plain")
     expect(onChange).toHaveBeenLastCalledWith("Accept: application/json\naccept: text/plain")
+  })
+})
+
+describe("structured fields in Polish", () => {
+  afterEach(async () => {
+    cleanup()
+    await act(async () => {
+      await i18n.changeLanguage("en")
+    })
+  })
+
+  it("names the controls and counts characters with Polish plurals", async () => {
+    await act(async () => {
+      await i18n.changeLanguage("pl")
+    })
+    render(<List initial={"a-much-too-long-argument-value"} onValue={() => undefined} />)
+    expect(screen.getByRole("button", { name: "Dodaj: argument" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Usuń: argument 1" })).toBeInTheDocument()
+    // 20 → "many": znaków.
+    expect(screen.getByText("Argument: maksymalnie 20 znaków.")).toBeInTheDocument()
+    expect(screen.getByText("Przekazywane jako:")).toBeInTheDocument()
   })
 })

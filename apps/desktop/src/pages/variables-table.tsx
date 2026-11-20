@@ -26,6 +26,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { useTranslation } from "@/i18n"
 import { AppContext } from "@/lib/app-context"
 import { SYSTEM_VARIABLES, VALUE_TYPES, typeLabel } from "@/lib/shared-variables"
 import type { CatalogEntry, SharedVariable } from "@/lib/types"
@@ -64,6 +65,7 @@ export function VariablesTable({
   /** Only the variables under this namespace, e.g. a plugin's `plugins.acme.weather`. */
   namespace?: string
 }) {
+  const { t } = useTranslation()
   const app = useContext(AppContext)
   const scope = useVariableScope()
   const [filter, setFilter] = useState<RowFilter>(NO_FILTER)
@@ -108,8 +110,8 @@ export function VariablesTable({
           <Search className="absolute top-2.5 left-2 size-4 text-muted-foreground" />
           <Input
             className="pl-8"
-            placeholder="Search variables"
-            aria-label="Search variables"
+            placeholder={t("workflows:variablesTable.search")}
+            aria-label={t("workflows:variablesTable.search")}
             value={filter.query}
             onChange={(e) => {
               setFilter({ ...filter, query: e.target.value })
@@ -117,7 +119,9 @@ export function VariablesTable({
           />
         </div>
         <FilterSelect
-          label="Owner"
+          label={t("workflows:variablesTable.owner")}
+          filterLabel={t("workflows:variablesTable.filter.owner")}
+          anyLabel={t("workflows:variablesTable.any.owner")}
           value={filter.owner}
           options={owners}
           onChange={(owner) => {
@@ -125,17 +129,21 @@ export function VariablesTable({
           }}
         />
         <FilterSelect
-          label="Type"
+          label={t("workflows:variablesTable.type")}
+          filterLabel={t("workflows:variablesTable.filter.type")}
+          anyLabel={t("workflows:variablesTable.any.type")}
           value={filter.type}
-          options={VALUE_TYPES.map((t) => [t.type, t.label])}
+          options={VALUE_TYPES.map((v) => [v.type, v.label])}
           onChange={(type) => {
             setFilter({ ...filter, type: type as RowFilter["type"] })
           }}
         />
         <FilterSelect
-          label="Scope"
+          label={t("workflows:variablesTable.scope")}
+          filterLabel={t("workflows:variablesTable.filter.scope")}
+          anyLabel={t("workflows:variablesTable.any.scope")}
           value={filter.scope}
-          options={scopes.map((s) => [s, CATALOG_SCOPE_LABEL[s]])}
+          options={scopes.map((s) => [s, t(CATALOG_SCOPE_LABEL[s])])}
           onChange={(value) => {
             setFilter({ ...filter, scope: value as CatalogScope | "all" })
           }}
@@ -143,28 +151,28 @@ export function VariablesTable({
       </div>
       {catalog.unavailable && (
         <p className="text-xs text-muted-foreground" role="status">
-          Values are not available: {catalog.unavailable}
+          {t("workflows:variablesTable.valuesUnavailable", { reason: catalog.unavailable })}
         </p>
       )}
       {!live && (
         <p className="text-xs text-muted-foreground" role="status">
-          The agent is not running or too old: module variables and current values are not shown.
+          {t("workflows:variablesTable.notLive")}
         </p>
       )}
       {shown.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No variables match.</p>
+        <p className="text-sm text-muted-foreground">{t("workflows:variablesTable.noMatch")}</p>
       ) : (
-        <Table aria-label="Variables">
+        <Table aria-label={t("workflows:variablesTable.label")}>
           <TableHeader>
             <TableRow>
-              <TableHead>Variable</TableHead>
-              <TableHead>Owner</TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead>Scope</TableHead>
-              <TableHead>Current value</TableHead>
-              <TableHead>Access</TableHead>
+              <TableHead>{t("workflows:variablesTable.variable")}</TableHead>
+              <TableHead>{t("workflows:variablesTable.owner")}</TableHead>
+              <TableHead>{t("workflows:variablesTable.type")}</TableHead>
+              <TableHead>{t("workflows:variablesTable.scope")}</TableHead>
+              <TableHead>{t("workflows:variablesTable.currentValue")}</TableHead>
+              <TableHead>{t("workflows:variablesTable.access")}</TableHead>
               <TableHead>
-                <span className="sr-only">Actions</span>
+                <span className="sr-only">{t("workflows:variablesTable.actions")}</span>
               </TableHead>
             </TableRow>
           </TableHeader>
@@ -178,7 +186,9 @@ export function VariablesTable({
                 value={
                   row.sensitive ? (
                     // Never asked for: only ever shown as redacted.
-                    <span className="text-muted-foreground italic">Redacted (sensitive)</span>
+                    <span className="text-muted-foreground italic">
+                      {t("workflows:variablesTable.redacted")}
+                    </span>
                   ) : (
                     <PreviewValue
                       status={previews.status(row.reference)}
@@ -200,23 +210,27 @@ export function VariablesTable({
 }
 
 function FilterSelect({
-  label,
+  filterLabel,
+  anyLabel,
   value,
   options,
   onChange,
 }: {
+  /** The column, as the table heads it. */
   label: string
+  filterLabel: string
+  anyLabel: string
   value: string
   options: [string, string][]
   onChange: (value: string) => void
 }) {
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="w-40" aria-label={`${label} filter`}>
+      <SelectTrigger className="w-40" aria-label={filterLabel}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="all">Any {label.toLowerCase()}</SelectItem>
+        <SelectItem value="all">{anyLabel}</SelectItem>
         {options.map(([key, text]) => (
           <SelectItem key={key} value={key}>
             {text}
@@ -240,11 +254,12 @@ function VariableTableRow({
   value: React.ReactNode
   onEdit: (key: string) => void
 }) {
+  const { t } = useTranslation()
   const editable = row.owner.kind === "user" && row.sharedKey !== undefined
   const copy = () => {
     navigator.clipboard.writeText(formatReference(row.reference)).then(
-      () => toast.success("Reference copied"),
-      () => toast.error("The reference was not copied"),
+      () => toast.success(t("workflows:variablesTable.toast.copied")),
+      () => toast.error(t("workflows:variablesTable.toast.copyFailed")),
     )
   }
   return (
@@ -259,38 +274,43 @@ function VariableTableRow({
         )}
         {row.aliases.length > 0 && (
           <span className="block text-xs text-muted-foreground">
-            Also readable as {row.aliases.map((a) => formatReference(a)).join(", ")} (deprecated)
+            {t("workflows:variablesTable.aliases", {
+              aliases: row.aliases.map((a) => formatReference(a)).join(", "),
+            })}
           </span>
         )}
       </TableCell>
       <TableCell className="align-top">{ownerName}</TableCell>
       <TableCell className="align-top">{typeLabel(row.valueType)}</TableCell>
       <TableCell className="align-top whitespace-normal">
-        {row.scopes.map((s) => CATALOG_SCOPE_LABEL[s]).join(", ") || "—"}
+        {row.scopes.map((s) => t(CATALOG_SCOPE_LABEL[s])).join(", ") || "—"}
       </TableCell>
       <TableCell className="max-w-56 align-top text-xs whitespace-normal">
         {value}
         {row.availability !== "available" && (
           <span className="block text-muted-foreground">
-            {AVAILABILITY_LABEL[row.availability]}
+            {t(AVAILABILITY_LABEL[row.availability])}
           </span>
         )}
       </TableCell>
       <TableCell className="align-top">
         <span className="flex flex-wrap gap-1">
           {editable ? (
-            <Badge variant="secondary">Editable</Badge>
+            <Badge variant="secondary">{t("workflows:variablesTable.editable")}</Badge>
           ) : (
-            <Badge variant="outline">Read-only</Badge>
+            <Badge variant="outline">{t("workflows:variablesTable.readOnly")}</Badge>
           )}
           {row.sensitive && (
             <Badge variant="outline">
-              <Lock /> Sensitive
+              <Lock /> {t("workflows:variablesTable.sensitive")}
             </Badge>
           )}
           {row.usages !== undefined && row.usages > 0 && (
-            <Badge variant="secondary" title={`Used ${row.usages} time(s)`}>
-              Used {row.usages}×
+            <Badge
+              variant="secondary"
+              title={t("workflows:variablesTable.usedTimes", { count: row.usages })}
+            >
+              {t("workflows:variablesTable.used", { count: row.usages })}
             </Badge>
           )}
         </span>
@@ -301,7 +321,7 @@ function VariableTableRow({
             type="button"
             variant="ghost"
             size="icon"
-            aria-label={`Copy ${row.reference}`}
+            aria-label={t("workflows:variablesTable.copy", { reference: row.reference })}
             onClick={copy}
           >
             <ClipboardCopy />
@@ -311,7 +331,7 @@ function VariableTableRow({
               type="button"
               variant="ghost"
               size="icon"
-              aria-label={`Edit ${row.reference}`}
+              aria-label={t("workflows:variablesTable.edit", { reference: row.reference })}
               onClick={() => {
                 if (row.sharedKey) onEdit(row.sharedKey)
               }}

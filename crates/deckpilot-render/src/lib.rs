@@ -5,13 +5,24 @@
 //! (previews), so both draw exactly the same.
 
 mod face;
+mod gradient;
 pub mod icons;
+mod library;
 mod marks;
+mod marquee;
 mod text;
+mod vector;
 
-pub use face::{FrameCache, render, render_with};
-pub use icons::{IconError, Icons};
-pub use text::{FALLBACK_ICON, has_icon, icon_names};
+pub use face::{
+    FrameCache, KeyColors, TextReport, background_preview, key_colors, marquee, render, render_for,
+    render_scrolled, render_with, text_report,
+};
+pub use icons::{IconError, Icons, LibraryAsset};
+pub use library::{
+    LibraryIcon, icon_thumbnail_png, library_categories, library_icon, library_icons, search_icons,
+};
+pub use marquee::{MARQUEE_FPS, Marquee, frame_interval, marquee_timeline, next_frame};
+pub use text::{FALLBACK_ICON, has_icon, has_title_font, icon_names};
 
 /// Encodes a frame as PNG, e.g. for a preview in the app.
 pub fn frame_png(frame: &deckpilot_device::Frame) -> Option<Vec<u8>> {

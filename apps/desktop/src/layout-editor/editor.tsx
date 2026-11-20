@@ -10,24 +10,24 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core"
-import { Redo2, RotateCcw, Save, Undo2 } from "lucide-react"
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
+import { ListOrdered, Redo2, RotateCcw, Save, Undo2 } from "lucide-react"
+import {
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react"
 import { toast } from "sonner"
 
 import { DeviceCanvas } from "@/components/device-canvas"
-import { deviceGeometry, KEY_SIZE, keySize } from "@/components/device-geometry"
+import { ModalShell } from "@/components/dialogs"
+import { DialogsContext } from "@/components/dialogs/use-dialogs"
+import { KEY_SIZE, keyBorderPixels } from "@/components/device-geometry"
 import { EmptyState, ErrorNotice } from "@/components/page"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader } from "@/components/ui/card"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
 import { displayPixels, useDevicePixelRatio } from "@/hooks/use-device-pixel-ratio"
 import { IS_MAC } from "@/hooks/use-navigation"
 import { api, errorMessage } from "@/lib/api"
@@ -40,6 +40,8 @@ import {
   whyNotOnControl,
 } from "@/lib/compatibility"
 import { pluginActionUnavailable, withPluginTypes } from "@/lib/plugin-actions"
+import { isSystemBack, systemBackControl } from "@/lib/folder-back"
+import { isFolderControl } from "@/lib/folder-control"
 import {
   bindingsFor,
   controlKey,
@@ -60,6 +62,7 @@ import {
 } from "@/lib/layout-navigation"
 import { StepEditor } from "@/pages/workflow-steps"
 import { useOptionalEditorSelection } from "@/shell/editor-selection-context"
+import { type TranslationKey, useTranslation } from "@/i18n"
 import type {
   ActionInstance,
   ActionType,
@@ -74,8 +77,9 @@ import type {
   Workflow,
 } from "@/lib/types"
 
-import { effectiveUsage } from "./appearance"
-import { AppearancePanel, type IconState } from "./appearance-panel"
+import { defaultAppearanceOf, effectiveUsage, shownBinding } from "./appearance"
+import type { IconState } from "./icon-library"
+import { type KeyLook, KeyLookContext } from "./key-look-context"
 import {
   catalogGroups,
   existingDefault,
@@ -89,29 +93,45 @@ import {
   boundControls,
   folderOf,
   isFree,
+  opensFolderBesides,
   orderedControls,
   pageDeletion,
   parseControlKey,
   type ActionPreset,
   type DragSource,
 } from "./editing"
-import { Inspector } from "./inspector"
+import { Inspector, InspectorDeselect } from "./inspector"
 import { LibraryDock } from "./library-dock"
 import { LibraryPanel, type PresetEntry } from "./library-panel"
 import { dragLook } from "./drag-look"
 import { DragPreview } from "./drag-preview"
-import { PageNav } from "./page-nav"
-import { PageSettings, PagesSheet } from "./page-settings"
-import { PageTreePanel } from "./page-tree-panel"
+import { PageNavigationDock } from "./page-nav"
+import { PageNavigator } from "./page-navigator"
+import { newPageName } from "./page-navigation"
 import { markIncompatible, targetGroups } from "./targets"
 import { useEditorShortcuts } from "@/hooks/use-editor-shortcuts"
 import { shortcutLabel } from "@/lib/shortcuts"
-import { useElementSize } from "./use-element-size"
+import { cn } from "@/lib/utils"
 import { useIcons } from "./use-icons"
+import { useVisualLibrary } from "./use-visual-library"
 import { useLayoutEditing } from "./use-layout-editing"
 import { LiveValuesNote } from "./live-values-note"
 import { useLiveKeyStates } from "./use-live-key-states"
 import { usePreviewFaces } from "./use-preview-faces"
+import { useMarqueeFrames } from "./use-marquee-frames"
+import { previewPixels } from "./canvas-viewport"
+import { DeviceViewport } from "./device-viewport"
+import {
+  adjacentPage,
+  canGoBack,
+  controlMove,
+  peekLayoutHistory,
+  popLayoutHistory,
+  pushLayoutHistory,
+  type EditorMove,
+} from "./preview-navigation"
+import { useDeviceSimulation } from "./use-device-simulation"
+import { type LiveStatus, useLivePreview } from "./use-live-preview"
 
 /**
  * Action types and default gesture timings for the gesture editor. In
@@ -150,7 +170,7 @@ export function LayoutEditor({
   view,
   model,
   saved,
-  header,
+  notices,
   device = null,
   onDirtyChange,
   onSaved,
@@ -159,8 +179,8 @@ export function LayoutEditor({
   view: ProfileView
   model: DeviceModel
   saved: DeviceLayout
-  /** Shown above the device, e.g. the layout chooser. */
-  header?: ReactNode
+  /** Notes about the layout, shown at the top of the workspace (e.g. it is shared). */
+  notices?: ReactNode
   /**
    * The connected device the editor is for, as the agent reports it: the
    * layout it shows and whether Back to previous layout can go back.
@@ -169,6 +189,8 @@ export function LayoutEditor({
   onDirtyChange: (dirty: boolean) => void
   onSaved: () => void
 }) {
+  const { t, i18n: translations } = useTranslation()
+  const language = translations.language
   const { profiles, refresh, agent } = useAppContext()
   // Actions created by dropping a type from the catalog, until the
   // reloaded profile has them: they are named, drawn and reused at once.
@@ -223,8 +245,8 @@ export function LayoutEditor({
       .filter((l) => l.id !== saved.id)
       .map((l) => ({
         key: `switch-layout:${l.id}`,
-        label: `Switch to ${l.name}`,
-        description: `Shows ${l.name} on this device; Back to previous layout returns here.`,
+        label: t("editor:shell.switchPreset.label", { layout: l.name }),
+        description: t("editor:shell.switchPreset.description", { layout: l.name }),
         category: switchType.category,
         type: switchType,
         preset: {
@@ -232,7 +254,7 @@ export function LayoutEditor({
           parameters: layoutSwitchParameters({ layout: l.id, page: null, history: "push" }),
         },
       }))
-  }, [switchType, view.profile.layouts, model.id, saved.id])
+  }, [switchType, view.profile.layouts, model.id, saved.id, t])
   const typeOfTarget = (target: BindingTarget): ActionType | undefined => {
     if (target.type !== "action") return undefined
     const action = actions.find((a) => a.id === target.action)
@@ -254,7 +276,7 @@ export function LayoutEditor({
     (control, target, trigger) => incompatibleFor(control, target, trigger) === null,
     initialPlace,
   )
-  const { draft, pageId, selected, selection, commands } = editing
+  const { draft, pageId, selected, editable, selection, commands } = editing
   const rememberPlace = shell?.rememberPlace
   const trail = editing.trail
   useEffect(() => {
@@ -277,6 +299,14 @@ export function LayoutEditor({
   const openSteps = workflows.find((w) => w.id === stepsOf)
   const profile = useMemo(() => ({ actions, workflows, projects }), [actions, workflows, projects])
   const library = useIcons(profileId)
+  // Read again when a plugin changed (installed, enabled, disabled,
+  // removed): its icons and backgrounds come and go with it.
+  const visualLibrary = useVisualLibrary(
+    modules
+      .filter((m) => m.id.includes("."))
+      .map((m) => `${m.id}:${String(m.enabled)}`)
+      .join(","),
+  )
   // The page's actions whose keys may show live values: the agent reports
   // their states, the same ones the device's keys show.
   const pageActions = useMemo(
@@ -287,41 +317,52 @@ export function LayoutEditor({
     [draft, pageId],
   )
   const liveStates = useLiveKeyStates(profileId, pageActions, agent)
-  // The preview fills the width of its workspace and at most about half
-  // the editor's height, so the inspector stays in view below it.
-  const workspace = useRef<HTMLDivElement>(null)
-  const main = useRef<HTMLDivElement>(null)
-  const space = useElementSize(workspace)
-  const editorSpace = useElementSize(main)
-  const unit = space
-    ? keySize(
-        {
-          // Less the padding around the device.
-          width: space.width - 16,
-          height: editorSpace ? editorSpace.height * 0.55 : undefined,
-        },
-        deviceGeometry(model),
-      )
-    : KEY_SIZE.fallback
+  // The key size the canvas shows the device at (device-viewport.tsx: its
+  // zoom), once the zoom has rested.
+  const [unit, setUnit] = useState<number>(KEY_SIZE.fallback)
   // Key images are drawn for the size they are shown at (inside the key's
-  // 1px border) on this display, never scaled up from the device's pixels.
+  // border, device-canvas.tsx) on this display, never scaled up from the
+  // device's pixels, within the sizes the renderer draws. Only the
+  // preview: the device draws its own images.
   const pixelRatio = useDevicePixelRatio()
-  const keyPixels = displayPixels(unit - 2, pixelRatio)
-  const { faces, images, incompatible } = usePreviewFaces(
+  const keyPixels = previewPixels(displayPixels(unit - 2 * keyBorderPixels(unit), pixelRatio))
+  const { faces, images, incompatible, reports, navigation } = usePreviewFaces(
     profileId,
     draft,
     pageId,
-    library.icons.map((i) => i.id).join(","),
+    `${library.icons.map((i) => i.id).join(",")}|${String(visualLibrary.version)}`,
     liveStates.live,
     keyPixels,
   )
+  // Scrolling titles play as on the device (unless motion is reduced).
+  const animations = useMarqueeFrames(profileId, draft, pageId, reports, liveStates.live, keyPixels)
   const iconState: IconState = {
     ...library,
     usage: (icon) => effectiveUsage(icon.usages, icon.id, editing.baseline, draft),
   }
+  // What the Inspector's key header and its popovers read: the Canvas's
+  // images of the keys, the icons and the one way to restyle the selection.
+  const keyLook: KeyLook = {
+    draft,
+    pageId,
+    defaults: defaultAppearanceOf(model),
+    images,
+    animations,
+    faces,
+    reports,
+    icons: iconState,
+    library: visualLibrary,
+    typeOf: (control) => {
+      const target = shownBinding(draft, pageId, control)?.target
+      return target ? typeOfTarget(target) : undefined
+    },
+    restyle: commands.restyle,
+  }
   const groups = useMemo(
     () => targetGroups(profile, draft, pageId, (type) => pluginActionUnavailable(modules, type)),
-    [profile, draft, pageId, modules],
+    // The groups' labels are translated: rebuilt when the language changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [profile, draft, pageId, modules, language],
   )
   const bound = boundControls(draft, pageId)
   const controls = orderedControls(model)
@@ -343,6 +384,25 @@ export function LayoutEditor({
   const dropRejection = (control: ControlId, dragged: unknown): string | null => {
     const source = dragged as DragSource | undefined
     if (!source) return null
+    // The folder's system Back is the agent's: nothing goes on it, and it
+    // does not move.
+    if (
+      isSystemBack(model, draft, pageId, control) ||
+      (source.type === "control" && isSystemBack(model, draft, pageId, source.control))
+    ) {
+      return t("editor:systemBack.dropRefused")
+    }
+    // A folder key only opens its folder: no action, workflow or page goes
+    // on it (moving it, or another key onto it, swaps them).
+    if (source.type !== "control" && isFolderControl(draft, pageId, control)) {
+      return t("editor:folderControl.dropRefused")
+    }
+    if (
+      source.type === "target" &&
+      opensFolderBesides(model, draft, pageId, control, source.target)
+    ) {
+      return t("editor:folderControl.needsFreeKey")
+    }
     if (source.type === "actionType") {
       const type = typeById.get(source.actionType)
       return type ? whyNotOnControl(type, model, control) : null
@@ -363,20 +423,33 @@ export function LayoutEditor({
     }
     return null
   }
-  /** What is dragged, as the announcement names it. */
-  const draggedName = (dragged: unknown): string => {
+  /**
+   * What is dragged, as the announcement names it: its name, or which
+   * generic wording to use when it has none.
+   */
+  const draggedName = (dragged: unknown): { item: string } | "action" | "this" => {
     const source = dragged as DragSource | undefined
-    if (source?.type === "actionType")
-      return source.preset?.name ?? typeById.get(source.actionType)?.name ?? "The action"
-    if (source?.type === "target") {
-      return targetLabel(source.target, actions, workflows, draft)
+    if (source?.type === "actionType") {
+      const name = source.preset?.name ?? typeById.get(source.actionType)?.name
+      return name ? { item: name } : "action"
     }
-    if (source?.type === "control") return controlLabel(source.control)
-    return "This"
+    if (source?.type === "target") {
+      return { item: targetLabel(source.target, actions, workflows, draft) }
+    }
+    if (source?.type === "control") return { item: controlLabel(source.control) }
+    return "this"
+  }
+  /** "… cannot go on <control>. <why>", for the announcement. */
+  const cannotGo = (control: ControlId, dragged: unknown, reason: string) => {
+    const name = draggedName(dragged)
+    const values = { control: controlLabel(control), reason }
+    if (name === "action") return t("editor:shell.drop.refusedAction", values)
+    if (name === "this") return t("editor:shell.drop.refusedThis", values)
+    return t("editor:shell.drop.refused", { ...values, item: name.item })
   }
   const refusal = (control: ControlId, dragged: unknown): string | null => {
     const why = dropRejection(control, dragged)
-    return why ? `${draggedName(dragged)} cannot go on ${controlLabel(control)}. ${why}` : null
+    return why ? cannotGo(control, dragged, why) : null
   }
   // The control that just refused a drop and the announcement, for a moment.
   const [rejected, setRejected] = useState<{ control: ControlId; message: string } | null>(null)
@@ -388,10 +461,17 @@ export function LayoutEditor({
     [],
   )
   const reject = (control: ControlId, dragged: unknown, why: string) => {
-    const message = `${draggedName(dragged)} cannot go on ${controlLabel(control)}. ${why}`
-    toast.error(`${draggedName(dragged)} was not put on ${controlLabel(control)}`, {
-      description: why,
-    })
+    const message = cannotGo(control, dragged, why)
+    const name = draggedName(dragged)
+    const values = { control: controlLabel(control) }
+    toast.error(
+      name === "action"
+        ? t("editor:shell.drop.notPutAction", values)
+        : name === "this"
+          ? t("editor:shell.drop.notPutThis", values)
+          : t("editor:shell.drop.notPut", { ...values, item: name.item }),
+      { description: why },
+    )
     setRejected({ control, message })
     clearTimeout(rejectedTimer.current)
     rejectedTimer.current = setTimeout(() => {
@@ -408,7 +488,9 @@ export function LayoutEditor({
     onDragEnd(event) {
       const control = event.over ? parseControlKey(String(event.over.id)) : null
       const why = control ? refusal(control, event.active.data.current) : null
-      return why ? `Not placed. ${why}` : defaultAnnouncements.onDragEnd(event)
+      return why
+        ? t("editor:shell.drop.notPlaced", { reason: why })
+        : defaultAnnouncements.onDragEnd(event)
     },
   }
 
@@ -439,7 +521,7 @@ export function LayoutEditor({
       }
       return { type: "action", action: action.id }
     } catch (e) {
-      toast.error(`“${preset?.name ?? type.name}” could not be added`, {
+      toast.error(t("editor:shell.addFailed", { name: preset?.name ?? type.name }), {
         description: errorMessage(e),
       })
       return null
@@ -465,7 +547,7 @@ export function LayoutEditor({
       setStepsOf(workflow.id)
       return { type: "workflow", workflow: workflow.id }
     } catch (e) {
-      toast.error("The Multi Action could not be created", { description: errorMessage(e) })
+      toast.error(t("editor:shell.multiActionFailed"), { description: errorMessage(e) })
       return null
     }
   }
@@ -488,8 +570,8 @@ export function LayoutEditor({
       const opensItself = source.target.type === "openPage" && source.target.page === pageId
       if (!opensItself) return source.target
     }
-    toast.error("A gesture takes an action, a workflow or another page", {
-      description: "Drag one from the library onto the gesture.",
+    toast.error(t("editor:shell.gestureDrop.title"), {
+      description: t("editor:shell.gestureDrop.description"),
     })
     return null
   }
@@ -523,9 +605,9 @@ export function LayoutEditor({
             profiles.activeProfileId === profileId ? device : null,
             draft.id,
           ),
-        ].map((key) => [key, "No previous layout"]),
+        ].map((key) => [key, t("editor:shell.noPreviousLayout")]),
       ),
-    [pageBindings, actions, profiles.activeProfileId, profileId, device, draft.id],
+    [pageBindings, actions, profiles.activeProfileId, profileId, device, draft.id, t],
   )
   const icons = useMemo(() => {
     const map = new Map<string, string | null | undefined>()
@@ -540,6 +622,8 @@ export function LayoutEditor({
     }
     return map
   }, [pageBindings, actions])
+  // The drawn faces' icons, for the key header's preview as for the Canvas.
+  keyLook.symbols = icons
   // Labels such as {project.key} show the profile's active project, as on
   // the device; nothing to choose here (projects are an optional module).
   const previewed = projects.find((p) => p.id === view.activeProjectId)
@@ -555,14 +639,17 @@ export function LayoutEditor({
         .replaceAll("{page.name}", findPage(draft, pageId)?.name ?? "-")
     const map = new Map<string, string>()
     for (const control of orderedControls(model)) {
-      const labels = bindingsFor(draft, pageId, control).map(
-        (b) =>
-          `${triggerLabel(b.trigger)}: ${render(b.label ?? targetLabel(b.target, actions, workflows, draft))}`,
+      const labels = bindingsFor(draft, pageId, control).map((b) =>
+        t("editor:canvas.summaryEntry", {
+          trigger: triggerLabel(b.trigger),
+          label: render(b.label ?? targetLabel(b.target, actions, workflows, draft)),
+        }),
       )
       if (labels.length > 0) map.set(controlKey(control), labels.join(" · "))
     }
     return map
-  }, [model, draft, pageId, actions, workflows, previewed, view.profile.name])
+    // `t` changes with the language, as do the labels of the triggers.
+  }, [model, draft, pageId, actions, workflows, previewed, view.profile.name, t])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -599,42 +686,200 @@ export function LayoutEditor({
       event.preventDefault()
       commands.selectAll(controls)
     } else if (event.key === "Enter" && event.shiftKey) {
+      // The keyboard's double-click: editor navigation only.
       event.preventDefault()
-      commands.openFolder(control)
+      navigate(control)
     }
   }
 
-  const save = async () => {
+  // The device shows and runs the draft while the editor is open, and the
+  // editor follows where the device goes (use-live-preview.ts).
+  const live = useLivePreview({
+    agent,
+    device: device ?? null,
+    profileId,
+    layoutId: draft.id,
+    pageId,
+    trail,
+    draft,
+    onDevice: (shown) => {
+      if (shown.profile !== profileId || !shown.layout) return
+      const page = shown.stack.at(-1)
+      const through = shown.stack.slice(0, -1)
+      if (shown.layout === draft.id) {
+        const moved = page !== pageId || through.join("/") !== trail.join("/")
+        if (page && moved && findPage(draft, page)) commands.openAt(page, through)
+        return
+      }
+      // Another layout of the profile: followed unless something is
+      // unsaved (the notice above the device offers to open it).
+      const other = switchableLayouts(view.profile.layouts, model.id).find(
+        (l) => l.id === shown.layout,
+      )
+      if (!shell || dirty || !other) return
+      shell.rememberPlace(`${profileId}:${other.id}`, {
+        pageId: page && findPage(other, page) ? page : other.homePage,
+        trail: through.filter((id) => findPage(other, id)),
+        selection: { controls: [], anchor: null, focus: null },
+      })
+      shell.selectLayout(other.id)
+    },
+  })
+
+  const save = async (): Promise<boolean> => {
     setErrors([])
+    // The device has the draft that is saved: nothing to draw afterwards.
+    live.flush()
     try {
       const saved = await api.saveLayout(profileId, draft)
       toastSaved(
         profiles.activeProfileId === profileId && appliedByAgent(saved.agentReload)
-          ? "Layout saved and sent to the agent"
-          : "Layout saved",
+          ? t("editor:shell.saved.sent")
+          : t("editor:shell.saved.saved"),
         saved.agentReload,
       )
       const kept = saved.incompatible ?? []
       if (kept.length > 0) {
-        toast.warning(
-          kept.length === 1
-            ? "1 binding is kept but not run"
-            : `${kept.length} bindings are kept but not run`,
-          {
-            description: `Their action cannot run from their control: ${kept.map(readableTriggers).join("; ")}`,
-          },
-        )
+        toast.warning(t("editor:shell.saved.keptNotRun", { count: kept.length }), {
+          description: t("editor:shell.saved.keptNotRunDetail", {
+            list: kept.map(readableTriggers).join("; "),
+          }),
+        })
       }
       onSaved()
       refresh()
+      return true
     } catch (e) {
       setErrors(errorMessage(e).split("\n"))
+      return false
     }
   }
 
-  const [managingPages, setManagingPages] = useState(false)
+  // The double-click of the preview: editor navigation only, resolved from
+  // data (preview-navigation.ts); it never runs or simulates anything.
+  const dialogs = useContext(DialogsContext)
+  const layoutsOfModel = switchableLayouts(view.profile.layouts, model.id)
+  const moveOf = (control: ControlId): EditorMove | null =>
+    isSystemBack(model, draft, pageId, control)
+      ? { type: "back" }
+      : controlMove(
+          draft,
+          pageId,
+          control,
+          actions,
+          (id) => typeById.get(id),
+          navigation.get(controlKey(control)),
+        )
+  /** Shows another layout of the profile, asking first over unsaved changes. */
+  const showLayout = async (to: string, page: string | null, back: boolean) => {
+    const target = layoutsOfModel.find((l) => l.id === to)
+    if (!shell || !target) return
+    if (to === draft.id) {
+      if (page && findPage(draft, page)) commands.openPage(page)
+      return
+    }
+    if (dirty) {
+      const discard = dialogs
+        ? await dialogs.destructive({
+            title: t("editor:editing.discard.title"),
+            description: t("editor:editing.discard.description"),
+            confirmLabel: t("editor:editing.discard.confirm"),
+          })
+        : shell.guard()
+      if (!discard) return
+      shell.setDirty(false)
+    }
+    // The other layout opens at its page (else its home page), with no
+    // folder trail; zoom and pan are the model's, so they stay.
+    const shown = page && findPage(target, page) ? page : target.homePage
+    shell.rememberPlace(`${profileId}:${to}`, {
+      pageId: shown,
+      trail: [],
+      selection: { controls: [], anchor: null, focus: null },
+    })
+    if (back) popLayoutHistory(profileId, model.id)
+    else pushLayoutHistory(profileId, model.id, draft.id)
+    shell.selectLayout(to)
+  }
+  const navigate = (control: ControlId) => {
+    const move = moveOf(control)
+    if (!move) return
+    switch (move.type) {
+      case "enter":
+        commands.enter(move.page)
+        return
+      case "back":
+        if (canGoBack(draft, pageId, editing.trail)) commands.back()
+        return
+      case "page": {
+        const to = adjacentPage(draft, pageId, move.direction, move.wrapAround)
+        if (to) commands.openPage(to)
+        return
+      }
+      case "layout":
+        void showLayout(move.layout, move.page, false)
+        return
+      case "layoutBack": {
+        const previous = peekLayoutHistory(profileId, model.id)
+        if (previous) void showLayout(previous, null, true)
+        return
+      }
+    }
+  }
+
+  const simulation = useDeviceSimulation(
+    {
+      profileId,
+      layoutId: draft.id,
+      pageId,
+      device: device ?? null,
+      agent,
+      activeProfileId: profiles.activeProfileId,
+    },
+    dirty,
+    save,
+    // The device runs the draft: a test runs what is on screen.
+    live.live,
+  )
+  /** "Remove assignment": asks first, as it removes bindings (undo still works). */
+  const removeAssignments = async () => {
+    if (selected.length === 0) return
+    if (dialogs) {
+      const subject =
+        selected.length === 1 && selected[0]
+          ? controlLabel(selected[0])
+          : t("editor:controlMenu.controls", { count: selected.length })
+      const ok = await dialogs.destructive({
+        title: t("editor:preview.remove.title", { subject }),
+        description: t("editor:preview.remove.description"),
+        confirmLabel: t("editor:controlMenu.clear"),
+      })
+      if (!ok) return
+    }
+    commands.clear()
+  }
+  const focusInspector = () => {
+    const inspector = document.querySelector<HTMLElement>(
+      "[data-slot=device-editor] [data-slot=inspector]",
+    )
+    const field = inspector?.querySelector<HTMLElement>(
+      "input:not([disabled]), textarea:not([disabled]), button:not([disabled]), [role=combobox]",
+    )
+    ;(field ?? inspector)?.focus()
+  }
 
   const folder = selection.focus ? folderOf(draft, pageId, selection.focus) : undefined
+  // The folder's protected system Back on the canvas, with what it is.
+  const systemBack = systemBackControl(model, draft, pageId)
+  const systemControls = useMemo(
+    () =>
+      systemBack
+        ? new Map([[controlKey(systemBack), t("editor:systemBack.canvasDescription")]])
+        : undefined,
+    // `t` changes with the language.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [systemBack?.kind, systemBack?.index, t],
+  )
   const isFolderPage = pageId !== draft.homePage
   const hasControls = controls.length > 0
 
@@ -654,226 +899,361 @@ export function LayoutEditor({
         inspector (below the device).
       */}
       <div data-slot="device-editor" className="relative flex min-h-0 flex-1 max-[859px]:flex-col">
+        {/*
+          The workspace: one dark surface (`dark workspace-scope`, see
+          index.css) in either app theme, in three parts that never move
+          each other: the editing bar, the device canvas (a fixed share of
+          the height, zoomed and panned, never scrolling: device-viewport.tsx)
+          with its page navigation, and below it the inspector, the only
+          part that scrolls.
+          A scroll container must also be the containing block of its
+          content (`relative`): otherwise absolutely positioned descendants,
+          such as the visually hidden file input of the icon controls, are not
+          clipped there and stretch the next container up instead, which then
+          scrolls past the editor into blank space.
+        */}
         <div
-          ref={main}
           data-slot="device-editor-main"
-          className="grid min-w-0 flex-1 content-start gap-4 overflow-y-auto p-4"
+          className="dark workspace-scope relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-workspace text-workspace-foreground"
         >
-          {header}
-          <Card className="min-w-0">
-            <CardHeader className="gap-3 border-b [.border-b]:pb-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Input
-                  aria-label="Layout name"
-                  className="h-8 w-56 font-medium"
-                  value={draft.name}
-                  onChange={(e) => {
-                    commands.change({ ...draft, name: e.target.value }, "layout-name")
-                  }}
-                />
-                {dirty && <Badge variant="outline">Unsaved</Badge>}
-                <div className="flex-1" />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Undo"
-                  title={`Undo (${shortcutLabel("Z")})`}
-                  disabled={!editing.canUndo}
-                  onClick={commands.undo}
-                >
-                  <Undo2 />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Redo"
-                  title={`Redo (${shortcutLabel("Z", true)})`}
-                  disabled={!editing.canRedo}
-                  onClick={commands.redo}
-                >
-                  <Redo2 />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={!dirty}
-                  onClick={() => {
-                    commands.revert()
-                    setErrors([])
-                  }}
-                >
-                  <RotateCcw /> Revert
-                </Button>
-                <Button size="sm" disabled={!dirty} onClick={() => void save()}>
-                  <Save /> Save
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent className="grid gap-4">
-              {errors.length > 0 && <ErrorNotice error={errors.map(readableTriggers).join(" ")} />}
-              <p
-                className="sr-only"
-                role="status"
-                aria-live="assertive"
-                data-slot="drop-announcement"
-              >
-                {rejected?.message ?? ""}
-              </p>
-              {hasControls ? (
-                <div
-                  ref={workspace}
-                  data-slot="device-workspace"
-                  className="grid min-w-0 justify-items-center gap-3"
-                >
-                  {/* Scrolls sideways only where even the smallest keys do not fit. */}
-                  <div className="flex max-w-full justify-center-safe overflow-x-auto p-2">
-                    <DeviceCanvas
-                      model={model}
-                      keySize={unit}
-                      images={images}
-                      faces={faces}
-                      unavailable={noWayBack}
-                      icons={icons}
-                      captions={summaries}
-                      summaries={summaries}
-                      selection={selection.controls}
-                      focused={selection.focus}
-                      onSelect={commands.select}
-                      onOpen={commands.openFolder}
-                      onControlKeyDown={onControlKeyDown}
-                      droppable
-                      draggable
-                      dropRejection={dropRejection}
-                      rejected={rejected?.control ?? null}
-                      wrapControl={(control, element) => (
-                        <ControlMenu
-                          label={controlLabel(control)}
-                          groups={groupsFor(control)}
-                          state={{
-                            count: selected.length,
-                            hasBindings: selected.some((c) => bound.has(controlKey(c))),
-                            canPaste: editing.clipboard !== null,
-                            folderName: (() => {
-                              const id = folderOf(draft, pageId, control)
-                              return id ? findPage(draft, id)?.name : undefined
-                            })(),
-                            canCreateFolder: isFree(draft, pageId, control),
-                          }}
-                          commands={{
-                            onOpen: () => {
-                              commands.selectForMenu(control)
-                            },
-                            assign: commands.assign,
-                            copy: commands.copy,
-                            cut: commands.cut,
-                            paste: commands.paste,
-                            duplicate: commands.duplicate,
-                            clear: commands.clear,
-                            openFolder: () => {
-                              commands.openFolder(control)
-                            },
-                            newFolder: () => {
-                              commands.newFolder(control)
-                            },
-                          }}
-                        >
-                          {element}
-                        </ControlMenu>
-                      )}
-                    />
-                  </div>
-                  <PageNav
-                    draft={draft}
-                    pageId={pageId}
-                    trail={editing.trail}
-                    onOpen={commands.openPage}
-                    onBack={commands.back}
-                    onAdd={commands.addPage}
-                    onManage={() => {
-                      setManagingPages(true)
-                    }}
-                    status={<LiveValuesNote status={liveStates.status} live={liveStates.live} />}
-                  />
-                </div>
+          <div
+            role="toolbar"
+            aria-label={t("editor:bar.label")}
+            data-slot="editing-bar"
+            className="z-10 box-content flex h-(--toolbar-height) shrink-0 items-center gap-1 border-b bg-workspace px-3"
+          >
+            <p
+              className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
+              data-slot="editing-state"
+            >
+              {dirty ? (
+                <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
+                  <span aria-hidden className="size-1.5 rounded-full bg-warning" />
+                  {t("editor:bar.unsaved")}
+                </span>
               ) : (
-                <EmptyState title={`${model.name} has no configurable controls`} />
+                t("editor:bar.allSaved")
               )}
-              {hasControls && bound.size === 0 && (
-                <EmptyState title={isFolderPage ? "This folder is empty" : "This page is empty"}>
-                  Drag an action, a workflow or “New folder” from the library onto a control, or
-                  select a control and choose in the inspector.
-                </EmptyState>
-              )}
-              {isFolderPage && !hasWayBack(draft, pageId) && (
-                <p className="text-xs text-muted-foreground" role="note">
-                  This folder has no “Back” binding. On the device, DeckPilot adds one on its first
-                  free key. To choose the key, drag “Back” from the library onto a control.
-                </p>
-              )}
-            </CardContent>
-          </Card>
-
-          <Inspector
-            model={model}
-            draft={draft}
-            pageId={pageId}
-            selection={selected}
-            focus={selection.focus}
-            groups={groups}
-            folder={folder}
-            profile={profile}
-            types={gestureContext.types}
-            gestureDefaults={gestureContext.defaults}
-            issues={errors}
-            onChange={commands.change}
-            onClear={commands.clear}
-            onOpenFolder={() => {
-              if (selection.focus) commands.openFolder(selection.focus)
-            }}
-            onClose={commands.clearSelection}
-            resolveDrop={resolveSlotDrop}
-            onEditWorkflow={setStepsOf}
-            incompatible={incompatibleFor}
-            layoutNavigation={{
-              profileId,
-              modelName: model.name,
-              layouts: switchableLayouts(view.profile.layouts, model.id),
-              defaultLayout:
-                view.profile.activeLayouts?.[model.id] ??
-                switchableLayouts(view.profile.layouts, model.id)[0]?.id ??
-                null,
-              usages: view.actionUsages,
-              device,
-              onActionSaved: (action) => {
-                remember(action)
-                refresh()
-              },
-            }}
-            notRun={
-              selection.focus
-                ? (incompatible.get(controlKey(selection.focus)) ?? []).map((found) => ({
-                    trigger: found.trigger,
-                    reason: describeIncompatibility(
-                      found.reason,
-                      model,
-                      selection.focus ? controlCapabilities(model, selection.focus) : null,
-                    ),
-                  }))
-                : []
-            }
-            appearance={
-              selected.length > 0 ? (
-                <AppearancePanel
+              <LiveBadge status={live.status} problem={live.problem} />
+            </p>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t("editor:bar.undo")}
+              title={t("navigation:toolbar.withShortcut", {
+                label: t("editor:bar.undo"),
+                shortcut: shortcutLabel("Z"),
+              })}
+              disabled={!editing.canUndo}
+              onClick={commands.undo}
+            >
+              <Undo2 />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t("editor:bar.redo")}
+              title={t("navigation:toolbar.withShortcut", {
+                label: t("editor:bar.redo"),
+                shortcut: shortcutLabel("Z", true),
+              })}
+              disabled={!editing.canRedo}
+              onClick={commands.redo}
+            >
+              <Redo2 />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!dirty}
+              onClick={() => {
+                commands.revert()
+                setErrors([])
+              }}
+            >
+              <RotateCcw /> {t("editor:bar.revert")}
+            </Button>
+            <Button
+              size="sm"
+              disabled={!dirty}
+              title={t("navigation:toolbar.withShortcut", {
+                label: t("editor:bar.save"),
+                shortcut: shortcutLabel("S"),
+              })}
+              onClick={() => void save()}
+            >
+              <Save /> {t("editor:bar.save")}
+            </Button>
+          </div>
+          <p className="sr-only" role="status" aria-live="assertive" data-slot="drop-announcement">
+            {rejected?.message ?? ""}
+          </p>
+          {hasControls ? (
+            <DeviceViewport
+              model={model}
+              onKeySizeSettled={setUnit}
+              status={<LiveValuesNote status={liveStates.status} live={liveStates.live} />}
+              footer={
+                <PageNavigationDock
                   draft={draft}
                   pageId={pageId}
-                  controls={selected}
-                  images={images}
-                  icons={iconState}
-                  onChange={commands.restyle}
+                  trail={editing.trail}
+                  onOpen={commands.openPage}
+                  onNavigate={commands.openAt}
+                  onAdd={(name) => {
+                    commands.addPage(name)
+                  }}
+                  onRename={(name) => {
+                    commands.renamePage(name, pageId)
+                  }}
+                  navigator={(close) => (
+                    <PageNavigator
+                      profileId={profileId}
+                      draft={draft}
+                      dirty={dirty}
+                      pageId={pageId}
+                      newPageName={() => newPageName(draft)}
+                      onClose={close}
+                      commands={{
+                        open: commands.openPage,
+                        rename: (page, name) => {
+                          commands.renamePage(name, page)
+                        },
+                        remove: commands.deletePage,
+                        addIn: (folder, name) => {
+                          commands.addPage(name, folder)
+                        },
+                        setAutoReturn: (page, on) => {
+                          commands.setAutoReturn(on, page)
+                        },
+                        stored: (layout, page) => {
+                          if (layout) commands.reset(layout, page)
+                          onSaved()
+                          refresh()
+                        },
+                      }}
+                    />
+                  )}
                 />
-              ) : undefined
-            }
-          />
+              }
+              renderCanvas={(keySize, visible) => (
+                <DeviceCanvas
+                  model={model}
+                  keySize={keySize}
+                  visible={visible}
+                  images={images}
+                  animations={animations}
+                  faces={faces}
+                  unavailable={noWayBack}
+                  system={systemControls}
+                  icons={icons}
+                  captions={summaries}
+                  summaries={summaries}
+                  selection={selection.controls}
+                  focused={selection.focus}
+                  onSelect={commands.select}
+                  onOpen={navigate}
+                  onControlKeyDown={onControlKeyDown}
+                  droppable
+                  draggable
+                  dropRejection={dropRejection}
+                  rejected={rejected?.control ?? null}
+                  wrapControl={(control, element) => {
+                    const protectedBack = isSystemBack(model, draft, pageId, control)
+                    return (
+                      <ControlMenu
+                        label={controlLabel(control)}
+                        groups={groupsFor(control)}
+                        state={{
+                          count: selected.length,
+                          hasBindings: editable.some((c) => bound.has(controlKey(c))),
+                          canPaste: editing.clipboard !== null,
+                          folderName: (() => {
+                            const id = folderOf(draft, pageId, control)
+                            return id ? findPage(draft, id)?.name : undefined
+                          })(),
+                          canCreateFolder: isFree(draft, pageId, control) && !protectedBack,
+                          systemBack: protectedBack,
+                          folderControl: isFolderControl(draft, pageId, control),
+                          goesBack:
+                            moveOf(control)?.type === "back" &&
+                            canGoBack(draft, pageId, editing.trail),
+                          testUnavailable:
+                            !protectedBack &&
+                            !bound.has(controlKey(control)) &&
+                            !navigation.get(controlKey(control))?.automatic
+                              ? t("editor:preview.why.noAction")
+                              : selected.length > 1
+                                ? t("editor:preview.why.oneControl")
+                                : simulation.unavailable,
+                        }}
+                        commands={{
+                          onOpen: () => {
+                            commands.selectForMenu(control)
+                          },
+                          assign: commands.assign,
+                          copy: commands.copy,
+                          cut: commands.cut,
+                          paste: commands.paste,
+                          duplicate: commands.duplicate,
+                          clear: () => {
+                            void removeAssignments()
+                          },
+                          goBack: commands.back,
+                          test: (kind) => {
+                            void simulation.run(control, kind)
+                          },
+                          configure: () => {
+                            commands.select(control, "only")
+                            // After the inspector shows the control.
+                            setTimeout(focusInspector, 0)
+                          },
+                          openFolder: () => {
+                            commands.openFolder(control)
+                          },
+                          newFolder: () => {
+                            commands.newFolder(control)
+                          },
+                        }}
+                      >
+                        {element}
+                      </ControlMenu>
+                    )
+                  }}
+                />
+              )}
+            />
+          ) : (
+            <div className="flex-none border-b px-4 pt-5 pb-4">
+              <EmptyState
+                variant="plain"
+                title={t("editor:shell.noControls", { model: model.name })}
+              />
+            </div>
+          )}
+          {/*
+            The inspector region: the editor's only scroll container (and
+            the containing block of its content, see above).
+          */}
+          {/*
+            The inspector region: a frosted curtain (index.css,
+            `.inspector-curtain`) over the top of the scrolling content once
+            it is scrolled; it never scrolls itself, takes no space and no
+            pointer events. Above it: the deselect button (z-10) and the
+            page dock on the divider (z-20).
+          */}
+          <div data-slot="inspector-region" className="relative flex min-h-0 flex-1 flex-col">
+            <div aria-hidden data-slot="inspector-curtain" className="inspector-curtain">
+              <span />
+              <span />
+              <span />
+            </div>
+            <div
+              data-slot="inspector-scroll"
+              // Below the bar that straddles the divider (device-viewport.tsx):
+              // half its height is kept free at the top.
+              className="relative min-h-0 flex-1 overflow-y-auto px-4 pt-[calc(var(--canvas-divider-half,0px)+0.75rem)] pb-6"
+              onScroll={(event) => {
+                // Only whether it is scrolled at all (no state, no render): the
+                // curtain fades in from 2px so fractional offsets don't flicker.
+                event.currentTarget.parentElement?.toggleAttribute(
+                  "data-scrolled",
+                  event.currentTarget.scrollTop > 2,
+                )
+              }}
+            >
+              <InspectorDeselect
+                selection={selected}
+                focus={selection.focus}
+                onClose={commands.clearSelection}
+              />
+              <div
+                className={cn(
+                  "mx-auto grid w-full max-w-3xl gap-3",
+                  // A notice above the inspector keeps the deselect button's width free.
+                  selected.length > 0 && "[&>:first-child:not([data-slot=inspector])]:pr-9",
+                )}
+              >
+                {(notices !== undefined || errors.length > 0) && (
+                  <div
+                    data-slot="workspace-notices"
+                    className="grid w-full max-w-3xl gap-2 empty:hidden"
+                  >
+                    {errors.length > 0 && (
+                      <ErrorNotice error={errors.map(readableTriggers).join(" ")} />
+                    )}
+                    {notices}
+                  </div>
+                )}
+                {hasControls && bound.size === 0 && (
+                  <div
+                    data-slot="page-empty"
+                    className="mx-auto grid max-w-md gap-0.5 text-center text-xs text-muted-foreground"
+                  >
+                    <p className="font-medium text-foreground">
+                      {isFolderPage ? t("editor:shell.folderEmpty") : t("editor:shell.pageEmpty")}
+                    </p>
+                    <p>{t("editor:shell.emptyHint")}</p>
+                  </div>
+                )}
+                {isFolderPage && !systemBack && !hasWayBack(draft, pageId) && (
+                  <p
+                    className="mx-auto max-w-md text-center text-xs text-muted-foreground"
+                    role="note"
+                  >
+                    {t("editor:shell.noBackKey")}
+                  </p>
+                )}
+                <KeyLookContext.Provider value={keyLook}>
+                  <Inspector
+                    model={model}
+                    draft={draft}
+                    pageId={pageId}
+                    selection={selected}
+                    focus={selection.focus}
+                    groups={groups}
+                    folder={folder}
+                    profile={profile}
+                    types={gestureContext.types}
+                    gestureDefaults={gestureContext.defaults}
+                    issues={errors}
+                    onChange={commands.change}
+                    onClear={commands.clear}
+                    resolveDrop={resolveSlotDrop}
+                    onEditWorkflow={setStepsOf}
+                    incompatible={incompatibleFor}
+                    layoutNavigation={{
+                      profileId,
+                      modelName: model.name,
+                      layouts: switchableLayouts(view.profile.layouts, model.id),
+                      defaultLayout:
+                        view.profile.activeLayouts?.[model.id] ??
+                        switchableLayouts(view.profile.layouts, model.id)[0]?.id ??
+                        null,
+                      usages: view.actionUsages,
+                      device,
+                      onActionSaved: (action) => {
+                        remember(action)
+                        refresh()
+                      },
+                    }}
+                    notRun={
+                      selection.focus
+                        ? (incompatible.get(controlKey(selection.focus)) ?? []).map((found) => ({
+                            trigger: found.trigger,
+                            reason: describeIncompatibility(
+                              found.reason,
+                              model,
+                              selection.focus ? controlCapabilities(model, selection.focus) : null,
+                            ),
+                          }))
+                        : []
+                    }
+                  />
+                </KeyLookContext.Provider>
+              </div>
+            </div>
+          </div>
         </div>
         <LibraryDock>
           <LibraryPanel
@@ -905,67 +1285,71 @@ export function LayoutEditor({
           />
         ) : null}
       </DragOverlay>
-      <PagesSheet open={managingPages} onOpenChange={setManagingPages}>
-        <PageSettings
-          draft={draft}
-          pageId={pageId}
-          onRename={commands.renamePage}
-          onDelete={() => {
-            setManagingPages(false)
-            commands.deletePage()
-          }}
-          onAutoReturn={commands.setAutoReturn}
-        />
-        <PageTreePanel
-          profileId={profileId}
-          draft={draft}
-          layouts={view.profile.layouts}
-          dirty={dirty}
-          pageId={pageId}
-          onOpen={commands.openPage}
-          onStored={(layout, page) => {
-            if (layout) commands.reset(layout, page)
-            onSaved()
-            refresh()
-          }}
-        />
-      </PagesSheet>
       <DeletePageDialog
         deletion={editing.deleting ? pageDeletion(draft, editing.deleting) : null}
         onCancel={commands.cancelDeletePage}
         onConfirm={commands.confirmDeletePage}
       />
-      <Dialog
-        open={isStepWorkflow(openSteps)}
-        onOpenChange={(open) => {
-          if (!open) setStepsOf(null)
-        }}
-      >
-        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>Multi Action</DialogTitle>
-            <DialogDescription>
-              The steps run in order in the agent when the key is pressed. A delay waits between two
-              steps; a running Multi Action can be cancelled from the status bar.
-            </DialogDescription>
-          </DialogHeader>
-          {isStepWorkflow(openSteps) && (
-            <StepEditor
-              key={openSteps.id}
-              view={{ ...view, profile: { ...view.profile, actions, workflows } }}
-              types={gestureContext.types}
-              profileId={profileId}
-              initial={openSteps}
-              isNew={false}
-              embedded
-              onChanged={() => {
-                refresh()
-                setStepsOf(null)
-              }}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
+      {isStepWorkflow(openSteps) && (
+        <ModalShell
+          presentation="dialog"
+          size="large"
+          icon={ListOrdered}
+          title={t("editor:shell.multiAction.title")}
+          description={t("editor:shell.multiAction.description")}
+          onClose={() => {
+            setStepsOf(null)
+          }}
+        >
+          <StepEditor
+            key={openSteps.id}
+            view={{ ...view, profile: { ...view.profile, actions, workflows } }}
+            types={gestureContext.types}
+            profileId={profileId}
+            initial={openSteps}
+            isNew={false}
+            embedded
+            onChanged={() => {
+              refresh()
+              setStepsOf(null)
+            }}
+          />
+        </ModalShell>
+      )}
     </DndContext>
+  )
+}
+
+const LIVE_LABELS: Partial<Record<LiveStatus, TranslationKey>> = {
+  live: "editor:live.live",
+  suspended: "editor:live.suspended",
+  connecting: "editor:live.connecting",
+  disconnected: "editor:live.disconnected",
+  unsupported: "editor:live.unsupported",
+  otherProfile: "editor:live.otherProfile",
+  refused: "editor:live.refused",
+}
+
+/** Whether the device shows the draft, in the editing bar. */
+function LiveBadge({ status, problem }: { status: LiveStatus; problem: string | null }) {
+  const { t } = useTranslation()
+  const label = LIVE_LABELS[status]
+  if (!label) return null
+  return (
+    <span
+      data-slot="live-preview-status"
+      data-status={status}
+      title={problem ?? undefined}
+      className="ms-2 inline-flex items-center gap-1.5"
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "size-1.5 rounded-full",
+          status === "live" ? "bg-success" : "bg-muted-foreground/50",
+        )}
+      />
+      {t(label)}
+    </span>
   )
 }

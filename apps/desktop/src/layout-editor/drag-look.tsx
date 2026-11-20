@@ -2,6 +2,7 @@ import { ArrowLeft, Folder, FolderPlus, ListOrdered, ListPlus } from "lucide-rea
 import type { ReactNode } from "react"
 
 import { ActionIcon } from "@/components/action-icon"
+import { i18n } from "@/i18n"
 import { controlKey, controlLabel } from "@/lib/layout-model"
 import type { ActionInstance, ActionType, KeyFace, Workflow } from "@/lib/types"
 
@@ -35,14 +36,20 @@ export function dragLook(
     case "actionType": {
       const type = context.types.get(source.actionType)
       return {
-        label: source.preset?.name ?? type?.name ?? "Action",
+        label: source.preset?.name ?? type?.name ?? i18n.t("editor:drag.action"),
         icon: <ActionIcon name={source.preset?.icon ?? type?.node?.icon} className={ICON} />,
       }
     }
     case "newFolder":
-      return { label: "New folder", icon: <FolderPlus className={ICON} aria-hidden /> }
+      return {
+        label: i18n.t("editor:library.newFolder"),
+        icon: <FolderPlus className={ICON} aria-hidden />,
+      }
     case "newMultiAction":
-      return { label: "Multi Action", icon: <ListPlus className={ICON} aria-hidden /> }
+      return {
+        label: i18n.t("editor:library.multiAction"),
+        icon: <ListPlus className={ICON} aria-hidden />,
+      }
     case "control": {
       const key = controlKey(source.control)
       return {
@@ -61,24 +68,34 @@ export function dragLook(
         case "action": {
           const action = context.actions.find((a) => a.id === target.action)
           return {
-            label: action?.name ?? "Missing action",
+            label: action?.name ?? i18n.t("editor:drag.missingAction"),
             icon: <ActionIcon name={action?.icon} className={ICON} />,
           }
         }
         case "workflow":
           return {
-            label: context.workflows.find((w) => w.id === target.workflow)?.name ?? "Workflow",
+            label:
+              context.workflows.find((w) => w.id === target.workflow)?.name ??
+              i18n.t("editor:drag.workflow"),
             icon: <ListOrdered className={ICON} aria-hidden />,
           }
         case "openPage":
           return {
-            label: `Open ${context.pageName(target.page) ?? "page"}`,
+            label: i18n.t("editor:drag.openPage", {
+              page: context.pageName(target.page) ?? i18n.t("editor:drag.page"),
+            }),
             icon: <Folder className={ICON} aria-hidden />,
           }
         case "back":
-          return { label: "Back", icon: <ArrowLeft className={ICON} aria-hidden /> }
+          return {
+            label: i18n.t("editor:targets.back"),
+            icon: <ArrowLeft className={ICON} aria-hidden />,
+          }
         case "stateful":
-          return { label: "Work Session", icon: <ActionIcon name={null} className={ICON} /> }
+          return {
+            label: i18n.t("editor:targets.workSession"),
+            icon: <ActionIcon name={null} className={ICON} />,
+          }
       }
     }
   }

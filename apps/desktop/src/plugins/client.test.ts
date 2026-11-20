@@ -210,6 +210,12 @@ describe("the Tauri plugin client", () => {
     ],
     ["listKnownPlugins", () => client.listKnownPlugins(), "list_known_plugins", undefined],
     [
+      "restoreBundledPlugin",
+      () => client.restoreBundledPlugin("deckpilot.notifications"),
+      "restore_bundled_plugin",
+      { plugin: "deckpilot.notifications" },
+    ],
+    [
       "getSettings",
       () => client.getSettings("acme.x"),
       "get_plugin_settings",

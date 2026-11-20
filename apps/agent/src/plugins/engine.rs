@@ -23,9 +23,9 @@ use std::time::{Duration, Instant};
 use deckpilot_core::graph::{MAX_TIMEOUT_MS, NodeSpec};
 use deckpilot_core::variables::{VariableSource, module_namespace};
 use deckpilot_core::{
-    ActionControls, ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId,
-    ButtonState, ExecutionContext, FeatureModule, ModuleId, ModuleManifest, ParameterValue,
-    Portability, RefreshPolicy, StateError,
+    ActionControls, ActionHandler, ActionParameters, ActionResult, ActionTitle, ActionType,
+    ActionTypeId, ButtonState, ExecutionContext, FeatureModule, ModuleId, ModuleManifest,
+    ParameterValue, Portability, RefreshPolicy, StateError,
 };
 use deckpilot_core::{RunOrigin, WorkflowCause};
 use deckpilot_plugin_abi::capability::{
@@ -74,6 +74,30 @@ pub(crate) struct CatalogPlugin {
     /// modules): the module registry then refuses to disable a built-in
     /// module an enabled plugin requires.
     pub requires: Vec<String>,
+    /// Per action whose name is a translation (plugin API 1.6): every
+    /// text it is named in, in any of the plugin's locales. A key titled
+    /// with one of them shows the action's default name, which the agent
+    /// draws in the app's language (`Agent::localize_faces`).
+    pub default_names: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+    /// The visual assets keys may draw now (plugin API 1.8): those of an
+    /// enabled plugin whose files match the integrity record, decoded.
+    pub visual_assets: Vec<(deckpilot_core::AssetId, deckpilot_render::LibraryAsset)>,
+}
+
+impl CatalogPlugin {
+    /// The name in the app's language of the action of type `action_type`
+    /// when `title` is one of its default names, else `None` (a title the
+    /// user wrote, or a plain name).
+    pub fn default_name(&self, action_type: &str, title: &str) -> Option<String> {
+        let action = action_type.strip_prefix(&self.id)?.strip_prefix('.')?;
+        if !self.default_names.get(action)?.contains(title) {
+            return None;
+        }
+        self.actions
+            .iter()
+            .find(|a| a.id == action)
+            .map(|a| a.name.clone())
+    }
 }
 
 /// A plugin as a feature module: no capabilities (a plugin reaches
@@ -224,7 +248,15 @@ pub(crate) fn action_type(plugin: &str, action: &Action) -> Result<ActionType, S
     )
     .unwrap_or(MAX_TIMEOUT_MS)
     .clamp(1, MAX_TIMEOUT_MS);
+    let editor_navigation = action
+        .editor_navigation
+        .as_ref()
+        .map(|declared| editor_navigation(declared, &parameters))
+        .transpose()?;
+    let title = action.title.as_ref().map(action_title);
     Ok(ActionType {
+        editor_navigation,
+        title,
         id,
         name: action.name.clone(),
         description: action.description.clone(),
@@ -240,6 +272,69 @@ pub(crate) fn action_type(plugin: &str, action: &Action) -> Result<ActionType, S
         }),
         node,
     })
+}
+
+/// The manifest's `title` (plugin API 1.8) as the core's: data only, values
+/// the manifest's validation already refused are left out.
+fn action_title(declared: &deckpilot_plugin_manifest::ActionTitle) -> ActionTitle {
+    use deckpilot_core::{TitleAlign, TitleFeature};
+    let position = declared
+        .position
+        .as_deref()
+        .and_then(|position| match position {
+            "top" => Some(TitleAlign::Top),
+            "middle" => Some(TitleAlign::Middle),
+            "bottom" => Some(TitleAlign::Bottom),
+            _ => None,
+        });
+    let supports = declared.supports.as_ref().map(|features| {
+        let mut known: Vec<TitleFeature> = features
+            .iter()
+            .filter_map(|feature| match feature.as_str() {
+                "visibility" => Some(TitleFeature::Visibility),
+                "position" => Some(TitleFeature::Position),
+                "font" => Some(TitleFeature::Font),
+                "style" => Some(TitleFeature::Style),
+                "color" => Some(TitleFeature::Color),
+                "layout" => Some(TitleFeature::Layout),
+                _ => None,
+            })
+            .collect();
+        known.sort();
+        known.dedup();
+        known
+    });
+    ActionTitle {
+        default: declared
+            .default
+            .as_ref()
+            .map(|text| text.trim().to_owned())
+            .filter(|text| !text.is_empty()),
+        dynamic: declared.dynamic.unwrap_or(false),
+        position,
+        supports,
+    }
+}
+
+/// The manifest's `editorNavigation` (plugin API 1.7) as the core's, checked
+/// again against the core's allowlist and the action's own parameters: data
+/// only, which the editor maps to its own navigation; the plugin is never
+/// called for it.
+fn editor_navigation(
+    declared: &deckpilot_plugin_manifest::EditorNavigation,
+    parameters: &[deckpilot_core::ParameterSpec],
+) -> Result<deckpilot_core::EditorNavigation, String> {
+    let operation = deckpilot_core::NavigationOperation::parse(&declared.operation)
+        .ok_or_else(|| format!("`{}` is not a navigation operation", declared.operation))?;
+    let navigation = deckpilot_core::EditorNavigation {
+        operation,
+        target_parameter: declared.target_parameter.clone(),
+        page_parameter: declared.page_parameter.clone(),
+    };
+    navigation
+        .check(parameters)
+        .map_err(|e| format!("editorNavigation: {e}"))?;
+    Ok(navigation)
 }
 
 /// Runs one plugin action through the plugin worker.
@@ -529,11 +624,13 @@ fn run_context(context: &ExecutionContext<'_>) -> RunContext {
                 WorkflowCause::Event => RunCause::Event,
                 WorkflowCause::Startup => RunCause::Startup,
                 WorkflowCause::WorkSession => RunCause::WorkSession,
-                WorkflowCause::Other => RunCause::Other,
+                WorkflowCause::Simulated | WorkflowCause::Other => RunCause::Other,
             },
             summary,
         ),
-        None => direct(RunTrigger::Other),
+        // A press the app simulated is not the user's direct request: the
+        // plugin sees `other`, so dialogs and `url.open` stay refused.
+        Some(RunOrigin::Simulated) | None => direct(RunTrigger::Other),
     }
     .bounded()
 }
@@ -688,6 +785,128 @@ mod tests {
                 "encoder": ["rotate-clockwise", "rotate-counter-clockwise"],
                 "touchZone": ["swipe"]})
         );
+    }
+
+    /// Plugin API 1.8: `title` becomes the action type's, data only; the
+    /// manifest's names are the core's.
+    #[test]
+    fn titles_become_the_action_types() {
+        use deckpilot_core::{TitleAlign, TitleFeature};
+        let manifest = sample();
+        let mut action = manifest.contributes.actions()[0].clone();
+        assert_eq!(
+            action_type("acme.hello-weather", &action).unwrap().title,
+            None
+        );
+        action.title = Some(deckpilot_plugin_manifest::ActionTitle {
+            default: Some(" CPU ".into()),
+            dynamic: Some(true),
+            position: Some("top".into()),
+            supports: Some(vec!["color".into(), "position".into()]),
+        });
+        let title = action_type("acme.hello-weather", &action)
+            .unwrap()
+            .title
+            .unwrap();
+        assert_eq!(title.default.as_deref(), Some("CPU"));
+        assert!(title.dynamic);
+        assert_eq!(title.position, Some(TitleAlign::Top));
+        assert_eq!(
+            title.supports,
+            Some(vec![TitleFeature::Position, TitleFeature::Color])
+        );
+        // Every name the manifest allows converts.
+        for position in deckpilot_plugin_manifest::TITLE_POSITIONS {
+            let converted = action_title(&deckpilot_plugin_manifest::ActionTitle {
+                default: None,
+                dynamic: None,
+                position: Some(position.into()),
+                supports: Some(
+                    deckpilot_plugin_manifest::TITLE_FEATURES
+                        .iter()
+                        .map(|f| (*f).to_owned())
+                        .collect(),
+                ),
+            });
+            assert!(converted.position.is_some(), "{position}");
+            assert_eq!(converted.supports.unwrap().len(), 6);
+        }
+    }
+
+    /// Plugin API 1.7: `editorNavigation` becomes the action type's, data
+    /// only, checked again against the core's allowlist and the action's
+    /// own text parameters.
+    #[test]
+    fn editor_navigation_becomes_the_action_types_and_is_checked_again() {
+        use deckpilot_core::NavigationOperation;
+        // The manifest's allowlist is the core's.
+        let manifest_ops: Vec<(&str, bool)> =
+            deckpilot_plugin_manifest::EDITOR_NAVIGATION_OPERATIONS.to_vec();
+        let core_ops: Vec<(&str, bool)> = NavigationOperation::ALL
+            .iter()
+            .map(|op| (op.as_str(), op.takes_target()))
+            .collect();
+        assert_eq!(manifest_ops, core_ops);
+
+        let manifest = sample();
+        let mut action = manifest.contributes.actions()[0].clone();
+        assert_eq!(
+            action_type("acme.hello-weather", &action)
+                .unwrap()
+                .editor_navigation,
+            None
+        );
+        let declare = |operation: &str, target: Option<&str>| {
+            Some(deckpilot_plugin_manifest::EditorNavigation {
+                operation: operation.into(),
+                target_parameter: target.map(str::to_owned),
+                page_parameter: None,
+            })
+        };
+        action.editor_navigation = declare("folder.open", Some("name"));
+        let declared = action_type("acme.hello-weather", &action).unwrap();
+        assert_eq!(
+            declared.editor_navigation,
+            Some(deckpilot_core::EditorNavigation::with_target(
+                NavigationOperation::FolderOpen,
+                "name"
+            ))
+        );
+        let json = serde_json::to_value(&declared).unwrap();
+        assert_eq!(
+            json["editorNavigation"],
+            serde_json::json!({"operation": "folder.open", "targetParameter": "name"})
+        );
+        // Whatever slipped past the manifest validator is refused here.
+        for (operation, target) in [
+            ("url.open", None),
+            ("folder.open", None),
+            ("folder.open", Some("style")),
+            ("page.next", Some("name")),
+        ] {
+            action.editor_navigation = declare(operation, target);
+            assert!(
+                action_type("acme.hello-weather", &action).is_err(),
+                "{operation} {target:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_simulated_press_is_not_user_initiated_for_plugins() {
+        use deckpilot_core::{MachineConfig, Profile};
+        let profile = Profile::new("P");
+        let machine = MachineConfig::new(deckpilot_core::Os::Linux);
+        let base = ExecutionContext::new(&profile, None, &machine);
+        let simulated = run_context(&base.with_origin(Some(RunOrigin::Simulated)));
+        assert_eq!(simulated, RunContext::direct(RunTrigger::Other));
+        assert!(!simulated.is_user_initiated());
+        assert!(!RunOrigin::Simulated.is_user_initiated());
+        let workflow = run_context(&base.with_origin(Some(RunOrigin::Workflow {
+            cause: WorkflowCause::Simulated,
+        })));
+        assert_eq!(workflow.cause, Some(RunCause::Other));
+        assert!(!workflow.is_user_initiated());
     }
 
     #[test]

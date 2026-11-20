@@ -7,6 +7,7 @@
 //! agent re-checks on load. This module models that record and checks it
 //! against a manifest; it does not hash anything itself.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 
@@ -157,10 +158,10 @@ impl Manifest {
     }
 
     /// Every package file the manifest names (icons, key icons,
-    /// screenshots, readme, changelog). `entry` is a source path and is not
-    /// in the package.
-    pub fn referenced_files(&self) -> BTreeSet<&str> {
-        let mut files = BTreeSet::new();
+    /// screenshots, readme, changelog, the locale files of `locales`).
+    /// `entry` is a source path and is not in the package.
+    pub fn referenced_files(&self) -> BTreeSet<Cow<'_, str>> {
+        let mut files: BTreeSet<&str> = BTreeSet::new();
         files.insert(self.icons.size128.as_str());
         files.extend(self.icons.size32.as_deref());
         files.extend(self.icons.size256.as_deref());
@@ -175,7 +176,26 @@ impl Manifest {
             files.extend(assets.changelog.as_deref());
         }
         files.extend(self.navigation_icon_files());
+        files.extend(self.visual_asset_files().into_iter().map(|(file, _)| file));
+        let mut files: BTreeSet<Cow<'_, str>> = files.into_iter().map(Cow::Borrowed).collect();
+        // Plugin API 1.6: translations are files the manifest names, so
+        // the integrity record and the registry's pins cover them.
+        files.extend(self.locale_files().into_iter().map(Cow::Owned));
         files
+    }
+
+    /// Every file of `contributes.visualAssets` and what it is used as.
+    pub fn visual_asset_files(&self) -> Vec<(&str, crate::visual::VisualUse)> {
+        let assets = self.contributes.visual_assets();
+        let icons = assets
+            .icons()
+            .iter()
+            .map(|icon| (icon.asset.as_str(), crate::visual::VisualUse::Icon));
+        let backgrounds = assets
+            .backgrounds()
+            .iter()
+            .filter_map(|b| Some((b.asset.as_deref()?, crate::visual::VisualUse::Background)));
+        icons.chain(backgrounds).collect()
     }
 
     /// Every icon file of `contributes.navigation`.
@@ -254,7 +274,11 @@ impl PackageIntegrity {
                 );
             }
         }
-        for required in required.iter().copied().chain(referenced) {
+        for required in required
+            .iter()
+            .copied()
+            .chain(referenced.iter().map(AsRef::as_ref))
+        {
             if !self.files.contains_key(required) {
                 error(
                     "files".into(),

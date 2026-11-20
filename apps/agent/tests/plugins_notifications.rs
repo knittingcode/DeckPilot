@@ -1348,6 +1348,176 @@ async fn removing_or_disabling_the_plugin_sticks_across_restarts_and_upgrades() 
     assert_eq!(env.shown().len(), shown, "nothing was shown since");
 }
 
+/// The user's Restore (`restoreBundledPlugin`, protocol 15) undoes their
+/// uninstall: the tombstone goes, the pinned copy comes back from the
+/// bundle with its kept settings, the legacy actions run on the plugin
+/// again, and a restart keeps it. Its broken copy is reinstalled the same
+/// way; a healthy one and an id DeckPilot does not bundle are refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // one sequence of the user's choices
+async fn a_removed_or_broken_plugin_is_restored_from_the_bundle() {
+    let env = Env::new("plugins-notifications-restore");
+    let mut profile = Profile::new("Work");
+    let legacy = instance(
+        "Legacy announce",
+        "notifications.show",
+        &json!({"title": "Legacy"}),
+    );
+    let legacy_id = legacy.id;
+    profile.actions.push(legacy);
+    {
+        let store = env.store();
+        store.save_profile(&profile).unwrap();
+        store.set_active_profile(Some(profile.id)).unwrap();
+    }
+    let plugin_id = PluginId::parse(ID).unwrap();
+    let agent = env.start(true).await;
+    agent
+        .wait_migration(MigrationPhase::CutOver, MigrationRoute::Plugin)
+        .await;
+    agent.set_settings(&json!({"statusBar": false})).await;
+    agent
+        .ok(Request::UninstallPlugin {
+            plugin: ID.into(),
+            keep: deckpilot_ipc::plugins::PluginRetention {
+                settings: true,
+                credentials: false,
+            },
+        })
+        .await;
+    agent
+        .wait_migration(MigrationPhase::CutOver, MigrationRoute::PluginWithdrawn)
+        .await;
+    let Response::KnownPlugins { plugins } = agent.ok(Request::ListKnownPlugins).await else {
+        panic!("known plugins")
+    };
+    let known = plugins.iter().find(|k| k.id == ID).unwrap();
+    assert!(!known.installed && known.restorable, "{known:?}");
+    let Response::PluginRuntime { status } = agent.ok(Request::GetPluginRuntime).await else {
+        panic!("runtime")
+    };
+    assert!(status.has_feature(deckpilot_ipc::plugins::feature::RESTORE_BUNDLED));
+
+    // Restore, watched by an app subscribed to plugin events.
+    let mut app = AgentClient::connect(&env.paths, ClientKind::Desktop)
+        .await
+        .unwrap();
+    app.subscribe_plugin_events().await.unwrap();
+    let restored = agent
+        .ok(Request::RestoreBundledPlugin { plugin: ID.into() })
+        .await;
+    let Response::Plugin { plugin } = restored else {
+        panic!("{restored:?}")
+    };
+    assert_eq!(plugin.summary.state, PluginState::Enabled);
+    assert_eq!(plugin.summary.origin, PluginOrigin::Bundled);
+    assert_eq!(plugin.summary.version, "0.1.0");
+    assert_eq!(env.plugin_store().tombstone(&plugin_id).unwrap(), None);
+    let mut seen = Vec::new();
+    let deadline = tokio::time::Instant::now() + SETTLE;
+    while !seen.iter().any(|e| {
+        matches!(e, deckpilot_ipc::plugins::PluginEvent::Changed { plugin, state }
+            if plugin == ID && *state == Some(PluginState::Enabled))
+    }) {
+        let event = tokio::time::timeout_at(deadline, app.next_plugin_event())
+            .await
+            .expect("plugin events in time")
+            .unwrap();
+        seen.push(event);
+    }
+    assert!(
+        seen.iter().any(|e| matches!(e,
+            deckpilot_ipc::plugins::PluginEvent::Progress { plugin, stage, .. }
+                if plugin == ID && *stage == deckpilot_ipc::plugins::PluginStage::Finished)),
+        "{seen:?}"
+    );
+    drop(app);
+    let Response::PluginSettings { settings } = agent
+        .ok(Request::GetPluginSettings { plugin: ID.into() })
+        .await
+    else {
+        panic!("settings")
+    };
+    assert_eq!(settings.values["statusBar"], json!(false), "kept settings");
+    agent
+        .wait_migration(MigrationPhase::CutOver, MigrationRoute::Plugin)
+        .await;
+    agent.run_on_plugin(&env, legacy_id).await;
+    let greeting = agent.invoke("show", &json!({"title": "Back again"})).await;
+    assert!(greeting.ok, "{greeting:?}");
+
+    // Installed and healthy: nothing to restore.
+    let refused = agent
+        .request(Request::RestoreBundledPlugin { plugin: ID.into() })
+        .await;
+    assert!(
+        matches!(&refused, Err(ClientError::Agent(e))
+            if e.reason.as_deref() == Some(reason::ALREADY_INSTALLED)),
+        "{refused:?}"
+    );
+    let refused = agent
+        .request(Request::RestoreBundledPlugin {
+            plugin: "acme.tool".into(),
+        })
+        .await;
+    assert!(
+        matches!(&refused, Err(ClientError::Agent(e))
+            if e.reason.as_deref() == Some(reason::NOT_BUNDLED)),
+        "{refused:?}"
+    );
+    agent.stop().await;
+
+    // A restart finds the pinned copy: still enabled, still on the plugin.
+    let agent = env.start(true).await;
+    assert_eq!(
+        agent.plugin().await.map(|p| p.state),
+        Some(PluginState::Enabled)
+    );
+    agent.run_on_plugin(&env, legacy_id).await;
+    agent.stop().await;
+
+    // Its installed copy changes while the agent is stopped: broken at the
+    // next start, then reinstalled from the bundle.
+    let wasm = env
+        .paths
+        .data_dir
+        .join("plugins")
+        .join(ID)
+        .join("0.1.0")
+        .join("plugin.wasm");
+    let mut permissions = std::fs::metadata(&wasm).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&wasm, permissions).unwrap();
+    let mut bytes = std::fs::read(&wasm).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0x01;
+    std::fs::write(&wasm, bytes).unwrap();
+    let agent = env.start(true).await;
+    assert_eq!(
+        agent.plugin().await.map(|p| p.state),
+        Some(PluginState::Broken),
+        "{}",
+        agent.log()
+    );
+    let Response::Plugin { plugin } = agent
+        .ok(Request::RestoreBundledPlugin { plugin: ID.into() })
+        .await
+    else {
+        panic!("reinstalled")
+    };
+    assert_eq!(plugin.summary.state, PluginState::Enabled);
+    assert!(
+        plugin
+            .permissions
+            .iter()
+            .all(|p| p.status == deckpilot_ipc::plugins::PermissionStatus::Granted)
+    );
+    assert_eq!(env.plugin_store().tombstone(&plugin_id).unwrap(), None);
+    agent.run_on_plugin(&env, legacy_id).await;
+    agent.stop().await;
+}
+
 // ------------------------------------------------------- alpha.3 upgrade
 
 /// The data an alpha.3 app saved: the module's settings (desktop off, from

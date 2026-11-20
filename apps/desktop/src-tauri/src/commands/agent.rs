@@ -54,9 +54,7 @@ pub async fn restart_agent(
     if let Some(running) = current.running_executions().filter(|n| *n > 0)
         && !interrupt_running.unwrap_or(false)
     {
-        return Err(CommandError::Invalid(agent::running_workflows_message(
-            running,
-        )));
+        return Err(agent::running_workflows_error(running));
     }
     agent::stop_any_version(&state.paths, Request::Shutdown).await?;
     // Started only once the old agent has released its instance lock, so
@@ -121,17 +119,118 @@ fn ensure_active(state: &AppState, profile_id: ProfileId) -> CommandResult<()> {
     if state.store()?.active_profile()? == Some(profile_id) {
         Ok(())
     } else {
-        Err(CommandError::Invalid("the profile is not active".into()))
+        Err(CommandError::invalid(
+            "profileNotActive",
+            "the profile is not active",
+        ))
     }
 }
 
 fn agent_required(error: ClientError) -> CommandError {
     match error {
-        ClientError::NotRunning => {
-            CommandError::Invalid("start the DeckPilot agent to run actions".into())
-        }
+        ClientError::NotRunning => CommandError::invalid(
+            "actionsAgentNotRunning",
+            "start the DeckPilot agent to run actions",
+        ),
         other => other.into(),
     }
+}
+
+/// What a simulated press did, for the editor's interactive preview
+/// (`docs/editor-navigation-and-simulation.md`): the agent's answer, or a
+/// refusal of this app's own (`agentNotRunning`; `unsupported` for an agent
+/// before protocol 14, which is never asked).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum SimulatePressResult {
+    /// The press went through the agent's gesture engine and dispatch;
+    /// `dispatched`: the triggers that ran, in order.
+    Ran {
+        dispatched: Vec<deckpilot_ipc::simulation::SimulatedTrigger>,
+    },
+    /// Nothing ran: ask the user, then send it again with `confirmed`.
+    #[serde(rename_all = "camelCase")]
+    ConfirmationRequired {
+        action_names: Vec<String>,
+        reason: String,
+    },
+    /// Nothing ran. `code`: the agent's
+    /// [`SimulationRefusal`](deckpilot_ipc::simulation::SimulationRefusal)
+    /// name, `agentNotRunning` or `unsupported`.
+    Refused { code: String, message: String },
+}
+
+impl From<deckpilot_ipc::simulation::SimulationOutcome> for SimulatePressResult {
+    fn from(outcome: deckpilot_ipc::simulation::SimulationOutcome) -> Self {
+        use deckpilot_ipc::simulation::SimulationOutcome as O;
+        match outcome {
+            O::Ran { dispatched } => Self::Ran { dispatched },
+            O::ConfirmationRequired {
+                action_names,
+                reason,
+            } => Self::ConfirmationRequired {
+                action_names,
+                reason,
+            },
+            O::Refused { code, message } => Self::Refused {
+                code: code.as_str().to_owned(),
+                message,
+            },
+        }
+    }
+}
+
+/// The answer to a simulated press, from what the agent said.
+pub(crate) fn simulate_press_result(
+    answer: Result<Response, ClientError>,
+) -> CommandResult<SimulatePressResult> {
+    let refused = |code: &str, message: String| {
+        Ok(SimulatePressResult::Refused {
+            code: code.to_owned(),
+            message,
+        })
+    };
+    match answer {
+        Ok(Response::SimulatedPress { outcome }) => Ok(outcome.into()),
+        Ok(other) => Err(unexpected(&other)),
+        Err(ClientError::NotRunning) => refused(
+            "agentNotRunning",
+            "start the DeckPilot agent to try keys".into(),
+        ),
+        Err(error @ ClientError::Unsupported { .. }) => refused("unsupported", error.to_string()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Presses `control` of the connected `device` in the agent as the user
+/// would (`kind`: single, double or long), while the device shows `page` of
+/// `layout` in `profile_id`; see [`SimulatePressResult`]. The agent runs it
+/// through its own gesture engine and dispatch and never writes to the
+/// device but the key images the binding changes. A press that may change
+/// something outside DeckPilot answers `confirmationRequired` unless
+/// `confirmed`; the agent's settings still gate those actions.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri passes each argument by name.
+pub async fn simulate_press(
+    state: State<'_, AppState>,
+    device: deckpilot_device::DeviceId,
+    profile: ProfileId,
+    layout: deckpilot_core::LayoutId,
+    page: deckpilot_core::PageId,
+    control: deckpilot_device::ControlId,
+    kind: deckpilot_ipc::simulation::PressKind,
+    confirmed: Option<bool>,
+) -> CommandResult<SimulatePressResult> {
+    let request = Request::SimulatePress {
+        device,
+        profile,
+        layout,
+        page,
+        control,
+        kind,
+        confirmed: confirmed.unwrap_or(false),
+    };
+    simulate_press_result(agent::request(&state.paths, request).await)
 }
 
 /// Runs an action of the active profile in the agent, which owns execution.
@@ -291,5 +390,65 @@ pub async fn last_workflow_report(
     {
         Response::LastWorkflow { report } => Ok(report),
         other => Err(unexpected(&other)),
+    }
+}
+
+#[cfg(test)]
+mod simulate_tests {
+    use deckpilot_ipc::simulation::{SimulatedTrigger, SimulationOutcome, SimulationRefusal};
+
+    use super::*;
+
+    #[test]
+    fn simulated_presses_answer_ran_confirmation_or_refused() {
+        let ran = simulate_press_result(Ok(Response::SimulatedPress {
+            outcome: SimulationOutcome::Ran {
+                dispatched: vec![SimulatedTrigger::DoubleClick],
+            },
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&ran).unwrap(),
+            serde_json::json!({"status": "ran", "dispatched": ["doubleClick"]})
+        );
+        let ask = simulate_press_result(Ok(Response::SimulatedPress {
+            outcome: SimulationOutcome::ConfirmationRequired {
+                action_names: vec!["Deploy".into()],
+                reason: "changes".into(),
+            },
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&ask).unwrap(),
+            serde_json::json!({"status": "confirmationRequired", "actionNames": ["Deploy"],
+                "reason": "changes"})
+        );
+        let refused = simulate_press_result(Ok(Response::SimulatedPress {
+            outcome: SimulationOutcome::refused(SimulationRefusal::WrongPage, "another page"),
+        }))
+        .unwrap();
+        assert_eq!(
+            refused,
+            SimulatePressResult::Refused {
+                code: "wrongPage".into(),
+                message: "another page".into()
+            }
+        );
+        // An agent before protocol 14 is never asked; no agent at all.
+        let older = simulate_press_result(Err(ClientError::Unsupported {
+            request: "simulatePress".into(),
+            needs: 14,
+            protocol: 13,
+            agent: "0.9.0".into(),
+        }))
+        .unwrap();
+        assert!(
+            matches!(older, SimulatePressResult::Refused { code, .. } if code == "unsupported")
+        );
+        let none = simulate_press_result(Err(ClientError::NotRunning)).unwrap();
+        assert!(
+            matches!(none, SimulatePressResult::Refused { code, .. } if code == "agentNotRunning")
+        );
+        assert!(simulate_press_result(Ok(Response::Ok)).is_err());
     }
 }

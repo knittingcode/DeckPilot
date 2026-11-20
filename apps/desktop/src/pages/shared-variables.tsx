@@ -19,6 +19,7 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useAsync } from "@/hooks/use-async"
+import { useTranslation } from "@/i18n"
 import { VariablesTable } from "@/pages/variables-table"
 import { api, errorMessage } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
@@ -69,6 +70,7 @@ const NEW = "__new__"
  * of a credential, never its secret.
  */
 export function SharedVariablesSettings() {
+  const { t } = useTranslation()
   const { editingProfileId, profiles, revision } = useAppContext()
   const profileId = editingProfileId
   const [generation, setGeneration] = useState(0)
@@ -97,12 +99,10 @@ export function SharedVariablesSettings() {
   return (
     <>
       <p className="text-sm text-muted-foreground">
-        Every value actions, workflows and keys can read. Insert one with {"{{ reference }}"}. For
-        shared variables, a value set for a project wins over the profile&apos;s, which wins over
-        the global one.
+        {t("workflows:sharedVariables.intro", { syntax: "{{ reference }}" })}
       </p>
       <SettingsSection
-        title="Variables"
+        title={t("workflows:sharedVariables.title")}
         actions={
           <Button
             type="button"
@@ -111,13 +111,13 @@ export function SharedVariablesSettings() {
               setSelected(NEW)
             }}
           >
-            <Plus /> New variable
+            <Plus /> {t("workflows:sharedVariables.new")}
           </Button>
         }
       >
         {variables.length === 0 && (
-          <EmptyState variant="plain" title="No shared variables yet">
-            Create one to use the same value in several actions and workflows.
+          <EmptyState variant="plain" title={t("workflows:sharedVariables.empty.title")}>
+            {t("workflows:sharedVariables.empty.description")}
           </EmptyState>
         )}
         <VariablesTable shared={variables} selected={selected} onEdit={setSelected} />
@@ -167,6 +167,7 @@ function ValueInput({
   credentials: CredentialInfo[]
   onChange: (draft: ValueDraft) => void
 }) {
+  const { t } = useTranslation()
   const choose = (options: { value: string; label: string }[], placeholder: string) => (
     <Select
       value={draft.text}
@@ -201,17 +202,17 @@ function ValueInput({
     case "projectId":
       return choose(
         projects.map((p) => ({ value: p.id, label: `${p.key} — ${p.name}` })),
-        "Choose a project",
+        t("workflows:sharedVariables.chooseProject"),
       )
     case "profileId":
       return choose(
         profiles.map((p) => ({ value: p.id, label: p.name })),
-        "Choose a profile",
+        t("workflows:sharedVariables.chooseProfile"),
       )
     case "secretRef":
       return credentials.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No stored credentials. Add one under Security first; the secret stays there.
+          {t("workflows:sharedVariables.noCredentials")}
         </p>
       ) : (
         choose(
@@ -219,7 +220,7 @@ function ValueInput({
             value: c.id,
             label: c.description ? `${c.id} — ${c.description}` : c.id,
           })),
-          "Choose a stored credential",
+          t("workflows:sharedVariables.chooseCredential"),
         )
       )
     case "resource":
@@ -231,12 +232,17 @@ function ValueInput({
               onChange({ ...draft, mode: mode as ValueDraft["mode"] })
             }}
           >
-            <SelectTrigger className="w-full" aria-label={`${label}: kind of reference`}>
+            <SelectTrigger
+              className="w-full"
+              aria-label={t("workflows:sharedVariables.referenceKind", { label })}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="fixed">Resource key</SelectItem>
-              <SelectItem value="projectRole">Project role</SelectItem>
+              <SelectItem value="fixed">{t("workflows:sharedVariables.resourceKey")}</SelectItem>
+              <SelectItem value="projectRole">
+                {t("workflows:sharedVariables.projectRole")}
+              </SelectItem>
             </SelectContent>
           </Select>
           <Input
@@ -309,6 +315,7 @@ function VariableEditor({
   onSaved: (key: string) => void
   onDeleted: () => void
 }) {
+  const { t } = useTranslation()
   const saved = variable?.definition
   const [key, setKey] = useState(saved?.key ?? "")
   const [label, setLabel] = useState(saved?.label ?? "")
@@ -324,7 +331,7 @@ function VariableEditor({
   const [error, setError] = useState<string | null>(null)
 
   const keyError = saved ? null : keyProblem(key, existingKeys)
-  const scopeError = scopes.length === 0 ? "Choose at least one scope." : null
+  const scopeError = scopes.length === 0 ? t("workflows:sharedVariables.scopeRequired") : null
   const parsedDefault = hasDefault && !sensitive ? parseValue(valueType, defaultDraft) : null
   const defaultError = parsedDefault && "error" in parsedDefault ? parsedDefault.error : null
 
@@ -345,7 +352,11 @@ function VariableEditor({
     }
     try {
       await api.saveSharedVariable(definition)
-      toast.success(saved ? "Variable saved" : "Variable created")
+      toast.success(
+        saved
+          ? t("workflows:sharedVariables.toast.saved")
+          : t("workflows:sharedVariables.toast.created"),
+      )
       onSaved(definition.key)
     } catch (e) {
       setError(errorMessage(e))
@@ -356,7 +367,7 @@ function VariableEditor({
     if (!saved) return
     try {
       await api.deleteSharedVariable(saved.key)
-      toast.success("Variable deleted")
+      toast.success(t("workflows:sharedVariables.toast.deleted"))
       onDeleted()
     } catch (e) {
       toast.error(errorMessage(e))
@@ -374,14 +385,16 @@ function VariableEditor({
 
   return (
     <Panel
-      title={saved ? `shared.${saved.key}` : "New variable"}
-      description={saved?.module && `Declared by the ${saved.module} module`}
+      title={saved ? `shared.${saved.key}` : t("workflows:sharedVariables.new")}
+      description={
+        saved?.module && t("workflows:sharedVariables.declaredBy", { module: saved.module })
+      }
     >
       <form className="grid gap-4" onSubmit={(e) => void save(e)} noValidate>
         {error && <ErrorNotice error={error} />}
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="grid gap-2">
-            <Label htmlFor="variable-key">Key</Label>
+            <Label htmlFor="variable-key">{t("workflows:sharedVariables.key")}</Label>
             <Input
               id="variable-key"
               value={key}
@@ -396,17 +409,22 @@ function VariableEditor({
               <p className="text-xs text-destructive">{keyError}</p>
             ) : (
               <p className="text-xs text-muted-foreground">
-                Referenced as {`{{ shared.${(saved?.key ?? key) || "<key>"} }}`}
-                {saved ? "; the key cannot change." : ""}
+                {saved
+                  ? t("workflows:sharedVariables.referencedAsFixed", {
+                      reference: `{{ shared.${saved.key} }}`,
+                    })
+                  : t("workflows:sharedVariables.referencedAs", {
+                      reference: `{{ shared.${key || `<${t("workflows:sharedVariables.keyPlaceholder")}>`} }}`,
+                    })}
               </p>
             )}
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="variable-label">Label</Label>
+            <Label htmlFor="variable-label">{t("workflows:sharedVariables.label")}</Label>
             <Input
               id="variable-label"
               value={label}
-              placeholder="Optional"
+              placeholder={t("workflows:sharedVariables.optional")}
               onChange={(e) => {
                 setLabel(e.target.value)
               }}
@@ -414,12 +432,12 @@ function VariableEditor({
           </div>
         </div>
         <div className="grid gap-2">
-          <Label htmlFor="variable-description">Description</Label>
+          <Label htmlFor="variable-description">{t("workflows:sharedVariables.description")}</Label>
           <Textarea
             id="variable-description"
             rows={2}
             value={description}
-            placeholder="Optional"
+            placeholder={t("workflows:sharedVariables.optional")}
             onChange={(e) => {
               setDescription(e.target.value)
             }}
@@ -427,7 +445,7 @@ function VariableEditor({
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="grid gap-2">
-            <Label htmlFor="variable-type">Type</Label>
+            <Label htmlFor="variable-type">{t("workflows:sharedVariables.type")}</Label>
             <Select
               value={valueType.type}
               disabled={Boolean(saved)}
@@ -442,23 +460,24 @@ function VariableEditor({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {VALUE_TYPES.map((t) => (
-                  <SelectItem key={t.type} value={t.type}>
-                    {t.label}
+                {VALUE_TYPES.map((v) => (
+                  <SelectItem key={v.type} value={v.type}>
+                    {v.label}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
             {valueType.type === "secretRef" && (
               <p className="text-xs text-muted-foreground">
-                Holds the name of a stored credential. The secret stays in the credential store and
-                is never shown here.
+                {t("workflows:sharedVariables.secretRefHint")}
               </p>
             )}
           </div>
           {valueType.type === "resource" && (
             <div className="grid gap-2">
-              <Label htmlFor="variable-resource-kind">Resource kind</Label>
+              <Label htmlFor="variable-resource-kind">
+                {t("workflows:sharedVariables.resourceKind")}
+              </Label>
               <Select
                 value={valueType.kind ?? "any"}
                 disabled={Boolean(saved)}
@@ -474,7 +493,7 @@ function VariableEditor({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="any">Any kind</SelectItem>
+                  <SelectItem value="any">{t("workflows:sharedVariables.anyKind")}</SelectItem>
                   {RESOURCE_KINDS.map((k) => (
                     <SelectItem key={k.kind} value={k.kind}>
                       {k.label}
@@ -486,7 +505,7 @@ function VariableEditor({
           )}
         </div>
         <fieldset className="grid gap-2">
-          <legend className="text-sm font-medium">Scopes</legend>
+          <legend className="text-sm font-medium">{t("workflows:sharedVariables.scopes")}</legend>
           {STORED_SCOPES.map((s) => (
             <label key={s.scope} className="flex items-center gap-2 text-sm">
               <Checkbox
@@ -515,9 +534,9 @@ function VariableEditor({
                 if (checked) setHasDefault(false)
               }}
             />
-            <Label htmlFor="variable-sensitive">Sensitive</Label>
+            <Label htmlFor="variable-sensitive">{t("workflows:sharedVariables.sensitive")}</Label>
             <span className="text-xs text-muted-foreground">
-              Values are never shown again, in logs or in history.
+              {t("workflows:sharedVariables.sensitiveHint")}
             </span>
           </div>
         )}
@@ -530,12 +549,12 @@ function VariableEditor({
                   setHasDefault(checked === true)
                 }}
               />
-              Default value, used where no scope has one
+              {t("workflows:sharedVariables.defaultToggle")}
             </label>
             {hasDefault && (
               <ValueInput
                 id="variable-default"
-                label="Default value"
+                label={t("workflows:sharedVariables.defaultValue")}
                 type={valueType}
                 sensitive={false}
                 draft={defaultDraft}
@@ -552,17 +571,20 @@ function VariableEditor({
         )}
         <div className="flex flex-wrap gap-2">
           <Button type="submit">
-            <Save /> {saved ? "Save" : "Create variable"}
+            <Save />{" "}
+            {saved ? t("workflows:sharedVariables.save") : t("workflows:sharedVariables.create")}
           </Button>
           {saved && (
             <ConfirmDialog
               trigger={
                 <Button type="button" variant="ghost" disabled={uses.length > 0}>
-                  <Trash2 /> Delete
+                  <Trash2 /> {t("common:actions.delete")}
                 </Button>
               }
-              title={`Delete “shared.${saved.key}”?`}
-              description="The variable and all its values are removed. This cannot be undone."
+              title={t("workflows:sharedVariables.deleteTitle", {
+                reference: `shared.${saved.key}`,
+              })}
+              description={t("workflows:sharedVariables.deleteDescription")}
               onConfirm={() => void remove()}
             />
           )}
@@ -582,18 +604,23 @@ function VariableEditor({
             }}
           />
           <div className="grid gap-2">
-            <h4 className="text-sm font-medium">Used in</h4>
+            <h4 className="text-sm font-medium">{t("workflows:sharedVariables.usedIn")}</h4>
             {references.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Not used by any action or workflow.</p>
+              <p className="text-sm text-muted-foreground">
+                {t("workflows:sharedVariables.notUsed")}
+              </p>
             ) : (
               <>
-                <ul className="grid gap-1 text-sm text-muted-foreground" aria-label="Usages">
+                <ul
+                  className="grid gap-1 text-sm text-muted-foreground"
+                  aria-label={t("workflows:sharedVariables.usages")}
+                >
                   {references.map((reference, index) => (
                     <li key={index}>{describeVariableReference(reference)}</li>
                   ))}
                 </ul>
                 <p className="text-xs text-muted-foreground">
-                  Remove these references before deleting the variable.
+                  {t("workflows:sharedVariables.removeReferences")}
                 </p>
               </>
             )}
@@ -619,6 +646,7 @@ function Values({
   credentials: CredentialInfo[]
   onChanged: () => void
 }) {
+  const { t } = useTranslation()
   const { definition } = variable
   const slots = useMemo(
     () => slotsFor(definition, profileId, projects),
@@ -648,7 +676,7 @@ function Values({
     try {
       await api.setSharedVariableValue(definition.key, scope, parsed.value)
       setEditing(null)
-      toast.success("Value saved")
+      toast.success(t("workflows:sharedVariables.toast.valueSaved"))
       onChanged()
     } catch (e) {
       setProblem(errorMessage(e))
@@ -658,7 +686,7 @@ function Values({
   const clear = async (scope: ScopeKey) => {
     try {
       await api.clearSharedVariableValue(definition.key, scope)
-      toast.success("Value cleared")
+      toast.success(t("workflows:sharedVariables.toast.valueCleared"))
       onChanged()
     } catch (e) {
       toast.error(errorMessage(e))
@@ -667,23 +695,23 @@ function Values({
 
   return (
     <div className="grid gap-2">
-      <h4 className="text-sm font-medium">Values</h4>
+      <h4 className="text-sm font-medium">{t("workflows:sharedVariables.values")}</h4>
       {slots.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           {profileId
-            ? "No scope allows a value here."
-            : "Choose a profile to set profile and project values."}
+            ? t("workflows:sharedVariables.noSlots")
+            : t("workflows:sharedVariables.noProfile")}
         </p>
       ) : (
-        <ul className="grid gap-3" aria-label="Values">
+        <ul className="grid gap-3" aria-label={t("workflows:sharedVariables.values")}>
           {slots.map((scope) => {
             const entry = valueAt(scope)
             const name = scopeLabel(scope, projects, profiles)
             const shown = entry
               ? sensitive
-                ? "Set (redacted)"
+                ? t("workflows:sharedVariables.redacted")
                 : formatValue(definition, entry.value, projects, profiles)
-              : "Not set"
+              : t("workflows:sharedVariables.notSet")
             const isEditing = editing !== null && sameScope(editing, scope)
             return (
               <li key={JSON.stringify(scope)} className="grid gap-2" aria-label={name}>
@@ -698,22 +726,28 @@ function Values({
                         type="button"
                         size="sm"
                         variant="outline"
-                        aria-label={`${entry ? "Change" : "Set"} ${name}`}
+                        aria-label={
+                          entry
+                            ? t("workflows:sharedVariables.changeNamed", { name })
+                            : t("workflows:sharedVariables.setNamed", { name })
+                        }
                         onClick={() => {
                           start(scope)
                         }}
                       >
-                        {entry ? "Change" : "Set"}
+                        {entry
+                          ? t("workflows:sharedVariables.change")
+                          : t("workflows:sharedVariables.set")}
                       </Button>
                       {entry && (
                         <Button
                           type="button"
                           size="sm"
                           variant="ghost"
-                          aria-label={`Clear ${name}`}
+                          aria-label={t("workflows:sharedVariables.clearNamed", { name })}
                           onClick={() => void clear(scope)}
                         >
-                          Clear
+                          {t("common:actions.clear")}
                         </Button>
                       )}
                     </span>
@@ -723,7 +757,7 @@ function Values({
                   <div className="grid gap-2">
                     <ValueInput
                       id="variable-value"
-                      label={`Value for ${name}`}
+                      label={t("workflows:sharedVariables.valueFor", { name })}
                       type={definition.valueType}
                       sensitive={sensitive}
                       draft={draft}
@@ -735,7 +769,7 @@ function Values({
                     {problem && <p className="text-xs text-destructive">{problem}</p>}
                     <span className="flex gap-2">
                       <Button type="button" size="sm" onClick={() => void save(scope)}>
-                        Save value
+                        {t("workflows:sharedVariables.saveValue")}
                       </Button>
                       <Button
                         type="button"
@@ -745,7 +779,7 @@ function Values({
                           setEditing(null)
                         }}
                       >
-                        Cancel
+                        {t("common:actions.cancel")}
                       </Button>
                     </span>
                   </div>

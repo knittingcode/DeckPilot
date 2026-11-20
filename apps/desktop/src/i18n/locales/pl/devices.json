@@ -1,0 +1,203 @@
+{
+  "activeProfileTooltip": "Profil aktywny na urządzeniu",
+  "agent": {
+    "title": "Agent w tle",
+    "short": "Agent",
+    "connection": "Połączenie",
+    "version": "Wersja",
+    "versionValue": "{{version}} (protokół {{protocol}})",
+    "runningFor": "Czas działania",
+    "startedAt": "Uruchomiono {{time}}",
+    "appVersion": "Wersja aplikacji",
+    "settings": "Ustawienia agenta",
+    "diagnostics": "Dzienniki i diagnostyka",
+    "state": {
+      "connecting": "Łączenie z agentem…",
+      "running": "Agent działa",
+      "stopped": "Agent zatrzymany",
+      "incompatible": "Niezgodna wersja agenta"
+    },
+    "checkLogInDiagnostics": "Sprawdź jego dziennik w Ustawienia › Diagnostyka",
+    "badge": {
+      "checking": "Sprawdzanie…",
+      "running": "Działa",
+      "stopped": "Zatrzymany"
+    },
+    "stoppedPanel": {
+      "notStartedCheckLog": "Agent nie uruchomił się. Szczegóły znajdziesz w jego dzienniku.",
+      "notStarted": "Agent nie uruchomił się",
+      "explanation": "Agent w tle obsługuje urządzenia i wykonuje akcje. Działa dalej po zamknięciu tego okna.",
+      "start": "Uruchom agenta",
+      "notFound": "Nie znaleziono pliku wykonywalnego agenta obok tej aplikacji. Uruchom<code>deckpilot-agent</code>ręcznie."
+    }
+  },
+  "detail": {
+    "title": "Urządzenia",
+    "tooltip": "Podłączone urządzenia Stream Deck",
+    "noneDetected": "Nie wykryto urządzenia Stream Deck.",
+    "agentStopped": "Agent nie działa.",
+    "simulated": "Symulowane",
+    "connected": "Podłączone",
+    "disconnected": "Odłączone",
+    "serialState": "{{serial}} · {{state}}",
+    "settings": "Ustawienia urządzeń"
+  },
+  "summary": {
+    "none": "Brak urządzeń",
+    "physical_one": "{{count}} urządzenie",
+    "physical_few": "{{count}} urządzenia",
+    "physical_many": "{{count}} urządzeń",
+    "physical_other": "{{count}} urządzenia",
+    "simulated_one": "{{count}} symulowane",
+    "simulated_few": "{{count}} symulowane",
+    "simulated_many": "{{count}} symulowanych",
+    "simulated_other": "{{count}} symulowanego",
+    "both": "{{physical}} · {{simulated}}"
+  },
+  "compatibility": {
+    "feature": {
+      "encryptedDatabase": "szyfrowana konfiguracja",
+      "backgroundExecutions": "uruchamianie przepływów pracy w tle i ich historia",
+      "notifications": "powiadomienia przepływów pracy"
+    },
+    "channel": {
+      "github": "GitHub Releases",
+      "homebrew": "Homebrew",
+      "winget": "WinGet",
+      "apt": "repozytorium APT",
+      "flathub": "Flathub",
+      "macAppStore": "Mac App Store",
+      "microsoftStore": "Microsoft Store"
+    },
+    "restarted": "Agent został uruchomiony ponownie",
+    "notRestarted": "Nie uruchomiono ponownie agenta",
+    "title": {
+      "updateRequired": "Działający agent jest za stary dla tej aplikacji",
+      "otherInstallation": "Działający agent należy do innej instalacji",
+      "mismatch": "Działający agent nie pasuje do tej aplikacji"
+    },
+    "otherInstallation": "Źródło agenta: {{agent}}, źródło tej aplikacji: {{app}}. DeckPilot działa tylko z agentem z własnej instalacji; ponowne uruchomienie zastąpi go agentem tej aplikacji.",
+    "versions": "Agent {{agent}}, aplikacja {{app}}.",
+    "replaceRequired": "Nie można niczego skonfigurować, dopóki nie zostanie zastąpiony agentem tej aplikacji.",
+    "restartToMatch": "Uruchom agenta ponownie, aby obie części działały w tej samej wersji.",
+    "unavailable": "Do tego czasu niedostępne są: {{features}}.",
+    "running_one": "W agencie działa przepływ pracy. Ponowne uruchomienie teraz go przerwie; historia to odnotuje.",
+    "running_few": "W agencie działają {{count}} przepływy pracy. Ponowne uruchomienie teraz je przerwie; historia to odnotuje.",
+    "running_many": "W agencie działa {{count}} przepływów pracy. Ponowne uruchomienie teraz je przerwie; historia to odnotuje.",
+    "running_other": "W agencie działa {{count}} przepływu pracy. Ponowne uruchomienie teraz je przerwie; historia to odnotuje.",
+    "restartEllipsis": "Uruchom agenta ponownie…",
+    "restart": "Uruchom agenta ponownie",
+    "interruptAndRestart": "Przerwij przepływy pracy i uruchom ponownie",
+    "wait": "Poczekaj na nie"
+  },
+  "refresh": {
+    "label": "Odśwież urządzenia",
+    "done": "Odświeżono urządzenia",
+    "failed": "Nie odświeżono urządzeń",
+    "next": "Sprawdź, czy agent działa"
+  },
+  "row": {
+    "usb": "USB",
+    "showingPage": "wyświetla stronę „{{page}}”"
+  },
+  "indicator": {
+    "checking": "Sprawdzanie agenta",
+    "openSettings": "{{label}}, otwórz ustawienia agenta"
+  },
+  "models": {
+    "supportedTitle": "Obsługiwane modele",
+    "supportedDescription": "Modele przetestowane na fizycznym urządzeniu na co najmniej jednej platformie. Plakietki pokazują stan na każdej platformie.",
+    "noneVerified": "Żaden model nie został jeszcze zweryfikowany.",
+    "showExperimental": "Pokaż modele eksperymentalne",
+    "experimentalTitle": "Eksperymentalne, niezweryfikowane",
+    "experimentalDescription": "Tych modeli nie przetestowano na fizycznym urządzeniu na żadnej platformie. Można projektować dla nich układy, ale nie są obsługiwane.",
+    "platformLevel": "{{platform}}: {{level}}",
+    "gesture": {
+      "tap": "Stuknięcie",
+      "longPress": "Długie naciśnięcie",
+      "swipe": "Przesunięcie"
+    },
+    "none": "Brak",
+    "keys": "Klawisze",
+    "keysValue": "{{total}} ({{columns}} × {{rows}})",
+    "keysWithImage": "{{total}} ({{columns}} × {{rows}}), {{width}} × {{height}} px {{format}}",
+    "dials": "Pokrętła",
+    "dialsPressable": "{{dials}}, z możliwością naciśnięcia",
+    "touchStrip": "Pasek dotykowy",
+    "zones_one": "{{count}} strefa",
+    "zones_few": "{{count}} strefy",
+    "zones_many": "{{count}} stref",
+    "zones_other": "{{count}} strefy",
+    "zonesWithImage_one": "{{count}} strefa {{width}} × {{height}} px",
+    "zonesWithImage_few": "{{count}} strefy po {{width}} × {{height}} px",
+    "zonesWithImage_many": "{{count}} stref po {{width}} × {{height}} px",
+    "zonesWithImage_other": "{{count}} strefy po {{width}} × {{height}} px",
+    "keyGestures": "Gesty klawiszy",
+    "keyGesturesValue": "Kliknięcie, dwukrotne kliknięcie, długie naciśnięcie",
+    "touchGestures": "Gesty dotykowe",
+    "usbIdentity": "Identyfikator USB",
+    "verification": "Weryfikacja",
+    "asOf": "(stan na {{date}})",
+    "designLayout": "Zaprojektuj układ"
+  },
+  "page": {
+    "refreshHint": "Wyszukaj ponownie podłączone urządzenia",
+    "connectedTitle": "Podłączone urządzenia",
+    "connectedDescription": "Urządzenia pojawiają się automatycznie po podłączeniu. Urządzenia symulowane służą do programowania i testów. W systemie Linux dostęp wymaga reguły udev.",
+    "noneDetected": "Nie wykryto urządzenia Stream Deck",
+    "editLayout": "Edytuj układ",
+    "display": "Wyświetlacz",
+    "brightness": "Jasność",
+    "brightnessDescription": "Dotyczy wszystkich podłączonych urządzeń.",
+    "brightnessFailed": "Nie zmieniono jasności",
+    "apply": "Zastosuj"
+  },
+  "layoutStatus": {
+    "noProfile": "Brak aktywnego profilu",
+    "unknownModel": "Nieobsługiwany model urządzenia",
+    "missing": "Brak układu dla tego modelu",
+    "compatible": "Układ „{{name}}”",
+    "invalid": "Układ „{{name}}” ma problemy"
+  },
+  "verification": {
+    "onPlatform": "{{level}} w systemie {{platform}}",
+    "level": {
+      "unsupported": {
+        "label": "Nieobsługiwany",
+        "detail": "Nieobsługiwany na tej platformie."
+      },
+      "experimental": {
+        "label": "Eksperymentalny",
+        "detail": "Definicja w trakcie opracowywania, która może być niekompletna lub błędna."
+      },
+      "defined": {
+        "label": "Tylko projektowanie układów",
+        "detail": "Układy można projektować i zapisywać. Dla tego modelu nie ma sterownika."
+      },
+      "driverImplemented": {
+        "label": "Sterownik, nieprzetestowany",
+        "detail": "Dla tej platformy istnieje sterownik, ale nie został przetestowany."
+      },
+      "automatedTests": {
+        "label": "Tylko testy automatyczne",
+        "detail": "Sterownik przechodzi tu testy automatyczne, ale nie został przetestowany na fizycznym urządzeniu."
+      },
+      "physicallyVerified": {
+        "label": "Zweryfikowany na urządzeniu",
+        "detail": "Przetestowany na fizycznym urządzeniu na tej platformie."
+      }
+    }
+  },
+  "gestureDefaults": {
+    "title": "Czas gestów",
+    "description": "Wartości domyślne dla klawiszy z podwójnym kliknięciem lub długim naciśnięciem. Klawisz może używać innych wartości w projektancie układów. Nie dotyczy to klawiszy, które reagują tylko na naciśnięcie.",
+    "doubleClickHint": "Czas od zwolnienia klawisza do ponownego naciśnięcia, który nadal liczy się jako podwójne kliknięcie. Pojedyncze kliknięcie klawisza z podwójnym kliknięciem czeka tak długo.",
+    "longPressHint": "Jak długo trzeba przytrzymać klawisz, aby liczyło się to jako długie naciśnięcie.",
+    "field": "{{label}} (ms)",
+    "range": "{{min}}–{{max}} ms, domyślnie {{default}} ms.",
+    "enterValue": "Wprowadź wartość.",
+    "saved": "Zapisano czas gestów",
+    "restore": "Przywróć domyślne",
+    "save": "Zapisz"
+  }
+}

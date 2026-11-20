@@ -30,6 +30,8 @@ import type {
   ImportSummary,
   ProfilesView,
 } from "@/lib/types"
+import { type TranslationKey, i18n, useTranslation } from "@/i18n"
+import { useFormat } from "@/i18n/format"
 
 import { useWindow } from "./window-context"
 
@@ -40,7 +42,8 @@ import { useWindow } from "./window-context"
  * the main window refreshes when the backend reports the change.
  */
 
-const FILTERS = [{ name: "DeckPilot configuration", extensions: ["deckpilot"] }]
+/** The file type of the native file dialogs, named in the window's language. */
+const filters = () => [{ name: i18n.t("settings:portability.fileType"), extensions: ["deckpilot"] }]
 
 /** Loads what a window needs before it can show its form. */
 function useLoaded<T>(load: () => Promise<T>) {
@@ -49,7 +52,11 @@ function useLoaded<T>(load: () => Promise<T>) {
   useEffect(() => {
     load().then(setData, (e: unknown) => {
       setError(
-        failureMessage("The profiles could not be loaded", e, "Close the window and try again"),
+        failureMessage(
+          i18n.t("settings:portability.profilesUnreadable"),
+          e,
+          i18n.t("settings:portability.closeAndRetry"),
+        ),
       )
     })
     // Loaded once per window.
@@ -59,6 +66,7 @@ function useLoaded<T>(load: () => Promise<T>) {
 }
 
 export function ExportWindow() {
+  const { t } = useTranslation()
   const loaded = useLoaded(() => Promise.all([api.listProfiles(), api.securityStatus()]))
   const { close } = useWindow()
   if (!loaded.data) {
@@ -66,7 +74,7 @@ export function ExportWindow() {
       <ModalShell
         size="medium"
         icon={Download}
-        title="Export configuration"
+        title={t("settings:portability.export.title")}
         loading={!loaded.error}
         error={loaded.error}
         onClose={close}
@@ -82,6 +90,7 @@ export function ExportWindow() {
 }
 
 function ExportForm({ profiles }: { profiles: ProfilesView }) {
+  const { t } = useTranslation()
   const { close } = useWindow()
   const sensitive = useSensitive()
   const [selected, setSelected] = useState(profiles.profiles.map((p) => p.id))
@@ -99,7 +108,7 @@ function ExportForm({ profiles }: { profiles: ProfilesView }) {
     setError(null)
     const path = await saveDialog({
       defaultPath: "deckpilot-configuration.deckpilot",
-      filters: FILTERS,
+      filters: filters(),
     })
     if (!path) return
     setBusy(true)
@@ -115,13 +124,15 @@ function ExportForm({ profiles }: { profiles: ProfilesView }) {
               includeModuleSettings: includeModules,
               includeAppSettings: includeSettings,
             }),
-          "export your configuration",
+          t("settings:portability.export.purpose"),
         ),
       )
       setPassword("")
       setConfirmation("")
     } catch (e) {
-      if (!isCancelled(e)) setError(failureMessage("The configuration was not exported", e))
+      if (!isCancelled(e)) {
+        setError(failureMessage(t("settings:portability.export.failed"), e))
+      }
     } finally {
       setBusy(false)
     }
@@ -132,16 +143,16 @@ function ExportForm({ profiles }: { profiles: ProfilesView }) {
       <ModalShell
         size="medium"
         icon={FileCheck2}
-        title="Configuration exported"
-        description={`${result.profiles} profile(s) and ${result.modules} module setting(s), encrypted with your export password.`}
+        title={t("settings:portability.export.doneTitle")}
+        description={t("settings:portability.export.doneDescription", {
+          profiles: t("settings:portability.count.profiles", { count: result.profiles }),
+          modules: t("settings:portability.count.moduleSettings", { count: result.modules }),
+        })}
         onClose={close}
-        primary={{ label: "Done", onClick: close }}
+        primary={{ label: t("settings:shared.done"), onClick: close }}
       >
         <p className="font-mono text-xs break-all select-text">{result.path}</p>
-        <p className="text-xs text-muted-foreground">
-          Keep the file and its password; you need both to import it. This file is your backup: the
-          key of this computer is not.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("settings:portability.export.keepFile")}</p>
       </ModalShell>
     )
   }
@@ -150,23 +161,25 @@ function ExportForm({ profiles }: { profiles: ProfilesView }) {
     <ModalShell
       size="medium"
       icon={Download}
-      title="Export configuration"
-      description="The file is encrypted with a password of its own, independent of how DeckPilot is protected on this computer."
+      title={t("settings:portability.export.title")}
+      description={t("settings:portability.export.description")}
       error={error}
       onClose={close}
       onSubmit={() => void submit()}
-      secondary={{ label: "Cancel", onClick: close }}
+      secondary={{ label: t("common:actions.cancel"), onClick: close }}
       primary={{
-        label: "Choose file and export",
-        loadingLabel: "Encrypting…",
+        label: t("settings:portability.export.action"),
+        loadingLabel: t("settings:portability.export.encrypting"),
         loading: busy,
         disabled: !ready,
       }}
     >
       <fieldset className="grid gap-2">
-        <legend className="mb-1 text-sm font-medium">Profiles</legend>
+        <legend className="mb-1 text-sm font-medium">{t("settings:pages.profiles.title")}</legend>
         {profiles.profiles.length === 0 && (
-          <p className="text-sm text-muted-foreground">There are no profiles yet.</p>
+          <p className="text-sm text-muted-foreground">
+            {t("settings:portability.export.noProfiles")}
+          </p>
         )}
         {profiles.profiles.map((profile) => (
           <label key={profile.id} className="flex items-center gap-2 text-sm">
@@ -192,7 +205,7 @@ function ExportForm({ profiles }: { profiles: ProfilesView }) {
               setIncludeModules(checked === true)
             }}
           />
-          Include module settings
+          {t("settings:portability.export.includeModules")}
         </label>
         <label className="flex items-center gap-2 text-sm">
           <Checkbox
@@ -201,7 +214,7 @@ function ExportForm({ profiles }: { profiles: ProfilesView }) {
               setIncludeSettings(checked === true)
             }}
           />
-          Include application settings (updates)
+          {t("settings:portability.export.includeSettings")}
         </label>
       </div>
       <NewPasswordFields
@@ -211,10 +224,7 @@ function ExportForm({ profiles }: { profiles: ProfilesView }) {
         onConfirmation={setConfirmation}
         idPrefix="export-password"
       />
-      <p className="text-xs text-muted-foreground">
-        Paths and other settings of this computer, keys, passwords and the security settings are
-        never included.
-      </p>
+      <p className="text-xs text-muted-foreground">{t("settings:portability.export.excluded")}</p>
     </ModalShell>
   )
 }
@@ -278,27 +288,28 @@ function ChooseFile({
   onChosen: (path: string) => void
   onClose: () => void
 }) {
+  const { t } = useTranslation()
   const [error, setError] = useState<string | null>(null)
   return (
     <ModalShell
       size="medium"
       icon={Upload}
-      title="Import configuration"
-      description="Choose a DeckPilot export (.deckpilot). Nothing is changed until you have reviewed its contents."
+      title={t("settings:portability.import.title")}
+      description={t("settings:portability.import.chooseDescription")}
       error={error}
       onClose={onClose}
       onSubmit={() => {
-        openDialog({ multiple: false, directory: false, filters: FILTERS }).then(
+        openDialog({ multiple: false, directory: false, filters: filters() }).then(
           (path) => {
             if (typeof path === "string") onChosen(path)
           },
           (e: unknown) => {
-            setError(failureMessage("The file could not be chosen", e))
+            setError(failureMessage(t("settings:portability.import.chooseFailed"), e))
           },
         )
       }}
-      secondary={{ label: "Cancel", onClick: onClose }}
-      primary={{ label: "Choose file…" }}
+      secondary={{ label: t("common:actions.cancel"), onClick: onClose }}
+      primary={{ label: t("settings:portability.import.chooseFile") }}
     />
   )
 }
@@ -314,6 +325,7 @@ function ImportPassword({
   onBack: () => void
   onClose: () => void
 }) {
+  const { t } = useTranslation()
   const [password, setPassword] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -321,7 +333,7 @@ function ImportPassword({
     <ModalShell
       size="medium"
       icon={Upload}
-      title="Import configuration"
+      title={t("settings:portability.import.title")}
       description={<span className="font-mono text-xs break-all">{path}</span>}
       error={error}
       onClose={onClose}
@@ -337,9 +349,9 @@ function ImportPassword({
           .catch((e: unknown) => {
             setError(
               failureMessage(
-                "The file could not be opened",
+                t("settings:portability.import.openFailed"),
                 e,
-                "Check the export password and that the file is a DeckPilot export",
+                t("settings:portability.import.openFailedNext"),
               ),
             )
             setPassword("")
@@ -348,34 +360,32 @@ function ImportPassword({
             setBusy(false)
           })
       }}
-      secondary={{ label: "Back", onClick: onBack }}
+      secondary={{ label: t("common:actions.back"), onClick: onBack }}
       primary={{
-        label: "Show contents",
-        loadingLabel: "Decrypting…",
+        label: t("settings:portability.import.showContents"),
+        loadingLabel: t("settings:portability.import.decrypting"),
         loading: busy,
         disabled: !password,
       }}
     >
       <PasswordField
         id="import-password"
-        label="Export password"
+        label={t("settings:portability.import.password")}
         value={password}
         onChange={setPassword}
         autoComplete="current-password"
         autoFocus
         invalid={Boolean(error)}
       />
-      <p className="text-xs text-muted-foreground">
-        Nothing is changed yet: you see what the file contains first.
-      </p>
+      <p className="text-xs text-muted-foreground">{t("settings:portability.import.nothingYet")}</p>
     </ModalShell>
   )
 }
 
-const RESOLUTIONS: { value: ConflictResolution; label: string }[] = [
-  { value: "keepBoth", label: "Import as a copy" },
-  { value: "replace", label: "Replace the local profile" },
-  { value: "skip", label: "Skip" },
+const RESOLUTIONS: { value: ConflictResolution; label: TranslationKey }[] = [
+  { value: "keepBoth", label: "settings:portability.import.resolution.keepBoth" },
+  { value: "replace", label: "settings:portability.import.resolution.replace" },
+  { value: "skip", label: "settings:portability.import.resolution.skip" },
 ]
 
 function ImportChoices({
@@ -389,6 +399,8 @@ function ImportChoices({
   onDone: (summary: ImportSummary) => void
   onClose: () => void
 }) {
+  const { t } = useTranslation()
+  const format = useFormat()
   const [mode, setMode] = useState<ImportMode>("merge")
   const [selected, setSelected] = useState(preview.profiles.map((p) => p.id))
   const [conflicts, setConflicts] = useState<Record<string, ConflictResolution>>({})
@@ -406,8 +418,11 @@ function ImportChoices({
     <ModalShell
       size="medium"
       icon={Upload}
-      title="Review the import"
-      description={`Exported by DeckPilot ${preview.appVersion} on ${new Date(preview.exportedAt * 1000).toLocaleString()}. Imported workflows do not run and imported profiles are not activated.`}
+      title={t("settings:portability.import.reviewTitle")}
+      description={t("settings:portability.import.reviewDescription", {
+        version: preview.appVersion,
+        date: format.dateTime(preview.exportedAt * 1000),
+      })}
       error={error}
       onClose={onClose}
       onSubmit={() => {
@@ -417,23 +432,23 @@ function ImportChoices({
           .applyImport(token, { mode, profiles: selected, conflicts, moduleSettings, appSettings })
           .then(onDone)
           .catch((e: unknown) => {
-            setError(failureMessage("Nothing was imported", e))
+            setError(failureMessage(t("settings:portability.import.failed"), e))
           })
           .finally(() => {
             setBusy(false)
           })
       }}
-      secondary={{ label: "Cancel", onClick: onClose }}
+      secondary={{ label: t("common:actions.cancel"), onClick: onClose }}
       primary={{
-        label: "Import",
-        loadingLabel: "Importing…",
+        label: t("settings:backup.import"),
+        loadingLabel: t("settings:portability.import.importing"),
         loading: busy,
         disabled: nothing,
         variant: mode === "replace" ? "destructive" : "default",
       }}
     >
       <div className="grid gap-2">
-        <Label htmlFor="import-mode">How to import</Label>
+        <Label htmlFor="import-mode">{t("settings:portability.import.mode")}</Label>
         <Select
           value={mode}
           onValueChange={(value) => {
@@ -444,24 +459,28 @@ function ImportChoices({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="merge">Add to my configuration</SelectItem>
-            <SelectItem value="replace">Replace my profiles</SelectItem>
+            <SelectItem value="merge">{t("settings:portability.import.merge")}</SelectItem>
+            <SelectItem value="replace">{t("settings:portability.import.replace")}</SelectItem>
           </SelectContent>
         </Select>
         {mode === "replace" && preview.localProfiles.length > 0 && (
           <Alert variant="destructive">
             <TriangleAlert />
-            <AlertTitle>These local profiles will be removed</AlertTitle>
+            <AlertTitle>{t("settings:portability.import.removedTitle")}</AlertTitle>
             <AlertDescription>
-              {preview.localProfiles.map(([, name]) => name).join(", ")}. The resources set up on
-              this computer are kept.
+              {t("settings:portability.import.removedDescription", {
+                profiles: format.list(
+                  preview.localProfiles.map(([, name]) => name),
+                  "unit",
+                ),
+              })}
             </AlertDescription>
           </Alert>
         )}
       </div>
 
       <fieldset className="grid gap-2">
-        <legend className="mb-1 text-sm font-medium">Profiles</legend>
+        <legend className="mb-1 text-sm font-medium">{t("settings:pages.profiles.title")}</legend>
         {preview.profiles.map((profile) => (
           <div key={profile.id} className="grid gap-2 rounded-md border p-3">
             <label className="flex items-center gap-2 text-sm">
@@ -477,13 +496,19 @@ function ImportChoices({
               />
               <span className="font-medium">{profile.name}</span>
               <span className="text-xs text-muted-foreground">
-                {profile.actions} actions · {profile.workflows} workflows · {profile.projects}{" "}
-                projects · {profile.layouts} layouts
+                {[
+                  t("settings:portability.count.actions", { count: profile.actions }),
+                  t("settings:portability.count.workflows", { count: profile.workflows }),
+                  t("settings:portability.count.projects", { count: profile.projects }),
+                  t("settings:portability.count.layouts", { count: profile.layouts }),
+                ].join(" · ")}
               </span>
             </label>
             {profile.conflict?.type === "sameId" && mode === "merge" && (
               <div className="flex flex-wrap items-center gap-2 pl-6 text-sm">
-                <Badge variant="outline">Already here as “{profile.conflict.name}”</Badge>
+                <Badge variant="outline">
+                  {t("settings:portability.import.alreadyHere", { name: profile.conflict.name })}
+                </Badge>
                 <Select
                   value={conflicts[profile.id] ?? "keepBoth"}
                   onValueChange={(value) => {
@@ -492,14 +517,16 @@ function ImportChoices({
                 >
                   <SelectTrigger
                     className="h-8 w-56"
-                    aria-label={`What to do with ${profile.name}`}
+                    aria-label={t("settings:portability.import.resolutionLabel", {
+                      profile: profile.name,
+                    })}
                   >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     {RESOLUTIONS.map((r) => (
                       <SelectItem key={r.value} value={r.value}>
-                        {r.label}
+                        {t(r.label)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -508,7 +535,7 @@ function ImportChoices({
             )}
             {profile.conflict?.type === "sameName" && mode === "merge" && (
               <p className="pl-6 text-xs text-muted-foreground">
-                A different local profile has the same name; both are kept.
+                {t("settings:portability.import.sameName")}
               </p>
             )}
           </div>
@@ -525,7 +552,7 @@ function ImportChoices({
                 setModuleSettings(checked === true)
               }}
             />
-            Apply module settings
+            {t("settings:portability.import.applyModules")}
           </label>
           <ul className="grid gap-1 pl-6 text-sm">
             {preview.modules.map((module) => (
@@ -534,11 +561,11 @@ function ImportChoices({
                 <Badge variant={module.status === "ready" ? "secondary" : "outline"}>
                   {module.status === "ready"
                     ? module.enabled
-                      ? "enabled"
-                      : "disabled"
+                      ? t("settings:modules.state.enabled")
+                      : t("settings:modules.state.disabled")
                     : module.status === "missing"
-                      ? "not installed"
-                      : "incompatible"}
+                      ? t("settings:modules.state.notInstalled")
+                      : t("settings:portability.import.incompatible")}
                 </Badge>
                 {module.problem && (
                   <span className="text-xs text-muted-foreground">{module.problem}</span>
@@ -557,33 +584,54 @@ function ImportChoices({
               setAppSettings(checked === true)
             }}
           />
-          Apply application settings ({settingsContent(preview)})
+          {t("settings:portability.import.applySettings", {
+            content: format.list(
+              settingsContent(preview).map((key) => t(key)),
+              "unit",
+            ),
+          })}
         </label>
       )}
 
       {(variables.new.length > 0 || variables.existing.length > 0 || variables.values > 0) && (
-        <div className="grid gap-1 text-sm" aria-label="Shared variables">
-          <h2 className="font-medium">Shared variables</h2>
-          {variables.new.length > 0 && <p>New: {variables.new.join(", ")}.</p>}
+        <div className="grid gap-1 text-sm" aria-label={t("settings:portability.variables.title")}>
+          <h2 className="font-medium">{t("settings:portability.variables.title")}</h2>
+          {variables.new.length > 0 && (
+            <p>
+              {t("settings:portability.variables.new", {
+                names: format.list(variables.new, "unit"),
+              })}
+            </p>
+          )}
           {variables.existing.length > 0 && (
-            <p>Already here, kept as they are: {variables.existing.join(", ")}.</p>
+            <p>
+              {t("settings:portability.variables.existing", {
+                names: format.list(variables.existing, "unit"),
+              })}
+            </p>
           )}
           <p className="text-xs text-muted-foreground">
-            {plural(variables.values, "value")} for profiles and projects
             {variables.globalValues > 0
-              ? `, ${plural(variables.globalValues, "global value")} with the application settings`
-              : ""}
-            . Sensitive values are never exported.
+              ? t("settings:portability.variables.valuesWithGlobal", {
+                  values: t("settings:portability.count.values", { count: variables.values }),
+                  global: t("settings:portability.count.globalValues", {
+                    count: variables.globalValues,
+                  }),
+                })
+              : t("settings:portability.variables.values", {
+                  values: t("settings:portability.count.values", { count: variables.values }),
+                })}
           </p>
         </div>
       )}
       {variables.incompatible.length > 0 && (
         <Alert>
           <TriangleAlert />
-          <AlertTitle>Some shared variables have another type here</AlertTitle>
+          <AlertTitle>{t("settings:portability.variables.incompatibleTitle")}</AlertTitle>
           <AlertDescription>
-            {variables.incompatible.join(", ")}. Their values are not imported; the variables here
-            are kept.
+            {t("settings:portability.variables.incompatibleDescription", {
+              names: format.list(variables.incompatible, "unit"),
+            })}
           </AlertDescription>
         </Alert>
       )}
@@ -591,19 +639,25 @@ function ImportChoices({
       {preview.unknownActionTypes.length > 0 && (
         <Alert>
           <TriangleAlert />
-          <AlertTitle>Some actions need modules this DeckPilot does not have</AlertTitle>
+          <AlertTitle>{t("settings:portability.import.unknownTypesTitle")}</AlertTitle>
           <AlertDescription>
-            {preview.unknownActionTypes.join(", ")}. They are imported and shown as unavailable.
+            {t("settings:portability.import.unknownTypesDescription", {
+              types: format.list(preview.unknownActionTypes, "unit"),
+            })}
           </AlertDescription>
         </Alert>
       )}
       {preview.missingResources.length > 0 && (
         <Alert>
           <TriangleAlert />
-          <AlertTitle>Resources to set up on this computer</AlertTitle>
+          <AlertTitle>{t("settings:portability.import.missingTitle")}</AlertTitle>
           <AlertDescription>
-            {preview.missingResources.map((r) => r.key).join(", ")}. You can map them after the
-            import.
+            {t("settings:portability.import.missingDescription", {
+              resources: format.list(
+                preview.missingResources.map((r) => r.key),
+                "unit",
+              ),
+            })}
           </AlertDescription>
         </Alert>
       )}
@@ -618,17 +672,14 @@ function ImportChoices({
   )
 }
 
-function plural(count: number, noun: string) {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`
-}
-
 /** What "application settings" means for this export. */
-function settingsContent(preview: ImportPreview) {
-  const parts = [
-    preview.settings.updates ? "updates" : "",
-    preview.variables.globalValues > 0 ? "global shared variable values" : "",
-  ].filter(Boolean)
-  return parts.join(", ")
+function settingsContent(preview: ImportPreview): TranslationKey[] {
+  const parts: TranslationKey[] = []
+  if (preview.settings.updates) parts.push("settings:portability.import.settingsUpdates")
+  if (preview.variables.globalValues > 0) {
+    parts.push("settings:portability.import.settingsGlobalValues")
+  }
+  return parts
 }
 
 function ImportDone({
@@ -640,20 +691,32 @@ function ImportDone({
   preview: ImportPreview
   onClose: () => void
 }) {
+  const { t } = useTranslation()
+  const format = useFormat()
   const missing = preview.missingResources
+  const outcome = [
+    t("settings:portability.done.imported", { count: summary.imported.length }),
+    summary.removed.length > 0
+      ? t("settings:portability.done.replaced", { count: summary.removed.length })
+      : "",
+    summary.skipped.length > 0
+      ? t("settings:portability.done.skipped", { count: summary.skipped.length })
+      : "",
+  ].filter(Boolean)
+  const values = t("settings:portability.count.values", { count: summary.variableValues })
   return (
     <ModalShell
       size="medium"
       icon={FileCheck2}
-      title="Import complete"
-      description={`${summary.imported.length} profile(s) imported${
-        summary.removed.length > 0 ? `, ${summary.removed.length} replaced` : ""
-      }${summary.skipped.length > 0 ? `, ${summary.skipped.length} skipped` : ""}.`}
+      title={t("settings:portability.done.title")}
+      description={t("settings:portability.done.description", {
+        outcome: format.list(outcome, "unit"),
+      })}
       onClose={onClose}
       secondary={
         missing.length > 0
           ? {
-              label: "Map resources now",
+              label: t("settings:portability.done.mapResources"),
               onClick: () => {
                 void emitTo("main", NAVIGATE_EVENT, "projects/projects").then(() =>
                   api.showMainWindow(),
@@ -663,25 +726,39 @@ function ImportDone({
             }
           : undefined
       }
-      primary={{ label: "Done", onClick: onClose }}
+      primary={{ label: t("settings:shared.done"), onClick: onClose }}
     >
       {summary.renamed.length > 0 && (
-        <p className="text-sm">Imported as copies: {summary.renamed.join(", ")}.</p>
+        <p className="text-sm">
+          {t("settings:portability.done.renamed", {
+            profiles: format.list(summary.renamed, "unit"),
+          })}
+        </p>
       )}
       {summary.settings.length > 0 && (
-        <p className="text-sm">Application settings applied: {summary.settings.join(", ")}.</p>
+        <p className="text-sm">
+          {t("settings:portability.done.settings", {
+            settings: format.list(summary.settings, "unit"),
+          })}
+        </p>
       )}
       {(summary.variables.length > 0 || summary.variableValues > 0) && (
         <p className="text-sm">
-          Shared variables:{" "}
-          {summary.variables.length > 0 ? `${summary.variables.join(", ")} created, ` : ""}
-          {plural(summary.variableValues, "value")} set.
+          {summary.variables.length > 0
+            ? t("settings:portability.done.variablesCreated", {
+                names: format.list(summary.variables, "unit"),
+                values,
+              })
+            : t("settings:portability.done.variables", { values })}
         </p>
       )}
       {summary.skippedValues.length > 0 && (
         <div className="grid gap-1">
-          <h2 className="text-sm font-medium">Shared variable values not imported</h2>
-          <ul className="list-disc pl-5 text-sm" aria-label="Values not imported">
+          <h2 className="text-sm font-medium">{t("settings:portability.done.skippedValues")}</h2>
+          <ul
+            className="list-disc pl-5 text-sm"
+            aria-label={t("settings:portability.done.skippedValuesList")}
+          >
             {summary.skippedValues.map((reason) => (
               <li key={reason}>{reason}</li>
             ))}
@@ -690,7 +767,7 @@ function ImportDone({
       )}
       {missing.length > 0 && (
         <div className="grid gap-2">
-          <h2 className="text-sm font-medium">Set up these resources on this computer</h2>
+          <h2 className="text-sm font-medium">{t("settings:portability.done.setUp")}</h2>
           <ul className="grid gap-1 text-sm">
             {missing.map((resource) => (
               <li key={resource.key}>
@@ -698,12 +775,14 @@ function ImportDone({
                 {resource.kind && (
                   <span className="text-muted-foreground">
                     {" "}
-                    · {RESOURCE_KIND_LABELS[resource.kind]}
+                    · {t(RESOURCE_KIND_LABELS[resource.kind])}
                   </span>
                 )}
                 <span className="text-xs text-muted-foreground">
                   {" "}
-                  — used by {resource.profiles.join(", ")}
+                  {t("settings:portability.done.usedBy", {
+                    profiles: format.list(resource.profiles, "unit"),
+                  })}
                 </span>
               </li>
             ))}

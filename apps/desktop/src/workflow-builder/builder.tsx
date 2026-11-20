@@ -40,6 +40,7 @@ import { useEditorShortcuts } from "@/hooks/use-editor-shortcuts"
 import { useStatusItem } from "@/hooks/use-status"
 import { useTitlebar } from "@/hooks/use-titlebar"
 import { IS_MAC } from "@/hooks/use-navigation"
+import { useTranslation } from "@/i18n"
 import { api, errorMessage } from "@/lib/api"
 import { toastSaved } from "@/lib/agent-reload"
 import { initialValue } from "@/lib/parameters"
@@ -178,13 +179,13 @@ function ToolButton({
   onClick: () => void
   children: ReactNode
 }) {
+  const { t } = useTranslation()
   return (
     <Button
       variant="ghost"
-      size="icon"
-      className="size-7"
+      size="icon-sm"
       aria-label={label}
-      title={shortcut ? `${label} (${shortcut})` : label}
+      title={shortcut ? t("navigation:toolbar.withShortcut", { label, shortcut }) : label}
       disabled={disabled}
       onClick={onClick}
     >
@@ -214,6 +215,7 @@ function Builder({
   onDeleted,
   onActionsChanged,
 }: BuilderProps) {
+  const { t } = useTranslation()
   const flow = useReactFlow<FlowNode>()
   const [name, setName] = useState(initial.name)
   const [description, setDescription] = useState(initial.description ?? "")
@@ -292,13 +294,13 @@ function Builder({
     () => [
       {
         id: "flow",
-        title: "Flow",
+        title: t("workflows:builder.flowGroup"),
         entries: flowEntries(loopTarget),
         types: [],
       },
       ...moduleGroups(modules, actions),
     ],
-    [modules, actions, loopTarget],
+    [modules, actions, loopTarget, t],
   )
 
   const workflow: Workflow = useMemo(
@@ -386,16 +388,16 @@ function Builder({
     api
       .saveWorkflow(profileId, workflow)
       .then((saved) => {
-        toastSaved("Workflow saved", saved.agentReload)
+        toastSaved(t("workflows:builder.toast.saved"), saved.agentReload)
         onSaved(saved.id)
       })
       .catch((e: unknown) =>
-        toast.error("The workflow was not saved", { description: errorMessage(e) }),
+        toast.error(t("workflows:builder.toast.saveFailed"), { description: errorMessage(e) }),
       )
       .finally(() => {
         setSaving(false)
       })
-  }, [canSave, profileId, workflow, onSaved])
+  }, [canSave, profileId, workflow, onSaved, t])
 
   const selectOnly = (ids: string[]) => {
     setSelected(ids)
@@ -405,7 +407,7 @@ function Builder({
   /** Adds a catalog entry; after the selected node when one is selected. */
   const addEntry = (entry: CatalogEntry, position?: { x: number; y: number }) => {
     if (graph.nodes.length >= MAX_NODES) {
-      toast.error(`A workflow can have at most ${MAX_NODES} nodes`)
+      toast.error(t("workflows:builder.toast.tooManyNodes", { count: MAX_NODES }))
       return
     }
     const after = selected.length === 1 ? graph.nodes.find((n) => n.id === selected[0]) : undefined
@@ -443,13 +445,13 @@ function Builder({
       .then(async (action) => {
         await onActionsChanged()
         addEntry(actionEntry(action, type))
-        toast.success(`Action “${action.name}” created`, {
-          description: "Configure it in the Action Library or override parameters here.",
+        toast.success(t("workflows:builder.toast.actionCreated", { name: action.name }), {
+          description: t("workflows:builder.toast.actionCreatedHint"),
         })
       })
       .catch((e: unknown) => {
-        toast.error("The action was not created", {
-          description: `${errorMessage(e)} You can create it in the Action Library instead.`,
+        toast.error(t("workflows:builder.toast.actionFailed"), {
+          description: t("workflows:builder.toast.actionFailedHint", { error: errorMessage(e) }),
         })
       })
   }
@@ -484,7 +486,7 @@ function Builder({
     actions: [
       {
         id: "workflows.save",
-        label: "Save",
+        label: t("workflows:builder.save.label"),
         icon: Save,
         placement: "primary" as const,
         order: 1,
@@ -492,27 +494,30 @@ function Builder({
         busy: saving,
         onSelect: save,
         hint: !dirty
-          ? "No unsaved changes"
+          ? t("workflows:builder.save.noChanges")
           : errors.length > 0
-            ? `Fix ${errors.length} problem${errors.length === 1 ? "" : "s"} to save`
+            ? t("workflows:builder.save.fixProblems", { count: errors.length })
             : workflow.name
-              ? `Save (${shortcutLabel("S")})`
-              : "Give the workflow a name",
+              ? t("navigation:toolbar.withShortcut", {
+                  label: t("workflows:builder.save.label"),
+                  shortcut: shortcutLabel("S"),
+                })
+              : t("workflows:builder.save.needsName"),
       },
       {
         id: "workflows.run",
-        label: running ? "Cancel run" : "Run workflow",
+        label: running ? t("workflows:builder.run.cancel") : t("workflows:builder.run.label"),
         icon: Play,
         placement: "primary" as const,
         order: 2,
         disabled: running ? !onCancelRun : !canRun || dirty,
         hint: running
-          ? "Stop before the next node"
+          ? t("workflows:builder.run.cancelHint")
           : dirty
-            ? "Save first; runs in the agent for the active profile"
+            ? t("workflows:builder.run.saveFirst")
             : canRun
-              ? `Run “${initial.name}” in the agent`
-              : (runBlocked ?? "Runs in the agent for the active profile"),
+              ? t("workflows:builder.run.inAgent", { name: initial.name })
+              : (runBlocked ?? t("workflows:builder.run.hint")),
         onSelect: running ? onCancelRun : onRun,
       },
     ],
@@ -525,8 +530,8 @@ function Builder({
           owner: "core",
           placement: "left",
           priority: 60,
-          label: `${errors.length} problem${errors.length === 1 ? "" : "s"}`,
-          tooltip: "Problems in the open workflow; it cannot be saved until they are fixed",
+          label: t("workflows:builder.problems", { count: errors.length }),
+          tooltip: t("workflows:builder.problemsTooltip"),
           tone: "danger",
         }
       : null,
@@ -535,7 +540,7 @@ function Builder({
   const nodes: FlowNode[] = useMemo(
     () =>
       graph.nodes.map((node) => {
-        const text = describeNode(node, lookup)
+        const text = describeNode(node, lookup, t)
         const action = node.type === "action" ? actions.find((a) => a.id === node.action) : null
         const type = action ? types.find((t) => t.id === action.actionType) : undefined
         return {
@@ -555,7 +560,7 @@ function Builder({
           },
         }
       }),
-    [graph.nodes, lookup, actions, types, selected, issues, run, sizes],
+    [graph.nodes, lookup, actions, types, selected, issues, run, sizes, t],
   )
   const edges: Edge[] = useMemo(
     () =>
@@ -573,7 +578,7 @@ function Builder({
           target: edge.to,
           targetHandle: "in",
           selected: selectedEdges.includes(id),
-          label: edge.port === "out" ? undefined : PORT_LABEL[edge.port],
+          label: edge.port === "out" ? undefined : t(PORT_LABEL[edge.port]),
           animated: run?.[edge.to]?.state === "running",
           style: { stroke: EDGE_COLOR[edge.port], strokeWidth: taken ? 2.5 : 1.5 },
           markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLOR[edge.port] },
@@ -581,7 +586,7 @@ function Builder({
           labelStyle: { fontSize: 11 },
         }
       }),
-    [graph.edges, selectedEdges, run],
+    [graph.edges, selectedEdges, run, t],
   )
 
   const onNodesChange = (changes: NodeChange<FlowNode>[]) => {
@@ -692,12 +697,13 @@ function Builder({
 
   return (
     <div className="flex h-[calc(100svh-var(--titlebar-height)-var(--statusbar-height)-3rem)] min-h-[28rem] flex-col overflow-hidden rounded-lg border bg-background">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b px-2">
+      <div className="box-content flex h-(--toolbar-height) shrink-0 items-center gap-2 border-b px-2">
         <Button
           variant="ghost"
-          size="icon"
-          className="size-7"
-          aria-label={panels.catalog ? "Hide nodes" : "Show nodes"}
+          size="icon-sm"
+          aria-label={
+            panels.catalog ? t("workflows:builder.hideCatalog") : t("workflows:builder.showCatalog")
+          }
           aria-pressed={panels.catalog}
           onClick={() => {
             setPanels((p) => ({ ...p, catalog: !p.catalog }))
@@ -706,9 +712,9 @@ function Builder({
           <PanelLeft />
         </Button>
         <div className="flex min-w-0 flex-1 items-center gap-2">{toolbar}</div>
-        <div className="flex items-center" role="toolbar" aria-label="Edit">
+        <div className="flex items-center" role="toolbar" aria-label={t("workflows:builder.edit")}>
           <ToolButton
-            label="Undo"
+            label={t("workflows:builder.undo")}
             shortcut={shortcutLabel("Z")}
             disabled={state.past.length === 0}
             onClick={doUndo}
@@ -716,25 +722,28 @@ function Builder({
             <Undo2 />
           </ToolButton>
           <ToolButton
-            label="Redo"
+            label={t("workflows:builder.redo")}
             shortcut={shortcutLabel("Z", true)}
             disabled={state.future.length === 0}
             onClick={doRedo}
           >
             <Redo2 />
           </ToolButton>
-          <ToolButton label="Arrange nodes" onClick={doLayout}>
+          <ToolButton label={t("workflows:builder.arrange")} onClick={doLayout}>
             <LayoutGrid />
           </ToolButton>
         </div>
         <span className="text-xs text-muted-foreground" aria-live="polite">
-          {dirty ? "Unsaved changes" : "Saved"}
+          {dirty ? t("workflows:builder.unsaved") : t("workflows:builder.saved")}
         </span>
         <Button
           variant="ghost"
-          size="icon"
-          className="size-7"
-          aria-label={panels.inspector ? "Hide inspector" : "Show inspector"}
+          size="icon-sm"
+          aria-label={
+            panels.inspector
+              ? t("workflows:builder.hideInspector")
+              : t("workflows:builder.showInspector")
+          }
           aria-pressed={panels.inspector}
           onClick={() => {
             setPanels((p) => ({ ...p, inspector: !p.inspector }))
@@ -745,7 +754,10 @@ function Builder({
       </div>
       <div className="flex min-h-0 flex-1">
         {panels.catalog && (
-          <aside className="flex w-56 shrink-0 flex-col border-r" aria-label="Node catalog">
+          <aside
+            className="flex w-56 shrink-0 flex-col border-r"
+            aria-label={t("workflows:builder.catalog")}
+          >
             <CatalogPanel
               groups={groups}
               onAdd={(entry) => {
@@ -819,8 +831,8 @@ function Builder({
             names={{ workflow: name.trim() || initial.name }}
           >
             <aside
-              className="w-68 shrink-0 overflow-x-hidden overflow-y-auto border-l"
-              aria-label="Inspector"
+              className="relative w-68 shrink-0 overflow-x-hidden overflow-y-auto border-l"
+              aria-label={t("workflows:builder.inspector")}
             >
               {node ? (
                 <NodeInspector
@@ -843,10 +855,10 @@ function Builder({
               ) : (
                 <div className="grid">
                   <div className="grid gap-3 px-4 py-3">
-                    <h2 className="text-sm font-semibold">Workflow</h2>
+                    <h2 className="text-sm font-semibold">{t("workflows:builder.panel.title")}</h2>
                     <div className="grid gap-1.5">
                       <Label htmlFor="workflow-name" className="text-xs">
-                        Name
+                        {t("workflows:builder.panel.name")}
                       </Label>
                       <Input
                         id="workflow-name"
@@ -858,7 +870,7 @@ function Builder({
                     </div>
                     <div className="grid gap-1.5">
                       <Label htmlFor="workflow-description" className="text-xs">
-                        Description
+                        {t("workflows:builder.panel.description")}
                       </Label>
                       <Textarea
                         id="workflow-description"
@@ -877,21 +889,22 @@ function Builder({
                     <IssueList issues={graphIssues} />
                     {errors.length > 0 && graphIssues.length === 0 && (
                       <p className="text-xs text-destructive">
-                        {errors.length} problem{errors.length === 1 ? "" : "s"} on nodes; select a
-                        node to see it.
+                        {t("workflows:builder.panel.nodeProblems", { count: errors.length })}
                       </p>
                     )}
                     {selected.length > 1 && (
                       <p className="text-xs text-muted-foreground">
-                        {selected.length} nodes selected. Copy with {shortcutLabel("C")}, delete
-                        with ⌫.
+                        {t("workflows:builder.panel.selected", {
+                          count: selected.length,
+                          shortcut: shortcutLabel("C"),
+                        })}
                       </p>
                     )}
                     {notes.length > 0 && (
                       <div className="grid gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs">
-                        <p className="font-medium">Converted from steps</p>
+                        <p className="font-medium">{t("workflows:builder.panel.converted")}</p>
                         <p className="text-muted-foreground">
-                          Review these differences, then save. The steps are kept.
+                          {t("workflows:builder.panel.convertedHint")}
                         </p>
                         <ul className="list-disc pl-4">
                           {notes.map((note) => (
@@ -907,19 +920,23 @@ function Builder({
                           size="sm"
                           onClick={() => {
                             api
-                              .duplicateWorkflow(profileId, initial.id, `${initial.name} (copy)`)
+                              .duplicateWorkflow(
+                                profileId,
+                                initial.id,
+                                t("workflows:builder.panel.copyName", { name: initial.name }),
+                              )
                               .then((copy) => {
-                                toast.success("Workflow duplicated")
+                                toast.success(t("workflows:builder.toast.duplicated"))
                                 onSaved(copy.id)
                               })
                               .catch((e: unknown) =>
-                                toast.error("The workflow was not duplicated", {
+                                toast.error(t("workflows:builder.toast.duplicateFailed"), {
                                   description: errorMessage(e),
                                 }),
                               )
                           }}
                         >
-                          <Copy /> Duplicate
+                          <Copy /> {t("workflows:builder.panel.duplicate")}
                         </Button>
                         <ConfirmDialog
                           trigger={
@@ -929,24 +946,24 @@ function Builder({
                               disabled={(view.workflowUsages[initial.id] ?? []).length > 0}
                               title={
                                 (view.workflowUsages[initial.id] ?? []).length > 0
-                                  ? "Used by a layout or another workflow"
+                                  ? t("workflows:builder.panel.inUse")
                                   : undefined
                               }
                             >
-                              <Trash2 /> Delete
+                              <Trash2 /> {t("common:actions.delete")}
                             </Button>
                           }
-                          title={`Delete “${initial.name}”?`}
-                          description="The workflow and its graph are removed from this profile."
+                          title={t("workflows:builder.panel.deleteTitle", { name: initial.name })}
+                          description={t("workflows:builder.panel.deleteDescription")}
                           onConfirm={() => {
                             api
                               .deleteWorkflow(profileId, initial.id)
                               .then(() => {
-                                toast.success("Workflow deleted")
+                                toast.success(t("workflows:builder.toast.deleted"))
                                 onDeleted()
                               })
                               .catch((e: unknown) =>
-                                toast.error("The workflow was not deleted", {
+                                toast.error(t("workflows:builder.toast.deleteFailed"), {
                                   description: errorMessage(e),
                                 }),
                               )
@@ -977,7 +994,9 @@ function Builder({
         )}
       </div>
       <p className={cn("sr-only")} aria-live="polite">
-        {errors.length > 0 ? `${errors.length} problems` : "No problems"}
+        {errors.length > 0
+          ? t("workflows:builder.problems", { count: errors.length })
+          : t("workflows:builder.noProblems")}
       </p>
     </div>
   )

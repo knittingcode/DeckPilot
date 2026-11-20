@@ -2,6 +2,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { useTranslation } from "@/i18n"
 import { api } from "@/lib/api"
 import { toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
@@ -20,20 +21,23 @@ export function ProjectSwitcher({
   projects: Project[]
   activeProjectId: string | null
 }) {
+  const { t } = useTranslation()
   const { profiles, refresh } = useAppContext()
   const isActiveProfile = profiles.activeProfileId === profileId
   const run = (operation: () => Promise<unknown>) => {
     operation().then(refresh, (error: unknown) => {
-      toastFailure("The project was not switched", error)
+      toastFailure(t("workspace:projects.switcher.failed"), error)
     })
   }
   if (projects.length === 0) {
-    return <p className="text-caption text-muted-foreground">This profile has no projects.</p>
+    return (
+      <p className="text-caption text-muted-foreground">{t("workspace:projects.switcher.none")}</p>
+    )
   }
   if (!isActiveProfile) {
     return (
       <p className="max-w-64 text-caption text-muted-foreground">
-        Projects can be switched for the profile that is active on the device.
+        {t("workspace:projects.switcher.inactiveProfile")}
       </p>
     )
   }
@@ -42,7 +46,7 @@ export function ProjectSwitcher({
       <Button
         variant="outline"
         size="icon-sm"
-        aria-label="Previous project"
+        aria-label={t("workspace:projects.switcher.previous")}
         onClick={() => {
           run(() => api.cycleProject(profileId, "previous"))
         }}
@@ -57,7 +61,7 @@ export function ProjectSwitcher({
         onValueChange={(id) => {
           if (id) run(() => api.selectProject(profileId, id))
         }}
-        aria-label="Active project"
+        aria-label={t("workspace:projects.switcher.active")}
       >
         {projects.map((project) => (
           <ToggleGroupItem
@@ -73,7 +77,7 @@ export function ProjectSwitcher({
       <Button
         variant="outline"
         size="icon-sm"
-        aria-label="Next project"
+        aria-label={t("workspace:projects.switcher.next")}
         onClick={() => {
           run(() => api.cycleProject(profileId, "next"))
         }}

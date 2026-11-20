@@ -79,8 +79,9 @@ pub fn update_action(
             .find(|existing| existing.id == action.id)
             .ok_or(CommandError::NotFound("action"))?;
         if slot.action_type != action.action_type {
-            return Err(CommandError::Invalid(
-                "the action type cannot be changed".into(),
+            return Err(CommandError::invalid(
+                "actionTypeFixed",
+                "the action type cannot be changed",
             ));
         }
         *slot = action.clone();

@@ -11,10 +11,20 @@
      lights are positioned on that axis in tauri.conf.json
      (trafficLightPosition) — keep both in sync. */
   --titlebar-height: 3rem;
+  /* In-view toolbars (the Device Editor's editing bar): the main toolbar's
+     height, so their `sm` buttons (2rem) have 0.5rem above and below. */
+  --toolbar-height: 3rem;
+  /* Controls overlaid on a canvas (the Device Editor's zoom bar): the same
+     distance from the canvas' right and bottom edges. */
+  --canvas-overlay-inset: 1rem;
+  /* The icon tile of dialog headers; a two-line heading fits its height. */
+  --modal-icon: 3rem;
   --titlebar-control: 1.75rem;
   --titlebar-icon: 1rem;
   --titlebar-gap: 0.25rem;
   --titlebar-padding-x: 0.75rem;
+  /* Clear space between the macOS traffic lights and the toolbar's content. */
+  --titlebar-controls-gap: 1.125rem;
 
   /* The device editor's Action Library (layout-editor/library-dock.tsx):
      one fixed width, always beside the editor (below it in windows
@@ -27,95 +37,56 @@
      elsewhere (dialog windows). */
   --statusbar-size: 1.625rem;
   --statusbar-height: 0px;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
-
-  /* The device drawn in the editor (components/device-canvas.tsx): its
-     body, touch strip and dials, and the marks of selection, keyboard
-     focus and a drop target. The key images show what the device's own
-     screens show and keep their colours. */
-  /* Status colours of inline status indicators (components/settings-layout.tsx). */
-  --success: oklch(0.6 0.15 155);
-  --warning: oklch(0.7 0.16 70);
-
-  --device-body: oklch(0.22 0 0);
-  --device-body-border: oklch(0.34 0 0);
-  --device-strip: oklch(0.15 0 0);
-  --device-dial: oklch(0.27 0 0);
-  --device-dial-border: oklch(0.46 0 0);
-  --device-dial-foreground: oklch(0.92 0 0);
-  /* A key: its LCD when nothing is shown (a little lighter than the body),
-     its hairline border at rest and on hover, and the faces drawn until the
-     device's own image arrives (components/key-face.tsx). */
-  --device-key: oklch(0.26 0 0);
-  --device-key-border: oklch(0.35 0 0);
-  --device-key-hover: oklch(0.55 0 0);
-  --device-key-foreground: oklch(0.95 0 0);
-  --device-key-muted: oklch(0.78 0 0);
-  --device-face: oklch(0.31 0 0);
-  --device-face-folder: oklch(0.33 0.05 270);
-  --device-selected: oklch(0.769 0.188 70.08);
-  --device-focus: oklch(0.685 0.169 237.32);
-  --device-drop: oklch(0.696 0.17 162.48);
-}
-
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  /* DeckPilot is permanently dark (src/lib/theme.ts): one palette, no
+     light theme. Surfaces step up in lightness with elevation:
+       --background #111111  workspace and page content
+       --sidebar    #191919  chrome: toolbar, navigation rail, status bar,
+                             settings navigation, Action Library
+       --card, --popover #202020  secondary panels, menus, popovers
+       --secondary, --muted, --accent #2a2a2a  interactive surfaces, hover
+       --border, --input #383838  separators and field outlines
+     Text: --foreground #f5f5f5, --muted-foreground #a3a3a3,
+     --disabled-foreground #737373. `index.html` and the native windows
+     (src-tauri/src/windows.rs) start with --background, so nothing flashes. */
+  --background: #111111;
+  --foreground: #f5f5f5;
+  --card: #202020;
+  --card-foreground: #f5f5f5;
+  --popover: #202020;
+  --popover-foreground: #f5f5f5;
+  --primary: #ededed;
+  --primary-foreground: #171717;
+  --secondary: #2a2a2a;
+  --secondary-foreground: #f5f5f5;
+  --muted: #2a2a2a;
+  --muted-foreground: #a3a3a3;
+  --disabled-foreground: #737373;
+  --accent: #2a2a2a;
+  --accent-foreground: #f5f5f5;
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --border: #383838;
+  --input: #383838;
+  --ring: #8a8a8a;
+  --sidebar: #191919;
+  --sidebar-foreground: #f5f5f5;
+  --sidebar-primary: oklch(0.62 0.19 260);
+  --sidebar-primary-foreground: #f5f5f5;
+  --sidebar-accent: #2a2a2a;
+  --sidebar-accent-foreground: #f5f5f5;
+  --sidebar-border: #383838;
+  --sidebar-ring: #8a8a8a;
 
+  /* Status colours of inline status indicators (components/settings-layout.tsx). */
   --success: oklch(0.7 0.15 158);
   --warning: oklch(0.78 0.15 75);
 
-  --device-body: oklch(0.17 0 0);
-  --device-body-border: oklch(0.3 0 0);
+  /* The controls drawn in the editor (components/device-canvas.tsx): touch
+     strip and dials, and the marks of selection, keyboard focus and a drop
+     target (no device enclosure is drawn). The key images show what the device's own
+     screens show and keep their colours. A key: its LCD when nothing is
+     shown (a little lighter than the body), its hairline border at rest and
+     on hover, and the faces drawn until the device's own image arrives
+     (components/key-face.tsx). */
   --device-strip: oklch(0.11 0 0);
   --device-dial: oklch(0.22 0 0);
   --device-dial-border: oklch(0.42 0 0);
@@ -130,6 +101,27 @@
   --device-selected: oklch(0.828 0.189 84.43);
   --device-focus: oklch(0.746 0.16 232.66);
   --device-drop: oklch(0.765 0.177 163.22);
+
+  /* The Device Editor's central workspace (layout-editor/editor.tsx): the
+     device preview, its page navigation and the inspector on the app's
+     base surface. The selection is a blue ring around the selected
+     controls, readable on the device body and on coloured key images;
+     keyboard focus is a light outline beyond it. */
+  --workspace: var(--background);
+  --workspace-foreground: var(--foreground);
+  --workspace-muted: var(--muted-foreground);
+  --workspace-border: var(--border);
+  --workspace-input: var(--input);
+  --workspace-selection: oklch(0.68 0.17 252);
+  --workspace-focus: oklch(0.93 0 0);
+}
+
+/* The Device Editor's workspace: the touch strip a little darker than the
+   surface, and selection blue. */
+.workspace-scope {
+  --device-strip: oklch(0.095 0 0);
+  --device-selected: var(--workspace-selection);
+  --device-focus: var(--workspace-focus);
 }
 
 @theme inline {
@@ -149,6 +141,7 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
+  --color-disabled-foreground: var(--disabled-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
@@ -168,8 +161,6 @@
   /* Secondary text of settings rows, tables and lists: between xs and sm. */
   --text-caption: 0.8125rem;
   --text-caption--line-height: 1.125rem;
-  --color-device-body: var(--device-body);
-  --color-device-body-border: var(--device-body-border);
   --color-device-strip: var(--device-strip);
   --color-device-dial: var(--device-dial);
   --color-device-dial-border: var(--device-dial-border);
@@ -184,6 +175,13 @@
   --color-device-selected: var(--device-selected);
   --color-device-focus: var(--device-focus);
   --color-device-drop: var(--device-drop);
+  --color-workspace: var(--workspace);
+  --color-workspace-foreground: var(--workspace-foreground);
+  --color-workspace-muted: var(--workspace-muted);
+  --color-workspace-border: var(--workspace-border);
+  --color-workspace-input: var(--workspace-input);
+  --color-workspace-selection: var(--workspace-selection);
+  --color-workspace-focus: var(--workspace-focus);
 }
 
 @layer base {
@@ -219,5 +217,69 @@
   }
   to {
     transform: translateX(300%);
+  }
+}
+
+/* The Device Editor's inspector curtain (layout-editor/editor.tsx): a
+   frosted band under the canvas/inspector divider that softly hides content
+   scrolling up beneath it. Blur is strongest at the divider and fades out
+   downwards: three backdrop-blurred layers, each masked to its own band,
+   plus a tint of the workspace surface that fades to transparent. Shown only
+   once the inspector is scrolled (`data-scrolled` on its region); decorative
+   only (no pointer events, hidden from assistive technology). */
+@layer components {
+  .inspector-curtain {
+    pointer-events: none;
+    position: absolute;
+    inset-inline: 0;
+    top: 0;
+    z-index: 5;
+    height: 3.5rem;
+    opacity: 0;
+    transition: opacity 150ms ease-out;
+    background: linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--workspace) 78%, transparent) 0%,
+      color-mix(in oklab, var(--workspace) 40%, transparent) 55%,
+      transparent 100%
+    );
+  }
+  [data-scrolled] > .inspector-curtain {
+    opacity: 1;
+  }
+  .inspector-curtain > span {
+    position: absolute;
+    inset: 0;
+  }
+  .inspector-curtain > span:nth-child(1) {
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    mask-image: linear-gradient(to bottom, #000 0%, #000 15%, transparent 45%);
+  }
+  .inspector-curtain > span:nth-child(2) {
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+    mask-image: linear-gradient(to bottom, transparent 10%, #000 30%, #000 45%, transparent 70%);
+  }
+  .inspector-curtain > span:nth-child(3) {
+    -webkit-backdrop-filter: blur(2px);
+    backdrop-filter: blur(2px);
+    mask-image: linear-gradient(to bottom, transparent 40%, #000 60%, #000 70%, transparent 100%);
+  }
+  /* Without backdrop blur: the tint alone, a little stronger. */
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .inspector-curtain {
+      background: linear-gradient(
+        to bottom,
+        color-mix(in oklab, var(--workspace) 92%, transparent) 0%,
+        color-mix(in oklab, var(--workspace) 55%, transparent) 55%,
+        transparent 100%
+      );
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .inspector-curtain {
+      transition: none;
+    }
   }
 }

@@ -59,8 +59,9 @@ fn build_project(id: ProjectId, input: ProjectInput) -> CommandResult<Project> {
     for (role, resource) in input.resources {
         let role = role.trim();
         if role.is_empty() {
-            return Err(CommandError::Invalid(
-                "resource role must not be empty".into(),
+            return Err(CommandError::invalid(
+                "resourceRoleEmpty",
+                "resource role must not be empty",
             ));
         }
         project
@@ -159,7 +160,10 @@ fn ensure_active(state: &AppState, profile_id: ProfileId) -> CommandResult<()> {
     if state.store()?.active_profile()? == Some(profile_id) {
         Ok(())
     } else {
-        Err(CommandError::Invalid("the profile is not active".into()))
+        Err(CommandError::invalid(
+            "profileNotActive",
+            "the profile is not active",
+        ))
     }
 }
 

@@ -61,6 +61,13 @@ pub enum RunOrigin {
     Test,
     /// A node of a workflow run, started by `cause`.
     Workflow { cause: WorkflowCause },
+    /// A press the configuration app simulated on a device's control
+    /// (`simulatePress`, `docs/editor-navigation-and-simulation.md`). It
+    /// runs the key's binding as a press would, but it is **not** user
+    /// initiated: the user asked the app, not the device, so what may
+    /// only act on a direct request (plugin dialogs, `url.open`) stays
+    /// refused, and no permission is granted by it.
+    Simulated,
 }
 
 /// What started a workflow run.
@@ -77,6 +84,9 @@ pub enum WorkflowCause {
     Startup,
     /// A work session's start or end-verification workflow.
     WorkSession,
+    /// A press the configuration app simulated (`simulatePress`); not the
+    /// user's direct request. Older readers see [`Self::Other`].
+    Simulated,
     /// Something else.
     #[serde(other)]
     Other,
@@ -97,6 +107,7 @@ impl WorkflowCause {
             }
             T::Lifecycle => Self::Event,
             T::WorkSession => Self::WorkSession,
+            T::Simulated => Self::Simulated,
             T::Other => Self::Other,
         }
     }
@@ -105,10 +116,11 @@ impl WorkflowCause {
 impl RunOrigin {
     /// Whether the user started the run directly: a key, a gesture, the
     /// app, or a workflow the user started. Never a schedule, an event,
-    /// the agent's start or a work session.
+    /// the agent's start, a work session or a simulated press.
     pub fn is_user_initiated(self) -> bool {
         match self {
             Self::Key | Self::Gesture | Self::App | Self::Test => true,
+            Self::Simulated => false,
             Self::Workflow { cause } => cause == WorkflowCause::User,
         }
     }

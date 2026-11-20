@@ -168,6 +168,8 @@ pub struct MultiSwitch(ActionType);
 impl MultiSwitch {
     pub fn new() -> Self {
         Self(ActionType {
+            editor_navigation: None,
+            title: None,
             id: type_id(MULTI_SWITCH),
             name: "Multi Action Switch".into(),
             description: "Goes through two or more states in turn, each running an action or \

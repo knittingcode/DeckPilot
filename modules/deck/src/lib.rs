@@ -41,9 +41,9 @@ use std::collections::BTreeMap;
 use deckpilot_core::graph::{ActionEffect, NodeSpec, OutputSpec, ValueKind};
 use deckpilot_core::{
     ActionHandler, ActionParameters, ActionResult, ActionType, ActionTypeId, Capability,
-    DeckRequest, ExecutionContext, FeatureModule, HistoryMode, KeyFace, LayoutId, LayoutNavigation,
-    ModuleId, ModuleManifest, PageId, ParameterError, ParameterKind, ParameterSpec, ParameterValue,
-    Portability, ProfileId, ProfileTarget, Project,
+    DeckRequest, EditorNavigation, ExecutionContext, FeatureModule, HistoryMode, KeyFace, LayoutId,
+    LayoutNavigation, ModuleId, ModuleManifest, NavigationOperation, PageId, ParameterError,
+    ParameterKind, ParameterSpec, ParameterValue, Portability, ProfileId, ProfileTarget, Project,
 };
 
 pub const MODULE_ID: &str = "deck";
@@ -325,6 +325,13 @@ impl TurnPage {
     ) -> Self {
         Self {
             definition: ActionType {
+                title: None,
+                // The editor's preview turns its own page (`page.next`/`page.previous`).
+                editor_navigation: Some(EditorNavigation::new(if forward {
+                    NavigationOperation::PageNext
+                } else {
+                    NavigationOperation::PagePrevious
+                })),
                 id,
                 name: name.into(),
                 description: description.into(),
@@ -376,6 +383,8 @@ pub struct PageIndicator(ActionType);
 impl PageIndicator {
     pub fn new() -> Self {
         Self(ActionType {
+            editor_navigation: None,
+            title: None,
             id: page_indicator_id(),
             name: "Page indicator".into(),
             description: "Shows the page the device is on, such as 2/5. A label with \
@@ -436,6 +445,8 @@ pub struct SwitchProfile(ActionType);
 impl SwitchProfile {
     pub fn new() -> Self {
         Self(ActionType {
+            editor_navigation: None,
+            title: None,
             id: switch_profile_id(),
             name: "Switch profile".into(),
             description: "Makes another profile the active one: a specific profile, or the next \
@@ -563,6 +574,12 @@ pub struct SwitchLayout(ActionType);
 impl SwitchLayout {
     pub fn new() -> Self {
         Self(ActionType {
+            title: None,
+            // The editor's preview shows the target layout (and page) itself.
+            editor_navigation: Some(
+                EditorNavigation::with_target(NavigationOperation::LayoutSwitch, LAYOUT)
+                    .with_page(PAGE),
+            ),
             id: switch_layout_id(),
             name: "Switch layout".into(),
             description: "Shows another layout of the active profile on this device. The \
@@ -713,6 +730,8 @@ pub struct PreviousLayout(ActionType);
 impl PreviousLayout {
     pub fn new() -> Self {
         Self(ActionType {
+            title: None,
+            editor_navigation: Some(EditorNavigation::new(NavigationOperation::LayoutBack)),
             id: previous_layout_id(),
             name: "Back to previous layout".into(),
             description: "Shows the layout this device showed before the current one, in this \
@@ -782,6 +801,8 @@ impl Brightness {
             default: Some(ParameterValue::Integer(default)),
         };
         Self(ActionType {
+            editor_navigation: None,
+            title: None,
             id: brightness_id(),
             name: "Brightness".into(),
             description: "Sets the display brightness of the connected devices to a level, or \
@@ -992,6 +1013,57 @@ mod tests {
                 Some(deckpilot_core::ActionControls::keys())
             );
             assert_eq!(handler.definition().category, "Navigation");
+        }
+    }
+
+    /// The editor's interactive preview reads what these keys do from the
+    /// catalog, without running them.
+    #[test]
+    fn navigation_actions_declare_their_editor_navigation() {
+        let module = DeckModule::new();
+        let handlers = module.action_handlers(&ActionParameters::new());
+        let declared = |id: &str| {
+            handlers
+                .iter()
+                .find(|h| h.definition().id.as_str() == id)
+                .unwrap()
+                .definition()
+                .editor_navigation
+                .clone()
+        };
+        assert_eq!(
+            declared(NEXT_PAGE),
+            Some(EditorNavigation::new(NavigationOperation::PageNext))
+        );
+        assert_eq!(
+            declared(PREVIOUS_PAGE),
+            Some(EditorNavigation::new(NavigationOperation::PagePrevious))
+        );
+        assert_eq!(
+            declared(SWITCH_LAYOUT),
+            Some(
+                EditorNavigation::with_target(NavigationOperation::LayoutSwitch, LAYOUT)
+                    .with_page(PAGE)
+            )
+        );
+        assert_eq!(
+            declared(PREVIOUS_LAYOUT),
+            Some(EditorNavigation::new(NavigationOperation::LayoutBack))
+        );
+        for handler in &handlers {
+            let definition = handler.definition();
+            if let Some(navigation) = &definition.editor_navigation {
+                assert_eq!(navigation.check(&definition.parameters), Ok(()));
+            }
+        }
+        for other in [
+            SWITCH_PROFILE,
+            BRIGHTNESS,
+            RANDOM,
+            MULTI_SWITCH,
+            PAGE_INDICATOR,
+        ] {
+            assert_eq!(declared(other), None, "{other}");
         }
     }
 

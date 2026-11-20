@@ -29,21 +29,22 @@ import { api } from "@/lib/api"
 import { failureMessage, toastFailure } from "@/lib/failure"
 import { useSecurity } from "@/lib/security-context"
 import type { AutoLock, Reauthentication, SecurityPolicy, SecurityView } from "@/lib/types"
+import { type TranslationKey, Trans, useTranslation } from "@/i18n"
 
-const AUTO_LOCK: { value: AutoLock; label: string }[] = [
-  { value: "never", label: "Never" },
+const AUTO_LOCK: { value: AutoLock; label: TranslationKey }[] = [
+  { value: "never", label: "security:card.autoLock.never" },
   // Sleep is noticed on every platform; the screen lock only where the
   // agent can detect it (see `screenLockDetection`).
-  { value: "sleep", label: "When the computer sleeps" },
-  { value: "screenLock", label: "When the screen locks or the computer sleeps" },
-  { value: "idle15Minutes", label: "After 15 minutes of inactivity" },
-  { value: "idle1Hour", label: "After 1 hour of inactivity" },
+  { value: "sleep", label: "security:card.autoLock.sleep" },
+  { value: "screenLock", label: "security:card.autoLock.screenLock" },
+  { value: "idle15Minutes", label: "security:card.autoLock.idle15Minutes" },
+  { value: "idle1Hour", label: "security:card.autoLock.idle1Hour" },
 ]
 
-const REAUTHENTICATION: { value: Reauthentication; label: string }[] = [
-  { value: "sensitiveOnly", label: "Only for sensitive operations" },
-  { value: "afterUpdate", label: "After updates and for sensitive operations" },
-  { value: "everyLaunch", label: "Every time DeckPilot starts" },
+const REAUTHENTICATION: { value: Reauthentication; label: TranslationKey }[] = [
+  { value: "sensitiveOnly", label: "security:card.reauthentication.sensitiveOnly" },
+  { value: "afterUpdate", label: "security:card.reauthentication.afterUpdate" },
+  { value: "everyLaunch", label: "security:card.reauthentication.everyLaunch" },
 ]
 
 /** Whether the user can prove who they are on this computer. */
@@ -64,13 +65,11 @@ function reportError(what: string) {
  * Changes are sensitive operations and ask for authentication first.
  */
 export function SecurityCard() {
+  const { t } = useTranslation()
   const { view } = useSecurity()
   return (
     <>
-      <p className="text-sm text-muted-foreground">
-        Your configuration is always encrypted on this computer (SQLCipher, AES-256). These settings
-        decide how its key is protected and when DeckPilot asks who you are.
-      </p>
+      <p className="text-sm text-muted-foreground">{t("security:card.intro")}</p>
       {view.legacyCopies.length > 0 && <LegacyCopies />}
       <UnlockMethod />
       <Policy />
@@ -80,12 +79,13 @@ export function SecurityCard() {
 }
 
 function UnlockMethod() {
+  const { t } = useTranslation()
   const { view, setView } = useSecurity()
   const sensitive = useSensitive()
   const system = view.protection === "systemManaged"
   const [choosePassword, setChoosePassword] = useState(false)
   return (
-    <SettingsSection title="Unlock method">
+    <SettingsSection title={t("security:card.unlockMethod.title")}>
       <SettingsGroup>
         <SettingsRow
           label={
@@ -95,20 +95,20 @@ function UnlockMethod() {
               ) : (
                 <LockKeyhole className="size-4 text-muted-foreground" />
               )}
-              {system ? `System key · ${view.keyStore}` : "Password"}
+              {system
+                ? t("security:card.unlockMethod.systemKey", { keyStore: view.keyStore })
+                : t("security:password.label")}
             </span>
           }
           description={
             system ? (
-              <>
-                A random key kept in the <strong>{view.keyStore}</strong> and unlocked by your
-                login. DeckPilot opens without a password, also after restarts and updates.
-              </>
+              <Trans
+                i18nKey="security:card.unlockMethod.systemKeyDescription"
+                values={{ keyStore: view.keyStore }}
+                components={{ strong: <strong /> }}
+              />
             ) : (
-              <>
-                A key derived from your DeckPilot password (Argon2id). The password is not stored;
-                you enter it after each restart of the computer.
-              </>
+              t("security:card.unlockMethod.passwordDescription")
             )
           }
         >
@@ -120,27 +120,31 @@ function UnlockMethod() {
                 setChoosePassword(true)
               }}
             >
-              Use a password instead…
+              {t("security:card.unlockMethod.usePasswordEllipsis")}
             </Button>
           ) : (
             <ConfirmDialog
               trigger={
                 <Button variant="outline" size="sm">
-                  Use the system key instead…
+                  {t("security:card.unlockMethod.useSystemKeyEllipsis")}
                 </Button>
               }
-              title={`Keep the key in the ${view.keyStore}?`}
-              description={`DeckPilot creates a new random key, stores it in the ${view.keyStore} and re-encrypts the configuration with it. Your password is no longer needed. If storing the key fails, nothing changes.`}
-              confirmLabel="Use the system key"
+              title={t("security:card.unlockMethod.useSystemKeyTitle", { keyStore: view.keyStore })}
+              description={t("security:card.unlockMethod.useSystemKeyDescription", {
+                keyStore: view.keyStore,
+              })}
+              confirmLabel={t("security:card.unlockMethod.useSystemKey")}
               destructive={false}
               onConfirm={() => {
-                sensitive(
-                  () => api.useSystemKey(),
-                  "change how the configuration is protected",
-                ).then((next) => {
-                  setView(next)
-                  toast.success(`The key is now kept in the ${view.keyStore}`)
-                }, reportError("The protection was not changed"))
+                sensitive(() => api.useSystemKey(), t("security:card.purpose.protection")).then(
+                  (next) => {
+                    setView(next)
+                    toast.success(
+                      t("security:card.unlockMethod.systemKeyDone", { keyStore: view.keyStore }),
+                    )
+                  },
+                  reportError(t("security:card.unlockMethod.protectionFailed")),
+                )
               }}
             />
           )}
@@ -165,6 +169,7 @@ function UnlockMethod() {
 
 /** System key → password. */
 function ChoosePasswordDialog({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation()
   const { setView } = useSecurity()
   const sensitive = useSensitive()
   const [password, setPassword] = useState("")
@@ -176,17 +181,14 @@ function ChoosePasswordDialog({ onClose }: { onClose: () => void }) {
     if (!ready) return
     setBusy(true)
     setError(null)
-    sensitive(
-      () => api.usePassword(password, confirmation),
-      "change how the configuration is protected",
-    )
+    sensitive(() => api.usePassword(password, confirmation), t("security:card.purpose.protection"))
       .then((next) => {
         setView(next)
-        toast.success("The configuration is now protected by your password")
+        toast.success(t("security:card.choosePassword.done"))
         onClose()
       })
       .catch((e: unknown) => {
-        if (!isCancelled(e)) setError(failureMessage("The password was not set", e))
+        if (!isCancelled(e)) setError(failureMessage(t("security:card.choosePassword.failed"), e))
       })
       .finally(() => {
         setBusy(false)
@@ -197,15 +199,15 @@ function ChoosePasswordDialog({ onClose }: { onClose: () => void }) {
       presentation="dialog"
       size="compact"
       icon={LockKeyhole}
-      title="Protect DeckPilot with a password"
-      description="The configuration is re-encrypted with a key derived from this password. You will enter it after each restart of the computer."
+      title={t("security:setup.passwordTitle")}
+      description={t("security:card.choosePassword.description")}
       error={error}
       onClose={onClose}
       onSubmit={submit}
-      secondary={{ label: "Cancel", onClick: onClose }}
+      secondary={{ label: t("common:actions.cancel"), onClick: onClose }}
       primary={{
-        label: "Use this password",
-        loadingLabel: "Re-encrypting…",
+        label: t("security:card.choosePassword.action"),
+        loadingLabel: t("security:card.reEncrypting"),
         loading: busy,
         disabled: !ready,
       }}
@@ -218,45 +220,39 @@ function ChoosePasswordDialog({ onClose }: { onClose: () => void }) {
         autoFocus
         idPrefix="choose-password"
       />
-      <p className="text-xs text-muted-foreground">
-        The password cannot be recovered. Keep an encrypted export as a backup.
-      </p>
+      <p className="text-xs text-muted-foreground">{t("security:newPassword.notRecoverable")}</p>
     </ModalShell>
   )
 }
 
 function Policy() {
+  const { t } = useTranslation()
   const { view, setView } = useSecurity()
   const sensitive = useSensitive()
   const policy = view.policy ?? { autoLock: "never", reauthentication: "sensitiveOnly" }
   const verifiable = canVerify(view)
   const save = (next: SecurityPolicy) => {
-    sensitive(() => api.setSecurityPolicy(next), "change your security settings").then(
+    sensitive(() => api.setSecurityPolicy(next), t("security:card.purpose.policy")).then(
       (updated) => {
         setView(updated)
-        toast.success("Security settings saved")
+        toast.success(t("security:card.policy.saved"))
       },
-      reportError("The security settings were not saved"),
+      reportError(t("security:card.policy.notSaved")),
     )
   }
   return (
     <SettingsSection
-      title="Locking and authentication"
-      description={
-        verifiable
-          ? undefined
-          : "These options need a DeckPilot password or system authentication, which this computer does not offer with the system key."
-      }
+      title={t("security:card.policy.title")}
+      description={verifiable ? undefined : t("security:card.policy.unavailable")}
     >
       <SettingsGroup>
         <SettingsRow
-          label="Lock automatically"
+          label={t("security:card.policy.autoLock")}
           htmlFor="auto-lock"
           description={
             <>
-              While locked, your Stream Deck shows &quot;Locked&quot; and runs no actions.
-              {!view.screenLockDetection &&
-                " Locking with the screen is not available: DeckPilot cannot detect the screen lock on this computer."}
+              {t("security:card.policy.autoLockDescription")}
+              {!view.screenLockDetection && ` ${t("security:card.policy.noScreenLock")}`}
             </>
           }
         >
@@ -277,16 +273,16 @@ function Policy() {
                   value={option.value}
                   disabled={option.value === "screenLock" && !view.screenLockDetection}
                 >
-                  {option.label}
+                  {t(option.label)}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </SettingsRow>
         <SettingsRow
-          label="Ask for authentication"
+          label={t("security:card.policy.reauthentication")}
           htmlFor="reauthentication"
-          description="Sensitive operations — exports, changes to encryption, passwords and these settings, deleting the unencrypted copy — always ask. Switching profiles or projects, device actions and workflows never do."
+          description={t("security:card.policy.reauthenticationDescription")}
         >
           <Select
             value={policy.reauthentication}
@@ -301,7 +297,7 @@ function Policy() {
             <SelectContent>
               {REAUTHENTICATION.map((option) => (
                 <SelectItem key={option.value} value={option.value}>
-                  {option.label}
+                  {t(option.label)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -314,20 +310,21 @@ function Policy() {
 }
 
 function LockNow() {
+  const { t } = useTranslation()
   const { setView } = useSecurity()
   return (
     <SettingsRow
-      label="Lock now"
-      description="Stops actions on your Stream Deck until you unlock DeckPilot again."
+      label={t("security:card.lockNow.label")}
+      description={t("security:card.lockNow.description")}
     >
       <Button
         variant="outline"
         size="sm"
         onClick={() => {
-          api.lock().then(setView, reportError("DeckPilot was not locked"))
+          api.lock().then(setView, reportError(t("security:card.lockNow.failed")))
         }}
       >
-        <LockKeyhole /> Lock now
+        <LockKeyhole /> {t("security:card.lockNow.label")}
       </Button>
     </SettingsRow>
   )
@@ -335,6 +332,7 @@ function LockNow() {
 
 /** Shown only where the platform offers it (Touch ID on macOS). */
 function SystemAuthentication() {
+  const { t } = useTranslation()
   const { view } = useSecurity()
   if (view.protection !== "systemManaged") return null
   if (view.verification === "touchId" || view.verification === "devicePassword") {
@@ -344,16 +342,20 @@ function SystemAuthentication() {
         label={
           <span className="flex items-center gap-2">
             <Fingerprint className="size-4 text-muted-foreground" />
-            {touchId ? "Touch ID" : "System authentication"}
+            {touchId
+              ? t("security:card.systemAuthentication.touchId")
+              : t("security:card.systemAuthentication.title")}
           </span>
         }
         description={
           touchId
-            ? "Touch ID (or your login password) unlocks DeckPilot after it was locked and confirms sensitive operations. macOS checks it; DeckPilot never sees your fingerprint or password."
-            : "Your login password unlocks DeckPilot after it was locked and confirms sensitive operations. The operating system checks it."
+            ? t("security:card.systemAuthentication.touchIdDescription")
+            : t("security:card.systemAuthentication.description")
         }
       >
-        <InlineStatus tone="positive">Available</InlineStatus>
+        <InlineStatus tone="positive">
+          {t("security:card.systemAuthentication.available")}
+        </InlineStatus>
       </SettingsRow>
     )
   }
@@ -361,22 +363,22 @@ function SystemAuthentication() {
 }
 
 function Recovery() {
+  const { t } = useTranslation()
   const { view } = useSecurity()
   return (
     <SettingsSection
-      title="Backup and recovery"
+      title={t("security:card.recovery.title")}
       description={
         <>
           {view.protection === "systemManaged"
-            ? `The key in the ${view.keyStore} protects the configuration on this computer only. It is not a backup: if your user account, the ${view.keyStore} or this computer is lost or reset, the configuration cannot be opened.`
-            : "There is no way to recover a forgotten password."}{" "}
-          Keep an <strong>encrypted export</strong> (Backup &amp; Restore) as your backup; it has
-          its own password and can be imported on any computer.
+            ? t("security:card.recovery.systemKey", { keyStore: view.keyStore })
+            : t("security:card.recovery.password")}{" "}
+          <Trans i18nKey="security:card.recovery.keepExport" components={{ strong: <strong /> }} />
         </>
       }
     >
       <PropertyList className="border-t pt-3">
-        <Property label="Backups before upgrades" mono>
+        <Property label={t("security:card.recovery.backupDir")} mono>
           {view.backupDir}
         </Property>
       </PropertyList>
@@ -385,41 +387,39 @@ function Recovery() {
 }
 
 function LegacyCopies() {
+  const { t } = useTranslation()
   const { view, setView } = useSecurity()
   const sensitive = useSensitive()
   return (
     <Alert>
       <TriangleAlert />
-      <AlertTitle>An unencrypted copy of your old configuration remains</AlertTitle>
+      <AlertTitle>{t("security:card.legacy.title")}</AlertTitle>
       <AlertDescription className="grid gap-2">
-        <p>
-          It was kept when the configuration was encrypted, in case anything went wrong. Anyone with
-          access to your files can read it.
-        </p>
+        <p>{t("security:card.legacy.description")}</p>
         <ul className="font-mono text-xs break-all">
           {view.legacyCopies.map((path) => (
             <li key={path}>{path}</li>
           ))}
         </ul>
-        <p className="text-xs">
-          Deleting a file does not guarantee that its contents cannot be recovered, especially on
-          SSDs. See the security documentation for a thorough cleanup.
-        </p>
+        <p className="text-xs">{t("security:card.legacy.recoverable")}</p>
         <ConfirmDialog
           trigger={
             <Button variant="outline" size="sm" className="justify-self-start">
-              Delete unencrypted copy
+              {t("security:card.legacy.delete")}
             </Button>
           }
-          title="Delete the unencrypted copy?"
-          description="Your encrypted configuration is not affected. Deleting the file removes it from the file system; on SSDs and in backups its contents may still be recoverable."
+          title={t("security:card.legacy.confirmTitle")}
+          description={t("security:card.legacy.confirmDescription")}
           onConfirm={() => {
-            sensitive(() => api.removeUnencryptedCopies(), "delete the unencrypted copy").then(
+            sensitive(
+              () => api.removeUnencryptedCopies(),
+              t("security:card.purpose.deleteCopy"),
+            ).then(
               (next) => {
                 setView(next)
-                toast.success("Unencrypted copy deleted")
+                toast.success(t("security:card.legacy.deleted"))
               },
-              reportError("The unencrypted copy was not deleted"),
+              reportError(t("security:card.legacy.notDeleted")),
             )
           }}
         />
@@ -429,6 +429,7 @@ function LegacyCopies() {
 }
 
 function ChangePassword() {
+  const { t } = useTranslation()
   const { setView } = useSecurity()
   const [current, setCurrent] = useState("")
   const [password, setPassword] = useState("")
@@ -448,14 +449,14 @@ function ChangePassword() {
         setCurrent("")
         setPassword("")
         setConfirmation("")
-        toast.success("Password changed")
+        toast.success(t("security:card.changePassword.done"))
       })
       .catch((e: unknown) => {
         setError(
           failureMessage(
-            "The password was not changed",
+            t("security:card.changePassword.failed"),
             e,
-            "Check the current password and try again",
+            t("security:card.changePassword.next"),
           ),
         )
       })
@@ -465,11 +466,11 @@ function ChangePassword() {
   }
   return (
     <form className="grid max-w-md gap-3" onSubmit={submit}>
-      <h4 className="text-sm leading-5 font-medium">Change password</h4>
+      <h4 className="text-sm leading-5 font-medium">{t("security:card.changePassword.title")}</h4>
       {error && <ErrorNotice error={error} />}
       <PasswordField
         id="current-password"
-        label="Current password"
+        label={t("security:card.changePassword.current")}
         value={current}
         onChange={setCurrent}
         autoComplete="current-password"
@@ -482,7 +483,7 @@ function ChangePassword() {
         idPrefix="changed-password"
       />
       <Button type="submit" className="justify-self-start" disabled={!ready || busy}>
-        {busy ? "Re-encrypting…" : "Change password"}
+        {busy ? t("security:card.reEncrypting") : t("security:card.changePassword.title")}
       </Button>
     </form>
   )

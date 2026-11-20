@@ -3,6 +3,7 @@ import { useEffect, useState } from "react"
 import { EmptyState, Page } from "@/components/page"
 import { Button } from "@/components/ui/button"
 import { SettingsSection } from "@/components/settings-layout"
+import { Trans, useTranslation } from "@/i18n"
 import { useAppContext } from "@/lib/app-context"
 import { ActionLibraryView } from "@/pages/actions"
 import { VariablesTable } from "@/pages/variables-table"
@@ -38,11 +39,12 @@ export function PluginViewPage() {
 
 /** The entry is gone: its plugin was disabled or uninstalled. */
 function GoneView() {
+  const { t } = useTranslation()
   const { navigate } = useAppContext()
   return (
-    <Page title="Plugin view">
-      <EmptyState title="This plugin view is not available">
-        Its plugin was disabled or uninstalled, or no longer offers it.
+    <Page title={t("workspace:pluginView.gone.page")}>
+      <EmptyState title={t("workspace:pluginView.gone.title")}>
+        {t("workspace:pluginView.gone.body")}
         <Button
           variant="outline"
           size="sm"
@@ -51,7 +53,7 @@ function GoneView() {
             navigate("designer")
           }}
         >
-          Open the Device Editor
+          {t("workspace:pluginView.gone.openEditor")}
         </Button>
       </EmptyState>
     </Page>
@@ -59,17 +61,20 @@ function GoneView() {
 }
 
 function VariablesView({ item }: { item: PluginNavigationItem }) {
+  const { t } = useTranslation()
   const namespace = pluginVariableNamespace(item.plugin)
+  const title = t("workspace:pluginView.variables.title", { plugin: item.pluginName })
   return (
-    <Page title={item.label} description={`Variables of ${item.pluginName}`}>
+    <Page title={item.label} description={title}>
       <SettingsSection
         data-plugin-view="variables"
-        title={`Variables of ${item.pluginName}`}
+        title={title}
         description={
-          <>
-            Live values the plugin publishes under <code>{namespace}</code>. Insert one in an action
-            or a key label with {"{{ reference }}"}.
-          </>
+          <Trans
+            i18nKey="workspace:pluginView.variables.description"
+            values={{ namespace, reference: "{{ reference }}" }}
+            components={{ code: <code /> }}
+          />
         }
       >
         <VariablesTable
@@ -84,8 +89,13 @@ function VariablesView({ item }: { item: PluginNavigationItem }) {
 }
 
 function ActionsView({ item }: { item: PluginNavigationItem }) {
+  const { t } = useTranslation()
   return (
-    <Page title={item.label} description={`Actions of ${item.pluginName}`} profileScoped>
+    <Page
+      title={item.label}
+      description={t("workspace:pluginView.actions.title", { plugin: item.pluginName })}
+      profileScoped
+    >
       <div data-plugin-view="actions" className="contents">
         <ActionLibraryView plugin={{ id: item.plugin, name: item.pluginName }} />
       </div>
@@ -110,16 +120,18 @@ function usePluginClient(): PluginClient | null {
 }
 
 function SettingsView({ item }: { item: PluginNavigationItem }) {
+  const { t } = useTranslation()
   const client = usePluginClient()
+  const title = t("workspace:pluginView.settings.title", { plugin: item.pluginName })
   // "Cancel" puts the form back to what is stored.
   const [generation, setGeneration] = useState(0)
   return (
-    <Page title={item.label} description={`Settings of ${item.pluginName}`}>
+    <Page title={item.label} description={title}>
       <SettingsSection
         data-plugin-view="settings"
         className="max-w-2xl"
-        title={`Settings of ${item.pluginName}`}
-        description="Stored by the agent for this plugin only. Also in Settings › Extensions › Plugins."
+        title={title}
+        description={t("workspace:pluginView.settings.description")}
       >
         <div className="grid gap-4 border-t pt-4">
           {client && (

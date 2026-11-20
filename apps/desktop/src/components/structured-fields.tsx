@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+import { useTranslation } from "@/i18n"
 import { api } from "@/lib/api"
 import {
   type Pair,
@@ -31,7 +32,7 @@ import type { CredentialInfo } from "@/lib/types"
 export function ListField({
   id,
   value,
-  itemLabel = "Item",
+  itemLabel: givenItemLabel,
   maxItems,
   maxLength,
   onChange,
@@ -43,6 +44,9 @@ export function ListField({
   maxLength?: number
   onChange: (value: string) => void
 }) {
+  const { t } = useTranslation()
+  const itemLabel = givenItemLabel ?? t("actions:fields.item")
+  const lower = itemLabel.toLowerCase()
   // Local rows so an item being typed (or still empty) is not dropped; a
   // value changed elsewhere (undo, another node) replaces them.
   const [items, setItems] = useState<string[]>(() => parseLines(value))
@@ -63,9 +67,14 @@ export function ListField({
   return (
     <div className="grid gap-2" id={id}>
       {items.length === 0 && (
-        <p className="text-xs text-muted-foreground">No {itemLabel.toLowerCase()}s.</p>
+        <p className="text-xs text-muted-foreground">
+          {t("actions:fields.list.none", { label: lower })}
+        </p>
       )}
-      <ol className="grid gap-1.5" aria-label={`${itemLabel}s`}>
+      <ol
+        className="grid gap-1.5"
+        aria-label={t("actions:fields.list.label", { label: itemLabel })}
+      >
         {items.map((item, index) => {
           const tooLong = maxLength !== undefined && item.length > maxLength
           return (
@@ -74,7 +83,7 @@ export function ListField({
                 {index + 1}
               </span>
               <Input
-                aria-label={`${itemLabel} ${index + 1}`}
+                aria-label={t("actions:fields.numbered", { label: itemLabel, number: index + 1 })}
                 aria-invalid={tooLong || item.trim() === "" ? true : undefined}
                 className="font-mono"
                 value={item}
@@ -89,7 +98,7 @@ export function ListField({
                 type="button"
                 variant="ghost"
                 size="icon"
-                aria-label={`Move ${itemLabel.toLowerCase()} ${index + 1} up`}
+                aria-label={t("actions:fields.moveUp", { label: lower, number: index + 1 })}
                 disabled={index === 0}
                 onClick={() => {
                   const next = [...items]
@@ -103,7 +112,7 @@ export function ListField({
                 type="button"
                 variant="ghost"
                 size="icon"
-                aria-label={`Move ${itemLabel.toLowerCase()} ${index + 1} down`}
+                aria-label={t("actions:fields.moveDown", { label: lower, number: index + 1 })}
                 disabled={index === items.length - 1}
                 onClick={() => {
                   const next = [...items]
@@ -117,7 +126,7 @@ export function ListField({
                 type="button"
                 variant="ghost"
                 size="icon"
-                aria-label={`Remove ${itemLabel.toLowerCase()} ${index + 1}`}
+                aria-label={t("actions:fields.remove", { label: lower, number: index + 1 })}
                 onClick={() => {
                   update(items.filter((_, i) => i !== index))
                 }}
@@ -138,27 +147,28 @@ export function ListField({
             setItems([...items, ""])
           }}
         >
-          <Plus /> Add {itemLabel.toLowerCase()}
+          <Plus /> {t("actions:fields.add", { label: lower })}
         </Button>
       </div>
       {items.some((item) => item.trim() === "") && (
         <p className="text-xs text-muted-foreground">
-          Empty {itemLabel.toLowerCase()}s are left out.
+          {t("actions:fields.list.emptyLeftOut", { label: lower })}
         </p>
       )}
       {items.some((item) => maxLength !== undefined && item.length > maxLength) && (
         <p className="text-xs text-destructive">
-          {itemLabel}s can have at most {maxLength} characters.
+          {t("actions:fields.list.tooLong", { label: itemLabel, count: maxLength ?? 0 })}
         </p>
       )}
       {tooMany && (
         <p className="text-xs text-destructive">
-          At most {maxItems} {itemLabel.toLowerCase()}s.
+          {t("actions:fields.list.tooMany", { label: lower, count: maxItems })}
         </p>
       )}
       {kept.length > 0 && (
         <p className="text-xs break-all text-muted-foreground">
-          Passed as: <code className="font-mono">{JSON.stringify(kept)}</code>
+          {t("actions:fields.list.passedAs")}{" "}
+          <code className="font-mono">{JSON.stringify(kept)}</code>
         </p>
       )}
     </div>
@@ -174,8 +184,8 @@ export function PairsField({
   id,
   value,
   separator,
-  nameLabel = "Name",
-  valueLabel = "Value",
+  nameLabel: givenNameLabel,
+  valueLabel: givenValueLabel,
   maxItems,
   caseInsensitive = false,
   noSecrets = false,
@@ -191,6 +201,9 @@ export function PairsField({
   noSecrets?: boolean
   onChange: (value: string) => void
 }) {
+  const { t } = useTranslation()
+  const nameLabel = givenNameLabel ?? t("actions:fields.name")
+  const valueLabel = givenValueLabel ?? t("actions:fields.value")
   const [rows, setRows] = useState<Pair[]>(() => parsePairs(value, separator))
   const emitted = useRef(value)
   useEffect(() => {
@@ -224,7 +237,7 @@ export function PairsField({
           <div key={index} className="grid gap-1">
             <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto] items-center gap-1.5">
               <Input
-                aria-label={`${nameLabel} ${index + 1}`}
+                aria-label={t("actions:fields.numbered", { label: nameLabel, number: index + 1 })}
                 aria-invalid={secret || duplicate ? true : undefined}
                 className="font-mono"
                 value={row.name}
@@ -235,7 +248,7 @@ export function PairsField({
                 }}
               />
               <Input
-                aria-label={`${valueLabel} ${index + 1}`}
+                aria-label={t("actions:fields.numbered", { label: valueLabel, number: index + 1 })}
                 className="font-mono"
                 value={row.value}
                 onChange={(e) => {
@@ -248,7 +261,10 @@ export function PairsField({
                 type="button"
                 variant="ghost"
                 size="icon"
-                aria-label={`Remove ${nameLabel.toLowerCase()} ${index + 1}`}
+                aria-label={t("actions:fields.remove", {
+                  label: nameLabel.toLowerCase(),
+                  number: index + 1,
+                })}
                 onClick={() => {
                   update(rows.filter((_, i) => i !== index))
                 }}
@@ -258,12 +274,14 @@ export function PairsField({
             </div>
             {secret && (
               <p className="flex items-center gap-1 text-xs text-destructive">
-                <TriangleAlert className="size-3.5" /> {row.name} holds a secret and cannot be saved
-                here. Use a stored credential instead.
+                <TriangleAlert className="size-3.5" />{" "}
+                {t("actions:fields.pairs.secret", { name: row.name })}
               </p>
             )}
             {duplicate && (
-              <p className="text-xs text-destructive">{row.name} appears more than once.</p>
+              <p className="text-xs text-destructive">
+                {t("actions:fields.pairs.duplicate", { name: row.name })}
+              </p>
             )}
           </div>
         )
@@ -278,7 +296,7 @@ export function PairsField({
             setRows([...rows, { name: "", value: "" }])
           }}
         >
-          <Plus /> Add {nameLabel.toLowerCase()}
+          <Plus /> {t("actions:fields.add", { label: nameLabel.toLowerCase() })}
         </Button>
       </div>
     </div>
@@ -299,6 +317,7 @@ export function CodeField({
   maxLength?: number
   onChange: (value: string) => void
 }) {
+  const { t } = useTranslation()
   const json = language === "json"
   const problem = json ? jsonProblem(value) : null
   return (
@@ -317,7 +336,9 @@ export function CodeField({
       <div className="flex items-center gap-2 text-xs">
         {json && value.trim() !== "" && (
           <span className={problem ? "text-destructive" : "text-muted-foreground"}>
-            {problem ? `Not valid JSON: ${problem}` : "Valid JSON"}
+            {problem
+              ? t("actions:fields.code.invalidJson", { problem })
+              : t("actions:fields.code.validJson")}
           </span>
         )}
         {json && value.trim() !== "" && !problem && (
@@ -329,7 +350,7 @@ export function CodeField({
               onChange(JSON.stringify(JSON.parse(value), null, 2))
             }}
           >
-            Format
+            {t("actions:fields.code.format")}
           </Button>
         )}
       </div>
@@ -355,6 +376,7 @@ export function CredentialField({
   optional: boolean
   onChange: (value: string) => void
 }) {
+  const { t } = useTranslation()
   const [stored, setStored] = useState<CredentialInfo[] | null>(null)
   useEffect(() => {
     api.listCredentials().then(setStored, () => {
@@ -372,12 +394,16 @@ export function CredentialField({
       >
         <SelectTrigger id={id} className="w-72">
           <KeyRound className="size-4 text-muted-foreground" />
-          <SelectValue placeholder="Choose a credential" />
+          <SelectValue placeholder={t("actions:fields.credential.choose")} />
         </SelectTrigger>
         <SelectContent>
-          {optional && <SelectItem value={NO_CREDENTIAL}>No credential</SelectItem>}
+          {optional && (
+            <SelectItem value={NO_CREDENTIAL}>{t("actions:fields.credential.none")}</SelectItem>
+          )}
           {value !== "" && !known && (
-            <SelectItem value={value}>{value} (not on this computer)</SelectItem>
+            <SelectItem value={value}>
+              {t("actions:fields.credential.notHere", { name: value })}
+            </SelectItem>
           )}
           {(stored ?? []).map((credential) => (
             <SelectItem key={credential.id} value={credential.id}>
@@ -388,14 +414,11 @@ export function CredentialField({
         </SelectContent>
       </Select>
       {stored !== null && stored.length === 0 && (
-        <p className="text-xs text-muted-foreground">
-          No credentials are stored on this computer. Add them in Settings › HTTP.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("actions:fields.credential.noneStored")}</p>
       )}
       {value !== "" && !known && (
         <p className="text-xs text-destructive">
-          “{value}” is not stored on this computer; requests fail until it is added in Settings ›
-          HTTP.
+          {t("actions:fields.credential.missing", { name: value })}
         </p>
       )}
     </div>

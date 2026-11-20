@@ -101,10 +101,10 @@ fn the_fixture_is_a_schema_8_database() {
 fn upgrading_keeps_variables_and_provenance_and_adds_no_session() {
     let copy = copy();
     let store = copy.open().unwrap();
-    assert_eq!(store.schema_version().unwrap(), 10);
+    assert_eq!(store.schema_version().unwrap(), 13);
     let history = store.migration_history().unwrap();
     let upgrade = history.last().unwrap();
-    assert_eq!((upgrade.from_version, upgrade.to_version), (8, 10));
+    assert_eq!((upgrade.from_version, upgrade.to_version), (8, 13));
     assert_eq!(upgrade.result, "ok");
     // The earlier upgrades are kept.
     assert!(
@@ -236,7 +236,7 @@ fn the_backup_restores_the_schema_8_database() {
     assert_eq!(copy.raw_version(), 8);
     // It upgrades again and holds the schema 8 data, without the session.
     let store = copy.open().unwrap();
-    assert_eq!(store.schema_version().unwrap(), 10);
+    assert_eq!(store.schema_version().unwrap(), 13);
     assert_eq!(store.shared_variables().unwrap().len(), 2);
     assert_eq!(store.active_work_session().unwrap(), None);
     let value = store
@@ -251,7 +251,7 @@ fn a_newer_schema_is_refused_without_changes() {
     let store = copy.open().unwrap();
     store
         .connection_for_tests()
-        .pragma_update(None, "user_version", 11)
+        .pragma_update(None, "user_version", 14)
         .unwrap();
     drop(store);
     let before = std::fs::read(copy.database()).unwrap();
@@ -259,8 +259,8 @@ fn a_newer_schema_is_refused_without_changes() {
     assert!(matches!(
         copy.open(),
         Err(StorageError::UnsupportedSchema {
-            found: 11,
-            supported: 10
+            found: 14,
+            supported: 13
         })
     ));
     assert!(

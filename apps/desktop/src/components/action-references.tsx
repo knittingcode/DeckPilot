@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { describeReference, isDirect, siteKey } from "@/lib/action-references"
+import { i18n, useTranslation } from "@/i18n"
 import { api, errorMessage } from "@/lib/api"
 import type { ActionInstance, ActionReference, ReferenceSite } from "@/lib/types"
 
@@ -23,11 +24,12 @@ export function ReferenceList({
   references: ActionReference[]
   onOpen?: (reference: ActionReference) => void
 }) {
+  const { t } = useTranslation()
   if (references.length === 0) {
-    return <p className="text-sm text-muted-foreground">Not used in any workflow or layout.</p>
+    return <p className="text-sm text-muted-foreground">{t("actions:references.notUsed")}</p>
   }
   return (
-    <ul className="grid gap-1 text-sm" aria-label="References">
+    <ul className="grid gap-1 text-sm" aria-label={t("actions:references.label")}>
       {references.map((reference) => {
         const text = describeReference(reference)
         return (
@@ -38,12 +40,12 @@ export function ReferenceList({
                 type="button"
                 size="sm"
                 variant="ghost"
-                aria-label={`Open ${text}`}
+                aria-label={t("actions:references.openLabel", { reference: text })}
                 onClick={() => {
                   onOpen(reference)
                 }}
               >
-                <ExternalLink /> Open
+                <ExternalLink /> {t("actions:references.open")}
               </Button>
             )}
           </li>
@@ -71,6 +73,7 @@ function ChoiceSelect({
   placeholder: string
   onChange: (value: string) => void
 }) {
+  const { t } = useTranslation()
   return (
     <Select value={value} onValueChange={onChange}>
       <SelectTrigger className="w-full sm:w-64" aria-label={label}>
@@ -79,10 +82,10 @@ function ChoiceSelect({
       <SelectContent>
         {candidates.map((a) => (
           <SelectItem key={a.id} value={`${REPLACE}${a.id}`}>
-            Replace with “{a.name}”
+            {t("actions:references.replaceWith", { name: a.name })}
           </SelectItem>
         ))}
-        {canUnbind && <SelectItem value={UNBIND}>Unbind</SelectItem>}
+        {canUnbind && <SelectItem value={UNBIND}>{t("actions:references.unbind")}</SelectItem>}
       </SelectContent>
     </Select>
   )
@@ -98,7 +101,10 @@ function sentence(message: string): string {
 
 /** What failed, the backend's reason and what to do, as one line. */
 function failureMessage(what: string, error: unknown, next: string): string {
-  return `${what}: ${sentence(errorMessage(error))} ${sentence(next)}`
+  return i18n.t("errors:failure.withDetail", {
+    what,
+    detail: `${sentence(errorMessage(error))} ${sentence(next)}`,
+  })
 }
 
 /**
@@ -127,6 +133,7 @@ export function DeleteActionDialog({
   /** Opens where a use is, e.g. a graph node to remove it in the workflow editor. */
   onOpen?: (reference: ActionReference) => void
 }) {
+  const { t } = useTranslation()
   const [choices, setChoices] = useState<Record<string, string>>({})
   const [all, setAll] = useState("")
   const [busy, setBusy] = useState(false)
@@ -140,7 +147,7 @@ export function DeleteActionDialog({
     setBusy(true)
     setError(null)
     // What failed, for the message, and whether earlier steps changed anything.
-    let step = "The references were not replaced"
+    let step = t("actions:references.failure.notReplaced")
     let changed = false
     try {
       // Replacements first: they keep step positions, which unbinding changes.
@@ -164,16 +171,14 @@ export function DeleteActionDialog({
         changed = true
       }
       if (unbind.length > 0) {
-        step = "The references were not unbound"
+        step = t("actions:references.failure.notUnbound")
         await api.unbindActionReferences(profileId, action.id, { type: "sites", sites: unbind })
         changed = true
       }
-      step = "The action was not deleted"
+      step = t("actions:references.failure.notDeleted")
       await api.deleteAction(profileId, action.id)
       if (cleared > 0) {
-        toast.warning(
-          `Parameter overrides and mappings were removed from ${cleared === 1 ? "1 step or node" : `${cleared} steps or nodes`}: the replacement is another action type.`,
-        )
+        toast.warning(t("actions:references.clearedSettings", { count: cleared }))
       }
       onDeleted()
     } catch (e) {
@@ -182,8 +187,8 @@ export function DeleteActionDialog({
           step,
           e,
           changed
-            ? "The changes made before were kept; close this dialog to see the current references"
-            : "Nothing was changed",
+            ? t("actions:references.failure.changesKept")
+            : t("actions:references.failure.nothingChanged"),
         ),
       )
     } finally {
@@ -197,18 +202,21 @@ export function DeleteActionDialog({
       open
       size="medium"
       icon={Trash2}
-      title={`Delete “${action.name}”?`}
+      title={t("actions:references.delete.title", { name: action.name })}
       description={
         direct.length === 0
-          ? "The action is removed from this profile. This cannot be undone."
-          : `The action is used in ${direct.length === 1 ? "1 place" : `${direct.length} places`}. Choose for each whether it uses another action instead or is unbound; then the action is deleted. This cannot be undone.`
+          ? t("actions:references.delete.unused")
+          : t("actions:references.delete.used", { count: direct.length })
       }
       error={error}
       onClose={onClose}
-      secondary={{ label: "Cancel", onClick: onClose }}
+      secondary={{ label: t("common:actions.cancel"), onClick: onClose }}
       primary={{
-        label: direct.length === 0 ? "Delete" : "Apply and delete",
-        loadingLabel: "Deleting…",
+        label:
+          direct.length === 0
+            ? t("common:actions.delete")
+            : t("actions:references.delete.applyAndDelete"),
+        loadingLabel: t("actions:references.delete.deleting"),
         variant: "destructive",
         loading: busy,
         disabled: undecided > 0,
@@ -218,13 +226,13 @@ export function DeleteActionDialog({
       {direct.length > 0 && (
         <div className="grid gap-4">
           <div className="grid gap-2">
-            <p className="text-sm font-medium">All references</p>
+            <p className="text-sm font-medium">{t("actions:references.all")}</p>
             <ChoiceSelect
               value={all}
               candidates={others}
               canUnbind
-              label="For all references"
-              placeholder="Choose for all"
+              label={t("actions:references.forAll")}
+              placeholder={t("actions:references.chooseForAll")}
               onChange={(value) => {
                 setAll(value)
                 // Graph nodes cannot be unbound; they keep their own choice.
@@ -240,7 +248,7 @@ export function DeleteActionDialog({
               }}
             />
           </div>
-          <ul className="grid gap-3" aria-label="References to change">
+          <ul className="grid gap-3" aria-label={t("actions:references.toChange")}>
             {direct.map((reference) => {
               const key = siteKey(reference.site)
               const text = describeReference(reference)
@@ -252,20 +260,20 @@ export function DeleteActionDialog({
                       type="button"
                       size="sm"
                       variant="outline"
-                      aria-label={`Open in workflow editor: ${text}`}
+                      aria-label={t("actions:references.openInEditorLabel", { reference: text })}
                       onClick={() => {
                         onOpen(reference)
                       }}
                     >
-                      <ExternalLink /> Open in workflow editor
+                      <ExternalLink /> {t("actions:references.openInEditor")}
                     </Button>
                   )}
                   <ChoiceSelect
                     value={choices[key] ?? ""}
                     candidates={others}
                     canUnbind={reference.site.type !== "node"}
-                    label={`Change for ${text}`}
-                    placeholder="Choose"
+                    label={t("actions:references.changeFor", { reference: text })}
+                    placeholder={t("actions:references.choose")}
                     onChange={(value) => {
                       setChoices((current) => ({ ...current, [key]: value }))
                     }}
@@ -275,22 +283,22 @@ export function DeleteActionDialog({
             })}
           </ul>
           <p className="text-xs text-muted-foreground">
-            Unbind leaves the key empty or removes the step from its workflow. A graph node cannot
-            be unbound: replace it, or open the workflow editor and remove it there.
-            {undecided > 0 &&
-              ` ${undecided === 1 ? "1 reference needs" : `${undecided} references need`} a choice.`}
+            {t("actions:references.unbindHint")}
+            {undecided > 0 && ` ${t("actions:references.undecided", { count: undecided })}`}
           </p>
           {indirect.length > 0 && (
             <div className="grid gap-1">
-              <p className="text-sm font-medium">Triggers</p>
-              <ul className="grid gap-1 text-sm text-muted-foreground" aria-label="Triggers">
+              <p className="text-sm font-medium">{t("actions:references.triggers")}</p>
+              <ul
+                className="grid gap-1 text-sm text-muted-foreground"
+                aria-label={t("actions:references.triggers")}
+              >
                 {indirect.map((reference) => (
                   <li key={siteKey(reference.site)}>{describeReference(reference)}</li>
                 ))}
               </ul>
               <p className="text-xs text-muted-foreground">
-                Triggers follow their workflow: they run whatever the workflow runs after the
-                change.
+                {t("actions:references.triggersHint")}
               </p>
             </div>
           )}

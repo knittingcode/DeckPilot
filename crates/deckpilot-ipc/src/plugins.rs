@@ -19,6 +19,7 @@
 //! | `approvePluginUpdate` / `declinePluginUpdate` | `pluginUpdate` / `plugin` | decides a staged update |
 //! | `rollbackPlugin` | `plugin` | returns to the kept previous version |
 //! | `uninstallPlugin` | `ok` | removes files, records, grants and storage; settings and credentials too unless `keep` says otherwise |
+//! | `restoreBundledPlugin` | `plugin` | installs again, from the application bundle, a bundled plugin the user uninstalled (clearing the tombstone), or reinstalls a broken bundled copy; verified against the pins compiled into the agent (protocol 15, feature [`feature::RESTORE_BUNDLED`]) |
 //! | `invokePluginAction` | `pluginActionResult` | runs one action out of process (for testing and the UI); parameters are validated against the manifest first |
 //! | `listKnownPlugins` | `knownPlugins` | every plugin installed here at some point (`plugin_known`) |
 //! | `getPluginSettings` / `setPluginSettings` | `pluginSettings` | a plugin's settings fields and values, validated against the manifest; origin settings with their consent state ([`PluginUserOrigin`]) |
@@ -108,6 +109,62 @@ pub mod feature {
     /// knows no dependencies; a client then installs one plugin at a time
     /// as before.
     pub const DEPENDENCIES: &str = "dependencies";
+    /// Plugin dialogs (plugin API 1.5, protocol 12,
+    /// [`crate::plugin_dialogs`]): the agent shows a plugin's `dialog.open`
+    /// in an app that announced this feature in `subscribePluginEvents`.
+    pub const PLUGIN_DIALOGS: &str = crate::plugin_dialogs::FEATURE;
+    /// Plugin localization (plugin API 1.6, protocol 13): the agent shows
+    /// plugins' manifest texts in the language the app set with
+    /// `setLocale` and announces the plugins whose texts changed with
+    /// `changed` events. Without it plugin texts are as the manifest has
+    /// them.
+    pub const LOCALE: &str = "locale";
+    /// Restoring bundled first-party plugins (protocol 15):
+    /// `restoreBundledPlugin` and [`KnownPlugin::restorable`](super::KnownPlugin::restorable).
+    /// The app offers Restore and Reinstall only when the agent lists it.
+    pub const RESTORE_BUNDLED: &str = "restoreBundled";
+    /// Visual assets (plugin API 1.8): [`PluginSummary::visual_assets`](super::PluginSummary::visual_assets)
+    /// and `getPluginIcon` with `asset`. An agent without it lists none and
+    /// ignores `asset`, so a client asks for an asset's file only when the
+    /// agent lists the feature.
+    pub const VISUAL_ASSETS: &str = "visualAssets";
+}
+
+/// What a plugin's visual asset is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VisualAssetKind {
+    /// An icon for keys (a PNG).
+    Icon,
+    /// An image background (a PNG or JPEG covering the key).
+    ImageBackground,
+    /// A gradient background ([`PluginVisualAsset::colors`] and
+    /// [`PluginVisualAsset::angle`]).
+    GradientBackground,
+}
+
+/// One icon or background of an installed plugin
+/// (`contributes.visualAssets`, plugin API 1.8): data only, listed for
+/// the app's Icon and Background Libraries. Its file, when it has one, is
+/// read with `getPluginIcon` and `asset`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginVisualAsset {
+    /// `<plugin id>.<id>`: what a key stores.
+    pub id: String,
+    /// The id inside the plugin (`getPluginIcon`'s `asset`).
+    pub asset: String,
+    /// In the app's language (the plugin's fallback chain).
+    pub name: String,
+    pub kind: VisualAssetKind,
+    /// A gradient's `#rrggbb` colours.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub colors: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle: Option<u16>,
+    /// An icon's search words.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keywords: Vec<String>,
 }
 
 /// One toolbar entry of an installed plugin (`contributes.navigation`,
@@ -160,6 +217,13 @@ pub struct NavigationIconRef {
     pub entry: String,
     pub theme: NavigationIconTheme,
 }
+
+/// Largest visual asset file `getPluginIcon` serves (`asset`; an image
+/// background's limit, `deckpilot_plugin_manifest::MAX_BACKGROUND_BYTES`).
+pub const MAX_VISUAL_ASSET_FILE_BYTES: usize = 1024 * 1024;
+
+/// Media types of visual asset files.
+pub const VISUAL_ASSET_MEDIA_TYPES: [&str; 2] = ["image/png", "image/jpeg"];
 
 /// Media types of navigation icons; the plugin's own icon is always
 /// `image/png`.
@@ -227,6 +291,11 @@ pub mod reason {
     /// confirmed (the registry or the installed plugins changed): plan
     /// again.
     pub const PLAN_CHANGED: &str = "planChanged";
+    /// `restoreBundledPlugin` for a plugin DeckPilot does not bundle.
+    pub const NOT_BUNDLED: &str = "notBundled";
+    /// `restoreBundledPlugin` for a bundled plugin this agent's
+    /// application bundle has no pinned copy of (a build without it).
+    pub const NOT_PINNED: &str = "notPinned";
 }
 
 /// Most consent items one `decideModuleMigration` may decide.
@@ -468,6 +537,13 @@ pub struct PluginSummary {
     /// [`feature::DEPENDENCIES`]); absent for a plugin the user installed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installed_for: Option<String>,
+    /// The active version's icons and backgrounds
+    /// (`contributes.visualAssets`, plugin API 1.8), in manifest order,
+    /// whatever the plugin's state: keys draw them only while the plugin
+    /// is enabled. Empty (left out) from agents without
+    /// [`feature::VISUAL_ASSETS`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visual_assets: Vec<PluginVisualAsset>,
 }
 
 /// Failures of a plugin's host the agent saw since it started (kept in
@@ -811,13 +887,32 @@ pub enum PluginEvent {
         plugin: String,
         phase: MigrationPhase,
     },
+    /// A plugin asks for a dialog (protocol 12). Only on connections that
+    /// announced [`feature::PLUGIN_DIALOGS`]; answered with
+    /// `answerPluginDialog`.
+    DialogOpened {
+        dialog: crate::plugin_dialogs::PluginDialog,
+    },
+    /// The agent closed a dialog (timeout, the plugin stopped, answered
+    /// elsewhere): the app takes it down without answering. Only on
+    /// connections that announced [`feature::PLUGIN_DIALOGS`].
+    DialogClosed {
+        dialog: String,
+        plugin: String,
+        reason: crate::plugin_dialogs::DialogCloseReason,
+    },
 }
 
 impl PluginEvent {
     /// Whether a connection receives the event: migration events only when
-    /// it asked for them (`subscribePluginEvents` with `migrations: true`).
-    pub fn delivered(&self, migrations: bool) -> bool {
-        migrations || !matches!(self, Self::MigrationChanged { .. })
+    /// it asked for them (`subscribePluginEvents` with `migrations: true`),
+    /// dialog events only when it announced plugin dialogs.
+    pub fn delivered(&self, migrations: bool, dialogs: bool) -> bool {
+        match self {
+            Self::MigrationChanged { .. } => migrations,
+            Self::DialogOpened { .. } | Self::DialogClosed { .. } => dialogs,
+            Self::Progress { .. } | Self::Changed { .. } => true,
+        }
     }
 }
 
@@ -1041,13 +1136,22 @@ pub(crate) fn check_request(request: &crate::Request) -> Result<(), String> {
             plugin,
             offset,
             navigation,
+            asset,
         } => {
             check_text("plugin", plugin)?;
             if let Some(navigation) = navigation {
                 check_text("navigation entry", &navigation.entry)?;
             }
-            if *offset > MAX_ICON_BYTES as u64 {
-                return Err(format!("offset must be at most {MAX_ICON_BYTES}"));
+            if let Some(asset) = asset {
+                check_text("visual asset", asset)?;
+            }
+            let most = if asset.is_some() {
+                MAX_VISUAL_ASSET_FILE_BYTES
+            } else {
+                MAX_ICON_BYTES
+            };
+            if *offset > most as u64 {
+                return Err(format!("offset must be at most {most}"));
             }
             Ok(())
         }
@@ -1300,6 +1404,12 @@ pub struct KnownPlugin {
     pub installed: bool,
     pub first_seen_at: i64,
     pub last_seen_at: i64,
+    /// A bundled first-party plugin the user uninstalled that this agent
+    /// can install again from its application bundle
+    /// (`restoreBundledPlugin`, feature [`feature::RESTORE_BUNDLED`]).
+    /// Absent (false) from agents without it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub restorable: bool,
 }
 
 /// What `uninstallPlugin` keeps for a later install of the same plugin.
@@ -1558,6 +1668,7 @@ mod tests {
             plugin: "a.b".into(),
             offset: 0,
             navigation: None,
+            asset: None,
         };
         assert_eq!(
             serde_json::to_value(&request).unwrap(),
@@ -1570,6 +1681,7 @@ mod tests {
                 entry: "dashboard".into(),
                 theme: NavigationIconTheme::Dark,
             }),
+            asset: None,
         };
         assert_eq!(
             serde_json::to_value(&request).unwrap()["navigation"],

@@ -1,0 +1,16 @@
+{
+  "discard": {
+    "title": "Odrzucić zmiany?",
+    "description": "To, co wprowadzono w tym oknie, nie zostało zapisane.",
+    "confirm": "Odrzuć"
+  },
+  "selection": {
+    "choose": "Wybierz",
+    "filter": "Filtruj",
+    "empty": "Brak elementów do wyboru."
+  },
+  "permission": {
+    "allow": "Zezwól",
+    "requestedBy": "Prośba od"
+  }
+}

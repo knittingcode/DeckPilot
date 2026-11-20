@@ -61,7 +61,10 @@ pub fn validate(
             + profile
                 .layouts
                 .iter()
-                .map(|l| l.pages.iter().map(|p| p.bindings.len() + 1).sum::<usize>())
+                .map(|l| {
+                    l.pages.iter().map(|p| p.bindings.len() + 1).sum::<usize>()
+                        + l.recovered_bindings().count()
+                })
                 .sum::<usize>();
         if items > MAX_ITEMS_PER_PROFILE {
             return invalid(format!("profile `{name}` is too large"));
@@ -85,7 +88,14 @@ pub fn validate(
                 return invalid(format!("profile `{name}`: icon “{}”: {error}", icon.name));
             }
         }
-        for issue in profile.validate(catalog) {
+        // Folder keys with more than their folder are normalized when
+        // imported, as migration 12 did with stored ones: a warning.
+        let mut normalized = profile.clone();
+        for layout in &mut normalized.layouts {
+            let place = format!("{name}: layout `{}`", layout.name);
+            warnings.extend(folder_control_warnings(layout, &place));
+        }
+        for issue in normalized.validate(catalog) {
             match issue {
                 // Device capabilities may differ between versions; such
                 // layouts are imported and shown with their problems.
@@ -95,7 +105,12 @@ pub fn validate(
                         | LayoutIssue::UnknownControl { .. }
                         | LayoutIssue::UnsupportedTrigger { .. }
                         | LayoutIssue::DuplicateBinding { .. }
-                        | LayoutIssue::IncompatibleAction { .. },
+                        | LayoutIssue::IncompatibleAction { .. }
+                        // The reserved Back key goes back whatever is
+                        // bound to it; a bad Auto Exit time is off. Kept
+                        // and shown, nothing of the user's is dropped.
+                        | LayoutIssue::ReservedBack { .. }
+                        | LayoutIssue::InvalidAutoExit { .. },
                     ..
                 } => warnings.push(format!("{name}: {issue}")),
                 // Broken references would violate referential integrity.
@@ -126,7 +141,10 @@ fn validate_library(
         + library
             .layouts
             .iter()
-            .map(|l| l.pages.iter().map(|p| p.bindings.len() + 1).sum::<usize>())
+            .map(|l| {
+                l.pages.iter().map(|p| p.bindings.len() + 1).sum::<usize>()
+                    + l.recovered_bindings().count()
+            })
             .sum::<usize>();
     if items > MAX_ITEMS_PER_PROFILE || library.icons.len() > deckpilot_core::MAX_ICONS * 4 {
         return invalid("the layouts of no profile are too large".into());
@@ -151,6 +169,10 @@ fn validate_library(
         if layout.name.chars().count() > MAX_NAME_CHARS {
             return invalid("a layout name is too long".into());
         }
+        let mut layout = layout.clone();
+        let place = format!("layout {}", layout.name);
+        warnings.extend(folder_control_warnings(&mut layout, &place));
+        let layout = &layout;
         for issue in layout.validate(catalog, &holder) {
             match issue {
                 LayoutIssue::UnknownModel(_)
@@ -165,6 +187,54 @@ fn validate_library(
         }
     }
     Ok(())
+}
+
+/// Normalizes the folder keys of `layout` as an import stores them
+/// ([`deckpilot_core::DeviceLayout::normalize_folder_controls`]) and says
+/// what moved to its recovered list, prefixed with `place`.
+fn folder_control_warnings(layout: &mut deckpilot_core::DeviceLayout, place: &str) -> Vec<String> {
+    let report = layout.normalize_folder_controls();
+    let labels = layout.normalize_folder_labels();
+    let name = |layout: &deckpilot_core::DeviceLayout, page| {
+        layout
+            .page(page)
+            .map(|p| p.name.clone())
+            .unwrap_or_default()
+    };
+    // Schema 13: a folder key shows its folder's name; a title of its own
+    // that differed is kept, as migration 13 keeps it.
+    let label_warnings: Vec<String> = labels
+        .iter()
+        .map(|normalized| {
+            format!(
+                "{place}: the key that opens the folder “{}” on page “{}” now shows the \
+                 folder's name; its own title “{}” is kept and can be used as the folder's \
+                 name",
+                name(layout, normalized.folder),
+                name(layout, normalized.page),
+                normalized.label
+            )
+        })
+        .collect();
+    report
+        .iter()
+        .map(|normalized| {
+            let name = |page| {
+                layout
+                    .page(page)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_default()
+            };
+            format!(
+                "{place}: the key that opens the folder “{}” on page “{}” keeps only that; its \
+                 other {} binding(s) are kept as recovered gestures and do not run",
+                name(normalized.folder),
+                name(normalized.page),
+                normalized.recovered
+            )
+        })
+        .chain(label_warnings)
+        .collect()
 }
 
 /// Warnings for the bindings of `payload` whose action cannot run from the
@@ -882,6 +952,20 @@ pub fn plan(
             *icon = deckpilot_render::icons::sanitize(icon)
                 .map_err(|e| PortabilityError::Invalid(format!("icon “{}”: {e}", icon.name)))?;
         }
+        // Folders of exports from before the reserved Back key get their
+        // Back setting as stored ones did in migration 11; settings that
+        // came with the export are kept as they are.
+        let catalog = deckpilot_device::ModelCatalog::builtin();
+        for layout in &mut imported.layouts {
+            if let Some(model) = catalog.get(&layout.model) {
+                layout.assign_folder_backs(&model.capabilities);
+            }
+            // Folder keys keep only what opens their folder; the rest is
+            // recovered, as migration 12 did with stored layouts. They
+            // show their folder's name, as migration 13 made them.
+            layout.normalize_folder_controls();
+            layout.normalize_folder_labels();
+        }
         // Layouts, actions and icons are shared records: one that exists
         // here with other content is never overwritten for profiles that
         // stay; the imported one gets a new id.
@@ -950,6 +1034,10 @@ fn plan_library(
         return Ok(());
     }
     let mut library = shared.resolve(&payload.library, store, removed, replace_all)?;
+    for layout in &mut library.layouts {
+        layout.normalize_folder_controls();
+        layout.normalize_folder_labels();
+    }
     for icon in &mut library.icons {
         *icon = deckpilot_render::icons::sanitize(icon)
             .map_err(|e| PortabilityError::Invalid(format!("icon “{}”: {e}", icon.name)))?;

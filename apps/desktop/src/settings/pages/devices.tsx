@@ -12,28 +12,31 @@ import { useTitlebar } from "@/hooks/use-titlebar"
 import { api } from "@/lib/api"
 import { failureMessage, toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
+import { useTranslation } from "@/i18n"
+import { useFormat } from "@/i18n/format"
 
 export function DevicesSettings() {
+  const { t } = useTranslation()
   const { agent, navigate } = useAppContext()
   const [refreshing, setRefreshing] = useState(false)
   useTitlebar({
     actions: [
       {
         id: "devices.refresh",
-        label: "Refresh devices",
+        label: t("devices:refresh.label"),
         icon: RefreshCw,
         placement: "primary",
         busy: refreshing,
         disabled: !agent?.running || refreshing,
-        hint: agent?.running ? "Look for connected devices again" : "The agent is not running",
+        hint: agent?.running ? t("devices:page.refreshHint") : t("devices:detail.agentStopped"),
         onSelect: () => {
           setRefreshing(true)
           api
             .refreshDevices()
             .then(
-              () => toast.success("Devices refreshed"),
+              () => toast.success(t("devices:refresh.done")),
               (e: unknown) => {
-                toastFailure("The devices were not refreshed", e, "Check that the agent is running")
+                toastFailure(t("devices:refresh.failed"), e, t("devices:refresh.next"))
               },
             )
             .finally(() => {
@@ -49,16 +52,16 @@ export function DevicesSettings() {
       <SettingsSection
         title={
           <>
-            Connected devices <AgentBadge />
+            {t("devices:page.connectedTitle")} <AgentBadge />
           </>
         }
-        description="Devices appear automatically when connected. Simulated devices are for development and testing. On Linux, a udev rule is required for access."
+        description={t("devices:page.connectedDescription")}
       >
         <SettingsGroup>
           {agent && !agent.running && <AgentStopped />}
           {agent?.status &&
             (agent.status.devices.length === 0 ? (
-              <EmptyState variant="plain" title="No Stream Deck detected" />
+              <EmptyState variant="plain" title={t("devices:page.noneDetected")} />
             ) : (
               agent.status.devices.map((device) => (
                 <DeviceRow
@@ -72,7 +75,7 @@ export function DevicesSettings() {
                         navigate("designer")
                       }}
                     >
-                      <LayoutGrid /> Edit layout
+                      <LayoutGrid /> {t("devices:page.editLayout")}
                     </Button>
                   }
                 />
@@ -81,7 +84,7 @@ export function DevicesSettings() {
         </SettingsGroup>
       </SettingsSection>
       {agent?.status && (
-        <SettingsSection title="Display">
+        <SettingsSection title={t("devices:page.display")}>
           <SettingsGroup>
             <Brightness key={agent.status.brightness} current={agent.status.brightness} />
           </SettingsGroup>
@@ -94,14 +97,17 @@ export function DevicesSettings() {
 }
 
 function Brightness({ current }: { current: number }) {
+  const { t } = useTranslation()
+  const format = useFormat()
   const [brightness, setBrightness] = useState(current)
   const [error, setError] = useState<string | null>(null)
+  const percent = format.percent(brightness / 100)
   return (
     <>
       <SettingsRow
-        label="Brightness"
+        label={t("devices:page.brightness")}
         htmlFor="brightness"
-        description="Applies to every connected device."
+        description={t("devices:page.brightnessDescription")}
       >
         <input
           id="brightness"
@@ -110,14 +116,14 @@ function Brightness({ current }: { current: number }) {
           max={100}
           step={5}
           value={brightness}
-          aria-valuetext={`${brightness}%`}
+          aria-valuetext={percent}
           className="w-40 accent-primary"
           onChange={(e) => {
             setBrightness(Number(e.target.value))
           }}
         />
         <output htmlFor="brightness" className="w-10 text-right text-sm tabular-nums">
-          {brightness}%
+          {percent}
         </output>
         <Button
           size="sm"
@@ -126,11 +132,11 @@ function Brightness({ current }: { current: number }) {
           onClick={() => {
             setError(null)
             api.setBrightness(brightness).catch((e: unknown) => {
-              setError(failureMessage("The brightness was not changed", e))
+              setError(failureMessage(t("devices:page.brightnessFailed"), e))
             })
           }}
         >
-          Apply
+          {t("devices:page.apply")}
         </Button>
       </SettingsRow>
       {error && (

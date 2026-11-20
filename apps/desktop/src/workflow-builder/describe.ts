@@ -1,3 +1,7 @@
+import type { TFunction } from "i18next"
+
+import { currentLanguage, i18n } from "@/i18n"
+import { formatNumber } from "@/i18n/format"
 import type {
   ActionInstance,
   ActionType,
@@ -70,79 +74,110 @@ export function actionOf(node: GraphNode, lookup: Lookup) {
   return { action, type }
 }
 
-function predicateText(predicate: GraphPredicate) {
+/**
+ * Translates with the window's instance by default; components pass the `t`
+ * of `useTranslation` so memoized texts follow a language change.
+ */
+function defaultT(): TFunction {
+  return i18n.getFixedT(currentLanguage())
+}
+
+function predicateText(predicate: GraphPredicate, t: TFunction) {
   switch (predicate.type) {
     case "equals":
-      return `${predicate.reference.node}.${predicate.reference.output} = “${predicate.value}”`
+      return t("workflows:node.predicate.equals", {
+        output: `${predicate.reference.node}.${predicate.reference.output}`,
+        value: predicate.value,
+      })
     case "notEmpty":
-      return `${predicate.reference.node}.${predicate.reference.output} is set`
+      return t("workflows:node.predicate.notEmpty", {
+        output: `${predicate.reference.node}.${predicate.reference.output}`,
+      })
     case "succeeded":
-      return `${predicate.node} succeeded`
+      return t("workflows:node.predicate.succeeded", { node: predicate.node })
     case "activeProject":
-      return `project is ${predicate.key || "…"}`
+      return t("workflows:node.predicate.activeProject", { key: predicate.key || "…" })
   }
 }
 
 /** Title and one-line summary of a node. */
-export function describeNode(node: GraphNode, lookup: Lookup): { title: string; detail: string } {
+export function describeNode(
+  node: GraphNode,
+  lookup: Lookup,
+  t: TFunction = defaultT(),
+): { title: string; detail: string } {
   const label = node.label?.trim()
   switch (node.type) {
     case "action": {
       const { action, type } = actionOf(node, lookup)
       return {
-        title: label || action?.name || "Missing action",
-        detail: type?.name ?? (action ? action.actionType : "The action no longer exists"),
+        title: label || action?.name || t("workflows:node.missingAction"),
+        detail: type?.name ?? (action ? action.actionType : t("workflows:node.actionGone")),
       }
     }
     case "condition":
-      return { title: label || "Condition", detail: predicateText(node.predicate) }
+      return {
+        title: label || t(FLOW_TITLE.condition),
+        detail: predicateText(node.predicate, t),
+      }
     case "loop": {
       const workflow = lookup.workflows.find((w) => w.id === node.workflow)
       return {
-        title: label || "Loop",
-        detail: `${workflow?.name ?? "Missing workflow"} × ${node.times}`,
+        title: label || t(FLOW_TITLE.loop),
+        detail: t("workflows:node.loopDetail", {
+          workflow: workflow?.name ?? t("workflows:node.missingWorkflow"),
+          times: node.times,
+        }),
       }
     }
     case "call": {
       const workflow = lookup.workflows.find((w) => w.id === node.workflow)
       return {
-        title: label || workflow?.name || "Sub-workflow",
-        detail: workflow ? "Sub-workflow" : "Missing workflow",
+        title: label || workflow?.name || t(FLOW_TITLE.call),
+        detail: workflow ? t(FLOW_TITLE.call) : t("workflows:node.missingWorkflow"),
       }
     }
     case "output": {
       const keys = Object.keys(node.values ?? {})
       return {
-        title: label || "Outputs",
-        detail: keys.length ? keys.join(", ") : "Sets no outputs",
+        title: label || t(FLOW_TITLE.output),
+        detail: keys.length ? keys.join(", ") : t("workflows:node.noOutputs"),
       }
     }
     case "setVariable": {
       const keys = Object.keys(node.values ?? {})
       return {
-        title: label || "Set variable",
-        detail: keys.length ? keys.join(", ") : "Sets no variables",
+        title: label || t(FLOW_TITLE.setVariable),
+        detail: keys.length ? keys.join(", ") : t("workflows:node.noVariables"),
       }
     }
     case "trigger":
       return {
-        title: label || FLOW_TITLE.trigger,
+        title: label || t(FLOW_TITLE.trigger),
         detail: triggersSummary(lookup.triggers, lookup.triggersPaused),
       }
     case "delay":
-      return { title: label || "Delay", detail: formatMs(node.ms) }
+      return { title: label || t(FLOW_TITLE.delay), detail: formatMs(node.ms, t) }
     default:
-      return { title: label || FLOW_TITLE[node.type], detail: "" }
+      return { title: label || t(FLOW_TITLE[node.type]), detail: "" }
   }
 }
 
-export function formatMs(ms: number) {
-  if (ms < 1000) return `${ms} ms`
+/** A duration for people: "250 ms", "1.5 s", "2 min 5 s" (numbers in the window's language). */
+export function formatMs(ms: number, t: TFunction = defaultT()) {
+  const number = (value: number) =>
+    formatNumber(currentLanguage(), value, { maximumFractionDigits: 1, useGrouping: false })
+  if (ms < 1000) return t("workflows:node.duration.ms", { value: number(ms) })
   const seconds = ms / 1000
-  if (seconds < 60) return `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1)} s`
+  if (seconds < 60) return t("workflows:node.duration.seconds", { value: number(seconds) })
   const minutes = Math.floor(seconds / 60)
   const rest = Math.round(seconds % 60)
-  return rest ? `${minutes} min ${rest} s` : `${minutes} min`
+  return rest
+    ? t("workflows:node.duration.minutesSeconds", {
+        minutes: number(minutes),
+        seconds: number(rest),
+      })
+    : t("workflows:node.duration.minutes", { minutes: number(minutes) })
 }
 
 /** Outputs of the nodes that run before `id`, for mappings and conditions. */
@@ -158,7 +193,7 @@ export function availableOutputs(graph: WorkflowGraph, id: string, lookup: Looku
     }),
     ...(lookup.variables ?? []).map((variable) => ({
       reference: { node: VARIABLES_NODE, output: variable.key },
-      label: `Variable · ${variable.label || variable.key}`,
+      label: i18n.t("workflows:node.variableOutput", { label: variable.label || variable.key }),
     })),
   ]
 }

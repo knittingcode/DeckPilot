@@ -13,6 +13,8 @@ import { api } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
 import { hex } from "@/lib/format"
 import type { DeviceModel, TouchGesture } from "@/lib/types"
+import { type TranslationKey, useTranslation } from "@/i18n"
+import { useFormat } from "@/i18n/format"
 import { LEVELS, PLATFORMS, PLATFORM_LABELS, isSupported, verificationOn } from "@/lib/verification"
 
 /**
@@ -22,6 +24,7 @@ import { LEVELS, PLATFORMS, PLATFORM_LABELS, isSupported, verificationOn } from 
  * others are shown on request, labelled as experimental and not verified.
  */
 export function SupportedModels() {
+  const { t } = useTranslation()
   const { state } = useAsync(() => api.listDeviceModels(), "models")
   const [showExperimental, setShowExperimental] = useState(false)
   const models = state.status === "ready" ? state.data : []
@@ -30,13 +33,13 @@ export function SupportedModels() {
   return (
     <DndContext>
       <SettingsSection
-        title="Supported Models"
-        description="Models tested on a physical device on at least one platform. The badges show the status on each platform."
+        title={t("devices:models.supportedTitle")}
+        description={t("devices:models.supportedDescription")}
       >
         {state.status === "loading" && <Loading />}
         {state.status === "error" && <ErrorNotice error={state.error} />}
         {state.status === "ready" && supported.length === 0 && (
-          <p className="text-sm text-muted-foreground">No model has been verified yet.</p>
+          <p className="text-sm text-muted-foreground">{t("devices:models.noneVerified")}</p>
         )}
         {supported.length > 0 && (
           <div className="grid divide-y border-y">
@@ -53,14 +56,14 @@ export function SupportedModels() {
               checked={showExperimental}
               onCheckedChange={setShowExperimental}
             />
-            <Label htmlFor="show-experimental">Show experimental models</Label>
+            <Label htmlFor="show-experimental">{t("devices:models.showExperimental")}</Label>
           </div>
         )}
       </SettingsSection>
       {showExperimental && experimental.length > 0 && (
         <SettingsSection
-          title="Experimental, not verified"
-          description="These models have not been tested on a physical device on any platform. Layouts can be designed for them, but they are not supported."
+          title={t("devices:models.experimentalTitle")}
+          description={t("devices:models.experimentalDescription")}
         >
           <div className="grid divide-y border-y">
             {experimental.map((model) => (
@@ -75,6 +78,7 @@ export function SupportedModels() {
 
 /** One badge per platform with the model's verification level there. */
 export function PlatformBadges({ model }: { model: DeviceModel }) {
+  const { t } = useTranslation()
   return (
     <span className="flex flex-wrap gap-1">
       {PLATFORMS.map((platform) => {
@@ -83,9 +87,12 @@ export function PlatformBadges({ model }: { model: DeviceModel }) {
           <Badge
             key={platform}
             variant={entry.level === "physicallyVerified" ? "secondary" : "outline"}
-            title={entry.evidence || LEVELS[entry.level].detail}
+            title={entry.evidence || t(LEVELS[entry.level].detail)}
           >
-            {PLATFORM_LABELS[platform]}: {LEVELS[entry.level].label}
+            {t("devices:models.platformLevel", {
+              platform: PLATFORM_LABELS[platform],
+              level: t(LEVELS[entry.level].label),
+            })}
           </Badge>
         )
       })}
@@ -93,38 +100,72 @@ export function PlatformBadges({ model }: { model: DeviceModel }) {
   )
 }
 
-const GESTURES: Record<TouchGesture, string> = {
-  tap: "Tap",
-  longPress: "Long press",
-  swipe: "Swipe",
+const GESTURES: Record<TouchGesture, TranslationKey> = {
+  tap: "devices:models.gesture.tap",
+  longPress: "devices:models.gesture.longPress",
+  swipe: "devices:models.gesture.swipe",
 }
 
 function ModelCard({ model }: { model: DeviceModel }) {
+  const { t } = useTranslation()
+  const format = useFormat()
   const { navigate } = useAppContext()
   const { keys, encoders, touch } = model.capabilities
+  const none = t("devices:models.none")
+  const usbIdentity = t("devices:models.usbIdentity")
   const rows: [string, string][] = [
     [
-      "Keys",
+      t("devices:models.keys"),
       keys
-        ? `${keys.rows * keys.columns} (${keys.columns} × ${keys.rows})${
-            keys.image
-              ? `, ${keys.image.width} × ${keys.image.height} px ${keys.image.format.toUpperCase()}`
-              : ""
-          }`
-        : "None",
+        ? keys.image
+          ? t("devices:models.keysWithImage", {
+              total: keys.rows * keys.columns,
+              columns: keys.columns,
+              rows: keys.rows,
+              width: keys.image.width,
+              height: keys.image.height,
+              format: keys.image.format.toUpperCase(),
+            })
+          : t("devices:models.keysValue", {
+              total: keys.rows * keys.columns,
+              columns: keys.columns,
+              rows: keys.rows,
+            })
+        : none,
     ],
-    ["Dials", encoders ? `${encoders.count}${encoders.pressable ? ", pressable" : ""}` : "None"],
     [
-      "Touch strip",
+      t("devices:models.dials"),
+      encoders
+        ? encoders.pressable
+          ? t("devices:models.dialsPressable", { dials: encoders.count })
+          : format.number(encoders.count)
+        : none,
+    ],
+    [
+      t("devices:models.touchStrip"),
       touch
-        ? `${touch.zones} zones${touch.image ? ` of ${touch.image.width} × ${touch.image.height} px` : ""}`
-        : "None",
+        ? touch.image
+          ? t("devices:models.zonesWithImage", {
+              count: touch.zones,
+              width: touch.image.width,
+              height: touch.image.height,
+            })
+          : t("devices:models.zones", { count: touch.zones })
+        : none,
     ],
     // Key gestures come from DeckPilot's gesture engine and work on every
     // model with keys; touch gestures are reported by the touch strip.
-    ["Key gestures", keys ? "Click, double click, long press" : "—"],
-    ["Touch gestures", touch ? touch.gestures.map((g) => GESTURES[g]).join(", ") : "—"],
-    ["USB identity", model.usb ? `${hex(model.usb.vendorId)}:${hex(model.usb.productId)}` : "—"],
+    [t("devices:models.keyGestures"), keys ? t("devices:models.keyGesturesValue") : "—"],
+    [
+      t("devices:models.touchGestures"),
+      touch
+        ? format.list(
+            touch.gestures.map((g) => t(GESTURES[g])),
+            "unit",
+          )
+        : "—",
+    ],
+    [usbIdentity, model.usb ? `${hex(model.usb.vendorId)}:${hex(model.usb.productId)}` : "—"],
   ]
   return (
     <article aria-label={model.name} className="grid gap-3 py-4">
@@ -138,7 +179,7 @@ function ModelCard({ model }: { model: DeviceModel }) {
         <PlatformBadges model={model} />
       </div>
       <div className="grid gap-6 lg:grid-cols-[auto_1fr]">
-        <div className="overflow-x-auto">
+        <div className="relative overflow-x-auto">
           <DeviceCanvas model={model} size="sm" />
         </div>
         <div className="grid h-fit gap-4">
@@ -146,11 +187,11 @@ function ModelCard({ model }: { model: DeviceModel }) {
             {rows.map(([label, value]) => (
               <div key={label} className="contents">
                 <dt className="text-muted-foreground">{label}</dt>
-                <dd className={label === "USB identity" ? "font-mono" : undefined}>{value}</dd>
+                <dd className={label === usbIdentity ? "font-mono" : undefined}>{value}</dd>
               </div>
             ))}
           </dl>
-          <dl className="grid gap-1 text-sm" aria-label="Verification">
+          <dl className="grid gap-1 text-sm" aria-label={t("devices:models.verification")}>
             {PLATFORMS.map((platform) => {
               const entry = verificationOn(model, platform)
               return (
@@ -160,12 +201,12 @@ function ModelCard({ model }: { model: DeviceModel }) {
                     {entry.evidenceDate && (
                       <span className="font-normal text-muted-foreground">
                         {" "}
-                        (as of {entry.evidenceDate})
+                        {t("devices:models.asOf", { date: entry.evidenceDate })}
                       </span>
                     )}
                   </dt>
                   <dd className="text-caption text-muted-foreground">
-                    {entry.evidence || LEVELS[entry.level].detail}
+                    {entry.evidence || t(LEVELS[entry.level].detail)}
                   </dd>
                 </div>
               )
@@ -179,7 +220,7 @@ function ModelCard({ model }: { model: DeviceModel }) {
                 navigate("designer")
               }}
             >
-              Design a layout
+              {t("devices:models.designLayout")}
             </Button>
           </div>
         </div>

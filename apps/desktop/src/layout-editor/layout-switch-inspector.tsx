@@ -20,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Trans, useTranslation } from "@/i18n"
 import { api } from "@/lib/api"
 import { failureDetail } from "@/lib/failure"
 import {
@@ -161,6 +162,7 @@ function SwitchLayoutPanel({
   trigger: string | null
   onChange: (layout: DeviceLayout) => void
 }) {
+  const { t } = useTranslation()
   const id = useId()
   const [busy, setBusy] = useState(false)
   const overrides = binding.target.type === "action" ? (binding.target.overrides ?? {}) : {}
@@ -183,7 +185,10 @@ function SwitchLayoutPanel({
           reused && reused.id !== action.id
             ? reused
             : await api.createAction(context.profileId, {
-                name: freeActionName(actions, name(next.layout) ?? "Switch layout"),
+                name: freeActionName(
+                  actions,
+                  name(next.layout) ?? t("editor:layoutSwitch.defaultName"),
+                ),
                 actionType: SWITCH_LAYOUT,
                 parameters,
                 description: "",
@@ -223,22 +228,29 @@ function SwitchLayoutPanel({
         context.onActionSaved(updated)
       }
     } catch (e) {
-      toast.error("The destination was not changed", { description: failureDetail(e) })
+      toast.error(t("editor:layoutSwitch.changeFailed"), { description: failureDetail(e) })
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <PanelFrame title="Switch layout" trigger={trigger}>
+    <PanelFrame title={t("editor:layoutSwitch.title")} trigger={trigger}>
       <p className="text-sm" aria-live="polite">
-        Shows:{" "}
-        <span className="font-medium">
-          {target?.name ?? (current.layout ? "a layout not in this profile" : "nothing chosen yet")}
-        </span>
+        <Trans
+          i18nKey="editor:layoutSwitch.shows"
+          values={{
+            name:
+              target?.name ??
+              (current.layout
+                ? t("editor:layoutSwitch.notInProfile")
+                : t("editor:layoutSwitch.nothingChosen")),
+          }}
+          components={{ name: <span className="font-medium" /> }}
+        />
       </p>
       <div className="grid gap-1.5">
-        <Label id={`${id}-layout`}>Layout</Label>
+        <Label id={`${id}-layout`}>{t("editor:layoutSwitch.layout")}</Label>
         <LayoutPicker
           labelledBy={`${id}-layout`}
           layouts={context.layouts}
@@ -250,11 +262,11 @@ function SwitchLayoutPanel({
           }}
         />
         <p className="text-xs text-muted-foreground">
-          Only layouts for {context.modelName} assigned to this profile.
+          {t("editor:layoutSwitch.onlyLayouts", { model: context.modelName })}
         </p>
       </div>
       <div className="grid gap-1.5">
-        <Label htmlFor={`${id}-page`}>Page</Label>
+        <Label htmlFor={`${id}-page`}>{t("editor:layoutSwitch.page")}</Label>
         <Select
           value={current.page ?? "home"}
           disabled={busy || !target}
@@ -266,7 +278,7 @@ function SwitchLayoutPanel({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="home">Home page</SelectItem>
+            <SelectItem value="home">{t("editor:layoutSwitch.homePage")}</SelectItem>
             {(target?.pages ?? [])
               .filter((p) => p.id !== target?.homePage)
               .map((p) => (
@@ -275,13 +287,13 @@ function SwitchLayoutPanel({
                 </SelectItem>
               ))}
             {current.page && !target?.pages.some((p) => p.id === current.page) && (
-              <SelectItem value={current.page}>Missing page (home page)</SelectItem>
+              <SelectItem value={current.page}>{t("editor:layoutSwitch.missingPage")}</SelectItem>
             )}
           </SelectContent>
         </Select>
       </div>
       <div className="grid gap-1.5">
-        <Label htmlFor={`${id}-history`}>Back</Label>
+        <Label htmlFor={`${id}-history`}>{t("editor:layoutSwitch.back")}</Label>
         <Select
           value={current.history}
           disabled={busy}
@@ -295,18 +307,18 @@ function SwitchLayoutPanel({
           <SelectContent>
             {HISTORY_CHOICES.map((choice) => (
               <SelectItem key={choice.value} value={choice.value}>
-                {choice.label}
+                {t(choice.label)}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">
-          {HISTORY_CHOICES.find((c) => c.value === current.history)?.detail}
+          {HISTORY_CHOICES.filter((c) => c.value === current.history).map((c) => t(c.detail))}
         </p>
       </div>
       {shared && (
         <p className="text-xs text-muted-foreground" role="note">
-          Other keys run “{action.name}” too: a change here gives this key an action of its own.
+          {t("editor:layoutSwitch.shared", { action: action.name })}
         </p>
       )}
     </PanelFrame>
@@ -329,6 +341,7 @@ function LayoutPicker({
   disabled: boolean
   onSelect: (layout: string) => void
 }) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const selected = layouts.find((l) => l.id === value)
   return (
@@ -343,15 +356,18 @@ function LayoutPicker({
           disabled={disabled}
           className="w-full justify-between font-normal"
         >
-          <span className="truncate">{selected?.name ?? "Choose a layout"}</span>
+          <span className="truncate">{selected?.name ?? t("editor:layoutSwitch.choose")}</span>
           <ChevronsUpDown className="opacity-50" aria-hidden />
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-(--radix-popover-trigger-width) min-w-56 p-0" align="start">
         <Command>
-          <CommandInput placeholder="Search layouts" aria-label="Search layouts" />
+          <CommandInput
+            placeholder={t("editor:layoutSwitch.search")}
+            aria-label={t("editor:layoutSwitch.search")}
+          />
           <CommandList>
-            <CommandEmpty>No layout matches.</CommandEmpty>
+            <CommandEmpty>{t("editor:layoutSwitch.noMatches")}</CommandEmpty>
             <CommandGroup>
               {layouts.map((layout) => (
                 <CommandItem
@@ -368,7 +384,9 @@ function LayoutPicker({
                   />
                   <span className="min-w-0 flex-1 truncate">{layout.name}</span>
                   {layout.id === defaultLayout && (
-                    <span className="text-xs text-muted-foreground">default</span>
+                    <span className="text-xs text-muted-foreground">
+                      {t("editor:layoutSwitch.default")}
+                    </span>
                   )}
                 </CommandItem>
               ))}
@@ -388,20 +406,22 @@ function PreviousLayoutPanel({
   context: LayoutNavigationContext
   trigger: string | null
 }) {
+  const { t } = useTranslation()
   const { device } = context
   const previous = device?.previousLayout
   const connected = shownLayout(device) !== null
   return (
-    <PanelFrame title="Back to previous layout" trigger={trigger}>
-      <p className="text-xs text-muted-foreground">
-        Returns this device to the layout it showed before, in this profile. Does nothing when there
-        is none. A folder&apos;s Back key returns to a page instead.
-      </p>
+    <PanelFrame title={t("editor:layoutSwitch.previousTitle")} trigger={trigger}>
+      <p className="text-xs text-muted-foreground">{t("editor:layoutSwitch.previousHint")}</p>
       {connected && (
         <p className="text-xs" role="status">
           {previous
-            ? `Now: back to ${context.layouts.find((l) => l.id === previous)?.name ?? "the previous layout"}.`
-            : "Now: this device has no previous layout, so the key does nothing."}
+            ? t("editor:layoutSwitch.nowBack", {
+                layout:
+                  context.layouts.find((l) => l.id === previous)?.name ??
+                  t("editor:layoutSwitch.previousLayout"),
+              })
+            : t("editor:layoutSwitch.nowNone")}
         </p>
       )}
     </PanelFrame>

@@ -31,6 +31,8 @@ plugin can be built or run ([JavaScript](#javascript)).
 | [actions.md](actions.md) | Declaring actions in code and in the manifest: parameters, defaults, outputs, results |
 | [permissions.md](permissions.md) | Permission kinds, what each grants in ABI 1, justifications, consent and revocation |
 | [capabilities.md](capabilities.md) | HTTP, credentials as handles, settings, variables, storage, notifications, log: the `Context` API |
+| [dialogs.md](dialogs.md) | Standard dialogs (plugin API 1.5): confirm, alert, form and selection, described as data and drawn by DeckPilot |
+| [localization.md](localization.md) | Translations (plugin API 1.6): `locales/<tag>.json`, `t:` manifest texts, the fallback chain, `ctx.locale()` and `ctx.t(...)` |
 | [lifecycle.md](lifecycle.md) | What runs when: init and shutdown hooks, hosts, restarts; what ABI 1 does not have |
 | [errors-and-versions.md](errors-and-versions.md) | Error codes and how they reach the user; ABI, API level, SDK and `engines` versions |
 | [building.md](building.md) | Building, reproducible builds, packaging, testing, local installation, size limits |

@@ -4,24 +4,17 @@
 // uninstalling a plugin affects. Compact rows in the settings layout, no
 // cards.
 
-import { Check, Loader2, ShieldAlert } from "lucide-react"
+import { Check, Loader2, ShieldAlert, ShieldCheck, TriangleAlert } from "lucide-react"
 import { useState } from "react"
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { ModalShell } from "@/components/dialogs"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+import { Trans, type TranslationKey, useTranslation } from "@/i18n"
 
-import { pluginErrorText, type PluginErrorText } from "./api"
 import { Notice, PermissionList, PublisherLine } from "./components"
+import { pluginErrorSentence } from "./dialog-error"
 import { grantOfInfo } from "./permissions"
 import { dependencyStateText } from "./dependency-text"
 import type {
@@ -43,6 +36,7 @@ export function DependencySection({
   dependencies: PluginDependencyInfo[]
   title: string
 }) {
+  const { t } = useTranslation()
   if (dependencies.length === 0) return null
   const required = dependencies.filter((d) => !d.optional)
   const optional = dependencies.filter((d) => d.optional)
@@ -51,14 +45,13 @@ export function DependencySection({
       <h4 id="plugin-detail-dependencies" className="text-sm font-medium">
         {title}
       </h4>
-      {required.length > 0 && <DependencyRows label="Requires" items={required} />}
+      {required.length > 0 && (
+        <DependencyRows label={t("plugins:dependencies.requires")} items={required} />
+      )}
       {optional.length > 0 && (
         <>
-          <p className="text-xs text-muted-foreground">
-            Optional integrations are never installed by themselves; without one, only the actions
-            that use it are unavailable.
-          </p>
-          <DependencyRows label="Optional integrations" items={optional} />
+          <p className="text-xs text-muted-foreground">{t("plugins:dependencies.optionalHint")}</p>
+          <DependencyRows label={t("plugins:dependencies.optional")} items={optional} />
         </>
       )}
     </section>
@@ -66,6 +59,7 @@ export function DependencySection({
 }
 
 function DependencyRows({ label, items }: { label: string; items: PluginDependencyInfo[] }) {
+  const { t } = useTranslation()
   return (
     <ul className="grid divide-y border-y text-sm" aria-label={label}>
       {items.map((d) => (
@@ -78,8 +72,10 @@ function DependencyRows({ label, items }: { label: string; items: PluginDependen
               {d.id}
             </span>
             <span className="text-xs text-muted-foreground">{d.version}</span>
-            {d.builtin && <Badge variant="outline">Built in</Badge>}
-            {d.optional && <Badge variant="outline">Optional</Badge>}
+            {d.builtin && <Badge variant="outline">{t("plugins:dependencies.builtIn")}</Badge>}
+            {d.optional && (
+              <Badge variant="outline">{t("plugins:dependencies.optionalBadge")}</Badge>
+            )}
             <span
               className={
                 d.state === "satisfied"
@@ -95,7 +91,11 @@ function DependencyRows({ label, items }: { label: string; items: PluginDependen
           )}
           {(d.actions ?? []).length > 0 && (
             <span className="text-xs text-muted-foreground">
-              Used by: <span className="font-mono">{(d.actions ?? []).join(", ")}</span>
+              <Trans
+                i18nKey="plugins:dependencies.usedByActions"
+                values={{ actions: (d.actions ?? []).join(", ") }}
+                components={{ code: <span className="font-mono" /> }}
+              />
             </span>
           )}
         </li>
@@ -106,21 +106,24 @@ function DependencyRows({ label, items }: { label: string; items: PluginDependen
 
 /** The installed plugins that declare a dependency on this one. */
 export function DependentsSection({ dependents }: { dependents: PluginDependentInfo[] }) {
+  const { t } = useTranslation()
   if (dependents.length === 0) return null
   return (
     <section aria-labelledby="plugin-detail-dependents" className="grid gap-2">
       <h4 id="plugin-detail-dependents" className="text-sm font-medium">
-        Used by
+        {t("plugins:dependencies.usedBy")}
       </h4>
-      <ul className="grid divide-y border-y text-sm" aria-label="Used by">
+      <ul className="grid divide-y border-y text-sm" aria-label={t("plugins:dependencies.usedBy")}>
         {dependents.map((d) => (
           <li key={d.id} className="flex flex-wrap items-center gap-2 py-1.5">
             <span className="font-medium">{d.name}</span>
             <span className="font-mono text-xs text-muted-foreground">{d.id}</span>
             <span className="text-xs text-muted-foreground">
-              {d.optional ? "optional" : "requires"} {d.version}
+              {d.optional
+                ? t("plugins:dependencies.dependentOptional", { version: d.version })
+                : t("plugins:dependencies.dependentRequires", { version: d.version })}
             </span>
-            {!d.enabled && <Badge variant="outline">Off</Badge>}
+            {!d.enabled && <Badge variant="outline">{t("plugins:dependencies.off")}</Badge>}
           </li>
         ))}
       </ul>
@@ -128,14 +131,14 @@ export function DependentsSection({ dependents }: { dependents: PluginDependentI
   )
 }
 
-const ACTION_LABELS: Record<PluginPlanStep["action"], string> = {
-  install: "Install",
-  update: "Update",
-  enable: "Turn on",
-  keep: "Already installed",
-  builtin: "Built in",
-  enableBuiltin: "Built in, turned off",
-}
+const ACTION_LABELS = {
+  install: "plugins:plan.action.install",
+  update: "plugins:plan.action.update",
+  enable: "plugins:plan.action.enable",
+  keep: "plugins:plan.action.keep",
+  builtin: "plugins:plan.action.builtin",
+  enableBuiltin: "plugins:plan.action.enableBuiltin",
+} as const satisfies Record<PluginPlanStep["action"], TranslationKey>
 
 /** The key of one permission of one plugin in the dialog's checks. */
 const checkKey = (plugin: string, key: string) => `${plugin}\u0000${key}`
@@ -176,12 +179,13 @@ export function InstallPlanDialog({
   request: InstallPlanRequest
   onClose: () => void
 }) {
+  const { t } = useTranslation()
   const [plan, setPlan] = useState(request.plan)
   const [optional, setOptional] = useState<string[]>(request.optional)
   const [checked, setChecked] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const [planning, setPlanning] = useState(false)
-  const [error, setError] = useState<PluginErrorText | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const required = plan.steps.flatMap((s) => pending(s).map((p) => checkKey(s.id, p.key)))
   const missing = required.filter((k) => !checked.has(k)).length
@@ -211,7 +215,7 @@ export function InstallPlanDialog({
         setPlanning(false)
       },
       (e: unknown) => {
-        setError(pluginErrorText(e))
+        setError(pluginErrorSentence(e))
         setPlanning(false)
       },
     )
@@ -228,212 +232,209 @@ export function InstallPlanDialog({
     setBusy(true)
     setError(null)
     request.confirm(plan, optional, consent).then(onClose, (e: unknown) => {
-      setError(pluginErrorText(e))
+      setError(pluginErrorSentence(e))
       setBusy(false)
     })
   }
 
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open && !busy) onClose()
+    <ModalShell
+      presentation="dialog"
+      size="large"
+      icon={ShieldCheck}
+      title={t("permissions:review.title.install", { name: request.name, version: plan.version })}
+      description={
+        extra.length === 0
+          ? t("plugins:plan.intro")
+          : t("plugins:plan.introMore", { count: extra.length })
+      }
+      error={error}
+      status={
+        <span aria-live="polite">
+          {planning ? (
+            <span className="flex items-center gap-1">
+              <Loader2 className="size-3 animate-spin" aria-hidden /> {t("plugins:plan.planning")}
+            </span>
+          ) : required.length === 0 ? (
+            t("plugins:plan.noConsent")
+          ) : missing === 0 ? (
+            t("permissions:review.status.consented")
+          ) : (
+            t("permissions:review.status.missing", { missing, total: required.length })
+          )}
+        </span>
+      }
+      onClose={() => {
+        if (!busy) onClose()
+      }}
+      onSubmit={submit}
+      secondary={{ label: t("common:actions.cancel"), onClick: onClose, disabled: busy }}
+      primary={{
+        label:
+          extra.length > 0
+            ? t("plugins:plan.installCount", { number: extra.length + 1 })
+            : t("permissions:review.confirm.install"),
+        loadingLabel: t("plugins:plan.installing"),
+        loading: busy,
+        disabled: planning || missing > 0 || blockers.length > 0,
       }}
     >
-      <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>
-            Install {request.name} {plan.version}?
-          </DialogTitle>
-          <DialogDescription>
-            {extra.length === 0
-              ? "Review what this plugin may do. Check each permission to consent to it."
-              : `It needs ${String(extra.length)} more ${extra.length === 1 ? "plugin" : "plugins"}, installed first. Each plugin gets only the permissions you grant it here.`}
-          </DialogDescription>
-        </DialogHeader>
-        <p className="flex items-start gap-2 text-xs text-muted-foreground">
-          <ShieldAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
-          <span>
-            Every package was downloaded and checked against the signed registry; nothing is
-            installed before you confirm. If one step fails, what was done is undone.
-          </span>
-        </p>
+      <p className="flex items-start gap-2 text-xs text-muted-foreground">
+        <ShieldAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+        <span>{t("plugins:plan.checked")}</span>
+      </p>
 
-        <ol className="grid divide-y border-y" aria-label="Install plan">
-          {plan.steps.map((step) => (
-            <li key={step.id} className="grid gap-1.5 py-2.5">
-              <span className="flex flex-wrap items-center gap-2 text-sm">
-                <span className="font-medium">{step.name}</span>
-                <span className="font-mono text-xs text-muted-foreground">{step.id}</span>
-                <span className="text-xs text-muted-foreground">
-                  {step.fromVersion ? `${step.fromVersion} → ${step.version}` : step.version}
-                </span>
-                {step.builtin && <Badge variant="outline">Built in</Badge>}
-                {step.optional && <Badge variant="outline">Optional</Badge>}
-                <Badge variant={step.requested ? "secondary" : "outline"} className="ml-auto">
-                  {step.requested ? "Requested" : ACTION_LABELS[step.action]}
-                </Badge>
+      {required.length > 1 && (
+        <div className="flex justify-end">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy || planning || missing === 0}
+            onClick={() => {
+              setChecked(new Set([...checked, ...required]))
+            }}
+          >
+            {t("permissions:review.allowAll", { number: required.length })}
+          </Button>
+        </div>
+      )}
+      <ol className="grid divide-y border-y" aria-label={t("plugins:plan.label")}>
+        {plan.steps.map((step) => (
+          <li key={step.id} className="grid gap-1.5 py-2.5">
+            <span className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="font-medium">{step.name}</span>
+              <span className="font-mono text-xs text-muted-foreground">{step.id}</span>
+              <span className="text-xs text-muted-foreground">
+                {step.fromVersion ? `${step.fromVersion} → ${step.version}` : step.version}
               </span>
-              {step.publisher && (
-                <PublisherLine publisher={step.publisher.namespace} info={step.publisher} />
+              {step.builtin && <Badge variant="outline">{t("plugins:dependencies.builtIn")}</Badge>}
+              {step.optional && (
+                <Badge variant="outline">{t("plugins:dependencies.optionalBadge")}</Badge>
               )}
-              {(step.requiredBy ?? []).length > 0 && (
-                <span className="text-xs text-muted-foreground">
-                  Needed because {(step.requiredBy ?? []).join("; ")}
-                </span>
-              )}
-              {step.blocker && <span className="text-xs font-medium">{step.blocker}</span>}
-              {(step.permissions ?? []).length > 0 && (
-                <PermissionList
-                  label={`Permissions of ${step.name}`}
-                  grants={(step.permissions ?? []).map(grantOfInfo)}
-                  renderControl={(grant) => {
-                    const info = (step.permissions ?? []).find((p) => p.key === grant.key)
-                    if (info?.status === "granted") {
-                      return (
-                        <Badge variant="secondary">
-                          <Check aria-hidden /> Already granted
-                        </Badge>
-                      )
-                    }
-                    const key = checkKey(step.id, grant.key)
-                    const id = `plan-consent-${step.id}-${grant.key}`
+              <Badge variant={step.requested ? "secondary" : "outline"} className="ml-auto">
+                {step.requested ? t("plugins:plan.requested") : t(ACTION_LABELS[step.action])}
+              </Badge>
+            </span>
+            {step.publisher && (
+              <PublisherLine publisher={step.publisher.namespace} info={step.publisher} />
+            )}
+            {(step.requiredBy ?? []).length > 0 && (
+              <span className="text-xs text-muted-foreground">
+                {t("plugins:plan.neededBecause", { reasons: (step.requiredBy ?? []).join("; ") })}
+              </span>
+            )}
+            {step.blocker && <span className="text-xs font-medium">{step.blocker}</span>}
+            {(step.permissions ?? []).length > 0 && (
+              <PermissionList
+                label={t("marketplace:installed.permissionsOf", { name: step.name })}
+                grants={(step.permissions ?? []).map(grantOfInfo)}
+                renderControl={(grant) => {
+                  const info = (step.permissions ?? []).find((p) => p.key === grant.key)
+                  if (info?.status === "granted") {
                     return (
-                      <div className="flex shrink-0 items-center gap-2">
-                        <Checkbox
-                          id={id}
-                          checked={checked.has(key)}
-                          disabled={busy || planning}
-                          aria-label={`Allow ${step.name}: ${grant.title}`}
-                          onCheckedChange={(value) => {
-                            toggle(key, value === true)
-                          }}
-                        />
-                        <label htmlFor={id} className="text-xs">
-                          Allow
-                        </label>
-                      </div>
+                      <Badge variant="secondary">
+                        <Check aria-hidden /> {t("permissions:review.alreadyGranted")}
+                      </Badge>
                     )
+                  }
+                  const key = checkKey(step.id, grant.key)
+                  const id = `plan-consent-${step.id}-${grant.key}`
+                  return (
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Checkbox
+                        id={id}
+                        checked={checked.has(key)}
+                        disabled={busy || planning}
+                        aria-label={t("plugins:plan.allowNamed", {
+                          name: step.name,
+                          title: grant.title,
+                        })}
+                        onCheckedChange={(value) => {
+                          toggle(key, value === true)
+                        }}
+                      />
+                      <label htmlFor={id} className="text-xs">
+                        {t("permissions:review.allow")}
+                      </label>
+                    </div>
+                  )
+                }}
+              />
+            )}
+          </li>
+        ))}
+      </ol>
+
+      {(plan.optional ?? []).length > 0 || optional.length > 0 ? (
+        <section className="grid gap-1.5" aria-labelledby="plan-optional">
+          <h4 id="plan-optional" className="text-xs font-medium text-muted-foreground uppercase">
+            {t("plugins:dependencies.optional")}
+          </h4>
+          <ul className="grid gap-1.5" aria-label={t("plugins:dependencies.optional")}>
+            {[
+              ...optional.map((id) => ({ id, selected: true, info: undefined })),
+              ...(plan.optional ?? []).map((o) => ({
+                id: o.dependency.id,
+                selected: false,
+                info: o.dependency,
+              })),
+            ].map(({ id, selected, info }) => (
+              <li key={id} className="flex items-start gap-2 text-sm">
+                <Checkbox
+                  id={`plan-optional-${id}`}
+                  checked={selected}
+                  disabled={busy || planning}
+                  onCheckedChange={(value) => {
+                    choose(id, value === true)
                   }}
                 />
-              )}
-            </li>
-          ))}
-        </ol>
-
-        {(plan.optional ?? []).length > 0 || optional.length > 0 ? (
-          <section className="grid gap-1.5" aria-labelledby="plan-optional">
-            <h4 id="plan-optional" className="text-xs font-medium text-muted-foreground uppercase">
-              Optional integrations
-            </h4>
-            <ul className="grid gap-1.5" aria-label="Optional integrations">
-              {[
-                ...optional.map((id) => ({ id, selected: true, info: undefined })),
-                ...(plan.optional ?? []).map((o) => ({
-                  id: o.dependency.id,
-                  selected: false,
-                  info: o.dependency,
-                })),
-              ].map(({ id, selected, info }) => (
-                <li key={id} className="flex items-start gap-2 text-sm">
-                  <Checkbox
-                    id={`plan-optional-${id}`}
-                    checked={selected}
-                    disabled={busy || planning}
-                    onCheckedChange={(value) => {
-                      choose(id, value === true)
-                    }}
-                  />
-                  <label htmlFor={`plan-optional-${id}`} className="grid gap-0.5">
-                    <span>
-                      Also install{" "}
-                      <span className="font-medium">
-                        {info?.name ?? plan.steps.find((s) => s.id === id)?.name ?? id}
-                      </span>{" "}
-                      <span className="font-mono text-xs text-muted-foreground">{id}</span>
+                <label htmlFor={`plan-optional-${id}`} className="grid gap-0.5">
+                  <span>
+                    <Trans
+                      i18nKey="plugins:plan.alsoInstall"
+                      values={{
+                        name: info?.name ?? plan.steps.find((s) => s.id === id)?.name ?? id,
+                        id,
+                      }}
+                      components={{
+                        name: <span className="font-medium" />,
+                        id: <span className="font-mono text-xs text-muted-foreground" />,
+                      }}
+                    />
+                  </span>
+                  {info?.justification && (
+                    <span className="text-xs text-muted-foreground">{info.justification}</span>
+                  )}
+                  {info && (info.actions ?? []).length > 0 && (
+                    <span className="text-xs text-muted-foreground">
+                      <Trans
+                        i18nKey="plugins:plan.withoutIt"
+                        values={{ actions: (info.actions ?? []).join(", ") }}
+                        components={{ code: <span className="font-mono" /> }}
+                      />
                     </span>
-                    {info?.justification && (
-                      <span className="text-xs text-muted-foreground">{info.justification}</span>
-                    )}
-                    {info && (info.actions ?? []).length > 0 && (
-                      <span className="text-xs text-muted-foreground">
-                        Without it these actions are unavailable:{" "}
-                        <span className="font-mono">{(info.actions ?? []).join(", ")}</span>
-                      </span>
-                    )}
-                  </label>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
+                  )}
+                </label>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
-        {blockers.length > 0 && (
-          <Notice title="This plan cannot be installed yet">
-            <ul className="grid gap-0.5">
-              {blockers.map((s) => (
-                <li key={s.id}>{s.blocker}</li>
-              ))}
-            </ul>
-          </Notice>
-        )}
-        {error && (
-          <Alert variant="destructive">
-            <AlertTitle className="line-clamp-none">{error.title}</AlertTitle>
-            <AlertDescription className="grid gap-1">
-              <p>{error.message}</p>
-              {error.hint && <p>{error.hint}</p>}
-            </AlertDescription>
-          </Alert>
-        )}
-        <DialogFooter className="items-center gap-2 sm:justify-between">
-          <p className="text-xs text-muted-foreground" aria-live="polite">
-            {planning ? (
-              <span className="flex items-center gap-1">
-                <Loader2 className="size-3 animate-spin" aria-hidden /> Planning again…
-              </span>
-            ) : required.length === 0 ? (
-              "No permission needs your consent."
-            ) : missing === 0 ? (
-              "You consented to every permission."
-            ) : (
-              `${String(missing)} of ${String(required.length)} permissions still need your consent.`
-            )}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {required.length > 1 && (
-              <Button
-                variant="outline"
-                disabled={busy || planning || missing === 0}
-                onClick={() => {
-                  setChecked(new Set([...checked, ...required]))
-                }}
-              >
-                Allow all {required.length}
-              </Button>
-            )}
-            <Button variant="ghost" disabled={busy} onClick={onClose}>
-              Cancel
-            </Button>
-            <Button
-              disabled={busy || planning || missing > 0 || blockers.length > 0}
-              onClick={submit}
-            >
-              {busy
-                ? "Installing…"
-                : extra.length > 0
-                  ? `Install ${String(extra.length + 1)}`
-                  : "Install"}
-            </Button>
-          </div>
-        </DialogFooter>
-        {root && !request.activate && (
-          <p className="text-xs text-muted-foreground">
-            Plugins cannot run on this computer: they are installed turned off.
-          </p>
-        )}
-      </DialogContent>
-    </Dialog>
+      {blockers.length > 0 && (
+        <Notice title={t("plugins:plan.blocked")}>
+          <ul className="grid gap-0.5">
+            {blockers.map((s) => (
+              <li key={s.id}>{s.blocker}</li>
+            ))}
+          </ul>
+        </Notice>
+      )}
+      {root && !request.activate && (
+        <p className="text-xs text-muted-foreground">{t("plugins:plan.installedOff")}</p>
+      )}
+    </ModalShell>
   )
 }
 
@@ -459,9 +460,9 @@ export function RemovalDialog({
   const { plan } = request
   const [orphans, setOrphans] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<PluginErrorText | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const { t } = useTranslation()
   const disables = plan.disables ?? []
-  const verb = plan.uninstall ? "Uninstall" : "Turn off"
   const names = new Map(
     [...(plan.requiredBy ?? []), ...(plan.usedBy ?? [])].map((d) => [d.id, d.name]),
   )
@@ -470,129 +471,116 @@ export function RemovalDialog({
     setBusy(true)
     setError(null)
     request.confirm(disables.length > 0, [...orphans]).then(onClose, (e: unknown) => {
-      setError(pluginErrorText(e))
+      setError(pluginErrorSentence(e))
       setBusy(false)
     })
   }
 
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open && !busy) onClose()
+    <ModalShell
+      presentation="dialog"
+      size="medium"
+      // Uninstalling deletes data; turning off does not.
+      icon={plan.uninstall ? TriangleAlert : undefined}
+      tone={plan.uninstall ? "destructive" : "default"}
+      title={
+        plan.uninstall
+          ? t("marketplace:uninstall.title", { name: request.name })
+          : t("plugins:removal.turnOffTitle", { name: request.name })
+      }
+      description={
+        disables.length > 0 ? t("plugins:removal.dependents") : t("plugins:removal.review")
+      }
+      error={error}
+      onClose={() => {
+        if (!busy) onClose()
+      }}
+      onSubmit={submit}
+      secondary={{ label: t("common:actions.cancel"), onClick: onClose, disabled: busy }}
+      primary={{
+        label: plan.uninstall
+          ? disables.length > 0
+            ? t("plugins:removal.uninstallCount", { number: disables.length + 1 })
+            : t("marketplace:uninstall.button")
+          : disables.length > 0
+            ? t("plugins:removal.turnOffCount", { number: disables.length + 1 })
+            : t("plugins:removal.turnOff"),
+        loadingLabel: t("common:status.working"),
+        loading: busy,
+        variant: plan.uninstall ? "destructive" : "default",
       }}
     >
-      <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle>
-            {verb} {request.name}?
-          </DialogTitle>
-          <DialogDescription>
-            {disables.length > 0
-              ? "Other plugins need it. They are turned off with it; nothing else is uninstalled unless you check it below."
-              : "Review what this changes."}
-          </DialogDescription>
-        </DialogHeader>
-        {disables.length > 0 && (
-          <section className="grid gap-1" aria-labelledby="removal-disables">
-            <h4
-              id="removal-disables"
-              className="text-xs font-medium text-muted-foreground uppercase"
-            >
-              Also turned off
-            </h4>
-            <ul className="grid divide-y border-y text-sm" aria-label="Also turned off">
-              {disables.map((id) => (
-                <li key={id} className="flex flex-wrap items-center gap-2 py-1.5">
-                  <span className="font-medium">{names.get(id) ?? id}</span>
-                  <span className="font-mono text-xs text-muted-foreground">{id}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-        {(plan.usedBy ?? []).length > 0 && (
-          <section className="grid gap-1" aria-labelledby="removal-used-by">
-            <h4
-              id="removal-used-by"
-              className="text-xs font-medium text-muted-foreground uppercase"
-            >
-              Actions that become unavailable
-            </h4>
-            <ul
-              className="grid divide-y border-y text-sm"
-              aria-label="Actions that become unavailable"
-            >
-              {(plan.usedBy ?? []).map((d) => (
-                <li key={d.id} className="grid gap-0.5 py-1.5">
-                  <span className="font-medium">{d.name}</span>
-                  <span className="font-mono text-xs text-muted-foreground">
-                    {(d.actions ?? []).join(", ") || "its optional integration"}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-        {(plan.orphans ?? []).length > 0 && (
-          <section className="grid gap-1" aria-labelledby="removal-orphans">
-            <h4
-              id="removal-orphans"
-              className="text-xs font-medium text-muted-foreground uppercase"
-            >
-              Installed only for it
-            </h4>
-            <ul className="grid gap-1.5" aria-label="Installed only for it">
-              {(plan.orphans ?? []).map((o) => (
-                <li key={o.id} className="flex items-center gap-2 text-sm">
-                  <Checkbox
-                    id={`removal-orphan-${o.id}`}
-                    checked={orphans.has(o.id)}
-                    disabled={busy}
-                    onCheckedChange={(value) => {
-                      setOrphans((previous) => {
-                        const next = new Set(previous)
-                        if (value === true) next.add(o.id)
-                        else next.delete(o.id)
-                        return next
-                      })
+      {disables.length > 0 && (
+        <section className="grid gap-1" aria-labelledby="removal-disables">
+          <h4 id="removal-disables" className="text-xs font-medium text-muted-foreground uppercase">
+            {t("plugins:removal.alsoOff")}
+          </h4>
+          <ul className="grid divide-y border-y text-sm" aria-label={t("plugins:removal.alsoOff")}>
+            {disables.map((id) => (
+              <li key={id} className="flex flex-wrap items-center gap-2 py-1.5">
+                <span className="font-medium">{names.get(id) ?? id}</span>
+                <span className="font-mono text-xs text-muted-foreground">{id}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {(plan.usedBy ?? []).length > 0 && (
+        <section className="grid gap-1" aria-labelledby="removal-used-by">
+          <h4 id="removal-used-by" className="text-xs font-medium text-muted-foreground uppercase">
+            {t("plugins:removal.unavailable")}
+          </h4>
+          <ul
+            className="grid divide-y border-y text-sm"
+            aria-label={t("plugins:removal.unavailable")}
+          >
+            {(plan.usedBy ?? []).map((d) => (
+              <li key={d.id} className="grid gap-0.5 py-1.5">
+                <span className="font-medium">{d.name}</span>
+                <span className="font-mono text-xs text-muted-foreground">
+                  {(d.actions ?? []).join(", ") || t("plugins:removal.optionalIntegration")}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {(plan.orphans ?? []).length > 0 && (
+        <section className="grid gap-1" aria-labelledby="removal-orphans">
+          <h4 id="removal-orphans" className="text-xs font-medium text-muted-foreground uppercase">
+            {t("plugins:removal.orphans")}
+          </h4>
+          <ul className="grid gap-1.5" aria-label={t("plugins:removal.orphans")}>
+            {(plan.orphans ?? []).map((o) => (
+              <li key={o.id} className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  id={`removal-orphan-${o.id}`}
+                  checked={orphans.has(o.id)}
+                  disabled={busy}
+                  onCheckedChange={(value) => {
+                    setOrphans((previous) => {
+                      const next = new Set(previous)
+                      if (value === true) next.add(o.id)
+                      else next.delete(o.id)
+                      return next
+                    })
+                  }}
+                />
+                <label htmlFor={`removal-orphan-${o.id}`}>
+                  <Trans
+                    i18nKey="plugins:removal.alsoUninstall"
+                    values={{ name: o.name, id: o.id }}
+                    components={{
+                      name: <span className="font-medium" />,
+                      id: <span className="font-mono text-xs text-muted-foreground" />,
                     }}
                   />
-                  <label htmlFor={`removal-orphan-${o.id}`}>
-                    Also uninstall <span className="font-medium">{o.name}</span>{" "}
-                    <span className="font-mono text-xs text-muted-foreground">{o.id}</span>
-                  </label>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-        {error && (
-          <Alert variant="destructive">
-            <AlertTitle className="line-clamp-none">{error.title}</AlertTitle>
-            <AlertDescription className="grid gap-1">
-              <p>{error.message}</p>
-              {error.hint && <p>{error.hint}</p>}
-            </AlertDescription>
-          </Alert>
-        )}
-        <DialogFooter className="gap-2">
-          <Button variant="ghost" disabled={busy} onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            variant={plan.uninstall ? "destructive" : "default"}
-            disabled={busy}
-            onClick={submit}
-          >
-            {busy
-              ? "Working…"
-              : disables.length > 0
-                ? `${verb} ${String(disables.length + 1)}`
-                : verb}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </ModalShell>
   )
 }

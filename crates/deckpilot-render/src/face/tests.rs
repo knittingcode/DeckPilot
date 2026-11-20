@@ -1,4 +1,11 @@
 use super::*;
+use deckpilot_core::{Accent, Color, FaceStyle};
+
+/// What a key without a background shows on a Stream Deck: the black
+/// display behind its transparent default.
+const BLACK: [u8; 3] = [0, 0, 0];
+/// The value line on a Stream Deck: white a fifth of the way to black.
+const MUTED: [u8; 3] = [204, 204, 204];
 
 fn lit(frame: &Frame, background: [u8; 3]) -> usize {
     (0..frame.height())
@@ -31,7 +38,7 @@ fn appearance() -> KeyAppearance {
 }
 
 /// Columns and rows that differ from the background, as a box.
-fn ink_box(frame: &Frame, background: [u8; 3]) -> Option<(u32, u32, u32, u32)> {
+pub(super) fn ink_box(frame: &Frame, background: [u8; 3]) -> Option<(u32, u32, u32, u32)> {
     let mut found: Option<(u32, u32, u32, u32)> = None;
     for y in 0..frame.height() {
         for x in 0..frame.width() {
@@ -69,7 +76,7 @@ fn text_is_drawn_within_bounds_for_any_size() {
         let frame = render(&face, w, h);
         assert_eq!((frame.width(), frame.height()), (w, h));
         if w >= 72 {
-            assert!(lit(&frame, background(FaceStyle::Action)) > 20);
+            assert!(lit(&frame, BLACK) > 20);
         }
     }
 }
@@ -79,7 +86,7 @@ fn text_is_drawn_within_bounds_for_any_size() {
 #[test]
 fn titles_are_anti_aliased_and_scale_with_the_key() {
     let face = KeyFace::new(FaceStyle::Action, "Mail");
-    let bg = background(FaceStyle::Action);
+    let bg = BLACK;
     let frame = render(&face, 72, 72);
     let shades: std::collections::BTreeSet<[u8; 3]> = (0..72)
         .flat_map(|y| (0..72).map(move |x| (x, y)))
@@ -153,7 +160,7 @@ fn long_titles_wrap_and_end_with_an_ellipsis() {
         72,
         72,
     );
-    let bg = background(FaceStyle::Action);
+    let bg = BLACK;
     let (_, top, _, bottom) = ink_box(&long, bg).unwrap();
     let (_, short_top, _, short_bottom) = ink_box(&short, bg).unwrap();
     // Several lines, all on the key, none touching its edges.
@@ -169,13 +176,13 @@ fn highlight_draws_a_border() {
     let frame = render(&face, 72, 72);
     assert_eq!(frame.pixel(0, 0), Some(ACCENT));
     assert_eq!(frame.pixel(71, 71), Some(ACCENT));
-    assert_eq!(frame.pixel(2, 36), Some(background(FaceStyle::Action)));
+    assert_eq!(frame.pixel(2, 36), Some(BLACK));
 }
 
 /// Icon first: the key's icon above the title, the value line under it.
 #[test]
 fn symbols_are_drawn_above_the_title_and_values_below_it() {
-    let bg = background(FaceStyle::Action);
+    let bg = BLACK;
     let plain = KeyFace::new(FaceStyle::Action, "CPU usage");
     let iconed = plain.clone().with_symbol(Some("cpu"));
     let frame = render(&iconed, 72, 72);
@@ -235,13 +242,14 @@ fn symbols_are_drawn_above_the_title_and_values_below_it() {
         &Request {
             face: &face,
             look: &look,
+            colors: key_colors(&face, &DefaultAppearance::BUILTIN),
             has_mark: true,
             over_icon: false,
         },
         72,
         72,
     );
-    let texts: Vec<&str> = placed.lines.iter().map(|line| line.0.as_str()).collect();
+    let texts: Vec<&str> = placed.lines.iter().map(|line| line.text.as_str()).collect();
     assert_eq!(texts.len(), 3, "{texts:?}");
     assert_eq!(&texts[1..], ["↓ 2.1 MB/s", "↑ 340 kB/s"]);
     let (_, mark_top, mark_side) = placed.mark.expect("the icon stays");
@@ -253,13 +261,14 @@ fn symbols_are_drawn_above_the_title_and_values_below_it() {
         &Request {
             face: &memory,
             look: &look,
+            colors: key_colors(&memory, &DefaultAppearance::BUILTIN),
             has_mark: false,
             over_icon: false,
         },
         72,
         72,
     );
-    assert_eq!(placed.lines.last().unwrap().0, "12.4/32 GiB");
+    assert_eq!(placed.lines.last().unwrap().text, "12.4/32 GiB");
     // Without a title, the icon is larger and centred.
     let bare = iconed.clone().with_appearance(Some(&KeyAppearance {
         show_title: Some(false),
@@ -282,7 +291,7 @@ fn geometry_of_every_model_keeps_marks_and_text_on_the_key() {
         .with_detail("12.4 / 32 GiB")
         .with_indicator(Indicator::Warning)
         .with_progress(Some(39));
-    let bg = background(FaceStyle::Action);
+    let bg = BLACK;
     // Mini 80, MK.2 72, XL 96, Plus 120, the Plus touch strip's zones 200
     // x 100, Neo's info screen 248 x 58.
     for (w, h) in [
@@ -305,7 +314,7 @@ fn geometry_of_every_model_keeps_marks_and_text_on_the_key() {
 /// size, and never over what the user chose for the key.
 #[test]
 fn accent_glyph_badge_and_series_are_drawn_and_the_users_look_wins() {
-    use deckpilot_core::{Accent, Color, Glyph};
+    use deckpilot_core::Glyph;
     let plain = KeyFace::new(FaceStyle::Action, "Focus");
     let base = render(&plain, 96, 96);
 
@@ -316,7 +325,7 @@ fn accent_glyph_badge_and_series_are_drawn_and_the_users_look_wins() {
     let green = marks::accent_color(Accent::Green);
     assert_eq!(frame.pixel(1, 50), Some(green));
     assert_eq!(count(&frame, WHITE), count(&base, WHITE));
-    assert_eq!(count(&frame, background(FaceStyle::Action)), 0);
+    assert_eq!(count(&frame, BLACK), 0);
 
     // A glyph is drawn in the upper part and moves the title down.
     let mut with_glyph = plain.clone();
@@ -349,7 +358,7 @@ fn accent_glyph_badge_and_series_are_drawn_and_the_users_look_wins() {
     let mut charted = plain.clone();
     charted.series = Some(vec![10, 80, 30, 100, 0]);
     let frame = render(&charted, 96, 96);
-    let line = marks::lighten(background(FaceStyle::Action), 35);
+    let line = marks::lighten(BLACK, 35);
     assert!(count(&frame, line) > 60);
     assert_eq!(count(&frame, WHITE), count(&base, WHITE));
 
@@ -358,7 +367,7 @@ fn accent_glyph_badge_and_series_are_drawn_and_the_users_look_wins() {
     let mut users = with_glyph.clone();
     users.accent = Some(Accent::Red);
     users.appearance = Some(KeyAppearance {
-        background: Some(Color([1, 2, 3])),
+        background: Some(Color([1, 2, 3]).into()),
         text_color: Some(Color([250, 250, 0])),
         ..KeyAppearance::default()
     });
@@ -373,7 +382,7 @@ fn accent_glyph_badge_and_series_are_drawn_and_the_users_look_wins() {
     let mut iconed = with_glyph.clone();
     iconed.appearance = Some(KeyAppearance {
         icon: Some(deckpilot_core::IconRef {
-            id,
+            id: id.into(),
             fit: deckpilot_core::IconFit::Fill,
         }),
         ..KeyAppearance::default()
@@ -413,8 +422,12 @@ fn accent_glyph_badge_and_series_are_drawn_and_the_users_look_wins() {
     let mut cache = FrameCache::new(4);
     let icons = Icons::default();
     assert_ne!(
-        cache.frame(&accented, 72, 72, &icons).rgb(),
-        cache.frame(&plain, 72, 72, &icons).rgb()
+        cache
+            .frame(&accented, 72, 72, &icons, &DefaultAppearance::BUILTIN)
+            .rgb(),
+        cache
+            .frame(&plain, 72, 72, &icons, &DefaultAppearance::BUILTIN)
+            .rgb()
     );
     assert_eq!(cache.rendered(), 2);
 }
@@ -442,15 +455,20 @@ fn state_marks_are_drawn() {
         assert!(marked(&face) > 4, "{indicator:?}");
         let frame = render(&face, 72, 72);
         let color = indicator_color(indicator);
+        // The thin loading ring is anti-aliased all round: within a few
+        // levels of its colour.
+        let close = |pixel: Option<[u8; 3]>| {
+            pixel.is_some_and(|p| p.iter().zip(color).all(|(a, b)| a.abs_diff(b) <= 4))
+        };
         assert!(
-            (0..72u32).any(|x| (0..20u32).any(|y| frame.pixel(x, y) == Some(color))),
+            (0..72u32).any(|x| (0..20u32).any(|y| close(frame.pixel(x, y)))),
             "{indicator:?}"
         );
     }
     // Loading is a ring: its centre is not filled.
     let ring = render(&plain.clone().with_indicator(Indicator::Loading), 72, 72);
     let dot = render(&plain.clone().with_indicator(Indicator::Unknown), 72, 72);
-    assert!(lit(&ring, background(FaceStyle::Action)) < lit(&dot, background(FaceStyle::Action)));
+    assert!(lit(&ring, BLACK) < lit(&dot, BLACK));
     // Progress fills the bottom edge in proportion.
     let half = render(&plain.clone().with_progress(Some(50)), 72, 72);
     assert_eq!(half.pixel(10, 71), Some(BLUE));
@@ -476,19 +494,28 @@ fn frames_are_cached_by_face_and_size() {
     let a = KeyFace::new(FaceStyle::Action, "A");
     let b = KeyFace::new(FaceStyle::Action, "B");
     let c = KeyFace::new(FaceStyle::Action, "C");
-    let first = cache.frame(&a, 72, 72, &none);
-    assert_eq!(cache.frame(&a, 72, 72, &none), first);
+    let first = cache.frame(&a, 72, 72, &none, &DefaultAppearance::BUILTIN);
+    assert_eq!(
+        cache.frame(&a, 72, 72, &none, &DefaultAppearance::BUILTIN),
+        first
+    );
     assert_eq!(cache.rendered(), 1);
-    cache.frame(&a, 96, 96, &none);
+    cache.frame(&a, 96, 96, &none, &DefaultAppearance::BUILTIN);
     assert_eq!(cache.rendered(), 2);
     // A different state is a different face.
-    cache.frame(&a.clone().with_indicator(Indicator::Ok), 72, 72, &none);
+    cache.frame(
+        &a.clone().with_indicator(Indicator::Ok),
+        72,
+        72,
+        &none,
+        &DefaultAppearance::BUILTIN,
+    );
     assert_eq!(cache.rendered(), 3);
-    cache.frame(&b, 72, 72, &none);
-    cache.frame(&c, 72, 72, &none);
+    cache.frame(&b, 72, 72, &none, &DefaultAppearance::BUILTIN);
+    cache.frame(&c, 72, 72, &none, &DefaultAppearance::BUILTIN);
     assert_eq!(cache.len(), 2);
     // `a` was dropped as the oldest.
-    cache.frame(&a, 72, 72, &none);
+    cache.frame(&a, 72, 72, &none, &DefaultAppearance::BUILTIN);
     assert_eq!(cache.rendered(), 6);
     cache.clear();
     assert!(cache.is_empty());
@@ -496,10 +523,9 @@ fn frames_are_cached_by_face_and_size() {
 
 #[test]
 fn appearance_sets_colours_size_and_position() {
-    use deckpilot_core::Color;
     let plain = KeyFace::new(FaceStyle::Action, "Go");
     let styled = plain.clone().with_appearance(Some(&KeyAppearance {
-        background: Some(Color([200, 0, 0])),
+        background: Some(Color([200, 0, 0]).into()),
         text_color: Some(Color([0, 255, 0])),
         ..appearance()
     }));
@@ -561,7 +587,7 @@ fn appearance_sets_colours_size_and_position() {
     );
     // Empty keys stay black whatever their appearance says.
     let empty = KeyFace::empty().with_appearance(Some(&KeyAppearance {
-        background: Some(Color([1, 2, 3])),
+        background: Some(Color([1, 2, 3]).into()),
         ..appearance()
     }));
     assert_eq!(render(&empty, 8, 8).pixel(0, 0), Some([0, 0, 0]));
@@ -579,7 +605,7 @@ fn icons_are_drawn_under_titles_and_state_marks() {
         .with_symbol(Some("cpu"))
         .with_appearance(Some(&KeyAppearance {
             icon: Some(IconRef {
-                id,
+                id: id.into(),
                 fit: IconFit::Fill,
             }),
             ..appearance()
@@ -604,7 +630,7 @@ fn icons_are_drawn_under_titles_and_state_marks() {
     // Without the decoded icon (e.g. missing), the key shows its own
     // icon instead, the fallback the app shows too.
     let missing = render(&face, 72, 72);
-    assert_eq!(missing.pixel(2, 20), Some(background(FaceStyle::Action)));
+    assert_eq!(missing.pixel(2, 20), Some(BLACK));
     assert!(rows_with(&missing, WHITE)[0] < 16);
 }
 
@@ -667,7 +693,7 @@ fn keys_drawn_at_display_size_are_sharper_than_scaled_up_device_images() {
     );
     // The same layout at both sizes: the ink covers the same share of the
     // key, within a pixel of the small one.
-    let bg = background(FaceStyle::Action);
+    let bg = BLACK;
     let (l, t, r, b) = ink_box(&native, bg).unwrap();
     let (dl, dt, dr, db) = ink_box(&display, bg).unwrap();
     for (small, large) in [(l, dl), (t, dt), (r, dr), (b, db)] {
@@ -684,7 +710,7 @@ fn keys_drawn_at_display_size_are_sharper_than_scaled_up_device_images() {
 fn icons_keep_their_proportions_at_every_size() {
     let titled = KeyFace::new(FaceStyle::Action, "Mute").with_symbol(Some("volume-2"));
     let alone = KeyFace::new(FaceStyle::Action, "").with_symbol(Some("volume-2"));
-    let bg = background(FaceStyle::Action);
+    let bg = BLACK;
     for side in [72_u32, 96, 120, 144, 216] {
         let key = side as f32;
         let (left, top, right, bottom) = ink_box(&render(&alone, side, side), bg).unwrap();
@@ -695,6 +721,7 @@ fn icons_keep_their_proportions_at_every_size() {
             &Request {
                 face: &titled,
                 look: &appearance(),
+                colors: key_colors(&titled, &DefaultAppearance::BUILTIN),
                 has_mark: true,
                 over_icon: false,
             },
@@ -710,4 +737,280 @@ fn icons_keep_their_proportions_at_every_size() {
         // Never on the title.
         assert!(top + mark_side < mark.block.unwrap().0, "{side}");
     }
+}
+
+/// A display that is not black, so a transparent key is told apart from
+/// a black one.
+fn blue_display() -> DefaultAppearance {
+    DefaultAppearance {
+        key_background: deckpilot_core::KeyBackground::Transparent,
+        text_color: Color([255, 224, 0]),
+        display_background: Color([0, 0, 90]),
+    }
+}
+
+#[test]
+fn every_kind_of_key_without_colours_gets_the_models_default() {
+    for style in [
+        FaceStyle::Empty,
+        FaceStyle::Action,
+        FaceStyle::Workflow,
+        FaceStyle::Folder,
+        FaceStyle::Back,
+        FaceStyle::Notice,
+    ] {
+        let face = KeyFace::new(style, "");
+        // Stream Deck: transparent on the black display, white text.
+        let colors = key_colors(&face, &DefaultAppearance::BUILTIN);
+        assert_eq!(colors.background, BLACK, "{style:?}");
+        assert_eq!(colors.text, [255, 255, 255], "{style:?}");
+        assert_eq!(render(&face, 16, 16).pixel(0, 0), Some(BLACK), "{style:?}");
+        // Another model: its own display shows through.
+        let blue = render_for(&face, 16, 16, &Icons::default(), &blue_display());
+        assert_eq!(blue.pixel(0, 0), Some([0, 0, 90]), "{style:?}");
+    }
+    // The folder's Back key too.
+    let back = KeyFace::new(FaceStyle::Back, "")
+        .with_symbol(Some(deckpilot_core::device_runtime::symbols::FOLDER_BACK));
+    let frame = render_for(&back, 72, 72, &Icons::default(), &blue_display());
+    assert_eq!(frame.pixel(0, 0), Some([0, 0, 90]));
+    assert!(
+        rows_with(&frame, [255, 224, 0]).len() > 10,
+        "drawn in the default text colour"
+    );
+}
+
+#[test]
+fn a_keys_own_colours_win_over_its_state_and_the_default() {
+    let plain = KeyFace::new(FaceStyle::Action, "Mute");
+    let look = |background| KeyFace {
+        appearance: Some(KeyAppearance {
+            background: Some(background),
+            ..KeyAppearance::default()
+        }),
+        ..plain.clone()
+    };
+    let defaults = blue_display();
+    let black = look(Color([0, 0, 0]).into());
+    let white = look(Color([255, 255, 255]).into());
+    let transparent = look(deckpilot_core::Background::TRANSPARENT);
+    // Explicit black and white are drawn as chosen, not as the default.
+    assert_eq!(key_colors(&black, &defaults).background, [0, 0, 0]);
+    assert_eq!(key_colors(&white, &defaults).background, [255, 255, 255]);
+    // Explicit transparent shows the display, even on a model whose
+    // default key background is a colour.
+    let opaque = DefaultAppearance {
+        key_background: Color([50, 50, 50]).into(),
+        ..defaults
+    };
+    assert_eq!(key_colors(&plain, &opaque).background, [50, 50, 50]);
+    assert_eq!(key_colors(&transparent, &opaque).background, [0, 0, 90]);
+    // A state's accent fills a key that sets no background, and gives way
+    // to one that does (transparent included).
+    let mut accented = plain.clone();
+    accented.accent = Some(Accent::Green);
+    assert_eq!(
+        key_colors(&accented, &defaults).background,
+        marks::accent_color(Accent::Green)
+    );
+    let mut chosen = transparent.clone();
+    chosen.accent = Some(Accent::Green);
+    assert_eq!(key_colors(&chosen, &defaults).background, [0, 0, 90]);
+    // Text: the key's own, else the model's.
+    let mut inked = plain.clone();
+    inked.appearance = Some(KeyAppearance {
+        text_color: Some(Color([1, 2, 3])),
+        ..KeyAppearance::default()
+    });
+    assert_eq!(key_colors(&inked, &defaults).text, [1, 2, 3]);
+    assert_eq!(key_colors(&inked, &defaults).value, [1, 2, 3]);
+    assert_eq!(key_colors(&plain, &defaults).text, [255, 224, 0]);
+    // The value line: softer than the title, the accent when highlighted.
+    assert_eq!(key_colors(&plain, &DefaultAppearance::BUILTIN).value, MUTED);
+    assert_eq!(
+        key_colors(&plain.clone().highlighted(true), &defaults).value,
+        ACCENT
+    );
+}
+
+#[test]
+fn frames_are_cached_per_model_defaults() {
+    let face = KeyFace::new(FaceStyle::Action, "A");
+    let mut cache = FrameCache::new(4);
+    let icons = Icons::default();
+    let builtin = cache.frame(&face, 8, 8, &icons, &DefaultAppearance::BUILTIN);
+    let blue = cache.frame(&face, 8, 8, &icons, &blue_display());
+    assert_eq!(builtin.pixel(0, 0), Some(BLACK));
+    assert_eq!(blue.pixel(0, 0), Some([0, 0, 90]));
+    assert_eq!(cache.rendered(), 2);
+}
+
+/// A face titled `title` with the icon `icon` and background `background`.
+fn with_assets(icon: Option<&str>, background: Option<&str>) -> KeyFace {
+    let mut face = KeyFace::new(FaceStyle::Action, "Go");
+    face.symbol = Some("cpu".into());
+    face.appearance = Some(KeyAppearance {
+        icon: icon.map(|id| deckpilot_core::IconRef {
+            id: deckpilot_core::AssetRef::parse(id).unwrap(),
+            fit: deckpilot_core::IconFit::Fit,
+        }),
+        background: background.map(|b| deckpilot_core::Background::parse(b).unwrap()),
+        ..KeyAppearance::default()
+    });
+    face
+}
+
+#[test]
+fn library_icons_are_drawn_from_the_font_in_the_text_colour() {
+    let icons = Icons::default();
+    let house = render_with(&with_assets(Some("deckpilot.house"), None), 72, 72, &icons);
+    let cpu = render_with(&with_assets(None, None), 72, 72, &icons);
+    assert_ne!(
+        house.rgb(),
+        cpu.rgb(),
+        "the library icon replaces the action's"
+    );
+    // Drawn like an action's icon named `house`: the same pixels.
+    let mut named = with_assets(None, None);
+    named.symbol = Some("house".into());
+    assert_eq!(house.rgb(), render_with(&named, 72, 72, &icons).rgb());
+    // On the key's background, nothing else filled (transparent around it).
+    assert_eq!(house.pixel(0, 0), Some(BLACK));
+    // An icon of a later version (not in this library) draws no icon of
+    // its own: the key looks as if it set none.
+    let later = render_with(
+        &with_assets(Some("deckpilot.not-yet-an-icon"), None),
+        72,
+        72,
+        &icons,
+    );
+    assert_eq!(later.rgb(), cpu.rgb());
+}
+
+fn plugin_assets() -> Icons {
+    let image = icons::tests::halves(32, 32);
+    Icons::default().with_library([
+        (
+            deckpilot_core::AssetId::parse("acme.tools.logo").unwrap(),
+            icons::LibraryAsset::Image(std::sync::Arc::new(image.clone())),
+        ),
+        (
+            deckpilot_core::AssetId::parse("acme.tools.photo").unwrap(),
+            icons::LibraryAsset::Image(std::sync::Arc::new(image)),
+        ),
+        (
+            deckpilot_core::AssetId::parse("acme.tools.dusk").unwrap(),
+            icons::LibraryAsset::Gradient(deckpilot_core::Gradient {
+                colors: vec![Color([0, 200, 0]), Color([0, 0, 200])],
+                angle: 180,
+            }),
+        ),
+    ])
+}
+
+#[test]
+fn background_assets_are_rasterised_over_the_default() {
+    let assets = plugin_assets();
+    // A built-in gradient: top and bottom differ, no pixel is the default.
+    let ocean = render_with(
+        &with_assets(None, Some("asset:deckpilot.gradient-ocean")),
+        72,
+        72,
+        &assets,
+    );
+    assert_ne!(ocean.pixel(0, 0), ocean.pixel(71, 71));
+    assert_ne!(ocean.pixel(0, 0), Some(BLACK));
+    // A plugin's gradient, top green, bottom blue.
+    let dusk = render_with(
+        &with_assets(None, Some("asset:acme.tools.dusk")),
+        72,
+        72,
+        &assets,
+    );
+    assert!(dusk.pixel(36, 0).unwrap()[1] > 180);
+    assert!(dusk.pixel(36, 71).unwrap()[2] > 180);
+    // A plugin's image covers the key (cropped): red left, blue right.
+    let photo = render_with(
+        &with_assets(None, Some("asset:acme.tools.photo")),
+        72,
+        72,
+        &assets,
+    );
+    assert_eq!(photo.pixel(2, 2), Some([255, 0, 0]));
+    assert_eq!(photo.pixel(69, 2), Some([0, 0, 255]));
+    // The same as the Background Library's tile shows.
+    let tile = background_preview(
+        Some(&deckpilot_core::Background::parse("asset:acme.tools.dusk").unwrap()),
+        72,
+        72,
+        &assets,
+        &DefaultAppearance::BUILTIN,
+    );
+    assert_eq!(tile.pixel(36, 0), dusk.pixel(36, 0));
+}
+
+#[test]
+fn unavailable_plugin_assets_fall_back_and_come_back() {
+    let face = with_assets(Some("acme.tools.logo"), Some("asset:acme.tools.dusk"));
+    let reference = face.appearance.clone();
+    // The plugin is disabled or uninstalled: its assets are not here. The
+    // key shows the device's default background and no icon of its own.
+    let missing = render_with(&face, 72, 72, &Icons::default());
+    assert_eq!(
+        missing.rgb(),
+        render(&with_assets(None, None), 72, 72).rgb()
+    );
+    assert_eq!(missing.pixel(0, 0), Some(BLACK));
+    // The reference is untouched (nothing is rewritten).
+    assert_eq!(face.appearance, reference);
+    // The plugin is back: the same face draws its assets again.
+    let back = render_with(&face, 72, 72, &plugin_assets());
+    assert_ne!(back.rgb(), missing.rgb());
+    assert_eq!(back.pixel(2, 2), Some([255, 0, 0]), "the icon is drawn");
+    let gradient_only = with_assets(None, Some("asset:acme.tools.dusk"));
+    let gradient = render_with(&gradient_only, 72, 72, &plugin_assets());
+    assert!(
+        gradient.pixel(36, 0).unwrap()[1] > 150,
+        "the gradient is drawn"
+    );
+    assert!(plugin_assets().has(&deckpilot_core::AssetRef::parse("acme.tools.logo").unwrap()));
+    assert!(!Icons::default().has(&deckpilot_core::AssetRef::parse("acme.tools.logo").unwrap()));
+}
+
+#[test]
+fn inherit_transparent_black_white_custom_and_assets_stay_distinct() {
+    let defaults = DefaultAppearance {
+        key_background: Color([50, 50, 50]).into(),
+        ..blue_display()
+    };
+    let fill = |background: Option<&str>| {
+        let face = with_assets(None, background);
+        render_for(&face, 72, 72, &plugin_assets(), &defaults)
+            .pixel(0, 0)
+            .unwrap()
+    };
+    let inherit = fill(None);
+    let transparent = fill(Some("transparent"));
+    let black = fill(Some("#000000"));
+    let white = fill(Some("#ffffff"));
+    let yellow = fill(Some("#ffd400"));
+    let gradient = fill(Some("asset:deckpilot.gradient-sunset"));
+    assert_eq!(inherit, [50, 50, 50]);
+    assert_eq!(transparent, [0, 0, 90]);
+    assert_eq!(black, [0, 0, 0]);
+    assert_eq!(white, [255, 255, 255]);
+    assert_eq!(yellow, [255, 212, 0]);
+    let all = [inherit, transparent, black, white, yellow, gradient];
+    for (i, a) in all.iter().enumerate() {
+        for b in &all[i + 1..] {
+            assert_ne!(a, b);
+        }
+    }
+    // An asset background is the key's own choice: it beats the accent.
+    let mut accented = with_assets(None, Some("asset:deckpilot.gradient-sunset"));
+    accented.accent = Some(Accent::Red);
+    assert_eq!(
+        count(&render(&accented, 72, 72), marks::accent_color(Accent::Red)),
+        0
+    );
 }

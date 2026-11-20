@@ -81,8 +81,13 @@ each device with the backend that discovered it.
 
 ### Model registry (`deckpilot-device`, `ModelCatalog`)
 
-Static data per model: id, vendor, name, capabilities, and the
-**verification status per platform** with evidence date and note. Model ids
+Static data per model: id, vendor, name, capabilities, the
+**verification status per platform** with evidence date and note, and
+optionally the colours of keys that set none (`defaultAppearance`: key
+background, which may be `transparent`, text colour and display background;
+[data-model.md](data-model.md#key-appearance)). Models without them, such
+as one from an older driver, use the built-in defaults, which are the
+Stream Deck's: transparent keys on a black display, white text. Model ids
 never change; stored layouts refer to them.
 
 ### Verification levels

@@ -2,7 +2,8 @@ import { Fingerprint, KeyRound, ShieldAlert } from "lucide-react"
 import { type ReactNode, useCallback, useState } from "react"
 
 import { ModalShell } from "@/components/modal-shell"
-import { PasswordField } from "@/components/password-field"
+import { CredentialDialog } from "@/components/dialogs/credential-dialog"
+import { type TranslationKey, useTranslation } from "@/i18n"
 import { api, isAuthenticationRequired } from "@/lib/api"
 import { failureMessage } from "@/lib/failure"
 import { AuthenticationCancelled, type Sensitive, SensitiveContext } from "@/lib/sensitive"
@@ -57,30 +58,33 @@ export function SensitiveOperations({
   )
 }
 
-const COPY: Record<Verification, { title: string; text: string; action: string }> = {
+const COPY = {
   password: {
-    title: "Enter your password",
-    text: "Your DeckPilot password confirms this change.",
-    action: "Confirm",
+    title: "security:authenticate.password.title",
+    text: "security:authenticate.password.text",
+    action: "security:authenticate.password.action",
   },
   touchId: {
-    title: "Confirm it's you",
-    text: "Use Touch ID or your Mac's login password.",
-    action: "Continue with Touch ID",
+    title: "security:authenticate.touchId.title",
+    text: "security:authenticate.touchId.text",
+    action: "security:authenticate.touchId.action",
   },
   devicePassword: {
-    title: "Confirm it's you",
-    text: "Your computer asks for your login password.",
-    action: "Continue",
+    title: "security:authenticate.devicePassword.title",
+    text: "security:authenticate.devicePassword.text",
+    action: "security:authenticate.devicePassword.action",
   },
   confirmationOnly: {
-    title: "Confirm this change",
-    text: "This computer offers no system authentication, so DeckPilot can only ask you to confirm. Set a DeckPilot password in Settings if others use this computer.",
-    action: "Confirm",
+    title: "security:authenticate.confirmationOnly.title",
+    text: "security:authenticate.confirmationOnly.text",
+    action: "security:authenticate.confirmationOnly.action",
   },
-}
+} as const satisfies Record<Verification, Record<"title" | "text" | "action", TranslationKey>>
 
-/** Asks for the authentication of one sensitive operation. */
+/**
+ * Asks for the authentication of one sensitive operation: the password
+ * (the shared credential template) or the system check.
+ */
 export function AuthenticateDialog({
   verification,
   purpose,
@@ -92,63 +96,75 @@ export function AuthenticateDialog({
   onDone: () => void
   onCancel: () => void
 }) {
-  const [password, setPassword] = useState("")
+  const { t } = useTranslation()
+  const copy = COPY[verification]
+  if (verification === "password") {
+    return (
+      <CredentialDialog
+        icon={KeyRound}
+        title={t(copy.title)}
+        description={t("security:authenticate.purpose", { purpose })}
+        submitLabel={t(copy.action)}
+        fieldId="authenticate-password"
+        submit={(password) => api.authenticate(password)}
+        onDone={onDone}
+        onCancel={onCancel}
+      />
+    )
+  }
+  return (
+    <SystemAuthentication
+      verification={verification}
+      purpose={purpose}
+      onDone={onDone}
+      onCancel={onCancel}
+    />
+  )
+}
+
+/** Touch ID, the login password in the system prompt, or a confirmation. */
+function SystemAuthentication({
+  verification,
+  purpose,
+  onDone,
+  onCancel,
+}: {
+  verification: Exclude<Verification, "password">
+  purpose: string
+  onDone: () => void
+  onCancel: () => void
+}) {
+  const { t } = useTranslation()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const copy = COPY[verification]
-  const needsPassword = verification === "password"
   const submit = () => {
-    if (needsPassword && !password) return
     setBusy(true)
     setError(null)
     api
-      .authenticate(needsPassword ? password : null)
+      .authenticate(null)
       .then(onDone, (e: unknown) => {
-        setError(
-          failureMessage(
-            "You were not verified",
-            e,
-            needsPassword ? "Check the password and try again" : "Try again",
-          ),
-        )
-        setPassword("")
+        setError(failureMessage(t("errors:security.notVerified"), e, t("errors:next.tryAgain")))
       })
       .finally(() => {
         setBusy(false)
       })
   }
-  const icon =
-    verification === "touchId" ? Fingerprint : verification === "password" ? KeyRound : ShieldAlert
   return (
     <ModalShell
       presentation="dialog"
       size="compact"
-      icon={icon}
-      title={copy.title}
-      description={`Authenticate to ${purpose}.`}
+      density="compact"
+      icon={verification === "touchId" ? Fingerprint : ShieldAlert}
+      title={t(copy.title)}
+      description={t("security:authenticate.purpose", { purpose })}
       error={error}
       onClose={onCancel}
       onSubmit={submit}
-      secondary={{ label: "Cancel", onClick: onCancel }}
-      primary={{
-        label: copy.action,
-        loadingLabel: "Waiting…",
-        loading: busy,
-        disabled: needsPassword && !password,
-      }}
+      secondary={{ label: t("common:actions.cancel"), onClick: onCancel, disabled: busy }}
+      primary={{ label: t(copy.action), loadingLabel: t("common:status.waiting"), loading: busy }}
     >
-      <p className="text-sm text-muted-foreground">{copy.text}</p>
-      {needsPassword && (
-        <PasswordField
-          id="authenticate-password"
-          label="Password"
-          value={password}
-          onChange={setPassword}
-          autoComplete="current-password"
-          autoFocus
-          invalid={Boolean(error)}
-        />
-      )}
+      <p className="text-sm text-muted-foreground">{t(copy.text)}</p>
     </ModalShell>
   )
 }

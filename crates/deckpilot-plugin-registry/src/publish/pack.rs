@@ -41,6 +41,7 @@ pub fn package(plugin_dir: &Path, module: &Path, first_party: bool) -> Result<Bu
     for file in manifest.referenced_files() {
         // The path rules first: a path such as `assets/../../x` must be
         // refused before anything outside the plugin directory is read.
+        let file: &str = &file;
         check_entry_path(file).map_err(|e| PublishError(e.to_string()))?;
         add(&mut builder, file, read(&plugin_dir.join(file))?)?;
     }

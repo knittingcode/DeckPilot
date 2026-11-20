@@ -1,5 +1,6 @@
 import { Lock } from "lucide-react"
 
+import { Trans, useTranslation } from "@/i18n"
 import type { CatalogEntry, ParameterKind, ReferenceStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { ownerLabel, ownerOf } from "@/lib/variable-catalog"
@@ -41,6 +42,7 @@ export function VariableResults({
   browser: BrowserState
   onPick: (entry: CatalogEntry) => void
 }) {
+  const { t } = useTranslation()
   const { catalog, groups, ordered, active } = browser
   const previews = useReferencePreviews(
     scope,
@@ -48,13 +50,18 @@ export function VariableResults({
   )
   return (
     <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-0 divide-x">
-      <div className="max-h-72 min-h-24 overflow-y-auto p-1">
+      <div className="relative max-h-72 min-h-24 overflow-y-auto p-1">
         {catalog.unavailable && (
           <p className="px-2 py-1 text-xs text-muted-foreground" role="status">
-            Values are not available: {catalog.unavailable}
+            {t("editor:variables.unavailable", { reason: catalog.unavailable })}
           </p>
         )}
-        <div id={listId} role="listbox" aria-label="Variables" className="grid gap-1">
+        <div
+          id={listId}
+          role="listbox"
+          aria-label={t("editor:variables.list")}
+          className="grid gap-1"
+        >
           {groups.map((group) => {
             const headingId = `${listId}-${group.group}`
             return (
@@ -95,7 +102,10 @@ export function VariableResults({
                       <span className="flex items-center gap-1 font-medium">
                         {entry.label}
                         {entry.sensitive && (
-                          <Lock className="size-3 text-muted-foreground" aria-label="sensitive" />
+                          <Lock
+                            className="size-3 text-muted-foreground"
+                            aria-label={t("editor:variables.sensitiveMark")}
+                          />
                         )}
                         <span className="ml-auto font-normal text-muted-foreground">
                           {typeLabel(entry.valueType)}
@@ -113,18 +123,18 @@ export function VariableResults({
         </div>
         {!catalog.loading && ordered.length === 0 && (
           <p className="px-2 py-3 text-xs text-muted-foreground" role="status">
-            {kind ? "No variable fits this field." : "No variables match."}
+            {kind ? t("editor:variables.noneFits") : t("editor:variables.noMatches")}
           </p>
         )}
         {catalog.loading && ordered.length === 0 && (
-          <p className="px-2 py-3 text-xs text-muted-foreground">Loading variables…</p>
+          <p className="px-2 py-3 text-xs text-muted-foreground">{t("editor:variables.loading")}</p>
         )}
       </div>
-      <div className="max-h-72 overflow-y-auto p-2">
+      <div className="relative max-h-72 overflow-y-auto p-2">
         {active ? (
           <VariableInspector entry={active} scope={scope} previews={previews} />
         ) : (
-          <p className="text-xs text-muted-foreground">Choose a variable to see its value.</p>
+          <p className="text-xs text-muted-foreground">{t("editor:variables.chooseToSee")}</p>
         )}
       </div>
     </div>
@@ -154,13 +164,28 @@ export function PreviewValue({
   loading: boolean
   error?: string
 }) {
-  if (!live) return <span className="text-muted-foreground">Not available from this agent</span>
-  if (error) return <span className="text-destructive">Could not be resolved: {error}</span>
+  const { t } = useTranslation()
+  if (!live) {
+    return <span className="text-muted-foreground">{t("editor:variables.preview.notLive")}</span>
+  }
+  if (error) {
+    return (
+      <span className="text-destructive">
+        {t("editor:variables.preview.failed", { reason: error })}
+      </span>
+    )
+  }
   if (!status) {
-    return <span className="text-muted-foreground">{loading ? "Resolving…" : "Unknown"}</span>
+    return (
+      <span className="text-muted-foreground">
+        {loading ? t("editor:variables.resolving") : t("editor:variables.preview.unknown")}
+      </span>
+    )
   }
   if (sensitive || status.status === "redacted") {
-    return <span className="text-muted-foreground italic">Redacted (sensitive)</span>
+    return (
+      <span className="text-muted-foreground italic">{t("editor:variables.preview.redacted")}</span>
+    )
   }
   if (status.status === "resolved") {
     return <span className="font-mono break-all">{formatValue(status.value)}</span>
@@ -184,21 +209,22 @@ export function VariableInspector({
   scope: VariableScope
   previews: PreviewState
 }) {
+  const { t } = useTranslation()
   const status = previews.status(entry.reference)
   const source =
     status && (status.status === "resolved" || status.status === "redacted")
       ? describeSource(status.source)
       : null
   return (
-    <section aria-label="Variable details" className="grid gap-2 text-xs">
+    <section aria-label={t("editor:variables.details.label")} className="grid gap-2 text-xs">
       <div>
         <h3 className="text-sm font-medium">{entry.label}</h3>
         <code className="break-all text-muted-foreground">{formatReference(entry.reference)}</code>
       </div>
       {entry.description && <p>{entry.description}</p>}
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1">
-        <dt className="text-muted-foreground">Value</dt>
-        <dd aria-live="polite" aria-label="Current value">
+        <dt className="text-muted-foreground">{t("editor:variables.details.value")}</dt>
+        <dd aria-live="polite" aria-label={t("editor:variables.details.currentValue")}>
           <PreviewValue
             status={status}
             sensitive={entry.sensitive}
@@ -209,43 +235,57 @@ export function VariableInspector({
         </dd>
         {source && (
           <>
-            <dt className="text-muted-foreground">Source</dt>
+            <dt className="text-muted-foreground">{t("editor:variables.details.source")}</dt>
             <dd>{source}</dd>
           </>
         )}
-        <dt className="text-muted-foreground">Type</dt>
+        <dt className="text-muted-foreground">{t("editor:variables.details.type")}</dt>
         <dd>{typeLabel(entry.valueType)}</dd>
         {entry.scope && (
           <>
-            <dt className="text-muted-foreground">Scope</dt>
-            <dd>{SCOPE_LABEL[entry.scope]}</dd>
+            <dt className="text-muted-foreground">{t("editor:variables.details.scope")}</dt>
+            <dd>{t(SCOPE_LABEL[entry.scope])}</dd>
           </>
         )}
-        <dt className="text-muted-foreground">Owner</dt>
+        <dt className="text-muted-foreground">{t("editor:variables.details.owner")}</dt>
         <dd>{ownerLabel(ownerOf(entry))}</dd>
-        <dt className="text-muted-foreground">Access</dt>
-        <dd>{ownerOf(entry).kind === "user" && !entry.readOnly ? "Editable" : "Read-only"}</dd>
+        <dt className="text-muted-foreground">{t("editor:variables.details.access")}</dt>
+        <dd>
+          {ownerOf(entry).kind === "user" && !entry.readOnly
+            ? t("editor:variables.details.editable")
+            : t("editor:variables.details.readOnly")}
+        </dd>
         {entry.deprecated && (
           <>
-            <dt className="text-muted-foreground">Deprecated</dt>
+            <dt className="text-muted-foreground">{t("editor:variables.details.deprecated")}</dt>
             <dd>
-              Still works; use <code>{formatReference(entry.deprecated.canonical)}</code>
+              <Trans
+                i18nKey="editor:variables.details.stillWorks"
+                values={{ reference: formatReference(entry.deprecated.canonical) }}
+                components={{ reference: <code /> }}
+              />
             </dd>
           </>
         )}
-        <dt className="text-muted-foreground">Changes</dt>
-        <dd>{entry.dynamic ? "Dynamic: depends on the context" : "Static"}</dd>
-        <dt className="text-muted-foreground">Availability</dt>
-        <dd>{AVAILABILITY_LABEL[entry.availability]}</dd>
+        <dt className="text-muted-foreground">{t("editor:variables.details.changes")}</dt>
+        <dd>
+          {entry.dynamic
+            ? t("editor:variables.details.dynamic")
+            : t("editor:variables.details.static")}
+        </dd>
+        <dt className="text-muted-foreground">{t("editor:variables.details.availability")}</dt>
+        <dd>{t(AVAILABILITY_LABEL[entry.availability])}</dd>
         {entry.sensitive && (
           <>
-            <dt className="text-muted-foreground">Sensitive</dt>
-            <dd>Never shown, logged or exported</dd>
+            <dt className="text-muted-foreground">{t("editor:variables.details.sensitive")}</dt>
+            <dd>{t("editor:variables.details.neverShown")}</dd>
           </>
         )}
       </dl>
-      <p className="text-muted-foreground" aria-label="Resolution context">
-        Resolved for: {describeContext(scope.context, scope.names)}
+      <p className="text-muted-foreground" aria-label={t("editor:variables.details.context")}>
+        {t("editor:variables.details.resolvedFor", {
+          scope: describeContext(scope.context, scope.names),
+        })}
       </p>
     </section>
   )

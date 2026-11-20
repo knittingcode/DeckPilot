@@ -230,6 +230,8 @@ fn node(icon: &str, extra: Vec<OutputSpec>) -> NodeSpec {
 
 fn show_definition() -> ActionType {
     ActionType {
+        editor_navigation: None,
+        title: None,
         id: id(SHOW),
         name: "Show notification".into(),
         description: "Shows a notification with a title, text and severity. Text can include \
@@ -266,6 +268,8 @@ fn show_definition() -> ActionType {
 
 fn summary_definition() -> ActionType {
     ActionType {
+        editor_navigation: None,
+        title: None,
         id: id(WORKFLOW_SUMMARY),
         name: "Workflow summary".into(),
         description: "Shows how the workflow went so far: how many steps succeeded, failed or \

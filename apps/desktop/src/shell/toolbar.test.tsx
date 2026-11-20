@@ -187,9 +187,9 @@ describe("device options", () => {
 })
 
 describe("plugin entries", () => {
-  it("show the agent's icon for the theme as an image, else the app's own icon", async () => {
+  it("show the agent's icon for the dark appearance as an image, else the app's own icon", async () => {
     const client = createFakePluginClient({
-      navigationIcons: { "acme.weather/weather/light": ICON },
+      navigationIcons: { "acme.weather/weather/dark": ICON },
     })
     renderEnd([item("weather", "Weather"), item("radar", "Radar")], { client })
     const nav = screen.getByRole("navigation", { name: "Plugins" })
@@ -198,11 +198,11 @@ describe("plugin entries", () => {
         within(nav).getByRole("button", { name: "Weather" }).querySelector("img"),
       ).toHaveAttribute("src", ICON)
     })
-    expect(client.getNavigationIcon).toHaveBeenCalledWith("acme.weather", "weather", "light")
+    expect(client.getNavigationIcon).toHaveBeenCalledWith("acme.weather", "weather", "dark")
     // No icon for the radar: the fallback, never an empty image.
     const radar = within(nav).getByRole("button", { name: "Radar" })
     await waitFor(() => {
-      expect(client.getNavigationIcon).toHaveBeenCalledWith("acme.weather", "radar", "light")
+      expect(client.getNavigationIcon).toHaveBeenCalledWith("acme.weather", "radar", "dark")
     })
     expect(radar.querySelector("img")).toBeNull()
     expect(radar.querySelector("[data-slot='plugin-icon-fallback']")).not.toBeNull()

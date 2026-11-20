@@ -12,10 +12,13 @@
 
 mod actions;
 pub(crate) mod agent;
+pub(crate) mod assets;
 mod credentials;
 mod icons;
 pub(crate) mod key_states;
 mod layouts;
+pub(crate) mod live_preview;
+pub(crate) mod locale;
 mod logs;
 mod machine;
 mod modules;
@@ -27,6 +30,7 @@ pub(crate) mod security;
 mod shared_layouts;
 mod shared_variables;
 mod system;
+pub(crate) mod unsaved;
 mod variables;
 pub(crate) mod windows;
 mod work_session;
@@ -64,6 +68,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         windows::close_window,
         windows::show_main_window,
         windows::titlebar_double_click,
+        windows::window_controls_inset,
         windows::finish_security_prompt,
         agent::last_workflow_report,
         portability::export_configuration,
@@ -71,6 +76,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         portability::apply_import,
         portability::cancel_import,
         system::get_overview,
+        locale::system_locales,
+        locale::set_agent_locale,
         system::launch_info,
         logs::read_agent_log,
         system::list_action_types,
@@ -127,7 +134,14 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         layouts::delete_layout,
         layouts::activate_layout,
         layouts::preview_layout,
+        layouts::preview_marquee,
         key_states::watch_key_states,
+        live_preview::live_preview_begin,
+        live_preview::live_preview_update,
+        live_preview::live_preview_end,
+        unsaved::set_unsaved_edits,
+        unsaved::quit_app,
+        unsaved::close_main_window,
         layouts::page_tree,
         layouts::reorder_pages,
         layouts::move_page,
@@ -143,8 +157,10 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         shared_layouts::set_default_layout,
         shared_layouts::profile_layouts,
         icons::list_icons,
+        icons::title_fonts,
         icons::import_icon,
         icons::delete_icon,
+        assets::visual_library,
         agent::agent_status,
         agent::start_agent,
         agent::stop_agent,
@@ -155,6 +171,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         agent::set_autostart,
         agent::set_active_profile,
         agent::run_action,
+        agent::simulate_press,
         agent::run_workflow,
         agent::start_workflow,
         agent::cancel_execution,
@@ -183,6 +200,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         plugins::decline_plugin_update,
         plugins::rollback_plugin,
         plugins::uninstall_plugin,
+        plugins::restore_bundled_plugin,
         plugins::plan_plugin_install,
         plugins::install_plugin_plan,
         plugins::plan_plugin_removal,
@@ -201,6 +219,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         plugins::retry_module_migration,
         plugins::pick_plugin_package,
         plugins::watch_plugin_events,
+        plugins::plugin_dialogs_ready,
+        plugins::answer_plugin_dialog,
         crate::updates::update_state,
         crate::updates::check_for_updates,
         crate::updates::download_update,

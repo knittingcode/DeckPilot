@@ -1,0 +1,219 @@
+{
+  "menu": {
+    "choose": "Wybierz układ",
+    "placeholder": "Układ",
+    "selector": "Układ: {{layout}}",
+    "selectorDefault": "Układ: {{layout}}, domyślny",
+    "profileLayouts": "Układy tego profilu",
+    "noneForModel": "Nie ma jeszcze układów dla {{model}}",
+    "noneForDevice": "Nie ma jeszcze układów dla tego urządzenia",
+    "forModel": "Układy dla {{model}}",
+    "forDevice": "Układy dla tego urządzenia",
+    "defaultMark": "domyślny",
+    "sharedProfiles_one": "współdzielony · {{count}} profil",
+    "sharedProfiles_few": "współdzielony · {{count}} profile",
+    "sharedProfiles_many": "współdzielony · {{count}} profili",
+    "sharedProfiles_other": "współdzielony · {{count}} profilu",
+    "onDevice": "Wyświetlany na urządzeniu",
+    "otherLayouts": "Inne układy dla {{model}}",
+    "useLayout": "Użyj układu {{layout}} w tym profilu",
+    "unused": "Nieużywany przez żaden profil",
+    "usedBy": "Używany przez: {{profiles}}",
+    "use": "Użyj w tym profilu",
+    "otherModels": "Układy dla innych modeli",
+    "notForDevice": "Nie dla tego urządzenia",
+    "madeFor": "Utworzony dla {{model}}; wybierz to urządzenie, aby go edytować",
+    "anotherModel": "inny model",
+    "manageGroup": "Zarządzanie układami",
+    "new": "Nowy układ…",
+    "duplicate": "Duplikuj układ…",
+    "rename": "Zmień nazwę układu…",
+    "defaultHint": "Układ profilu dla {{model}}: wyświetlają go urządzenia tego modelu",
+    "isDefault": "Domyślny dla tego modelu",
+    "setDefault": "Ustaw jako domyślny",
+    "delete": "Usuń układ…",
+    "manage": "Zarządzaj układami…",
+    "toast": {
+      "assigned": "Układ {{layout}} jest używany w tym profilu",
+      "assignFailed": "Nie dodano układu „{{layout}}” do tego profilu",
+      "madeDefault": "Układ {{layout}} jest używany dla {{model}}",
+      "defaultFailed": "Nie ustawiono układu „{{layout}}” jako domyślnego"
+    }
+  },
+  "open": {
+    "title": "Użyć układu „{{layout}}” w profilu {{profile}}?",
+    "titleThisProfile": "Użyć układu „{{layout}}” w tym profilu?",
+    "description": "Żaden profil nie używa jeszcze tego układu. Zostanie dodany do układów profilu {{profile}} i otwarty w Edytorze urządzenia.",
+    "descriptionThisProfile": "Żaden profil nie używa jeszcze tego układu. Zostanie dodany do układów tego profilu i otwarty w Edytorze urządzenia.",
+    "confirm": "Użyj w profilu {{profile}}",
+    "confirmThisProfile": "Użyj w tym profilu",
+    "failed": "Nie dodano układu „{{layout}}” do profilu {{profile}}",
+    "failedThisProfile": "Nie dodano układu „{{layout}}” do tego profilu"
+  },
+  "profileLayouts": {
+    "title": "Układy",
+    "description": "Układy używane przez ten profil, w jego kolejności. Każde urządzenie wyświetla domyślny układ swojego modelu; klawisze Przełącz układ wyświetlają pozostałe. Inne profile mogą używać tych samych układów.",
+    "empty": "Do tego profilu nie przypisano żadnych układów.",
+    "listLabel": "Układy profilu",
+    "toast": {
+      "orderSaved": "Zapisano kolejność",
+      "assigned": "Przypisano układ {{layout}}",
+      "defaultChanged": "Zmieniono domyślny układ dla {{model}}",
+      "removed": "Usunięto układ z profilu; sam układ został zachowany"
+    },
+    "defaultFor": "Domyślny dla {{model}}",
+    "editsApply": "Zmiany dotyczą także: {{profiles}}",
+    "alsoIn": "Także w: {{profiles}}",
+    "makeDefault": "Ustaw jako domyślny dla {{model}}",
+    "moveUp": "Przenieś układ {{layout}} w górę",
+    "moveDown": "Przenieś układ {{layout}} w dół",
+    "open": "Otwórz układ {{layout}}",
+    "openTitle": "Otwórz w Edytorze urządzenia",
+    "removeLabel": "Usuń układ {{layout}} z profilu",
+    "remove": {
+      "title": "Usunąć układ „{{layout}}” z tego profilu?",
+      "description": "Sam układ wraz ze stronami i klawiszami zostanie zachowany i pozostanie dostępny dla innych profili oraz w Układach.",
+      "confirm": "Usuń"
+    },
+    "compatibility": {
+      "ownOnly": "Tylko własny model",
+      "fits": "pasuje: {{fits}}",
+      "misses": "nie pasuje: {{misses}}",
+      "fitsMisses": "pasuje: {{fits}}, nie pasuje: {{misses}}",
+      "unknown": "Inne modele nieznane",
+      "label": "Zgodność: {{lines}}"
+    },
+    "unavailable": {
+      "label_one": "{{count}} klawisz niedostępny",
+      "label_few": "{{count}} klawisze niedostępne",
+      "label_many": "{{count}} klawiszy niedostępnych",
+      "label_other": "{{count}} klawisza niedostępnego",
+      "detail_one": "{{count}} klawisz niedostępny w tym profilu: {{items}}",
+      "detail_few": "{{count}} klawisze niedostępne w tym profilu: {{items}}",
+      "detail_many": "{{count}} klawiszy niedostępnych w tym profilu: {{items}}",
+      "detail_other": "{{count}} klawisza niedostępnego w tym profilu: {{items}}",
+      "heading": "Nie można uruchomić w tym profilu:"
+    },
+    "assign": {
+      "button": "Przypisz układ",
+      "allAssigned": "Wszystkie układy są przypisane",
+      "notInProfile": "Układy spoza tego profilu",
+      "unknownModel": "{{model}}: nieznany model, nie można przypisać",
+      "fitsOf_one": "{{model}} · pasuje do {{fits}} z {{count}} innego modelu",
+      "fitsOf_few": "{{model}} · pasuje do {{fits}} z {{count}} innych modeli",
+      "fitsOf_many": "{{model}} · pasuje do {{fits}} z {{count}} innych modeli",
+      "fitsOf_other": "{{model}} · pasuje do {{fits}} z {{count}} innego modelu"
+    }
+  },
+  "page": {
+    "description": "Układy przechowywane raz i przypisywane do dowolnej liczby profili",
+    "new": "Nowy układ",
+    "search": "Szukaj",
+    "empty": {
+      "title": "Nie ma jeszcze układów",
+      "body": "Układ zawiera strony i klawisze urządzenia; można go przypisać do dowolnej liczby profili."
+    },
+    "searchPlaceholder": "Szukaj układów",
+    "noMatches": "Brak pasujących układów.",
+    "table": {
+      "name": "Nazwa",
+      "device": "Urządzenie",
+      "contents": "Strony / klawisze",
+      "usedBy": "Używany przez",
+      "compatibility": "Zgodność",
+      "actions": "Czynności"
+    },
+    "rename": {
+      "title": "Zmień nazwę układu",
+      "label": "Nazwa układu",
+      "confirm": "Zmień nazwę"
+    },
+    "duplicate": {
+      "title": "Duplikuj układ",
+      "description": "Niezależna kopia z własnymi stronami; jej klawisze uruchamiają te same akcje z Biblioteki akcji.",
+      "label": "Nazwa kopii",
+      "confirm": "Duplikuj",
+      "copyName": "{{layout}} — kopia"
+    },
+    "toast": {
+      "renamed": "Zmieniono nazwę układu",
+      "duplicated": "Zduplikowano układ",
+      "assigned": "Przypisano do profilu {{profile}}",
+      "unassigned": "Usunięto z profilu {{profile}}; układ został zachowany",
+      "deleted": "Usunięto układ",
+      "created": "Utworzono układ"
+    },
+    "contents": "{{pages}} · {{keys}}",
+    "pages_one": "{{count}} strona",
+    "pages_few": "{{count}} strony",
+    "pages_many": "{{count}} stron",
+    "pages_other": "{{count}} strony",
+    "keys_one": "{{count}} klawisz",
+    "keys_few": "{{count}} klawisze",
+    "keys_many": "{{count}} klawiszy",
+    "keys_other": "{{count}} klawisza",
+    "openLabel": "Otwórz układ {{layout}} w Edytorze urządzenia",
+    "unknownModel": "Model urządzenia tego układu jest nieznany",
+    "openTooltip": "Otwórz w Edytorze urządzenia",
+    "more": "Więcej czynności dla układu {{layout}}",
+    "menu": {
+      "rename": "Zmień nazwę…",
+      "duplicate": "Duplikuj…",
+      "delete": "Usuń…"
+    },
+    "notUsed": "Nieużywany",
+    "profilesUsing": "Profile używające układu {{layout}}",
+    "defaultOf": "Domyślny układ profilu {{profile}} dla {{model}}",
+    "assignTooltip": "Przypisz do profili",
+    "unknownModelAssign": "Model urządzenia tego układu jest nieznany, więc nie można go przypisać do kolejnych profili.",
+    "delete": {
+      "title": "Usunąć układ „{{layout}}”?",
+      "unused": "Żaden profil nie używa tego układu. Jego strony i klawisze zostaną usunięte.",
+      "usedBy_one": "Ten profil używa układu:",
+      "usedBy_few": "Te profile używają układu:",
+      "usedBy_many": "Te profile używają układu:",
+      "usedBy_other": "Te profile używają układu:",
+      "listLabel": "Profile używające układu",
+      "defaultEntry": "{{profile}} (układ domyślny)",
+      "fallback_one": "Profil przełączy się na pozostałe układy. Sam profil nie zostanie usunięty.",
+      "fallback_few": "Profile przełączą się na pozostałe układy. Same profile nie zostaną usunięte.",
+      "fallback_many": "Profile przełączą się na pozostałe układy. Same profile nie zostaną usunięte.",
+      "fallback_other": "Profile przełączą się na pozostałe układy. Same profile nie zostaną usunięte."
+    },
+    "create": {
+      "title": "Nowy układ",
+      "description": "Pusty układ dla jednego modelu urządzenia.",
+      "submit": "Utwórz",
+      "name": "Nazwa",
+      "model": "Model urządzenia",
+      "choose": "Wybierz",
+      "experimental": "(eksperymentalny)",
+      "profile": "Przypisz do profilu",
+      "noProfile": "Bez profilu (nieprzypisany)"
+    }
+  },
+  "management": {
+    "duplicateTitle": "Duplikuj „{{layout}}”",
+    "duplicateDescription": "Kopia zostanie dodana do tego profilu. Oryginał pozostanie bez zmian.",
+    "copyName": "{{layout}} (kopia)",
+    "duplicateFailed": "Nie zduplikowano „{{layout}}”",
+    "renameTitle": "Zmień nazwę „{{layout}}”",
+    "renameShared": "Układ jest współdzielony: każdy profil, który go używa, pokaże nową nazwę.",
+    "renameFailed": "Nie zmieniono nazwy „{{layout}}”",
+    "deleteShared": "Inne profile również używają tego układu, więc nie można go tutaj usunąć. Usuń go z tego profilu w Ustawieniach › Profile albo usuń go dla wszystkich profili na stronie Układy.",
+    "deleteOwn": "Układ i jego strony zostaną usunięte. Akcje i przepływy pracy pozostaną w bibliotece.",
+    "deleting": "Usuwanie…",
+    "deleteFailed": "Nie usunięto „{{layout}}”",
+    "deleteFailedHint": "Układ używany przez inne profile usuwa się na stronie Układy lub usuwa z tego profilu w Ustawieniach › Profile",
+    "newTitle": "Nowy układ dla {{model}}",
+    "newPlaceholder": "Układ {{model}}",
+    "createFailed": "Nie utworzono „{{layout}}”",
+    "generate": "Umieść akcje i przepływy pracy profilu na klawiszach"
+  },
+  "compatibility": {
+    "unknownModel": "Nieznany model",
+    "notInCatalog": "Tego modelu urządzenia nie ma w katalogu",
+    "line": "{{model}}: {{explanation}}",
+    "unknown": "nieznana"
+  }
+}

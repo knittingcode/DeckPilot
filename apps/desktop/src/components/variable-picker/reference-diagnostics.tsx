@@ -1,5 +1,6 @@
 import { CircleAlert, Info } from "lucide-react"
 
+import { Trans, useTranslation } from "@/i18n"
 import type { ParameterKind } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { describeContext, describeStatus, formatReference, formatValue } from "@/lib/variables"
@@ -26,6 +27,7 @@ export function ReferenceDiagnostics({
   /** Plain text that contains `{{`, which stays literal text. */
   literalBraces?: boolean
 }) {
+  const { t } = useTranslation()
   const scope = useVariableScope()
   const previews = useReferencePreviews(
     scope ?? FALLBACK,
@@ -34,12 +36,10 @@ export function ReferenceDiagnostics({
   )
   if (!scope || (references.length === 0 && !unclosed && !literalBraces)) return null
   return (
-    <ul className="grid gap-0.5 text-xs" aria-label="References">
-      {unclosed && <Line tone="error">A reference is not closed: add “{"}}"}” after it.</Line>}
+    <ul className="grid gap-0.5 text-xs" aria-label={t("editor:variables.references")}>
+      {unclosed && <Line tone="error">{t("editor:variables.unclosed", { braces: "}}" })}</Line>}
       {literalBraces && (
-        <Line tone="info">
-          “{"{{"}” in plain text stays as typed. Insert a variable to use a reference.
-        </Line>
+        <Line tone="info">{t("editor:variables.literalBraces", { braces: "{{" })}</Line>
       )}
       {references.map((reference) => {
         const status = previews.status(reference)
@@ -47,8 +47,11 @@ export function ReferenceDiagnostics({
         if (!scope.live) {
           return (
             <Line key={reference} tone="error">
-              {label} cannot be resolved by this DeckPilot agent; update the agent or use a fixed
-              value.
+              <Trans
+                i18nKey="editor:variables.notLive"
+                values={{ reference: formatReference(reference) }}
+                components={{ reference: <code className="font-mono" /> }}
+              />
             </Line>
           )
         }
@@ -62,14 +65,21 @@ export function ReferenceDiagnostics({
         if (!status) {
           return (
             <Line key={reference} tone="info">
-              {label}: resolving…
+              {label}: {t("editor:variables.resolving")}
             </Line>
           )
         }
         if (status.status === "resolved") {
           return (
             <Line key={reference} tone="info">
-              {label} is now <span className="font-mono">{formatValue(status.value)}</span>
+              <Trans
+                i18nKey="editor:variables.isNow"
+                values={{ reference: formatReference(reference), value: formatValue(status.value) }}
+                components={{
+                  reference: <code className="font-mono" />,
+                  value: <span className="font-mono" />,
+                }}
+              />
             </Line>
           )
         }
@@ -83,7 +93,9 @@ export function ReferenceDiagnostics({
       })}
       {scope.live && references.length > 0 && (
         <li className="text-muted-foreground">
-          Values for {describeContext(scope.context, scope.names)}
+          {t("editor:variables.valuesFor", {
+            scope: describeContext(scope.context, scope.names),
+          })}
         </li>
       )}
     </ul>

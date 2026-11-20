@@ -4,6 +4,7 @@ import "@testing-library/jest-dom/vitest"
 import { cleanup, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { i18n } from "@/i18n"
 import type { ResourceCheck } from "@/lib/types"
 import { ProjectsPage } from "@/modules/projects/projects-page"
 import { api, resetApi } from "@/test/api-mock"
@@ -75,6 +76,18 @@ describe("Projects page", () => {
     expect(toast.success).toHaveBeenCalledWith("Project saved")
     expect(context.refresh).toHaveBeenCalled()
     expect(api.getProfile).toHaveBeenCalledTimes(2)
+  })
+
+  it("keeps the project dialog open with the reason when saving fails", async () => {
+    api.createProject.mockRejectedValue("the key API is taken")
+    const { titlebarAction, user } = await renderProjects()
+    titlebarAction("projects.new")
+    const dialog = await screen.findByRole("dialog", { name: "New project" })
+    await user.type(within(dialog).getByLabelText("Key"), "API{Enter}")
+    expect(
+      await within(dialog).findByText("The project was not saved: The key API is taken."),
+    ).toBeVisible()
+    expect(toast.success).not.toHaveBeenCalled()
   })
 
   it("refuses half-filled and repeated resource roles", async () => {
@@ -164,11 +177,11 @@ describe("Projects page", () => {
     await user.click(screen.getByRole("button", { name: "Delete CMR" }))
     const confirm = screen.getByRole("alertdialog", { name: "Delete CMR?" })
     await user.click(within(confirm).getByRole("button", { name: "Delete" }))
-    await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith("CMR was not deleted", {
-        description: "Project is used by a workflow.",
-      })
-    })
+    // The confirmation stays open and says why, inline.
+    expect(
+      await within(confirm).findByText("CMR was not deleted: Project is used by a workflow."),
+    ).toBeVisible()
+    expect(screen.getByRole("alertdialog", { name: "Delete CMR?" })).toBeInTheDocument()
   })
 
   it("has empty states for projects and machine resources", async () => {
@@ -178,5 +191,37 @@ describe("Projects page", () => {
     expect(await screen.findByText("No projects in this profile")).toBeInTheDocument()
     await user.click(screen.getByRole("tab", { name: "This machine" }))
     expect(await screen.findByText("No resources used or mapped yet")).toBeInTheDocument()
+  })
+})
+
+describe("Projects page in Polish", () => {
+  afterEach(async () => {
+    await i18n.changeLanguage("en")
+  })
+
+  it("shows its texts and counts in Polish", async () => {
+    await i18n.changeLanguage("pl")
+    const extra = ["ERP", "WEB", "APP"].map((key) => project(key))
+    api.getProfile.mockResolvedValue(
+      profileView({ projects: [shop, cmr, ...extra] }, { activeProjectId: shop.id }),
+    )
+    api.checkResources.mockResolvedValue(checks)
+    const { user } = renderWithApp(<ProjectsPage />)
+    expect(await screen.findByRole("tab", { name: "Projekty" })).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "Kolejność przełączania" })).toBeInTheDocument()
+    expect(screen.getByText(/^5 projektów w cyklu\./)).toBeInTheDocument()
+    const item = screen.getByText("Online Shop").closest("li") as HTMLElement
+    expect(within(item).getByText("Aktywny")).toBeInTheDocument()
+    expect(within(item).getByText("(Znaleziono)")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Edytuj SHOP" })).toBeInTheDocument()
+    await user.click(screen.getByRole("tab", { name: "Ten komputer" }))
+    expect(await screen.findByText("Zasoby na tym komputerze")).toBeInTheDocument()
+    cleanup()
+
+    api.getProfile.mockResolvedValue(
+      profileView({ projects: [shop, cmr] }, { activeProjectId: shop.id }),
+    )
+    renderWithApp(<ProjectsPage />)
+    expect(await screen.findByText(/^2 projekty w cyklu\./)).toBeInTheDocument()
   })
 })

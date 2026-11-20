@@ -20,6 +20,7 @@ import {
 import { createElement } from "react"
 
 import { ActionIcon } from "@/components/action-icon"
+import { type TranslationKey, useTranslation } from "@/i18n"
 import type { GraphIssue, GraphPort, NodeProgress, NodeReport } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -67,12 +68,22 @@ function NodeIcon({ data }: { data: NodeViewData }) {
   return createElement(FLOW_ICONS[data.type], { className: "size-4", "aria-hidden": true })
 }
 
+const STATUS_LABEL: Record<NodeReport["status"], TranslationKey> = {
+  succeeded: "workflows:node.run.succeeded",
+  failed: "workflows:node.run.failed",
+  skipped: "workflows:node.run.skipped",
+  cancelled: "workflows:node.run.cancelled",
+}
+
 function RunBadge({ run }: { run: NodeRun }) {
+  const { t } = useTranslation()
   if (run.state === "running") {
     return (
       <span className="flex items-center gap-1 text-xs text-primary">
         <Loader2 className="size-3.5 animate-spin" aria-hidden />
-        {run.attempt && run.attempt > 1 ? `Attempt ${run.attempt}` : "Running"}
+        {run.attempt && run.attempt > 1
+          ? t("workflows:node.run.attempt", { attempt: run.attempt })
+          : t("workflows:node.run.running")}
         {run.progress?.message ? ` · ${run.progress.message}` : ""}
       </span>
     )
@@ -87,9 +98,9 @@ function RunBadge({ run }: { run: NodeRun }) {
   return (
     <span className="flex items-center gap-1 text-xs text-muted-foreground">
       {icon}
-      <span className="capitalize">{report.status}</span>
+      <span>{t(STATUS_LABEL[report.status])}</span>
       {report.status !== "skipped" && report.status !== "cancelled" && (
-        <span>· {formatMs(report.durationMs)}</span>
+        <span>· {formatMs(report.durationMs, t)}</span>
       )}
     </span>
   )
@@ -97,6 +108,7 @@ function RunBadge({ run }: { run: NodeRun }) {
 
 /** A workflow node on the canvas: icon, title, summary, ports and problems. */
 export function NodeView({ data, selected }: NodeProps<FlowNode>) {
+  const { t } = useTranslation()
   const ports = outputPorts(data.type)
   const errors = data.issues.filter((i) => i.severity === "error")
   const warnings = data.issues.filter((i) => i.severity === "warning")
@@ -144,13 +156,13 @@ export function NodeView({ data, selected }: NodeProps<FlowNode>) {
         {errors.length > 0 ? (
           <CircleAlert
             className="size-4 shrink-0 text-destructive"
-            aria-label={`${errors.length} problem${errors.length === 1 ? "" : "s"}`}
+            aria-label={t("workflows:node.problems", { count: errors.length })}
           />
         ) : (
           warnings.length > 0 && (
             <TriangleAlert
               className="size-4 shrink-0 text-amber-600 dark:text-amber-400"
-              aria-label="warning"
+              aria-label={t("workflows:node.warning")}
             />
           )
         )}
@@ -164,7 +176,7 @@ export function NodeView({ data, selected }: NodeProps<FlowNode>) {
         <div className="grid border-t px-3 py-1 text-right text-[0.6875rem] text-muted-foreground">
           {ports.map((port) => (
             <span key={port} className="leading-5">
-              {PORT_LABEL[port]}
+              {t(PORT_LABEL[port])}
             </span>
           ))}
         </div>
@@ -181,7 +193,7 @@ export function NodeView({ data, selected }: NodeProps<FlowNode>) {
               ? { top: "auto", bottom: `${(ports.length - 1 - index) * 20 + 6}px` }
               : undefined
           }
-          aria-label={PORT_LABEL[port]}
+          aria-label={t(PORT_LABEL[port])}
         />
       ))}
     </div>

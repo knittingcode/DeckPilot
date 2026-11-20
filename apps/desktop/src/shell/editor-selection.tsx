@@ -11,8 +11,9 @@ import {
   type DirtyFlag,
   type EditorSelection,
   EditorSelectionContext,
-  UNSAVED_WARNING,
+  unsavedWarning,
 } from "./editor-selection-context"
+import { reportUnsaved } from "./unsaved-guards"
 
 const MODEL_KEY = "deckpilot.editor.model"
 
@@ -47,7 +48,7 @@ export function EditorSelectionProvider({
 
   const guard = useCallback(() => {
     if (!dirtyRef.current) return true
-    toast.warning(UNSAVED_WARNING)
+    toast.warning(unsavedWarning())
     return false
   }, [dirtyRef])
 
@@ -102,6 +103,8 @@ export function EditorSelectionProvider({
 
   const setDirty = useCallback(
     (value: boolean) => {
+      // Quitting the app asks while there are unsaved edits.
+      if (dirtyRef.current !== value) reportUnsaved(value)
       dirtyRef.current = value
     },
     [dirtyRef],

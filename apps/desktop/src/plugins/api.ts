@@ -6,6 +6,8 @@
 
 import { createContext, useContext } from "react"
 
+import { type TranslationKey, i18n } from "@/i18n"
+
 import type {
   ActionParamValue,
   AvailablePlugins,
@@ -64,6 +66,12 @@ export interface PluginClient {
    * unless `keep` keeps settings and/or credentials for a later install.
    */
   uninstallPlugin(id: string, keep?: PluginRetention): Promise<void>
+  /**
+   * `restoreBundledPlugin` (protocol 15, agent feature `restoreBundled`):
+   * installs again, from DeckPilot's own bundle, a bundled plugin the user
+   * removed, or reinstalls one whose installed copy is broken.
+   */
+  restoreBundledPlugin(id: string): Promise<PluginDetails>
   /**
    * `planPluginInstall` (agent feature `dependencies`): resolves and
    * verifies what installing `id` takes, with the optional integrations
@@ -196,77 +204,84 @@ export type PluginErrorReason =
   | "requiredBy"
   | "dependency"
   | "planChanged"
+  | "notBundled"
+  | "notPinned"
   | "failed"
 
 /** What each reason means, as a headline; the agent's message has the details. */
-const TITLES: Partial<Record<string, string>> = {
-  agentNotRunning: "The agent is not running",
-  agentTooOld: "The running agent is too old",
-  communication: "DeckPilot could not talk to the agent",
-  noDialog: "No file dialog is available",
-  pluginsUnavailable: "Plugins are not available in the agent",
-  platformUnsupported: "Plugins cannot run on this platform",
-  locked: "DeckPilot is locked",
-  notInstalled: "The plugin is not installed",
-  unknownPlugin: "The registry does not offer this plugin or version",
-  storeUnavailable: "The plugin database cannot be opened",
-  alreadyInstalled: "The plugin is already installed",
-  consentRequired: "Consent is missing",
-  unknownPermission: "The plugin's permissions changed",
-  registryUnavailable: "The registry is not available",
-  revoked: "The version was withdrawn",
-  incompatible: "Not compatible with this DeckPilot",
-  invalidPackage: "The package was refused",
-  unsupportedRuntime: "Unsupported kind of plugin",
-  invalidState: "Not possible in the plugin's current state",
-  notEnabled: "The plugin is not enabled",
-  hostFailed: "The plugin host failed",
-  broken: "The plugin's files were modified",
-  busy: "The plugin is busy",
-  invalidParameters: "Invalid parameters",
-  invalidData: "The values do not fit what the plugin declares",
-  unknownMigration: "No such module migration",
-  answerTooLarge: "The agent's answer is too large",
-  requiredBy: "Other plugins need this plugin",
-  dependency: "Its dependencies cannot be installed",
-  planChanged: "The install plan changed",
-  failed: "The request failed",
+const TITLES: Partial<Record<string, TranslationKey>> = {
+  agentNotRunning: "plugins:errors.title.agentNotRunning",
+  agentTooOld: "plugins:errors.title.agentTooOld",
+  communication: "plugins:errors.title.communication",
+  noDialog: "plugins:errors.title.noDialog",
+  pluginsUnavailable: "plugins:errors.title.pluginsUnavailable",
+  platformUnsupported: "plugins:errors.title.platformUnsupported",
+  locked: "plugins:errors.title.locked",
+  notInstalled: "plugins:errors.title.notInstalled",
+  unknownPlugin: "plugins:errors.title.unknownPlugin",
+  storeUnavailable: "plugins:errors.title.storeUnavailable",
+  alreadyInstalled: "plugins:errors.title.alreadyInstalled",
+  consentRequired: "plugins:errors.title.consentRequired",
+  unknownPermission: "plugins:errors.title.unknownPermission",
+  registryUnavailable: "plugins:errors.title.registryUnavailable",
+  revoked: "plugins:errors.title.revoked",
+  incompatible: "plugins:errors.title.incompatible",
+  invalidPackage: "plugins:errors.title.invalidPackage",
+  unsupportedRuntime: "plugins:errors.title.unsupportedRuntime",
+  invalidState: "plugins:errors.title.invalidState",
+  notEnabled: "plugins:errors.title.notEnabled",
+  hostFailed: "plugins:errors.title.hostFailed",
+  broken: "plugins:errors.title.broken",
+  busy: "plugins:errors.title.busy",
+  invalidParameters: "plugins:errors.title.invalidParameters",
+  invalidData: "plugins:errors.title.invalidData",
+  unknownMigration: "plugins:errors.title.unknownMigration",
+  answerTooLarge: "plugins:errors.title.answerTooLarge",
+  requiredBy: "plugins:errors.title.requiredBy",
+  dependency: "plugins:errors.title.dependency",
+  planChanged: "plugins:errors.title.planChanged",
+  notBundled: "plugins:errors.title.notBundled",
+  notPinned: "plugins:errors.title.notPinned",
+  failed: "plugins:errors.title.failed",
 }
 
 /** The headline of a refusal's reason; unknown reasons get a generic one. */
 export function reasonTitle(reason: string): string {
-  return TITLES[reason] ?? "The request failed"
+  return i18n.t(TITLES[reason] ?? "plugins:errors.title.failed")
 }
 
-const HINTS: Partial<Record<string, string>> = {
-  agentNotRunning: "Start the agent in Settings › Background Agent, then try again.",
-  agentTooOld:
-    "Restart the agent in Settings › Background Agent so that the agent of this release runs.",
-  pluginsUnavailable:
-    "Plugins need an agent built with the `plugins` feature and not started with --disable-plugins.",
-  platformUnsupported:
-    "Plugins can be installed and inspected here, but only run where the plugin sandbox is verified: macOS, Linux and Windows.",
-  locked: "Unlock DeckPilot, then try again.",
-  storeUnavailable:
-    "The plugin database cannot be opened with the current key (e.g. after a password change while the agent was locked).",
-  consentRequired: "Consent to every permission the plugin declares.",
-  unknownPermission: "Reload the plugin; its permissions changed.",
-  registryUnavailable: "Check the registry the agent uses, then try again.",
-  revoked: "The registry withdrew this version; choose another one or uninstall it.",
-  incompatible: "This DeckPilot cannot run it; update DeckPilot or choose another version.",
-  invalidPackage: "Only package files whose bytes the verified registry pins can be installed.",
-  unsupportedRuntime: "Only WebAssembly plugins (ABI 1) can be installed.",
-  invalidState: "Reload the list; the plugin changed in the meantime.",
-  notEnabled: "Enable the plugin first.",
-  hostFailed: "The plugin host failed or is backing off after crashes; try again later.",
-  broken: "Its installed files no longer match their record; roll back or uninstall it.",
-  alreadyInstalled: "Update it instead.",
-  busy: "Wait for its running actions to finish, then try again.",
-  requiredBy: "Disable the plugins that need it with it, or first.",
-  dependency: "The plugin needs plugins or versions that cannot be installed here.",
-  planChanged: "Review the new plan and confirm it again.",
-  answerTooLarge:
-    "Part of it does not fit one message to the app, even in parts (for instance a plugin's very large settings); ask the plugin's publisher to shorten its manifest.",
+const HINTS: Partial<Record<string, TranslationKey>> = {
+  agentNotRunning: "plugins:errors.hint.agentNotRunning",
+  agentTooOld: "plugins:errors.hint.agentTooOld",
+  pluginsUnavailable: "plugins:errors.hint.pluginsUnavailable",
+  platformUnsupported: "plugins:errors.hint.platformUnsupported",
+  locked: "plugins:errors.hint.locked",
+  storeUnavailable: "plugins:errors.hint.storeUnavailable",
+  consentRequired: "plugins:errors.hint.consentRequired",
+  unknownPermission: "plugins:errors.hint.unknownPermission",
+  registryUnavailable: "plugins:errors.hint.registryUnavailable",
+  revoked: "plugins:errors.hint.revoked",
+  incompatible: "plugins:errors.hint.incompatible",
+  invalidPackage: "plugins:errors.hint.invalidPackage",
+  unsupportedRuntime: "plugins:errors.hint.unsupportedRuntime",
+  invalidState: "plugins:errors.hint.invalidState",
+  notEnabled: "plugins:errors.hint.notEnabled",
+  hostFailed: "plugins:errors.hint.hostFailed",
+  broken: "plugins:errors.hint.broken",
+  alreadyInstalled: "plugins:errors.hint.alreadyInstalled",
+  busy: "plugins:errors.hint.busy",
+  requiredBy: "plugins:errors.hint.requiredBy",
+  dependency: "plugins:errors.hint.dependency",
+  planChanged: "plugins:errors.hint.planChanged",
+  notBundled: "plugins:errors.hint.notBundled",
+  notPinned: "plugins:errors.hint.notPinned",
+  answerTooLarge: "plugins:errors.hint.answerTooLarge",
+}
+
+/** What the user can do about a refusal's reason, in the window's language. */
+function reasonHint(reason: string): string | undefined {
+  const key = HINTS[reason]
+  return key ? i18n.t(key) : undefined
 }
 
 /** A refusal of the marketplace, with what the user can do about it. */
@@ -274,7 +289,7 @@ export class PluginError extends Error {
   readonly reason: PluginErrorReason | (string & {})
   readonly hint: string | undefined
 
-  constructor(reason: string, message: string, hint: string | undefined = HINTS[reason]) {
+  constructor(reason: string, message: string, hint: string | undefined = reasonHint(reason)) {
     super(message)
     this.name = "PluginError"
     this.reason = reason
@@ -293,7 +308,7 @@ export function toPluginError(error: unknown): PluginError {
   }
   if (typeof error === "string") return new PluginError("failed", error)
   if (error instanceof Error) return new PluginError("failed", error.message)
-  return new PluginError("failed", "Unexpected error")
+  return new PluginError("failed", i18n.t("plugins:errors.unexpected"))
 }
 
 export interface PluginErrorText {

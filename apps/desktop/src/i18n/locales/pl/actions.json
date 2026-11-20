@@ -1,0 +1,275 @@
+{
+  "library": {
+    "description": "Skonfigurowane akcje, gotowe do użycia w przepływach pracy i na klawiszach",
+    "new": "Nowa akcja",
+    "search": "Szukaj",
+    "listTitle": "Akcje",
+    "searchPlaceholder": "Szukaj akcji",
+    "filterCategory": "Filtruj według kategorii",
+    "allCategories": "Wszystkie kategorie",
+    "otherCategory": "Inne",
+    "empty": "Nie ma jeszcze akcji",
+    "emptyPlugin": "Nie ma jeszcze akcji wtyczki {{plugin}}",
+    "emptyHint": "Tworzone akcje pojawiają się tutaj, gotowe do użycia w przepływach pracy i na klawiszach urządzenia.",
+    "noMatches": "Brak pasujących akcji.",
+    "moduleDisabled": "Jej moduł jest wyłączony",
+    "unavailable": "Niedostępna",
+    "usedTimes_one": "Użyta {{count}} raz",
+    "usedTimes_few": "Użyta {{count}} razy",
+    "usedTimes_many": "Użyta {{count}} razy",
+    "usedTimes_other": "Użyta {{count}} raza",
+    "step1": "Krok 1 z 2: wybierz, co robi akcja",
+    "step2": "Krok 2 z 2: nadaj jej nazwę i ustaw parametry",
+    "first": {
+      "title": "Utwórz pierwszą akcję",
+      "body": "Akcja to jedna czynność wykonywana przez DeckPilot, na przykład uruchomienie polecenia lub otwarcie adresu URL. Wybierz typ z modułów, nadaj akcji nazwę i ustaw jej parametry. Następnie umieść ją na klawiszu urządzenia lub w przepływie pracy.",
+      "create": "Utwórz akcję"
+    },
+    "noSelection": {
+      "title": "Nie wybrano akcji",
+      "body": "Wybierz akcję po lewej stronie lub utwórz nową."
+    }
+  },
+  "deck": {
+    "missingDeleted": "Brak (usunięto)",
+    "groupActions": "Akcje",
+    "groupWorkflows": "Przepływy pracy",
+    "groupWorkflowsMulti": "Przepływy pracy i multiakcje",
+    "unreadable": "Nieczytelne: {{line}}",
+    "states": {
+      "runs": "Uruchamiane w stanie {{number}}",
+      "titlePlaceholder": "Tytuł",
+      "title": "Tytuł stanu {{number}}",
+      "glyph": "Symbol stanu {{number}}",
+      "noGlyph": "Bez symbolu",
+      "moveUp": "Przenieś stan {{number}} w górę",
+      "moveDown": "Przenieś stan {{number}} w dół",
+      "remove": "Usuń stan {{number}}",
+      "add": "Dodaj stan",
+      "hint_one": "Każde naciśnięcie uruchamia bieżący stan i, gdy to się powiedzie, przechodzi do następnego; po ostatnim zaczyna od początku. Od {{min}} do {{count}} stanów.",
+      "hint_few": "Każde naciśnięcie uruchamia bieżący stan i, gdy to się powiedzie, przechodzi do następnego; po ostatnim zaczyna od początku. Od {{min}} do {{count}} stanów.",
+      "hint_many": "Każde naciśnięcie uruchamia bieżący stan i, gdy to się powiedzie, przechodzi do następnego; po ostatnim zaczyna od początku. Od {{min}} do {{count}} stanów.",
+      "hint_other": "Każde naciśnięcie uruchamia bieżący stan i, gdy to się powiedzie, przechodzi do następnego; po ostatnim zaczyna od początku. Od {{min}} do {{count}} stanów.",
+      "addAtLeastTwo": "Dodaj co najmniej dwa."
+    },
+    "profile": {
+      "none": "Brak profilu",
+      "deleted": "Usunięty profil",
+      "missing": "Ten profil już nie istnieje. Wybierz inny, w przeciwnym razie klawisz nie zadziała."
+    },
+    "candidates": {
+      "empty": "Dodaj elementy, spośród których klawisz losuje.",
+      "candidate": "Kandydat {{number}}",
+      "weight": "Waga kandydata {{number}}",
+      "remove": "Usuń kandydata {{number}}",
+      "add": "Dodaj kandydata",
+      "addPlaceholder": "Dodaj akcję lub przepływ pracy",
+      "hint": "Kandydat z wagą 3 jest wybierany trzy razy częściej niż kandydat z wagą 1."
+    },
+    "glyph": {
+      "check": "ptaszek",
+      "cross": "krzyżyk",
+      "play": "odtwarzanie",
+      "pause": "pauza",
+      "stop": "stop",
+      "timer": "minutnik",
+      "bell": "dzwonek",
+      "up": "w górę",
+      "down": "w dół",
+      "dot": "kropka",
+      "circle": "okrąg",
+      "square": "kwadrat",
+      "diamond": "romb",
+      "triangle": "trójkąt",
+      "star": "gwiazdka",
+      "heart": "serce"
+    }
+  },
+  "editor": {
+    "toast": {
+      "saved": "Zapisano akcję",
+      "created": "Utworzono akcję",
+      "duplicated": "Zduplikowano akcję",
+      "deleted": "Usunięto akcję"
+    },
+    "failure": {
+      "notSaved": "Nie zapisano akcji",
+      "notCreated": "Nie utworzono akcji",
+      "notDuplicated": "Nie zduplikowano akcji „{{name}}”",
+      "didNotRun": "Akcja „{{name}}” nie została uruchomiona",
+      "checkAgent": "Sprawdź, czy agent działa"
+    },
+    "copyName": "{{name}} (kopia)",
+    "unavailable": {
+      "title": "Niedostępna",
+      "pluginKept": "{{reason}}. Akcja zostaje zachowana; będzie można ją edytować i uruchamiać, gdy wtyczka znów będzie mogła działać (Ustawienia › Wtyczki).",
+      "pluginNew": "{{reason}}. Wybierz inny typ akcji.",
+      "moduleDisabled": "Moduł {{module}} jest wyłączony. Włącz go w Ustawieniach, aby edytować lub uruchamiać tę akcję; do tego czasu akcja zostaje zachowana.",
+      "noModule": "Żaden zainstalowany moduł nie dostarcza typu „{{type}}”. Akcja zostaje zachowana, ale nie może działać."
+    },
+    "unknownModule": "Nieznany moduł",
+    "theModule": "moduł",
+    "legacy": "Przestarzały typ: {{module}} przeniesiono do wtyczki {{plugin}}, która uruchamia go jako <target>{{target}}</target>. Twoja akcja nadal działa; nowe akcje używają typu wtyczki.",
+    "changeType": "Zmień typ",
+    "module": "Moduł",
+    "chooseModule": "Wybierz moduł",
+    "actionType": "Typ akcji",
+    "chooseType": "Wybierz typ",
+    "chooseModuleFirst": "Najpierw wybierz moduł",
+    "typeRequired": "Wybierz typ akcji.",
+    "name": "Nazwa",
+    "namePlaceholder": "Otwórz Terminal",
+    "nameRequired": "Wprowadź nazwę.",
+    "icon": "Ikona",
+    "keyLabel": "Etykieta klawisza",
+    "keyLabelPlaceholder": "Domyślnie nazwa",
+    "projectPlaceholders": "Użyj {{key}} lub {{name}}, aby wyświetlić aktywny projekt na klawiszu.",
+    "description": "Opis",
+    "optional": "Opcjonalnie",
+    "modifies": {
+      "title": "Ta akcja wprowadza zmiany",
+      "body": "Jej uruchomienie zmienia stan na tym komputerze lub gdzie indziej (na przykład polecenie, żądanie lub kontenery). Niektóre moduły zezwalają na to dopiero po włączeniu tej możliwości w ich ustawieniach na każdym komputerze."
+    },
+    "parameterRequired": "Pole „{{label}}” jest wymagane.",
+    "save": "Zapisz",
+    "create": "Utwórz akcję",
+    "duplicate": "Duplikuj",
+    "run": "Uruchom",
+    "runHint": "Działa w agencie dla aktywnego profilu",
+    "usedIn": "Używana w",
+    "deleteHint": "Aby usunąć akcję, wybierz dla każdego odwołania, czy ma używać innej akcji, czy zostać odpięte."
+  },
+  "references": {
+    "notUsed": "Nieużywana w żadnym przepływie pracy ani układzie.",
+    "label": "Odwołania",
+    "openLabel": "Otwórz: {{reference}}",
+    "open": "Otwórz",
+    "replaceWith": "Zastąp akcją „{{name}}”",
+    "unbind": "Odepnij",
+    "failure": {
+      "notReplaced": "Nie zastąpiono odwołań",
+      "notUnbound": "Nie odpięto odwołań",
+      "notDeleted": "Nie usunięto akcji",
+      "changesKept": "Wcześniej wprowadzone zmiany zostały zachowane; zamknij to okno, aby zobaczyć bieżące odwołania",
+      "nothingChanged": "Niczego nie zmieniono"
+    },
+    "clearedSettings_one": "Usunięto nadpisania parametrów i mapowania z {{count}} kroku lub węzła: zamiennik jest innym typem akcji.",
+    "clearedSettings_few": "Usunięto nadpisania parametrów i mapowania z {{count}} kroków lub węzłów: zamiennik jest innym typem akcji.",
+    "clearedSettings_many": "Usunięto nadpisania parametrów i mapowania z {{count}} kroków lub węzłów: zamiennik jest innym typem akcji.",
+    "clearedSettings_other": "Usunięto nadpisania parametrów i mapowania z {{count}} kroku lub węzła: zamiennik jest innym typem akcji.",
+    "delete": {
+      "title": "Usunąć „{{name}}”?",
+      "unused": "Akcja zostanie usunięta z tego profilu. Tej operacji nie można cofnąć.",
+      "used_one": "Akcja jest używana w {{count}} miejscu. Wybierz dla każdego, czy ma używać innej akcji, czy zostać odpięte; następnie akcja zostanie usunięta. Tej operacji nie można cofnąć.",
+      "used_few": "Akcja jest używana w {{count}} miejscach. Wybierz dla każdego, czy ma używać innej akcji, czy zostać odpięte; następnie akcja zostanie usunięta. Tej operacji nie można cofnąć.",
+      "used_many": "Akcja jest używana w {{count}} miejscach. Wybierz dla każdego, czy ma używać innej akcji, czy zostać odpięte; następnie akcja zostanie usunięta. Tej operacji nie można cofnąć.",
+      "used_other": "Akcja jest używana w {{count}} miejsca. Wybierz dla każdego, czy ma używać innej akcji, czy zostać odpięte; następnie akcja zostanie usunięta. Tej operacji nie można cofnąć.",
+      "applyAndDelete": "Zastosuj i usuń",
+      "deleting": "Usuwanie…"
+    },
+    "all": "Wszystkie odwołania",
+    "forAll": "Dla wszystkich odwołań",
+    "chooseForAll": "Wybierz dla wszystkich",
+    "toChange": "Odwołania do zmiany",
+    "openInEditorLabel": "Otwórz w edytorze przepływu pracy: {{reference}}",
+    "openInEditor": "Otwórz w edytorze przepływu pracy",
+    "changeFor": "Zmiana dla: {{reference}}",
+    "choose": "Wybierz",
+    "unbindHint": "Odpięcie pozostawia klawisz pusty lub usuwa krok z przepływu pracy. Węzła grafu nie można odpiąć: zastąp go albo otwórz edytor przepływu pracy i usuń go tam.",
+    "undecided_one": "{{count}} odwołanie wymaga wyboru.",
+    "undecided_few": "{{count}} odwołania wymagają wyboru.",
+    "undecided_many": "{{count}} odwołań wymaga wyboru.",
+    "undecided_other": "{{count}} odwołania wymaga wyboru.",
+    "triggers": "Wyzwalacze",
+    "triggersHint": "Wyzwalacze podążają za swoim przepływem pracy: po zmianie uruchamiają to, co uruchamia przepływ pracy."
+  },
+  "typeChooser": {
+    "none": {
+      "title": "Brak dostępnych typów akcji",
+      "body": "Typy akcji pochodzą z modułów. Włącz moduł, aby tworzyć akcje.",
+      "openSettings": "Otwórz ustawienia modułów"
+    },
+    "label": "Typy akcji",
+    "search": "Szukaj typów akcji",
+    "noMatches": "Brak pasujących typów.",
+    "plugin": "wtyczka",
+    "unavailable": "Niedostępna: {{reason}}"
+  },
+  "parameters": {
+    "useVariable": "Użyj zmiennej dla pola „{{label}}”",
+    "unsupported": "Nieobsługiwany typ parametru.",
+    "project": {
+      "none": "Ten profil nie ma jeszcze projektów. Dodaj projekt na stronie Projekty.",
+      "choose": "Wybierz projekt",
+      "current": "Bieżący projekt (domyślnie)",
+      "notInProfile": "Zapisany projekt nie należy do tego profilu. Wybierz jeden z jego projektów."
+    },
+    "resource": {
+      "source": "Źródło zasobu",
+      "projectRole": "Rola aktywnego projektu",
+      "fixed": "Stały klucz zasobu"
+    }
+  },
+  "fields": {
+    "item": "Element",
+    "name": "Nazwa",
+    "value": "Wartość",
+    "numbered": "{{label}} {{number}}",
+    "moveUp": "Przenieś w górę: {{label}} {{number}}",
+    "moveDown": "Przenieś w dół: {{label}} {{number}}",
+    "remove": "Usuń: {{label}} {{number}}",
+    "add": "Dodaj: {{label}}",
+    "list": {
+      "none": "Brak elementów ({{label}}).",
+      "label": "Lista: {{label}}",
+      "emptyLeftOut": "Puste elementy ({{label}}) są pomijane.",
+      "tooLong_one": "{{label}}: maksymalnie {{count}} znak.",
+      "tooLong_few": "{{label}}: maksymalnie {{count}} znaki.",
+      "tooLong_many": "{{label}}: maksymalnie {{count}} znaków.",
+      "tooLong_other": "{{label}}: maksymalnie {{count}} znaku.",
+      "tooMany_one": "Maksymalnie {{count}} element ({{label}}).",
+      "tooMany_few": "Maksymalnie {{count}} elementy ({{label}}).",
+      "tooMany_many": "Maksymalnie {{count}} elementów ({{label}}).",
+      "tooMany_other": "Maksymalnie {{count}} elementu ({{label}}).",
+      "passedAs": "Przekazywane jako:"
+    },
+    "pairs": {
+      "secret": "{{name}} zawiera sekret i nie można go tu zapisać. Użyj zamiast tego zapisanego poświadczenia.",
+      "duplicate": "{{name}} występuje więcej niż raz."
+    },
+    "code": {
+      "invalidJson": "Nieprawidłowy JSON: {{problem}}",
+      "validJson": "Prawidłowy JSON",
+      "format": "Formatuj"
+    },
+    "credential": {
+      "choose": "Wybierz poświadczenie",
+      "none": "Bez poświadczenia",
+      "notHere": "{{name}} (brak na tym komputerze)",
+      "noneStored": "Na tym komputerze nie zapisano poświadczeń. Dodaj je w Ustawienia › HTTP.",
+      "missing": "Poświadczenie „{{name}}” nie jest zapisane na tym komputerze; żądania kończą się niepowodzeniem, dopóki nie zostanie dodane w Ustawienia › HTTP."
+    }
+  },
+  "execution": {
+    "failedTitle": "Przepływ pracy „{{workflow}}” zakończył się niepowodzeniem",
+    "interruptedTitle": "Przepływ pracy „{{workflow}}” został przerwany",
+    "openToSee": "Otwórz przepływ pracy, aby zobaczyć, który krok się nie powiódł.",
+    "operation": "Przepływ pracy „{{workflow}}”",
+    "failed": "Przepływ pracy zakończył się niepowodzeniem",
+    "interrupted": "Przepływ pracy został przerwany"
+  },
+  "requireProfile": {
+    "title": "Nie ma jeszcze profilu",
+    "body": "Profile zawierają akcje, przepływy pracy, projekty i układy.",
+    "create": "Utwórz profil"
+  },
+  "referenceSite": {
+    "binding": "Układ „{{layout}}”, strona „{{page}}”, {{control}}",
+    "bindingTrigger": "Układ „{{layout}}”, strona „{{page}}”, {{control}} ({{trigger}})",
+    "step": "Przepływ pracy „{{workflow}}”, krok {{step}}",
+    "node": "Przepływ pracy „{{workflow}}”, węzeł „{{node}}”",
+    "trigger": "Przepływ pracy „{{workflow}}” uruchamia wyzwalacz: {{trigger}}",
+    "triggerPaused": "Przepływ pracy „{{workflow}}” uruchamia wyzwalacz: {{trigger}} (wstrzymany)",
+    "aTrigger": "wyzwalacz"
+  }
+}

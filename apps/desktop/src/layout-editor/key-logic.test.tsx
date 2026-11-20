@@ -8,7 +8,7 @@ import type { ReactNode } from "react"
 import { toast } from "sonner"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { gestureSlotId, slotGesture } from "@/components/gesture-editor/model"
+import { gestureSlotId, releaseSlotId, slotGesture } from "@/components/gesture-editor/model"
 import type { ActionInput } from "@/lib/api"
 import { moduleInfo } from "@/lib/test-fixtures"
 import type {
@@ -158,12 +158,17 @@ function renderEditor() {
 
 const KEY: ControlId = { kind: "key", index: 2 }
 const slot = (gesture: Gesture) => gestureSlotId(KEY, gesture)
-const row = (name: string) => screen.getByRole("combobox", { name })
+/** A gesture's chooser; an empty gesture's is named "Assign an action to: …". */
+const row = (name: string) =>
+  screen.getByRole("combobox", {
+    name: (accessible) => accessible === name || accessible === `Assign an action to: ${name}`,
+  })
 const describes = (name: string) => screen.getByRole("button", { name }).getAttribute("title")
+/** The gestures' slots (not the raw release's). */
 const slots = () =>
-  [...document.querySelectorAll("[data-gesture-slot]")].map((element) =>
-    element.getAttribute("data-gesture-slot"),
-  )
+  [...document.querySelectorAll("[data-gesture-slot]")]
+    .filter((element) => !element.getAttribute("aria-labelledby")?.endsWith("-release-label"))
+    .map((element) => element.getAttribute("data-gesture-slot"))
 
 /** Drops the draggable `id` on the drop target `over`, as dnd-kit does. */
 function drop(id: string, over: string) {
@@ -211,13 +216,14 @@ describe("key logic in the layout editor", { timeout: 20_000 }, () => {
     const user = renderEditor()
     await user.click(screen.getByRole("button", { name: "Key 3" }))
     expect(slots()).toEqual(["empty", "empty", "empty"])
-    expect(screen.getAllByText(/Drop an action, a workflow or a page here/)).toHaveLength(3)
+    // Each empty gesture, and the raw release, invites a drop.
+    expect(screen.getAllByText("Drag an action here")).toHaveLength(4)
 
     // Single press: a saved action from the library. With nothing else on
     // the key it acts as soon as the key is pressed.
     drop("library:action:shop", slot("click"))
     await waitFor(() => {
-      expect(row("Single click (immediate)")).toHaveTextContent("Shop")
+      expect(row("Single press")).toHaveTextContent("Shop")
     })
     expect(describes("Key 3")).toBe("Key 3: Press: Shop")
     expect(slots()).toEqual(["filled", "empty", "empty"])
@@ -271,16 +277,19 @@ describe("key logic in the layout editor", { timeout: 20_000 }, () => {
     expect(describes("Key 3")).toBe("Key 3: Press: Shop")
     await user.click(screen.getByRole("button", { name: "Redo" }))
 
-    // A page goes on a gesture too.
+    await user.click(screen.getByRole("button", { name: "Remove Single press" }))
+    expect(describes("Key 3")).toBe("Key 3")
+    expect(slots()).toEqual(["empty", "empty", "empty"])
+    expect(screen.queryByRole("button", { name: /^Remove Single press/ })).not.toBeInTheDocument()
+
+    // A page put on the key alone makes it the page's folder key: it opens
+    // it on the press and its inspector holds the folder's settings only.
     drop("library:page:tools", slot("click"))
     await waitFor(() => {
       expect(describes("Key 3")).toBe("Key 3: Press: Open “Tools”")
     })
-
-    await user.click(screen.getByRole("button", { name: "Remove Single click (immediate)" }))
-    expect(describes("Key 3")).toBe("Key 3")
-    expect(slots()).toEqual(["empty", "empty", "empty"])
-    expect(screen.queryByRole("button", { name: /^Remove Single click/ })).not.toBeInTheDocument()
+    expect(document.querySelector("[data-slot=folder-control]")).not.toBeNull()
+    expect(document.querySelector("[data-gesture-slot]")).toBeNull()
   })
 
   it("refuses what is not an action, a workflow or another page", async () => {
@@ -308,6 +317,23 @@ describe("key logic in the layout editor", { timeout: 20_000 }, () => {
     expect(describes("Key 1")).toBe("Key 1: Press: Shop")
     expect(await pageNames(user)).toEqual(["Home", "Tools"])
     expect(slots()).toEqual(["empty", "empty", "empty"])
+  })
+
+  it("takes a drop on the raw release through the release's assignment", async () => {
+    const user = renderEditor()
+    await user.click(screen.getByRole("button", { name: "Key 3" }))
+    drop("library:action:shop", slot("click"))
+    await waitFor(() => {
+      expect(describes("Key 3")).toBe("Key 3: Press: Shop")
+    })
+    drop("library:action:mail", releaseSlotId(KEY))
+    await waitFor(() => {
+      expect(describes("Key 3")).toBe("Key 3: Press: Shop · Release: Mail")
+    })
+    expect(row("Release")).toHaveTextContent("Mail")
+    // One step back removes it again.
+    await user.click(screen.getByRole("button", { name: "Undo" }))
+    expect(describes("Key 3")).toBe("Key 3: Press: Shop")
   })
 
   it("has no slots where nothing is selected", () => {

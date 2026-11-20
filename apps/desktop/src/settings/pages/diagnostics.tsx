@@ -10,20 +10,22 @@ import { api } from "@/lib/api"
 import { toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
 import { diagnosticsReport } from "@/lib/diagnostics"
+import { useTranslation } from "@/i18n"
 
 export function DiagnosticsSettings() {
+  const { t, i18n } = useTranslation()
   const { agent, revision } = useAppContext()
   const { state } = useAsync(() => api.getOverview(), String(revision))
   const status = agent?.status
   return (
     <>
       <SettingsSection
-        title="Logs"
-        description="The agent writes a log of device events, action runs and errors. Logs stay on this computer."
+        title={t("settings:diagnostics.logsTitle")}
+        description={t("settings:diagnostics.logsDescription")}
       >
         <SettingsGroup>
           <SettingsRow
-            label="Agent log"
+            label={t("settings:diagnostics.agentLog")}
             description={
               status && <span className="font-mono break-all select-text">{status.logDir}</span>
             }
@@ -33,18 +35,18 @@ export function DiagnosticsSettings() {
               size="sm"
               onClick={() => {
                 api.openWindow("app.logs").catch((e: unknown) => {
-                  toastFailure("The log window did not open", e)
+                  toastFailure(t("settings:diagnostics.logWindowFailed"), e)
                 })
               }}
             >
-              <ScrollText /> Show log…
+              <ScrollText /> {t("settings:diagnostics.showLog")}
             </Button>
           </SettingsRow>
         </SettingsGroup>
       </SettingsSection>
       <SettingsSection
-        title="Diagnostics"
-        description="Include these details when you report a problem. They contain paths on this computer but no configuration content."
+        title={t("settings:diagnostics.title")}
+        description={t("settings:diagnostics.description")}
         actions={
           state.status === "ready" && (
             <Button
@@ -52,18 +54,18 @@ export function DiagnosticsSettings() {
               size="sm"
               onClick={() => {
                 navigator.clipboard.writeText(diagnosticsReport(state.data, agent)).then(
-                  () => toast.success("Diagnostics copied"),
+                  () => toast.success(t("settings:diagnostics.copied")),
                   (e: unknown) => {
                     toastFailure(
-                      "The diagnostics were not copied",
+                      t("settings:diagnostics.notCopied"),
                       e,
-                      "Select the report and copy it by hand",
+                      t("settings:diagnostics.copyByHand"),
                     )
                   },
                 )
               }}
             >
-              <ClipboardCopy /> Copy
+              <ClipboardCopy /> {t("settings:shared.copy")}
             </Button>
           )
         }
@@ -72,9 +74,14 @@ export function DiagnosticsSettings() {
         {state.status === "loading" && <Loading />}
         {state.status === "error" && <ErrorNotice error={state.error} />}
         {state.status === "ready" && (
-          <pre className="overflow-x-auto rounded-md bg-muted px-3 py-2 text-xs leading-5 whitespace-pre-wrap select-text">
+          <pre className="relative overflow-x-auto rounded-md bg-muted px-3 py-2 text-xs leading-5 whitespace-pre-wrap select-text">
             {diagnosticsReport(state.data, agent)}
           </pre>
+        )}
+        {state.status === "ready" && (i18n.resolvedLanguage ?? i18n.language) !== "en" && (
+          <p className="text-caption text-muted-foreground">
+            {t("settings:diagnostics.reportInEnglish")}
+          </p>
         )}
       </SettingsSection>
     </>

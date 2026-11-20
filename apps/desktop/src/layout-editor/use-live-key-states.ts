@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event"
 import { useEffect, useMemo, useState } from "react"
 
+import { i18n } from "@/i18n"
 import { api } from "@/lib/api"
 import type { AgentConnection, KeyStateEntry, KeyStatesEvent, LivePreview } from "@/lib/types"
 
@@ -159,16 +160,14 @@ export function liveValuesText(status: LiveStatus, live: LivePreview | null): st
     case "connecting":
       return null
     case "live":
-      return live ? "Live values from the agent" : null
+      return live ? i18n.t("editor:liveStates.live") : null
     case "inactiveProfile":
-      return "Live values show while this profile is active"
+      return i18n.t("editor:liveStates.inactiveProfile")
     case "stopped":
-      return live
-        ? "The agent is not running: live values are not current"
-        : "The agent is not running: no live values"
+      return live ? i18n.t("editor:liveStates.stoppedStale") : i18n.t("editor:liveStates.stopped")
     case "disconnected":
-      return "Lost the agent: live values are not current"
+      return i18n.t("editor:liveStates.disconnected")
     case "unsupported":
-      return "Restart the agent to see live values here"
+      return i18n.t("editor:liveStates.unsupported")
   }
 }

@@ -4,6 +4,7 @@ import "@testing-library/jest-dom/vitest"
 import { cleanup, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { i18n } from "@/i18n"
 import type { Conversion } from "@/lib/types"
 import { WorkflowsPage } from "@/pages/workflows"
 import { api, resetApi } from "@/test/api-mock"
@@ -170,5 +171,42 @@ describe("Workflows page", () => {
     const confirm = screen.getByRole("alertdialog", { name: "Delete “Morning (copy)”?" })
     await user.click(within(confirm).getByRole("button", { name: "Delete" }))
     expect(api.deleteWorkflow).toHaveBeenCalledWith("profile-1", "w-copy")
+  })
+})
+
+describe("Workflows page in Polish", () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage("pl")
+  })
+  afterEach(async () => {
+    await i18n.changeLanguage("en")
+  })
+
+  it("shows the page and the step editor in Polish; user data stays as it is", async () => {
+    api.getProfile.mockResolvedValue(
+      profileView({ actions: [log, url, git], workflows: [morning] }),
+    )
+    api.listActionTypes.mockResolvedValue([ACTION_TYPES.log, ACTION_TYPES.openUrl])
+    const { user, titlebar } = renderWithApp(<WorkflowsPage />)
+    const switcher = await screen.findByRole("combobox", { name: "Przepływ pracy" })
+    expect(titlebar.getSnapshot()).toMatchObject({
+      title: "Przepływy pracy",
+      subtitle: "Łącz akcje w przepływy pracy",
+    })
+    expect(titlebar.getSnapshot().actions?.map((action) => action.label)).toEqual(
+      expect.arrayContaining(["Nowy przepływ pracy", "Uruchom przepływ pracy"]),
+    )
+    expect(screen.getByText(/Ten przepływ pracy wykonuje swoje kroki po kolei/)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Otwórz w edytorze grafu" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Dodaj krok" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Zapisz" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Przeciągnij krok 1" })).toBeInTheDocument()
+    expect(screen.getByLabelText("Nazwa")).toHaveValue("Morning")
+
+    await user.click(screen.getByRole("combobox", { name: "Akcja do dodania" }))
+    expect(screen.getByRole("option", { name: "Repo status (niedostępna)" })).toBeInTheDocument()
+    await user.keyboard("{Escape}")
+    await user.click(switcher)
+    expect(screen.getByRole("option", { name: "Nowy przepływ krokowy" })).toBeInTheDocument()
   })
 })

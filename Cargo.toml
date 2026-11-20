@@ -114,6 +114,9 @@ hidapi = "2.6"
 ab_glyph_rasterizer = "0.1.10"
 skrifa = { version = "0.50", default-features = false, features = ["std"] }
 image = { version = "0.25", default-features = false }
+# Grapheme clusters, so key texts are never cut inside a character (an
+# emoji, a letter with a combining mark); already in the tree through tao.
+unicode-segmentation = "1"
 minisign-verify = "0.3"
 # Plugin navigation icons (SVG allow-list sanitizer); already in the tree
 # through plist.

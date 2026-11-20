@@ -21,6 +21,12 @@
 //! - **Invalidation.** A disconnect, a page change, a profile change or
 //!   reload, and locking drop pending gestures; a gesture whose page or
 //!   layout generation no longer matches is not dispatched.
+//! - **Simulated presses.** A press the app simulates
+//!   (`service/simulate.rs`) goes through an engine of its own, on a
+//!   connection id of its own ([`simulated_connection`]), so it never
+//!   joins, ends or cancels a sequence of the device's physical keys; its
+//!   gestures are dispatched here like any other, as
+//!   [`RunOrigin::Simulated`].
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -29,7 +35,7 @@ use deckpilot_core::gesture::{
     BoundGestures, GestureCancel, GestureEngine, GestureFired, GestureOutput, GestureTimings,
     KeyContext,
 };
-use deckpilot_core::{ExecutionTrigger, PageId, RunOrigin, RuntimeOutcome};
+use deckpilot_core::{ExecutionTrigger, PageId, RunOrigin, RuntimeOutcome, Trigger};
 use deckpilot_device::{ControlId, ControlInput, DeviceEvent, DeviceId};
 use deckpilot_ipc::SecurityState;
 use tracing::{debug, warn};
@@ -39,6 +45,56 @@ use super::Agent;
 /// Signals taken off the channel before a deadline is handled; the rest
 /// waits for the next loop turn, which keeps the loop responsive.
 const DRAIN_LIMIT: usize = 256;
+
+/// Set in the connection id of a simulated press: device sessions count
+/// up from 1 and never reach it, so a simulated sequence (and a stateful
+/// key's captured press) never shares a key with the physical one.
+const SIMULATED_LANE: u64 = 1 << 63;
+
+/// The connection id simulated presses on the device session `session`
+/// use.
+pub(super) fn simulated_connection(session: u64) -> u64 {
+    session | SIMULATED_LANE
+}
+
+/// The device session a connection id belongs to, physical or simulated.
+fn session_of(connection: u64) -> u64 {
+    connection & !SIMULATED_LANE
+}
+
+/// Whose input the engine's outputs are: the device's physical keys, or a
+/// press the app simulated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Lane {
+    Physical,
+    Simulated,
+}
+
+impl Lane {
+    fn edge_origin(self) -> RunOrigin {
+        match self {
+            Self::Physical => RunOrigin::Key,
+            Self::Simulated => RunOrigin::Simulated,
+        }
+    }
+
+    fn gesture_origin(self) -> RunOrigin {
+        match self {
+            Self::Physical => RunOrigin::Gesture,
+            Self::Simulated => RunOrigin::Simulated,
+        }
+    }
+}
+
+/// How a workflow a key started is recorded: from the device, or, for a
+/// simulated press, as simulated (whose actions are not user initiated).
+pub(super) fn workflow_trigger(origin: RunOrigin) -> ExecutionTrigger {
+    if origin == RunOrigin::Simulated {
+        ExecutionTrigger::Simulated
+    } else {
+        ExecutionTrigger::Device
+    }
+}
 
 /// Test hooks: supply gesture bindings and observe recognized gestures.
 ///
@@ -74,6 +130,21 @@ impl Gestures {
     pub(super) fn is_idle(&self, device: &DeviceId, connection: u64, control: ControlId) -> bool {
         self.engine.is_idle(device, connection, control)
     }
+
+    /// Drops the pending gestures of `device`: the page it shows changed
+    /// without a key of it (e.g. a folder's Auto Exit).
+    pub(super) fn page_changed(&mut self, device: &DeviceId) {
+        self.engine.cancel(device, GestureCancel::PageChanged);
+    }
+
+    /// The layout generation gestures are recognized for now.
+    pub(super) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(super) fn hooks(&self) -> Option<&dyn GestureHooks> {
+        self.hooks.as_deref()
+    }
 }
 
 impl Agent {
@@ -104,7 +175,8 @@ impl Agent {
             }
             return;
         }
-        self.capture_stateful_press(session, device, control, input, at);
+        let idle = self.gestures.is_idle(device, session, control);
+        self.capture_stateful_press(session, device, control, input, at, idle);
         let Self {
             gestures, runtime, ..
         } = self;
@@ -121,7 +193,7 @@ impl Agent {
         let outputs = gestures
             .engine
             .on_input(at, device, session, control, input, context);
-        self.handle_gesture_outputs(outputs);
+        self.handle_gesture_outputs(outputs, Lane::Physical);
     }
 
     /// When the next pending gesture is due, if any is pending.
@@ -142,7 +214,7 @@ impl Agent {
             }
         }
         let outputs = self.gestures.engine.advance(now);
-        self.handle_gesture_outputs(outputs);
+        self.handle_gesture_outputs(outputs, Lane::Physical);
     }
 
     /// Drops the pending gestures of every device after the profile, its
@@ -161,7 +233,14 @@ impl Agent {
         self.stateful.forget_device(device);
     }
 
-    fn handle_gesture_outputs(&mut self, outputs: Vec<GestureOutput>) {
+    /// Dispatches what the engine reported for `lane`; returns the triggers
+    /// that were dispatched (edges, and gestures that were still current).
+    pub(super) fn handle_gesture_outputs(
+        &mut self,
+        outputs: Vec<GestureOutput>,
+        lane: Lane,
+    ) -> Vec<Trigger> {
+        let mut dispatched = Vec::new();
         for output in outputs {
             match output {
                 GestureOutput::Edge {
@@ -169,22 +248,40 @@ impl Agent {
                     control,
                     input,
                     ..
-                } => self.dispatch_edge(&device, control, input),
-                GestureOutput::Fired(fired) => self.dispatch_gesture(&fired),
+                } => {
+                    self.dispatch_edge(&device, control, input, lane.edge_origin());
+                    match input {
+                        ControlInput::Press => dispatched.push(Trigger::Press),
+                        ControlInput::Release => dispatched.push(Trigger::Release),
+                        _ => {}
+                    }
+                }
+                GestureOutput::Fired(fired) => {
+                    if self.dispatch_gesture(&fired, lane.gesture_origin()) {
+                        dispatched.push(Trigger::from(fired.gesture));
+                    }
+                }
             }
         }
+        dispatched
     }
 
     /// A raw-mode edge: dispatched exactly as before gestures existed.
-    fn dispatch_edge(&mut self, device: &DeviceId, control: ControlId, input: ControlInput) {
+    fn dispatch_edge(
+        &mut self,
+        device: &DeviceId,
+        control: ControlId,
+        input: ControlInput,
+        origin: RunOrigin,
+    ) {
         let event = DeviceEvent::Input {
             device: device.clone(),
             control,
             input,
         };
         let shown = self.runtime.current_page(device);
-        let outcome = self.runtime.handle_event(&event);
-        self.handle_outcome(device, control, RunOrigin::Key, shown, outcome);
+        let outcome = self.runtime.handle_event_as(&event, origin);
+        self.handle_outcome(device, control, origin, shown, outcome);
     }
 
     /// What a binding did, from a raw edge or a gesture: report an action
@@ -242,7 +339,7 @@ impl Agent {
                 return;
             }
             Ok(RuntimeOutcome::WorkflowRequested { workflow }) => {
-                if let Err(error) = self.start_execution(workflow, ExecutionTrigger::Device) {
+                if let Err(error) = self.start_execution(workflow, workflow_trigger(origin)) {
                     warn!(%error, "cannot start the workflow");
                 }
             }
@@ -279,42 +376,39 @@ impl Agent {
         self.after_change();
     }
 
-    /// A recognized gesture, if what it was recognized on is still shown.
-    fn dispatch_gesture(&mut self, fired: &GestureFired) {
-        let current = self.sessions.get(&fired.device).map(|s| s.id) == Some(fired.connection)
+    /// A recognized gesture, if what it was recognized on is still shown;
+    /// returns whether it was dispatched.
+    fn dispatch_gesture(&mut self, fired: &GestureFired, origin: RunOrigin) -> bool {
+        let current = self.sessions.get(&fired.device).map(|s| s.id)
+            == Some(session_of(fired.connection))
             && self.security == SecurityState::Unlocked
             && fired.generation == self.gestures.generation
             && self.runtime.current_page(&fired.device) == fired.page;
         if !current {
             debug!(device = %fired.device, control = %fired.control, gesture = ?fired.gesture, "stale gesture dropped");
-            return;
+            return false;
         }
         debug!(device = %fired.device, control = %fired.control, gesture = ?fired.gesture, "gesture");
         if let Some(hooks) = &self.gestures.hooks {
             hooks.fired(fired);
         }
-        let outcome = self
-            .runtime
-            .dispatch_gesture(&fired.device, fired.control, fired.gesture);
+        let outcome =
+            self.runtime
+                .dispatch_gesture_as(&fired.device, fired.control, fired.gesture, origin);
         if let (Some(hooks), Ok(outcome)) = (&self.gestures.hooks, &outcome) {
             hooks.dispatched(fired, outcome);
         }
         if let Ok(RuntimeOutcome::StatefulRequested { binding, gesture }) = &outcome {
             self.run_stateful(fired, binding, *gesture);
-            return;
+            return true;
         }
-        self.handle_outcome(
-            &fired.device,
-            fired.control,
-            RunOrigin::Gesture,
-            fired.page,
-            outcome,
-        );
+        self.handle_outcome(&fired.device, fired.control, origin, fired.page, outcome);
+        true
     }
 }
 
 /// The key's gesture bindings on the page `device` shows now.
-fn key_context(
+pub(super) fn key_context(
     runtime: &deckpilot_core::Runtime,
     hooks: Option<&dyn GestureHooks>,
     generation: u64,

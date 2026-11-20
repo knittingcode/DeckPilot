@@ -1,0 +1,186 @@
+{
+  "locked": {
+    "title": "DeckPilot is locked",
+    "resumes": "Your Stream Deck resumes as soon as it is unlocked.",
+    "unlock": "Unlock DeckPilot"
+  },
+  "cannotOpen": {
+    "title": "DeckPilot cannot open its configuration",
+    "keyUnavailable": "Its key is kept in the {{keyStore}}, which did not provide it. Unlock the {{keyStore}} or sign in again, then try again. Nothing was changed.",
+    "keyDeleted": "If the key was deleted (for example when the keychain was reset), this configuration cannot be opened anymore. Restore your encrypted export on a new configuration; see the security documentation."
+  },
+  "password": {
+    "label": "Password",
+    "repeat": "Repeat password",
+    "show": "Show password",
+    "hide": "Hide password",
+    "checking": "Checking…",
+    "tooShort_one": "Use at least {{count}} character.",
+    "tooShort_other": "Use at least {{count}} characters.",
+    "mismatch": "The passwords do not match."
+  },
+  "keyStore": {
+    "waitingTitle": "Waiting for the {{keyStore}}",
+    "waitingDescription": "DeckPilot is reading its key. If the {{keyStore}} asks whether DeckPilot may use it, allow it."
+  },
+  "missingDatabase": {
+    "title": "Your configuration is missing",
+    "description": "DeckPilot was set up on this computer, but its configuration database is gone — perhaps it was moved, deleted, or is on a drive that is not connected. Nothing was created or overwritten.",
+    "startNewEllipsis": "Start a new configuration…",
+    "startNew": "Start a new configuration",
+    "creating": "Creating…",
+    "startNewExplanation": "DeckPilot starts with an empty configuration. The old key file is kept next to it, and its key stays in the credential store, so the old configuration can still be opened if you find its database. Import an encrypted export to restore your profiles.",
+    "restore": "Restore <file>{{file}}</file> to the data folder (or connect its drive) and try again."
+  },
+  "newPassword": {
+    "encrypting": "Encrypting…",
+    "notRecoverable": "The password cannot be recovered. Keep an encrypted export as a backup."
+  },
+  "systemKey": {
+    "usePassword": "Use a password instead",
+    "agentNotRunning": "The DeckPilot background agent is not running. It keeps the key and starts with your login; start it from the Dashboard or try again.",
+    "showLog": "Show the agent log"
+  },
+  "setup": {
+    "welcome": "Welcome to DeckPilot",
+    "passwordTitle": "Protect DeckPilot with a password",
+    "passwordDescription": "The configuration is encrypted with a key derived from this password. You enter it after each restart.",
+    "create": "Create encrypted configuration",
+    "keyStoreFailed": "DeckPilot encrypts your configuration with a key kept in the {{keyStore}}, but could not store it there."
+  },
+  "migrate": {
+    "title": "Encrypt your configuration",
+    "originalKept": "The unencrypted original is kept",
+    "originalReadable": "Until you delete it in Settings, anyone with access to your files can read it.",
+    "passwordDescription": "It was saved by an earlier DeckPilot without encryption. Choose a password; everything is kept.",
+    "encrypt": "Encrypt configuration",
+    "keyStoreFailed": "It was saved by an earlier DeckPilot without encryption. DeckPilot encrypts it with a key kept in the {{keyStore}}, but could not store the key."
+  },
+  "unlock": {
+    "action": "Unlock",
+    "withTouchId": "Unlock with Touch ID",
+    "macPassword": "You can also use your Mac's login password in the system prompt.",
+    "passwordDescription": "Enter your password to unlock DeckPilot.",
+    "reason": {
+      "idle": "It was locked after a period without activity. Your Stream Deck resumes as soon as it is unlocked.",
+      "sleep": "It was locked when the computer went to sleep. Your Stream Deck resumes as soon as it is unlocked.",
+      "screenLocked": "It was locked when the screen was locked. Your Stream Deck resumes as soon as it is unlocked.",
+      "other": "It was locked. Your Stream Deck resumes as soon as it is unlocked."
+    }
+  },
+  "confirm": {
+    "title": "Confirm it's you",
+    "passwordDescription": "Your security settings ask for your password when DeckPilot starts or after an update.",
+    "systemDescription": "Your security settings ask for authentication when DeckPilot starts or after an update."
+  },
+  "authenticate": {
+    "purpose": "Authenticate to {{purpose}}.",
+    "password": {
+      "title": "Enter your password",
+      "text": "Your DeckPilot password confirms this change.",
+      "action": "Confirm"
+    },
+    "touchId": {
+      "title": "Confirm it's you",
+      "text": "Use Touch ID or your Mac's login password.",
+      "action": "Continue with Touch ID"
+    },
+    "devicePassword": {
+      "title": "Confirm it's you",
+      "text": "Your computer asks for your login password.",
+      "action": "Continue"
+    },
+    "confirmationOnly": {
+      "title": "Confirm this change",
+      "text": "This computer offers no system authentication, so DeckPilot can only ask you to confirm. Set a DeckPilot password in Settings if others use this computer.",
+      "action": "Confirm"
+    }
+  },
+  "card": {
+    "intro": "Your configuration is always encrypted on this computer (SQLCipher, AES-256). These settings decide how its key is protected and when DeckPilot asks who you are.",
+    "reEncrypting": "Re-encrypting…",
+    "autoLock": {
+      "never": "Never",
+      "sleep": "When the computer sleeps",
+      "screenLock": "When the screen locks or the computer sleeps",
+      "idle15Minutes": "After 15 minutes of inactivity",
+      "idle1Hour": "After 1 hour of inactivity"
+    },
+    "reauthentication": {
+      "sensitiveOnly": "Only for sensitive operations",
+      "afterUpdate": "After updates and for sensitive operations",
+      "everyLaunch": "Every time DeckPilot starts"
+    },
+    "purpose": {
+      "protection": "change how the configuration is protected",
+      "policy": "change your security settings",
+      "deleteCopy": "delete the unencrypted copy"
+    },
+    "unlockMethod": {
+      "title": "Unlock method",
+      "systemKey": "System key · {{keyStore}}",
+      "systemKeyDescription": "A random key kept in the <strong>{{keyStore}}</strong> and unlocked by your login. DeckPilot opens without a password, also after restarts and updates.",
+      "passwordDescription": "A key derived from your DeckPilot password (Argon2id). The password is not stored; you enter it after each restart of the computer.",
+      "usePasswordEllipsis": "Use a password instead…",
+      "useSystemKeyEllipsis": "Use the system key instead…",
+      "useSystemKeyTitle": "Keep the key in the {{keyStore}}?",
+      "useSystemKeyDescription": "DeckPilot creates a new random key, stores it in the {{keyStore}} and re-encrypts the configuration with it. Your password is no longer needed. If storing the key fails, nothing changes.",
+      "useSystemKey": "Use the system key",
+      "systemKeyDone": "The key is now kept in the {{keyStore}}",
+      "protectionFailed": "The protection was not changed"
+    },
+    "choosePassword": {
+      "description": "The configuration is re-encrypted with a key derived from this password. You will enter it after each restart of the computer.",
+      "action": "Use this password",
+      "done": "The configuration is now protected by your password",
+      "failed": "The password was not set"
+    },
+    "policy": {
+      "title": "Locking and authentication",
+      "unavailable": "These options need a DeckPilot password or system authentication, which this computer does not offer with the system key.",
+      "saved": "Security settings saved",
+      "notSaved": "The security settings were not saved",
+      "autoLock": "Lock automatically",
+      "autoLockDescription": "While locked, your Stream Deck shows \"Locked\" and runs no actions.",
+      "noScreenLock": "Locking with the screen is not available: DeckPilot cannot detect the screen lock on this computer.",
+      "reauthentication": "Ask for authentication",
+      "reauthenticationDescription": "Sensitive operations — exports, changes to encryption, passwords and these settings, deleting the unencrypted copy — always ask. Switching profiles or projects, device actions and workflows never do."
+    },
+    "lockNow": {
+      "label": "Lock now",
+      "description": "Stops actions on your Stream Deck until you unlock DeckPilot again.",
+      "failed": "DeckPilot was not locked"
+    },
+    "systemAuthentication": {
+      "touchId": "Touch ID",
+      "title": "System authentication",
+      "touchIdDescription": "Touch ID (or your login password) unlocks DeckPilot after it was locked and confirms sensitive operations. macOS checks it; DeckPilot never sees your fingerprint or password.",
+      "description": "Your login password unlocks DeckPilot after it was locked and confirms sensitive operations. The operating system checks it.",
+      "available": "Available"
+    },
+    "recovery": {
+      "title": "Backup and recovery",
+      "systemKey": "The key in the {{keyStore}} protects the configuration on this computer only. It is not a backup: if your user account, the {{keyStore}} or this computer is lost or reset, the configuration cannot be opened.",
+      "password": "There is no way to recover a forgotten password.",
+      "keepExport": "Keep an <strong>encrypted export</strong> (Backup & Restore) as your backup; it has its own password and can be imported on any computer.",
+      "backupDir": "Backups before upgrades"
+    },
+    "legacy": {
+      "title": "An unencrypted copy of your old configuration remains",
+      "description": "It was kept when the configuration was encrypted, in case anything went wrong. Anyone with access to your files can read it.",
+      "recoverable": "Deleting a file does not guarantee that its contents cannot be recovered, especially on SSDs. See the security documentation for a thorough cleanup.",
+      "delete": "Delete unencrypted copy",
+      "confirmTitle": "Delete the unencrypted copy?",
+      "confirmDescription": "Your encrypted configuration is not affected. Deleting the file removes it from the file system; on SSDs and in backups its contents may still be recoverable.",
+      "deleted": "Unencrypted copy deleted",
+      "notDeleted": "The unencrypted copy was not deleted"
+    },
+    "changePassword": {
+      "title": "Change password",
+      "current": "Current password",
+      "done": "Password changed",
+      "failed": "The password was not changed",
+      "next": "Check the current password and try again"
+    }
+  }
+}

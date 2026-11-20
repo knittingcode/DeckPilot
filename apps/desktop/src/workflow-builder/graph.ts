@@ -4,6 +4,7 @@
  * editor refuses connections the engine would reject; the engine's own
  * validation remains the authority and is shown on the nodes.
  */
+import { type TranslationKey, i18n } from "@/i18n"
 import type {
   ErrorPolicy,
   GraphEdge,
@@ -48,11 +49,12 @@ export function hasInput(type: NodeType) {
   return type !== "trigger"
 }
 
-export const PORT_LABEL: Record<GraphPort, string> = {
-  out: "Next",
-  error: "On error",
-  true: "Yes",
-  false: "No",
+/** Translation keys of the output ports' labels (`t(PORT_LABEL[port])`). */
+export const PORT_LABEL: Record<GraphPort, TranslationKey> = {
+  out: "workflows:node.port.out",
+  error: "workflows:node.port.error",
+  true: "workflows:node.port.true",
+  false: "workflows:node.port.false",
 }
 
 export const DEFAULT_POLICY: ErrorPolicy = {
@@ -150,21 +152,23 @@ function reaches(graph: WorkflowGraph, start: string, target: string) {
 export function connectionProblem(graph: WorkflowGraph, edge: GraphEdge): string | null {
   const from = graph.nodes.find((n) => n.id === edge.from)
   const to = graph.nodes.find((n) => n.id === edge.to)
-  if (!from || !to) return "both nodes must exist"
-  if (from.id === to.id) return "a node cannot connect to itself"
-  if (!outputPorts(from.type).includes(edge.port)) return "this output does not exist"
-  if (!hasInput(to.type)) return "nothing can connect into the start node"
-  if (graph.edges.some((e) => sameEdge(e, edge))) return "the connection exists already"
+  if (!from || !to) return i18n.t("workflows:validation.connection.missingNodes")
+  if (from.id === to.id) return i18n.t("workflows:validation.connection.self")
+  if (!outputPorts(from.type).includes(edge.port))
+    return i18n.t("workflows:validation.connection.noOutput")
+  if (!hasInput(to.type)) return i18n.t("workflows:validation.connection.intoStart")
+  if (graph.edges.some((e) => sameEdge(e, edge)))
+    return i18n.t("workflows:validation.connection.exists")
   if (
     from.type !== "parallel" &&
     graph.edges.some((e) => e.from === from.id && e.port === edge.port)
   ) {
-    return "an output connects to one node; branch with a Parallel or Condition node"
+    return i18n.t("workflows:validation.connection.oneTarget")
   }
   if (to.type !== "join" && graph.edges.some((e) => e.to === to.id)) {
-    return "only a Join node can have several incoming connections"
+    return i18n.t("workflows:validation.connection.oneIncoming")
   }
-  if (reaches(graph, to.id, from.id)) return "this would create a cycle; use a Loop node to repeat"
+  if (reaches(graph, to.id, from.id)) return i18n.t("workflows:validation.connection.cycle")
   return null
 }
 

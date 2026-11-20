@@ -64,12 +64,24 @@ impl Env {
     /// resources and returns the bundle the agent would see, pinned to
     /// exactly these files.
     fn bundle(&self, version: &str, permissions: &Value, class: BundleClass) -> Bundle {
+        self.bundle_with(version, permissions, class, |_| {})
+    }
+
+    /// [`Env::bundle`] with the manifest changed by `edit` first.
+    fn bundle_with(
+        &self,
+        version: &str,
+        permissions: &Value,
+        class: BundleClass,
+        edit: impl FnOnce(&mut Value),
+    ) -> Bundle {
         let dir = self.bundled().join(ID);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("assets")).unwrap();
         let mut manifest: Value = serde_json::from_slice(&fixture("manifest.json")).unwrap();
         manifest["version"] = version.into();
         manifest["permissions"] = permissions.clone();
+        edit(&mut manifest);
         std::fs::write(
             dir.join("manifest.json"),
             serde_json::to_vec_pretty(&manifest).unwrap(),
@@ -489,4 +501,274 @@ fn a_copy_from_a_registry_is_left_alone() {
         check_installed(&mut manager, &newer, &record, &dir).unwrap(),
         None
     );
+}
+
+// ------------------------------------------------------------------ restore
+
+/// The fixture with one optional text setting, `greeting`.
+fn with_setting(manifest: &mut Value) {
+    manifest["contributes"]["settings"] = json!({
+        "portabilityVersion": 1,
+        "fields": [{
+            "key": "greeting",
+            "label": "Greeting",
+            "description": "Test fixture: a setting kept for a reinstall.",
+            "required": false,
+            "kind": { "type": "text", "maxLength": 32 },
+            "portability": "portable"
+        }]
+    });
+}
+
+fn tamper(path: &Path) {
+    let mut permissions = std::fs::metadata(path).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(path, permissions).unwrap();
+    let mut bytes = std::fs::read(path).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0x01;
+    std::fs::write(path, bytes).unwrap();
+}
+
+fn installed_dir(manager: &PluginManager) -> PathBuf {
+    let record = record(manager).unwrap();
+    manager
+        .layout()
+        .resolve(&record.active().unwrap().install_dir)
+}
+
+#[test]
+fn a_user_uninstall_is_undone_by_a_restore_with_the_kept_settings() {
+    let env = Env::new();
+    let bundle = env.bundle_with(
+        "0.1.0",
+        &notifications(),
+        BundleClass::Default,
+        with_setting,
+    );
+    let mut manager = env.open();
+    seed(&mut manager, &bundle);
+    let enabled = record_state(&manager);
+    manager
+        .set_settings(
+            &id(),
+            &std::iter::once(("greeting".to_owned(), json!("Yo"))).collect(),
+        )
+        .unwrap();
+    manager
+        .uninstall_by_user(
+            &id(),
+            Retention {
+                settings: true,
+                credentials: false,
+            },
+        )
+        .unwrap();
+    assert!(restorable(&manager, &bundle, &id()));
+
+    let restored = restore(&mut manager, &bundle, &id()).unwrap();
+    if super::super::execution_supported() {
+        assert_eq!(restored, Restored::Restored(Restart::Enabled));
+    } else {
+        assert!(matches!(restored, Restored::Restored(Restart::Disabled(_))));
+    }
+    assert!(manager.store().tombstone(&id()).unwrap().is_none());
+    let record = record(&manager).unwrap();
+    assert_eq!(record.source, InstallSource::Bundled);
+    assert_eq!(record.state, enabled);
+    assert_eq!(record.active().unwrap().version, Version::new(0, 1, 0));
+    deckpilot_plugin_bundled::verify_installed(&installed_dir(&manager), &bundle.pins.plugins[0])
+        .unwrap();
+    // Seeding's own rules: the low-tier grant, decided by the bundle.
+    let grants = manager.store().grants(&id()).unwrap();
+    assert_eq!(
+        grants.iter().map(|g| g.key.to_string()).collect::<Vec<_>>(),
+        ["notifications"]
+    );
+    assert!(grants.iter().all(|g| g.status == GrantStatus::Granted));
+    assert_eq!(
+        manager.store().settings(&id()).unwrap()["greeting"],
+        json!("Yo")
+    );
+    let audit = manager.store().audit(&id()).unwrap();
+    assert!(
+        audit
+            .iter()
+            .any(|a| a.op == "tombstone" && a.decision == "cleared"),
+        "{audit:?}"
+    );
+    assert!(!restorable(&manager, &bundle, &id()));
+    // The next start sees the pinned copy, as after seeding.
+    assert_eq!(only(seed(&mut manager, &bundle)), Seeded::Current);
+    assert_eq!(record_state(&manager), enabled);
+}
+
+#[test]
+fn a_restore_with_more_than_low_tier_permissions_waits_for_consent() {
+    let env = Env::new();
+    let bundle = env.bundle("0.1.0", &with_network(), BundleClass::Default);
+    let mut manager = env.open();
+    seed(&mut manager, &bundle);
+    manager
+        .uninstall_by_user(&id(), Retention::default())
+        .unwrap();
+    let restored = restore(&mut manager, &bundle, &id()).unwrap();
+    let Restored::Restored(Restart::AwaitingConsent(waiting)) = restored else {
+        panic!("{restored:?}");
+    };
+    assert_eq!(
+        waiting.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        ["network:api.example.com"]
+    );
+    assert_eq!(record_state(&manager), PluginState::Disabled);
+    assert!(manager.store().tombstone(&id()).unwrap().is_none());
+}
+
+#[test]
+fn a_broken_copy_is_reinstalled_with_the_users_decisions() {
+    let env = Env::new();
+    let bundle = env.bundle_with("0.1.0", &with_network(), BundleClass::Default, with_setting);
+    let mut manager = env.open();
+    seed(&mut manager, &bundle);
+    let network: GrantKey = "network:api.example.com".parse().unwrap();
+    let notifications: GrantKey = "notifications".parse().unwrap();
+    manager
+        .grant(&id(), &Consent::of([network.clone()], "user"))
+        .unwrap();
+    manager.revoke(&id(), &notifications, "user").unwrap();
+    manager
+        .set_settings(
+            &id(),
+            &std::iter::once(("greeting".to_owned(), json!("Hej"))).collect(),
+        )
+        .unwrap();
+    let dir = installed_dir(&manager);
+    tamper(&dir.join("plugin.wasm"));
+    let before = record(&manager).unwrap();
+    assert!(check_installed(&mut manager, &bundle, &before, &dir).is_err());
+    assert_eq!(record_state(&manager), PluginState::Broken);
+
+    let restored = restore(&mut manager, &bundle, &id()).unwrap();
+    // The revoked notifications stay revoked, so it is not enabled.
+    assert_eq!(
+        restored,
+        Restored::Reinstalled(Restart::AwaitingConsent(vec![notifications.clone()]))
+    );
+    assert_eq!(record_state(&manager), PluginState::Disabled);
+    deckpilot_plugin_bundled::verify_installed(&installed_dir(&manager), &bundle.pins.plugins[0])
+        .unwrap();
+    let grants = manager.store().grants(&id()).unwrap();
+    let status = |key: &GrantKey| grants.iter().find(|g| &g.key == key).map(|g| g.status);
+    assert_eq!(status(&network), Some(GrantStatus::Granted));
+    assert_eq!(status(&notifications), Some(GrantStatus::Revoked));
+    assert_eq!(
+        manager.store().settings(&id()).unwrap()["greeting"],
+        json!("Hej")
+    );
+    // A reinstall writes no tombstone, and the next start finds it current.
+    assert!(manager.store().tombstone(&id()).unwrap().is_none());
+    assert_eq!(only(seed(&mut manager, &bundle)), Seeded::Current);
+
+    // With every permission granted, a reinstalled copy is enabled again.
+    manager
+        .grant(&id(), &Consent::of([notifications], "user"))
+        .unwrap();
+    let dir = installed_dir(&manager);
+    tamper(&dir.join("manifest.json"));
+    let before = record(&manager).unwrap();
+    assert!(check_installed(&mut manager, &bundle, &before, &dir).is_err());
+    let restored = restore(&mut manager, &bundle, &id()).unwrap();
+    if super::super::execution_supported() {
+        assert_eq!(restored, Restored::Reinstalled(Restart::Enabled));
+    }
+}
+
+#[test]
+fn a_restore_is_refused_without_changing_anything() {
+    let env = Env::new();
+    let bundle = env.default_bundle();
+    let mut manager = env.open();
+
+    // Not bundled at all.
+    let tool = PluginId::parse("acme.tool").unwrap();
+    assert!(matches!(
+        restore(&mut manager, &bundle, &tool),
+        Err(RestoreRefusal::NotBundled(_))
+    ));
+    // Bundled with DeckPilot, but not pinned by this agent.
+    let github = PluginId::parse("deckpilot.github").unwrap();
+    assert!(matches!(
+        restore(&mut manager, &bundle, &github),
+        Err(RestoreRefusal::NotPinned(_))
+    ));
+    assert!(!restorable(&manager, &bundle, &github));
+
+    // Installed and healthy.
+    seed(&mut manager, &bundle);
+    let state = record_state(&manager);
+    let audit = manager.store().audit(&id()).unwrap().len();
+    assert!(matches!(
+        restore(&mut manager, &bundle, &id()),
+        Err(RestoreRefusal::Installed(_))
+    ));
+    assert_eq!(record_state(&manager), state);
+    assert_eq!(manager.store().audit(&id()).unwrap().len(), audit);
+
+    // Uninstalled, but the bundle's files no longer match the pins: the
+    // tombstone stays and nothing is installed.
+    manager
+        .uninstall_by_user(&id(), Retention::default())
+        .unwrap();
+    tamper(&env.bundled().join(ID).join("plugin.wasm"));
+    let refused = restore(&mut manager, &bundle, &id());
+    assert!(
+        matches!(&refused, Err(RestoreRefusal::Verification(why)) if why.contains("plugin.wasm")),
+        "{refused:?}"
+    );
+    assert!(record(&manager).is_none());
+    assert_eq!(
+        manager.store().tombstone(&id()).unwrap().unwrap().decision,
+        TombstoneDecision::Uninstalled
+    );
+    // An untrusted bundle (the code seal) is refused the same way.
+    let untrusted = Bundle {
+        trust: Err("the code seal does not verify".into()),
+        ..env.default_bundle()
+    };
+    assert!(matches!(
+        restore(&mut manager, &untrusted, &id()),
+        Err(RestoreRefusal::Verification(why)) if why.contains("code seal")
+    ));
+    assert!(record(&manager).is_none());
+    assert!(manager.store().tombstone(&id()).unwrap().is_some());
+}
+
+#[test]
+fn a_migration_plugin_is_restored_only_after_the_users_uninstall() {
+    let env = Env::new();
+    let bundle = env.bundle("0.1.0", &notifications(), BundleClass::Migration);
+    let mut manager = env.open();
+    // Never installed: the migration engine's, not a restore's.
+    assert!(!restorable(&manager, &bundle, &id()));
+    assert!(matches!(
+        restore(&mut manager, &bundle, &id()),
+        Err(RestoreRefusal::InvalidState(_))
+    ));
+    assert!(record(&manager).is_none());
+    // Installed (as the migration engine does), then removed by the user.
+    let package = verified(&bundle, &bundle.pins.plugins[0]).unwrap();
+    manager
+        .install(
+            &package,
+            &InstallSource::Bundled,
+            &Consent::none("migration"),
+        )
+        .unwrap();
+    manager
+        .uninstall_by_user(&id(), Retention::default())
+        .unwrap();
+    assert!(restorable(&manager, &bundle, &id()));
+    assert!(restore(&mut manager, &bundle, &id()).is_ok());
+    assert!(record(&manager).is_some());
 }

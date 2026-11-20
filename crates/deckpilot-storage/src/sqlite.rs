@@ -85,6 +85,18 @@ const MIGRATIONS: &[&str] = &[
     // Shared layouts: layouts, actions and icons move out of the profile
     // documents into tables of their own (`layouts::migrate`).
     crate::layouts::SCHEMA,
+    // Folder Back: folder pages get their reserved Back key, or keep the
+    // Back where it was when their first key runs something
+    // (`layouts::migrate_folder_backs`). Rewrites layout documents only.
+    "",
+    // Folder controls: a key that opens a folder keeps only that, other
+    // bindings move to the layout's recovered list
+    // (`layouts::migrate_folder_controls`). Rewrites layout documents only.
+    "",
+    // Folder names: the key that opens a folder shows the folder's name; a
+    // title of its own that differed is kept in the recovered list
+    // (`layouts::migrate_folder_labels`). Rewrites layout documents only.
+    "",
 ];
 
 /// Runs `step` again while SQLite reports the database busy, for up to
@@ -315,6 +327,9 @@ impl SqliteStore {
                 4 => crate::project_actions::migrate(&tx)?,
                 8 => tx.execute_batch(crate::provenance::SCHEMA)?,
                 10 => crate::layouts::migrate(&tx)?,
+                11 => crate::layouts::migrate_folder_backs(&tx)?,
+                12 => crate::layouts::migrate_folder_controls(&tx)?,
+                13 => crate::layouts::migrate_folder_labels(&tx)?,
                 _ => {}
             }
             failpoint(Failpoint::Migration(version + 1))?;

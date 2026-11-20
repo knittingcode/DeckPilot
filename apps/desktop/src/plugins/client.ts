@@ -23,6 +23,7 @@ import type {
   PluginActionOutcome,
   PluginCredentialSlot,
   PluginDetails,
+  PluginDialogAnswer,
   PluginEvent,
   PluginInstallPlan,
   PluginNavigationItem,
@@ -58,6 +59,29 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   } catch (error) {
     throw toPluginError(error)
   }
+}
+
+/**
+ * Tells the app whether the main window's plugin dialog host is mounted:
+ * only then does it announce plugin dialogs to the agent, so a plugin
+ * never asks a window that cannot answer (`plugin_dialogs_ready`).
+ */
+export function setPluginDialogsReady(ready: boolean): Promise<void> {
+  return call<null>("plugin_dialogs_ready", { ready }).then(() => undefined)
+}
+
+/**
+ * Answers a plugin dialog (`answer_plugin_dialog`). The agent checks the
+ * answer against the dialog: it refuses one that does not fit with the
+ * reason `invalidAnswer` (the dialog stays open), and one for a dialog that
+ * is no longer open with `dialogClosed`.
+ */
+export function answerPluginDialog(
+  dialog: string,
+  plugin: string,
+  answer: PluginDialogAnswer,
+): Promise<void> {
+  return call<null>("answer_plugin_dialog", { dialog, plugin, answer }).then(() => undefined)
 }
 
 /** `listKnownPlugins`. */
@@ -161,6 +185,7 @@ export function createTauriPluginClient(): PluginClient {
             ...(keep.credentials ? { credentials: true } : {}),
           })
         : call<null>("uninstall_plugin", { plugin }).then(() => undefined),
+    restoreBundledPlugin: (plugin) => call<PluginDetails>("restore_bundled_plugin", { plugin }),
     listKnownPlugins,
     getSettings: getPluginSettings,
     setSettings: setPluginSettings,

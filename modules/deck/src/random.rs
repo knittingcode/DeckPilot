@@ -168,6 +168,8 @@ impl RandomAction {
     pub fn with_chooser(chooser: Box<dyn Chooser>) -> Self {
         Self {
             definition: ActionType {
+                editor_navigation: None,
+                title: None,
                 id: type_id(RANDOM),
                 name: "Random action".into(),
                 description: "Runs one of several actions or workflows, picked at random.".into(),

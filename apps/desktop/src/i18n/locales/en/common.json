@@ -1,0 +1,34 @@
+{
+  "actions": {
+    "back": "Back",
+    "cancel": "Cancel",
+    "clear": "Clear",
+    "continue": "Continue",
+    "delete": "Delete",
+    "ok": "OK",
+    "tryAgain": "Try again"
+  },
+  "status": {
+    "loading": "Loading…",
+    "trying": "Trying…",
+    "waiting": "Waiting…",
+    "working": "Working…"
+  },
+  "duration": {
+    "daysHours": "{{days}} d {{hours}} h",
+    "hoursMinutes": "{{hours}} h {{minutes}} min",
+    "minutes": "{{minutes}} min",
+    "lessThanMinute": "less than a minute"
+  },
+  "counts": {
+    "projects_one": "{{count}} project",
+    "projects_other": "{{count}} projects"
+  },
+  "os": {
+    "linux": "Linux",
+    "macOs": "macOS",
+    "windows": "Windows",
+    "other": "Other"
+  },
+  "close": "Close"
+}

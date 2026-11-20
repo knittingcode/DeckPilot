@@ -1321,3 +1321,311 @@ fn a_missing_navigation_icon_is_refused() {
         "{refused:?}"
     );
 }
+
+// ------------------------------------------------- locales (plugin API 1.6)
+
+const EN: &[u8] =
+    br#"{"plugin": {"name": "PR count"}, "prs_one": "{{count}} PR", "prs_other": "{{count}} PRs"}"#;
+const PL: &[u8] = r#"{"plugin": {"name": "Liczba PR"}, "prs_one": "{{count}} PR", "prs_few": "{{count}} PR-y", "prs_many": "{{count}} PR-ów", "prs_other": "{{count}} PR"}"#.as_bytes();
+
+/// The example as a plugin API 1.6 manifest with `locales`, its name a
+/// translation key.
+fn localized_manifest(id: &str, version: &str, locales: &[&str]) -> Vec<u8> {
+    let mut value: Value = serde_json::from_slice(&manifest_json(id, version)).unwrap();
+    value["engines"]["pluginApi"] = Value::from("^1.6");
+    value["name"] = Value::from("t:plugin.name");
+    value["locales"] = Value::from(locales.to_vec());
+    serde_json::to_vec_pretty(&value).unwrap()
+}
+
+fn localized_files(locales: &[(&'static str, &[u8])]) -> Vec<(&'static str, Vec<u8>)> {
+    localized_files_of("acme.github-prs", locales)
+}
+
+fn localized_files_of(id: &str, locales: &[(&'static str, &[u8])]) -> Vec<(&'static str, Vec<u8>)> {
+    let tags: Vec<&str> = locales
+        .iter()
+        .map(|(path, _)| {
+            path.trim_start_matches("locales/")
+                .trim_end_matches(".json")
+        })
+        .collect();
+    let mut list = files(id, "1.0.0");
+    list[0].1 = localized_manifest(id, "1.0.0", &tags);
+    list.extend(locales.iter().map(|(path, bytes)| (*path, bytes.to_vec())));
+    list
+}
+
+fn localized_expected(built: &BuiltPackage) -> ExpectedPackage {
+    ExpectedPackage {
+        id: built.manifest.id.clone(),
+        version: built.manifest.version.clone(),
+        package: built.integrity.package.clone(),
+        manifest_sha256: built.integrity.manifest_sha256,
+        permissions: None,
+        first_party: false,
+    }
+}
+
+#[test]
+fn locale_files_are_package_files_the_integrity_covers() {
+    let list = localized_files(&[("locales/en.json", EN), ("locales/pl.json", PL)]);
+    let built = build_files(&list).unwrap();
+    for path in ["locales/en.json", "locales/pl.json"] {
+        assert!(built.integrity.files.contains_key(path), "{path}");
+    }
+    let verified = verify_package(
+        &built.bytes,
+        &localized_expected(&built),
+        &Limits::default(),
+    )
+    .unwrap();
+    let catalog = verified
+        .manifest()
+        .catalog(|path| verified.files().get(path).cloned())
+        .unwrap();
+    let pl = deckpilot_plugin_manifest::locale::LocaleTag::parse("pl-PL").unwrap();
+    let mut missing = Vec::new();
+    let localized = verified
+        .manifest()
+        .localized(&catalog, Some(&pl), &mut |key| missing.push(key.to_owned()));
+    assert_eq!(localized.name, "Liczba PR");
+    assert_eq!(missing, [] as [String; 0]);
+
+    // Installed and changed afterwards: refused at load like any file.
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("plugins/acme.github-prs/1.0.0");
+    verified
+        .unpack(&dir.path().join("plugins/.staging"), &target)
+        .unwrap();
+    verify_installed(&target, verified.integrity()).unwrap();
+    let file = target.join("locales/pl.json");
+    make_writable(&file);
+    std::fs::write(&file, br#"{"plugin": {"name": "Zmienione"}}"#).unwrap();
+    assert!(matches!(
+        verify_installed(&target, verified.integrity()),
+        Err(PackageError::InstalledMismatch { path, .. }) if path == "locales/pl.json"
+    ));
+}
+
+#[test]
+fn a_tampered_locale_file_is_refused_against_the_pins() {
+    let list = localized_files(&[("locales/en.json", EN), ("locales/pl.json", PL)]);
+    let built = build_files(&list).unwrap();
+    let expected = localized_expected(&built);
+    // The same package with another Polish file: other bytes than pinned.
+    let mut tampered = list.clone();
+    tampered.last_mut().unwrap().1 = br#"{"plugin": {"name": "Inna nazwa"}}"#.to_vec();
+    let other = build_files(&tampered).unwrap();
+    assert!(matches!(
+        verify_package(&other.bytes, &expected, &Limits::default()),
+        Err(PackageError::HashMismatch { .. } | PackageError::SizeMismatch { .. })
+    ));
+    // A bundled plugin's per-file pins catch it too.
+    let list = localized_files_of(
+        "deckpilot.github-prs",
+        &[("locales/en.json", EN), ("locales/pl.json", PL)],
+    );
+    let mut tampered = list.clone();
+    tampered.last_mut().unwrap().1 = br#"{"plugin": {"name": "Inna nazwa"}}"#.to_vec();
+    let pinned: Files = list
+        .iter()
+        .map(|(p, b)| ((*p).to_owned(), b.clone()))
+        .collect();
+    let mut pins = ExpectedFiles {
+        id: PluginId::parse("deckpilot.github-prs").unwrap(),
+        version: semver::Version::new(1, 0, 0),
+        files: pinned
+            .iter()
+            .map(|(path, bytes)| {
+                (
+                    path.clone(),
+                    PackageDigest {
+                        sha256: sha256(bytes),
+                        size: bytes.len() as u64,
+                    },
+                )
+            })
+            .collect(),
+    };
+    assert!(verify_bundled_files(pinned, &pins, &Limits::default()).is_ok());
+    let files: Files = tampered
+        .iter()
+        .map(|(p, b)| ((*p).to_owned(), b.clone()))
+        .collect();
+    assert!(verify_bundled_files(files.clone(), &pins, &Limits::default()).is_err());
+    pins.files.remove("locales/pl.json");
+    assert!(verify_bundled_files(files, &pins, &Limits::default()).is_err());
+}
+
+#[test]
+fn bad_or_undeclared_locale_files_are_refused() {
+    let locale_error = |result: Result<BuiltPackage, PackageError>| match result {
+        Err(PackageError::Locale { path, error }) => (path, error.to_string()),
+        Err(other) => panic!("expected a locale error, got {other}"),
+        Ok(_) => panic!("expected a locale error, got a package"),
+    };
+    for (bytes, message) in [
+        (&b"{\"plugin\": {\"name\": 7}}"[..], "not valid JSON"),
+        (
+            b"{\"plugin\": {\"name\": \"<script>x</script>\"}}",
+            "markup",
+        ),
+        (b"not json", "not valid JSON"),
+        (b"{\"a\": \"{{broken\"}", "placeholder"),
+    ] {
+        let (path, error) = locale_error(build_files(&localized_files(&[
+            ("locales/en.json", EN),
+            ("locales/pl.json", bytes),
+        ])));
+        assert_eq!(path, "locales/pl.json");
+        assert!(error.contains(message), "{error}");
+    }
+    let huge = format!("{{\"a\": \"{}\"}}", "x".repeat(70 * 1024));
+    let (_, error) = locale_error(build_files(&localized_files(&[
+        ("locales/en.json", EN),
+        ("locales/pl.json", huge.as_bytes()),
+    ])));
+    assert!(error.contains("larger than"), "{error}");
+
+    // A file in locales/ the manifest does not declare is not allowed,
+    // and a declared one must be there.
+    let mut extra = localized_files(&[("locales/en.json", EN)]);
+    extra.push(("locales/de.json", EN.to_vec()));
+    assert!(matches!(
+        build_files(&extra),
+        Err(PackageError::Contents(errors)) if errors.to_string().contains("locales/de.json")
+    ));
+    let mut missing = localized_files(&[("locales/en.json", EN), ("locales/pl.json", PL)]);
+    missing.pop();
+    assert!(matches!(
+        build_files(&missing),
+        Err(PackageError::Contents(errors)) if errors.to_string().contains("locales/pl.json")
+    ));
+}
+
+/// The sample localized plugin (`tests/fixtures/localized`): its manifest
+/// and translations package, verify and show in Polish, with Polish
+/// plurals, and in English for a language it has no file for.
+#[test]
+fn the_localized_sample_packages_and_translates() {
+    use deckpilot_plugin_manifest::locale::{Arg, LocaleTag};
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/localized");
+    let read = |path: &str| std::fs::read(dir.join(path)).unwrap();
+    let list = vec![
+        ("manifest.json", read("manifest.json")),
+        ("plugin.wasm", module_for("acme.pr-count", "1.0.0")),
+        ("LICENSE", b"Apache-2.0\n".to_vec()),
+        ("assets/icon-128.png", noise(200, 9)),
+        ("locales/en.json", read("locales/en.json")),
+        ("locales/pl.json", read("locales/pl.json")),
+    ];
+    let built = build_files(&list).unwrap();
+    let verified = verify_package(
+        &built.bytes,
+        &localized_expected(&built),
+        &Limits::default(),
+    )
+    .unwrap();
+    let manifest = verified.manifest();
+    let catalog = manifest
+        .catalog(|path| verified.files().get(path).cloned())
+        .unwrap();
+    let tag = |t: &str| LocaleTag::parse(t).unwrap();
+    let mut missing = Vec::new();
+    let pl = manifest.localized(&catalog, Some(&tag("pl-PL")), &mut |k| {
+        missing.push(k.to_owned());
+    });
+    assert_eq!(pl.name, "Liczba PR");
+    let action = &pl.contributes.actions()[0];
+    assert_eq!(action.id, "count");
+    assert_eq!(action.name, "Policz pull requesty");
+    assert_eq!(action.parameters[0].label, "Repozytorium");
+    assert_eq!(action.parameters[0].key, "repository");
+    assert_eq!(
+        pl.contributes.error_codes.as_ref().unwrap()["rate-limited"],
+        "GitHub prosi o chwilę cierpliwości."
+    );
+    assert_eq!(
+        pl.permissions[0].justification(),
+        "Odczytuje pull requesty z API GitHuba."
+    );
+    assert!(missing.is_empty(), "{missing:?}");
+    let de = manifest.localized(&catalog, Some(&tag("de")), &mut |_| {});
+    assert_eq!(de.name, "PR count");
+    let count = |n: i64| {
+        catalog
+            .translate(
+                Some(&tag("pl")),
+                "prs",
+                &[("count".into(), Arg::Int(n))],
+                None,
+            )
+            .text
+    };
+    assert_eq!(count(1), "1 pull request");
+    assert_eq!(count(4), "4 pull requesty");
+    assert_eq!(count(5), "5 pull requestów");
+}
+
+// ------------------------------------------------------- visual assets
+
+/// The fixture at plugin API 1.8 with an icon (`assets/visual/icon.png`)
+/// and an image background (`assets/visual/sky.png`).
+fn visual_files(icon: Vec<u8>, sky: Vec<u8>) -> Vec<(&'static str, Vec<u8>)> {
+    let mut value: Value =
+        serde_json::from_slice(&manifest_json("acme.github-prs", "1.0.0")).unwrap();
+    value["engines"]["pluginApi"] = Value::from("^1.8");
+    value["contributes"]["visualAssets"] = serde_json::json!({
+        "icons": [{"id": "logo", "name": "Logo", "asset": "assets/visual/icon.png"}],
+        "backgrounds": [
+            {"id": "sky", "name": "Sky", "type": "image", "asset": "assets/visual/sky.png"},
+            {"id": "dusk", "name": "Dusk", "type": "gradient", "colors": ["#ff8800", "#220044"]}
+        ]
+    });
+    let mut list = files("acme.github-prs", "1.0.0");
+    list[0].1 = serde_json::to_vec_pretty(&value).unwrap();
+    list.push(("assets/visual/icon.png", icon));
+    list.push(("assets/visual/sky.png", sky));
+    list
+}
+
+#[test]
+fn visual_assets_are_packaged_hashed_and_checked() {
+    let built = build_files(&visual_files(png_header(64, 64), png_header(400, 200))).unwrap();
+    // Hashed like every other file the manifest names: a changed asset is
+    // a changed package.
+    assert!(built.integrity.files.contains_key("assets/visual/icon.png"));
+    assert!(built.integrity.files.contains_key("assets/visual/sky.png"));
+    verify_package(&built.bytes, &expected_for(&built), &Limits::default()).unwrap();
+
+    let refusal = |result: Result<_, PackageError>| match result {
+        Err(PackageError::VisualAsset { path, error }) => format!("{path}: {error}"),
+        other => panic!("expected a visual asset refusal, got {other:?}"),
+    };
+    assert_eq!(
+        refusal(build_files(&visual_files(
+            png_header(600, 64),
+            png_header(64, 64)
+        ))),
+        "assets/visual/icon.png: is 600 x 64 pixels; the limit is 512 x 512"
+    );
+    assert_eq!(
+        refusal(build_files(&visual_files(
+            png_header(64, 64),
+            png_header(2048, 64)
+        ))),
+        "assets/visual/sky.png: is 2048 x 64 pixels; the limit is 1024 x 1024"
+    );
+    assert_eq!(
+        refusal(build_files(&visual_files(
+            b"GIF89a...".to_vec(),
+            png_header(64, 64)
+        ))),
+        "assets/visual/icon.png: is not a valid PNG file"
+    );
+    // A file the manifest names must be in the package.
+    let mut missing = visual_files(png_header(64, 64), png_header(64, 64));
+    missing.pop();
+    assert!(build_files(&missing).is_err());
+}

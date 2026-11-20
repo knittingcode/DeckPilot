@@ -191,6 +191,7 @@ pub fn summary(record: &PluginRecord, stored: &[StoredGrant]) -> ipc::PluginSumm
         health: None,
         navigation: manifest.map(navigation).unwrap_or_default(),
         installed_for: None,
+        visual_assets: manifest.map(visual_assets).unwrap_or_default(),
     }
 }
 
@@ -359,6 +360,11 @@ fn chunk(
     })
 }
 
+/// The sha256 of `bytes`.
+pub fn sha256_of(bytes: &[u8]) -> Sha256Digest {
+    sha256(bytes)
+}
+
 fn sha256(bytes: &[u8]) -> Sha256Digest {
     use sha2::Digest as _;
     Sha256Digest::from_bytes(sha2::Sha256::digest(bytes).into())
@@ -471,6 +477,123 @@ pub fn navigation_icon_chunk(
     offset: u64,
 ) -> Option<ipc::PluginIconChunk> {
     let (format, bytes) = navigation_icon(dir, record, navigation)?;
+    chunk(&bytes, format.media_type(), &sha256(&bytes), offset)
+}
+
+/// The icons and backgrounds of a manifest (`contributes.visualAssets`,
+/// plugin API 1.8), in manifest order, named `<plugin id>.<id>`. Entries
+/// whose id does not form an asset id are left out (never, for a
+/// validated manifest).
+pub fn visual_assets(manifest: &Manifest) -> Vec<ipc::PluginVisualAsset> {
+    use deckpilot_plugin_manifest::VisualBackgroundKind;
+    let plugin = manifest.id.to_string();
+    let full = |id: &str| {
+        deckpilot_core::AssetId::of_plugin(&plugin, id)
+            .ok()
+            .map(|id| id.to_string())
+    };
+    let assets = manifest.contributes.visual_assets();
+    let icons = assets.icons().iter().filter_map(|icon| {
+        Some(ipc::PluginVisualAsset {
+            id: full(&icon.id)?,
+            asset: icon.id.clone(),
+            name: icon.name.clone(),
+            kind: ipc::VisualAssetKind::Icon,
+            colors: Vec::new(),
+            angle: None,
+            keywords: icon.keywords.clone().unwrap_or_default(),
+        })
+    });
+    let backgrounds = assets.backgrounds().iter().filter_map(|background| {
+        Some(ipc::PluginVisualAsset {
+            id: full(&background.id)?,
+            asset: background.id.clone(),
+            name: background.name.clone(),
+            kind: match background.kind {
+                VisualBackgroundKind::Image => ipc::VisualAssetKind::ImageBackground,
+                VisualBackgroundKind::Gradient => ipc::VisualAssetKind::GradientBackground,
+            },
+            colors: background
+                .colors
+                .iter()
+                .flatten()
+                .map(|c| c.to_ascii_lowercase())
+                .collect(),
+            angle: background.angle,
+            keywords: Vec::new(),
+        })
+    });
+    icons.chain(backgrounds).collect()
+}
+
+/// The file of the visual asset `asset` (its id in the plugin) of the
+/// manifest, read with `read`, only when its sha256 is the one `files` (the
+/// integrity record) has for it and its content passes
+/// [`deckpilot_plugin_manifest::check_visual_asset`] again. Anything else
+/// (no such asset, a gradient, a changed or oversized file) gives none:
+/// keys then draw their fallback.
+pub fn visual_asset_of(
+    manifest: &Manifest,
+    files: &BTreeMap<String, Sha256Digest>,
+    asset: &str,
+    read: impl FnOnce(&str) -> Option<Vec<u8>>,
+) -> Option<(deckpilot_plugin_manifest::VisualFormat, Vec<u8>)> {
+    use deckpilot_plugin_manifest::VisualUse;
+    let assets = manifest.contributes.visual_assets();
+    let (relative, used) = assets
+        .icons()
+        .iter()
+        .find(|icon| icon.id == asset)
+        .map(|icon| (icon.asset.as_str(), VisualUse::Icon))
+        .or_else(|| {
+            assets
+                .backgrounds()
+                .iter()
+                .find(|b| b.id == asset)
+                .and_then(|b| Some((b.asset.as_deref()?, VisualUse::Background)))
+        })?;
+    let expected = files.get(relative)?;
+    let bytes = read(relative)?;
+    if bytes.len() > ipc::MAX_VISUAL_ASSET_FILE_BYTES || sha256(&bytes) != *expected {
+        return None;
+    }
+    let (format, ..) =
+        deckpilot_plugin_manifest::check_visual_asset(relative, used, &bytes).ok()?;
+    Some((format, bytes))
+}
+
+/// [`visual_asset_of`] for the active version installed in `dir`: a
+/// regular file (no link) of at most [`ipc::MAX_VISUAL_ASSET_FILE_BYTES`].
+pub fn visual_asset_file(
+    dir: &Path,
+    record: &PluginRecord,
+    asset: &str,
+) -> Option<(deckpilot_plugin_manifest::VisualFormat, Vec<u8>)> {
+    let active = record.active()?;
+    visual_asset_of(
+        &active.manifest,
+        &active.integrity.files,
+        asset,
+        |relative| {
+            let path = dir.join(relative);
+            let meta = std::fs::symlink_metadata(&path).ok()?;
+            if !meta.is_file() || meta.len() > ipc::MAX_VISUAL_ASSET_FILE_BYTES as u64 {
+                return None;
+            }
+            std::fs::read(&path).ok()
+        },
+    )
+}
+
+/// The chunk at `offset` of a visual asset's file (`getPluginIcon` with
+/// `asset`), checked on every request.
+pub fn visual_asset_chunk(
+    dir: &Path,
+    record: &PluginRecord,
+    asset: &str,
+    offset: u64,
+) -> Option<ipc::PluginIconChunk> {
+    let (format, bytes) = visual_asset_file(dir, record, asset)?;
     chunk(&bytes, format.media_type(), &sha256(&bytes), offset)
 }
 
@@ -618,6 +741,8 @@ pub fn approved_with(
                 None => skipped.push(key.to_string()),
             },
             (PermissionKind::Notifications, _) => out.push(ApprovedPermission::Notifications {}),
+            // Standard dialogs (plugin API 1.5).
+            (PermissionKind::Dialogs, _) => out.push(ApprovedPermission::Dialogs {}),
             // Key state (plugin API 1.2): the plugin describes what its
             // keys show. `device:icons` gives nothing yet.
             (PermissionKind::Device, _) if key.key == "state" => {

@@ -3,6 +3,8 @@ import { CircleAlert, CircleCheck, CircleX } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { SettingsSection } from "@/components/settings-layout"
+import { useTranslation } from "@/i18n"
+import { useFormat } from "@/i18n/format"
 import { api } from "@/lib/api"
 import { toastFailure } from "@/lib/failure"
 import type { ElapsedFormat, WorkSessionSnapshot } from "@/lib/types"
@@ -12,6 +14,7 @@ import {
   describeDuration,
   formatElapsed,
   noticeText,
+  outcomeKey,
   showsElapsed,
   timerRunning,
 } from "./model"
@@ -32,41 +35,49 @@ export function StatusCard({
   projectName: (id: string) => string
   onChange: (snapshot: WorkSessionSnapshot) => void
 }) {
+  const { t } = useTranslation()
+  const { dateTime } = useFormat()
   const text = STATE_TEXT[snapshot.state]
   const notices = snapshot.notices ?? []
   return (
     <SettingsSection
-      title="Current session"
-      description="Operated from its key on the device; this page only shows the state."
+      title={t("workspace:workSession.status.title")}
+      description={t("workspace:workSession.status.description")}
     >
       <div className="grid gap-4">
         <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
           <div className="grid gap-1">
-            <span className="text-xs text-muted-foreground">State</span>
+            <span className="text-xs text-muted-foreground">
+              {t("workspace:workSession.status.state")}
+            </span>
             <p aria-live="polite" className="flex items-center gap-2 text-lg font-medium">
               <Badge variant={timerRunning(snapshot.state) ? "default" : "secondary"}>
-                {text.label}
+                {t(text.label)}
               </Badge>
             </p>
           </div>
           {showsElapsed(snapshot.state) && <Elapsed snapshot={snapshot} format={format} />}
           {snapshot.project && (
             <div className="grid gap-1">
-              <span className="text-xs text-muted-foreground">Project</span>
+              <span className="text-xs text-muted-foreground">
+                {t("workspace:workSession.status.project")}
+              </span>
               <span className="text-sm">{projectName(snapshot.project)}</span>
             </div>
           )}
           {snapshot.startedAtMs !== undefined && (
             <div className="grid gap-1">
-              <span className="text-xs text-muted-foreground">Started</span>
-              <span className="text-sm">{new Date(snapshot.startedAtMs).toLocaleString()}</span>
+              <span className="text-xs text-muted-foreground">
+                {t("workspace:workSession.status.started")}
+              </span>
+              <span className="text-sm">{dateTime(snapshot.startedAtMs)}</span>
             </div>
           )}
         </div>
-        <p className="text-sm text-muted-foreground">{text.hint}</p>
+        <p className="text-sm text-muted-foreground">{t(text.hint)}</p>
         {snapshot.verification && <LastCheck snapshot={snapshot} />}
         {notices.length > 0 && (
-          <section aria-label="Notices" className="grid gap-2">
+          <section aria-label={t("workspace:workSession.status.notices")} className="grid gap-2">
             <ul className="grid gap-2">
               {notices.map((notice) => {
                 const { title, detail } = noticeText(notice)
@@ -79,9 +90,7 @@ export function StatusCard({
                     <div className="grid gap-0.5">
                       <span className="font-medium">{title}</span>
                       <span className="text-muted-foreground">{detail}</span>
-                      <span className="text-xs text-muted-foreground">
-                        {new Date(notice.atMs).toLocaleString()}
-                      </span>
+                      <span className="text-xs text-muted-foreground">{dateTime(notice.atMs)}</span>
                     </div>
                   </li>
                 )
@@ -96,14 +105,14 @@ export function StatusCard({
                     .clearWorkSessionNotices(snapshot.session ?? null)
                     .then(onChange, (e: unknown) => {
                       toastFailure(
-                        "The notices were not cleared",
+                        t("workspace:workSession.status.clearFailed"),
                         e,
-                        "Unlock DeckPilot if it is locked, then try again.",
+                        t("workspace:workSession.unlockNext"),
                       )
                     })
                 }}
               >
-                Clear notices
+                {t("workspace:workSession.status.clearNotices")}
               </Button>
             </div>
           </section>
@@ -114,11 +123,12 @@ export function StatusCard({
 }
 
 function Elapsed({ snapshot, format }: { snapshot: WorkSessionSnapshot; format: ElapsedFormat }) {
+  const { t } = useTranslation()
   const elapsed = useLiveElapsed(snapshot, format)
   return (
     <div className="grid gap-1">
       <span className="text-xs text-muted-foreground" id="work-session-elapsed">
-        Elapsed
+        {t("workspace:workSession.status.elapsed")}
       </span>
       <time
         role="timer"
@@ -133,21 +143,25 @@ function Elapsed({ snapshot, format }: { snapshot: WorkSessionSnapshot; format: 
 }
 
 function LastCheck({ snapshot }: { snapshot: WorkSessionSnapshot }) {
+  const { t } = useTranslation()
+  const { dateTime } = useFormat()
   const record = snapshot.verification
   if (!record) return null
   const outcome = record.outcome
   const Icon = outcome === undefined ? CircleAlert : outcome.canFinish ? CircleCheck : CircleX
-  const label =
-    outcome === undefined ? "No result" : outcome.canFinish ? "Can finish" : "Not ready to finish"
   return (
     <div className="flex gap-2 text-sm">
       <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
       <p>
-        <span className="font-medium">Last end check: {label}</span>
-        {outcome?.details && <span className="text-muted-foreground"> — {outcome.details}</span>}
-        <span className="block text-xs text-muted-foreground">
-          {new Date(record.atMs).toLocaleString()}
+        <span className="font-medium">
+          {t("workspace:workSession.check.last", { outcome: t(outcomeKey(outcome)) })}
         </span>
+        {outcome?.details && (
+          <span className="text-muted-foreground">
+            {t("workspace:workSession.check.details", { details: outcome.details })}
+          </span>
+        )}
+        <span className="block text-xs text-muted-foreground">{dateTime(record.atMs)}</span>
       </p>
     </div>
   )

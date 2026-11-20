@@ -58,9 +58,9 @@ pub async fn set_module_enabled(
         && module_id == deckpilot_modules::work_session::module_id()
         && state.store()?.active_work_session()?.is_some()
     {
-        return Err(CommandError::Invalid(
-            "a work session is active; finish it from its key before turning work sessions off"
-                .into(),
+        return Err(CommandError::invalid(
+            "workSessionActive",
+            "a work session is active; finish it from its key before turning work sessions off",
         ));
     }
     state.modules().set_enabled(&module_id, enabled)?;

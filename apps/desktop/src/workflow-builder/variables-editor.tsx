@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { useTranslation } from "@/i18n"
 import type { ValueKind, WorkflowVariable } from "@/lib/types"
 
 import { MAX_WORKFLOW_VALUES } from "./graph"
@@ -36,28 +37,28 @@ export function VariablesEditor({
   variables: WorkflowVariable[]
   onChange: (variables: WorkflowVariable[]) => void
 }) {
+  const { t } = useTranslation()
   const set = (index: number, change: Partial<WorkflowVariable>) => {
     onChange(variables.map((v, i) => (i === index ? { ...v, ...change } : v)))
   }
   return (
-    <section className="grid gap-3 border-t px-4 py-3" aria-label="Variables">
+    <section className="grid gap-3 border-t px-4 py-3" aria-label={t("workflows:variables.title")}>
       <div className="grid gap-1">
-        <h3 className="text-xs font-medium text-muted-foreground uppercase">Variables</h3>
-        <p className="text-xs text-muted-foreground">
-          Values for one run. Set variable nodes change them; later nodes read them as “Variable ·
-          …”.
-        </p>
+        <h3 className="text-xs font-medium text-muted-foreground uppercase">
+          {t("workflows:variables.title")}
+        </h3>
+        <p className="text-xs text-muted-foreground">{t("workflows:variables.description")}</p>
       </div>
       {variables.map((variable, index) => (
         <div
           key={index}
           className="grid grid-cols-[minmax(0,1fr)] gap-1.5 rounded-md border p-2"
           role="group"
-          aria-label={`Variable ${variable.key}`}
+          aria-label={t("workflows:variables.group", { key: variable.key })}
         >
           <div className="flex items-center gap-1">
             <Input
-              aria-label="Variable key"
+              aria-label={t("workflows:variables.key")}
               aria-invalid={!/^[A-Za-z0-9_]{1,64}$/.test(variable.key)}
               className="h-7 min-w-0 flex-1 font-mono text-xs"
               value={variable.key}
@@ -71,7 +72,10 @@ export function VariablesEditor({
                 set(index, { kind: kind as ValueKind })
               }}
             >
-              <SelectTrigger className="h-7 w-28 text-xs" aria-label="Variable type">
+              <SelectTrigger
+                className="h-7 w-28 text-xs"
+                aria-label={t("workflows:variables.type")}
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -86,7 +90,7 @@ export function VariablesEditor({
               variant="ghost"
               size="icon"
               className="size-7 shrink-0"
-              aria-label={`Remove variable ${variable.key}`}
+              aria-label={t("workflows:variables.remove", { key: variable.key })}
               onClick={() => {
                 onChange(variables.filter((_, i) => i !== index))
               }}
@@ -95,18 +99,18 @@ export function VariablesEditor({
             </Button>
           </div>
           <Input
-            aria-label="Variable label"
+            aria-label={t("workflows:variables.label")}
             className="h-7 text-xs"
-            placeholder="Label"
+            placeholder={t("workflows:interface.labelPlaceholder")}
             value={variable.label ?? ""}
             onChange={(e) => {
               set(index, { label: e.target.value || undefined })
             }}
           />
           <Input
-            aria-label="Variable initial value"
+            aria-label={t("workflows:variables.initial")}
             className="h-7 text-xs"
-            placeholder="Initial value (optional)"
+            placeholder={t("workflows:variables.initialPlaceholder")}
             value={variable.initial ?? ""}
             onChange={(e) => {
               set(index, { initial: e.target.value === "" ? undefined : e.target.value })
@@ -121,7 +125,7 @@ export function VariablesEditor({
               }}
             />
             <Label htmlFor={`variable-sensitive-${index}`} className="text-xs font-normal">
-              Sensitive: not kept in history
+              {t("workflows:interface.sensitiveNotKept")}
             </Label>
           </div>
         </div>
@@ -134,7 +138,7 @@ export function VariablesEditor({
           onChange([...variables, { key: nextKey(variables), kind: "text" }])
         }}
       >
-        <Plus /> Add variable
+        <Plus /> {t("workflows:variables.add")}
       </Button>
     </section>
   )

@@ -4,18 +4,20 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { useTitlebar } from "@/hooks/use-titlebar"
 import { useAppContext } from "@/lib/app-context"
 import type { TitlebarAction, TitlebarBreadcrumb } from "@/lib/titlebar"
+import { useTranslation } from "@/i18n"
 
 /** The profile a profile-scoped page edits, shown in the titlebar. */
 function useProfileScope(enabled: boolean) {
+  const { t } = useTranslation()
   const { profiles, editingProfileId } = useAppContext()
   const profile = enabled ? profiles.profiles.find((p) => p.id === editingProfileId) : undefined
   if (!profile) return undefined
   const onDevice = profile.id === profiles.activeProfileId
   return {
-    caption: "Profile",
+    caption: t("settings:page.profile"),
     label: profile.name,
     tone: onDevice ? ("positive" as const) : ("neutral" as const),
-    hint: onDevice ? "Active on the device" : "Not active on the device",
+    hint: onDevice ? t("settings:page.activeOnDevice") : t("settings:page.notActiveOnDevice"),
   }
 }
 
@@ -46,16 +48,18 @@ export function Page({
 }
 
 export function ErrorNotice({ error }: { error: string }) {
+  const { t } = useTranslation()
   return (
     <Alert variant="destructive">
-      <AlertTitle>Something went wrong</AlertTitle>
+      <AlertTitle>{t("settings:shared.somethingWentWrong")}</AlertTitle>
       <AlertDescription>{error}</AlertDescription>
     </Alert>
   )
 }
 
 export function Loading() {
-  return <p className="text-sm text-muted-foreground">Loading…</p>
+  const { t } = useTranslation()
+  return <p className="text-sm text-muted-foreground">{t("common:status.loading")}</p>
 }
 
 /**

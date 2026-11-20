@@ -4,6 +4,8 @@ import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
 import { defineConfig } from "vitest/config"
 
+import { layoutProbe } from "./dev/layout-probe-plugin"
+
 const host = process.env.TAURI_DEV_HOST
 // A second development session (e.g. the integration preview) uses its own
 // port, with a Tauri configuration whose `devUrl` matches it
@@ -11,7 +13,8 @@ const host = process.env.TAURI_DEV_HOST
 const port = Number(process.env.DECKPILOT_VITE_PORT ?? 1420)
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  // layoutProbe: development only (`apply: "serve"`), see docs/development.md.
+  plugins: [react(), tailwindcss(), layoutProbe()],
   resolve: {
     alias: { "@": path.resolve(import.meta.dirname, "./src") },
   },

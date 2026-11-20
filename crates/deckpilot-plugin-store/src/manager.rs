@@ -421,6 +421,185 @@ impl PluginManager {
         })
     }
 
+    // -------------------------------------------------------- bundled restore
+
+    /// The user's restore of a first-party plugin they uninstalled
+    /// (Settings › Plugins › Restore, `restoreBundledPlugin`): clears its
+    /// tombstone and installs `package` (the copy of the application bundle,
+    /// verified by the caller against the pins compiled into the agent) as
+    /// source `bundled` with `consent` (low-tier keys only, as seeding).
+    /// One step for the user: if the install fails, the tombstone is written
+    /// back, so nothing changed. Settings and credentials kept at the
+    /// uninstall belong to the plugin again. Refused for a plugin that is
+    /// installed ([`StoreError::AlreadyInstalled`]).
+    pub fn restore_by_user(
+        &mut self,
+        package: &VerifiedPackage,
+        consent: &Consent,
+    ) -> Result<PluginRecord> {
+        let id = package.manifest().id.clone();
+        store::check_source(&id, &InstallSource::Bundled)?;
+        let version = package.manifest().version.to_string();
+        let removed = self.tx(|tx, ctx| {
+            ensure_idle(tx, &id)?;
+            if let Some(existing) = store::load_plugin(tx, &id)? {
+                return Err(StoreError::AlreadyInstalled {
+                    id: id.clone(),
+                    version: existing
+                        .active()
+                        .map(|v| v.version.to_string())
+                        .unwrap_or_default(),
+                });
+            }
+            let tombstone = store::load_tombstone(tx, &id)?;
+            if tombstone.is_some() {
+                store::delete_tombstone(tx, &id)?;
+                ctx.audit(
+                    tx,
+                    &id,
+                    event(
+                        Some(&version),
+                        "tombstone",
+                        None,
+                        "cleared",
+                        Some("restore"),
+                    ),
+                )?;
+            }
+            Ok(tombstone.map(|t| t.decision))
+        })?;
+        match self.install(package, &InstallSource::Bundled, consent) {
+            Err(error) if !error.is_crash() => {
+                if let Some(decision) = removed {
+                    // The user's earlier decision stands until a restore
+                    // succeeds.
+                    let _ = self.tx(|tx, ctx| {
+                        store::set_tombstone(tx, &id, decision, ctx.now)?;
+                        ctx.audit(
+                            tx,
+                            &id,
+                            event(
+                                Some(&version),
+                                "tombstone",
+                                None,
+                                decision.as_str(),
+                                Some("restore failed"),
+                            ),
+                        )
+                    });
+                }
+                Err(error)
+            }
+            other => other,
+        }
+    }
+
+    /// The user's reinstall of a broken bundled plugin (Settings › Plugins ›
+    /// Reinstall, `restoreBundledPlugin`): uninstalls the broken copy
+    /// (without a tombstone, keeping its settings and credentials) and
+    /// installs `package` (verified by the caller against the pins compiled
+    /// into the agent) as source `bundled` with `consent` (low-tier keys
+    /// only). The plugin's earlier permission decisions (grants and
+    /// revocations) and its consents to servers the user entered come back
+    /// where the reinstalled version declares them alike. The result is
+    /// `Disabled`; enabling it is the caller's decision. Only a `Broken`
+    /// plugin of source `bundled` is reinstalled.
+    pub fn reinstall_bundled_by_user(
+        &mut self,
+        package: &VerifiedPackage,
+        consent: &Consent,
+    ) -> Result<PluginRecord> {
+        let id = package.manifest().id.clone();
+        store::check_source(&id, &InstallSource::Bundled)?;
+        let plugin = self.plugin(&id)?;
+        if plugin.source != InstallSource::Bundled {
+            return Err(StoreError::SourceNotAllowed {
+                id,
+                origin: plugin.source.as_str(),
+            });
+        }
+        if plugin.state != PluginState::Broken {
+            return Err(StoreError::IllegalTransition {
+                id,
+                from: plugin.state,
+                to: PluginState::Installing,
+            });
+        }
+        let grants = self.store.grants(&id)?;
+        let origins = self.store.user_origins(&id)?;
+        let broken = plugin.active().map(|v| v.version.to_string());
+        self.tx(|tx, ctx| {
+            ctx.audit(
+                tx,
+                &id,
+                event(
+                    broken.as_deref(),
+                    "reinstall",
+                    None,
+                    "started",
+                    plugin.state_reason.as_deref(),
+                ),
+            )
+        })?;
+        self.uninstall_keeping(
+            &id,
+            Retention {
+                settings: true,
+                credentials: true,
+            },
+        )?;
+        let record = self.install(package, &InstallSource::Bundled, consent)?;
+        let active = active_of(&record)?;
+        let declared = active.grants();
+        let manifest = active.manifest.clone();
+        let version = active.version.to_string();
+        self.tx(|tx, ctx| {
+            for grant in &grants {
+                if declared.get(&grant.key) != Some(&grant.scope) {
+                    continue;
+                }
+                store::upsert_grant(
+                    tx,
+                    &id,
+                    &StoredGrant {
+                        granted_for_version: version.clone(),
+                        ..grant.clone()
+                    },
+                )?;
+                ctx.audit(
+                    tx,
+                    &id,
+                    event(
+                        Some(&version),
+                        "grant",
+                        Some(&grant.key),
+                        grant.status.as_str(),
+                        Some("kept at reinstall"),
+                    ),
+                )?;
+            }
+            for origin in &origins {
+                if crate::origins::check(&id, &manifest, &origin.consent).is_err() {
+                    continue;
+                }
+                crate::origins::upsert(
+                    tx,
+                    &id,
+                    &crate::origins::StoredUserOrigin {
+                        granted_for_version: version.clone(),
+                        ..origin.clone()
+                    },
+                )?;
+            }
+            ctx.audit(
+                tx,
+                &id,
+                event(Some(&version), "reinstall", None, "ok", None),
+            )
+        })?;
+        self.plugin(&id)
+    }
+
     // ------------------------------------------------------ module migrations
 
     /// Records a step of a built-in module's migration to its first-party

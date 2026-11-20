@@ -49,6 +49,17 @@
 //!   workflow the user started): the broker refuses it in any other run,
 //!   and the executor checks its own run context again before opening.
 //!   Only the origin is logged, never the path or query.
+//! * `dialog.open` (plugin API 1.5, `docs/dialogs.md`): the request the
+//!   broker allowed (granted, a run the user started, within every bound),
+//!   shown in the app connections that announced plugin dialogs
+//!   (`crate::plugin_dialogs`), titled with the plugin's display name from
+//!   its installed manifest under a random id. The invocation waits for
+//!   the answer, which is checked against the request before the plugin
+//!   receives it; at most `timeoutSeconds`, never past the invocation's
+//!   deadline (less a margin, so the plugin can still act on the
+//!   timeout). An abort (the plugin was disabled, updated or uninstalled,
+//!   or the run cancelled), the deadline or a crash of the host closes the
+//!   dialog in the app (`pluginStopped`). No app: `unavailable`.
 //! * `run.context` (G8): what started the invocation's run and, for a
 //!   workflow node, how the run is going ([`RunContext`]); the context the
 //!   agent handed this executor, never anything the guest said.
@@ -75,6 +86,7 @@ use deckpilot_plugin_abi::capability::{
     AuthScheme, Header, HttpResponse, LogLevel, NotifyDelivery, NotifySeverity, RunContext,
     StorageUsage, is_response_header,
 };
+use deckpilot_plugin_abi::dialog::{CancelReason, DialogRequest, DialogResult};
 use deckpilot_plugin_abi::limits::{MAX_HEADER_LEN, MAX_HEADERS};
 use deckpilot_plugin_abi::{CallErrorCode, CallResult, HttpMethod, NetworkErrorKind};
 use deckpilot_plugin_broker::{
@@ -111,6 +123,11 @@ const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 const MAX_BODY: usize = 512 * 1024;
 /// URLs one invocation may open (on top of the broker's rate limits).
 const MAX_OPENS_PER_INVOCATION: u32 = 3;
+/// How long before the invocation's deadline a dialog times out at the
+/// latest, so the plugin still receives `timeout` and can finish.
+const DIALOG_DEADLINE_MARGIN: std::time::Duration = std::time::Duration::from_secs(2);
+/// How often a waiting dialog looks at its invocation's interrupt.
+const DIALOG_POLL: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// How allowed `url.open` requests are carried out: the operating system's
 /// handler for https URLs, or (agent tests only, feature `test-hooks`) a
@@ -542,6 +559,13 @@ pub(super) struct Executor {
     /// What started the invocation's run (G8); unknown until the caller
     /// says, which counts as not started by the user.
     run: RunContext,
+    /// Plugin dialogs (plugin API 1.5); without them `dialog.open` is
+    /// `unavailable`.
+    dialogs: Option<Arc<crate::plugin_dialogs::PluginDialogs>>,
+    /// The plugin's own translations and the app's language (plugin API
+    /// 1.6); without them the language is English and every key falls
+    /// back.
+    translator: Option<super::locales::Translator>,
 }
 
 impl std::fmt::Debug for Executor {
@@ -572,6 +596,176 @@ impl Executor {
             opener,
             opened: std::sync::atomic::AtomicU32::new(0),
             run: RunContext::unknown(),
+            dialogs: None,
+            translator: None,
+        }
+    }
+
+    /// `locale.get` and `locale.translate` answer from `translator`, and
+    /// dialog texts given as keys are resolved with it.
+    pub fn with_translator(mut self, translator: super::locales::Translator) -> Self {
+        self.translator = Some(translator);
+        self
+    }
+
+    /// The translator of `plugin`, which must be the one this executor
+    /// serves: a plugin never reaches another plugin's translations.
+    fn translator(&self, plugin: &PluginId) -> Result<super::locales::Translator, CallResult> {
+        match &self.translator {
+            Some(t) if t.plugin() == plugin.as_str() => Ok(t.clone()),
+            Some(_) => Err(CallResult::error(
+                CallErrorCode::NotPermitted,
+                "translations belong to their own plugin",
+            )),
+            None => Ok(super::locales::Translator::empty(plugin.as_str())),
+        }
+    }
+
+    /// `locale.get`: the app's language, a tag only.
+    fn locale(&self, plugin: &PluginId) -> CallResult {
+        match self.translator(plugin) {
+            Ok(t) => {
+                serde_json::to_value(deckpilot_plugin_abi::locale::LocaleReply { locale: t.tag() })
+                    .map_or_else(
+                        |e| CallResult::error(CallErrorCode::Failed, e.to_string()),
+                        CallResult::Ok,
+                    )
+            }
+            Err(refused) => refused,
+        }
+    }
+
+    /// `locale.translate`: one of the plugin's own keys.
+    fn translate(
+        &self,
+        plugin: &PluginId,
+        request: &deckpilot_plugin_abi::locale::Translate,
+    ) -> CallResult {
+        let translator = match self.translator(plugin) {
+            Ok(t) => t,
+            Err(refused) => return refused,
+        };
+        match translator.translate(request) {
+            Ok(translation) => serde_json::to_value(translation).map_or_else(
+                |e| CallResult::error(CallErrorCode::Failed, e.to_string()),
+                CallResult::Ok,
+            ),
+            Err(why) => CallResult::error(CallErrorCode::BadRequest, why),
+        }
+    }
+
+    /// Plugin dialogs go to the app connections `dialogs` knows.
+    pub fn with_dialogs(mut self, dialogs: Arc<crate::plugin_dialogs::PluginDialogs>) -> Self {
+        self.dialogs = Some(dialogs);
+        self
+    }
+
+    /// Shows a dialog the broker allowed and waits for its answer.
+    fn dialog(
+        &self,
+        plugin: &PluginId,
+        request: &DialogRequest,
+        interrupt: Option<&CallInterrupt>,
+    ) -> CallResult {
+        use crate::plugin_dialogs::{OpenError, Outcome};
+        use deckpilot_ipc::plugin_dialogs::{AppCancelReason, DialogCloseReason, DialogSpec};
+
+        let Some(dialogs) = &self.dialogs else {
+            return CallResult::error(CallErrorCode::Unavailable, NO_DIALOG_APP);
+        };
+        // The broker allows it only in runs the user started; checked
+        // again here.
+        if !self.run.is_user_initiated() {
+            return CallResult::error(
+                CallErrorCode::NotPermitted,
+                deckpilot_plugin_broker::DenyReason::DialogNotUserInitiated.to_string(),
+            );
+        }
+        let started = std::time::Instant::now();
+        let mut seconds = request.timeout_seconds();
+        if let Some(interrupt) = interrupt {
+            let left = interrupt
+                .deadline()
+                .saturating_duration_since(started)
+                .saturating_sub(DIALOG_DEADLINE_MARGIN);
+            seconds = seconds.min(u32::try_from(left.as_secs()).unwrap_or(u32::MAX));
+        }
+        if seconds == 0 {
+            return CallResult::error(
+                CallErrorCode::Unavailable,
+                "the action has too little time left to show a dialog; raise its timeoutMs",
+            );
+        }
+        let shown = request.clone().with_timeout(seconds);
+        let mut spec =
+            match serde_json::to_value(&shown).and_then(serde_json::from_value::<DialogSpec>) {
+                Ok(spec) => spec,
+                Err(e) => return CallResult::error(CallErrorCode::Failed, e.to_string()),
+            };
+        // Plugin API 1.6: texts given as the plugin's own keys, in the
+        // app's language, before the app draws them (plain text there).
+        match self.translator(plugin) {
+            Ok(translator) => translator.dialog(&mut spec),
+            Err(refused) => return refused,
+        }
+        let Some(id) = dialog_id() else {
+            return CallResult::error(CallErrorCode::Failed, "no random source for a dialog id");
+        };
+        let check_against = request.clone();
+        let check: crate::plugin_dialogs::AnswerCheck = Box::new(move |values, selected| {
+            check_against
+                .check_answer(values, selected)
+                .map_err(|e| format!("the answer does not fit the dialog ({e})"))
+                .and_then(|result| serde_json::to_value(result).map_err(|e| e.to_string()))
+        });
+        let outcome = match dialogs.open(id.clone(), plugin.as_str(), &self.name, spec, check) {
+            Ok(outcome) => outcome,
+            Err(OpenError::Unavailable) => {
+                return CallResult::error(CallErrorCode::Unavailable, NO_DIALOG_APP);
+            }
+            Err(OpenError::AlreadyOpen) => {
+                return CallResult::error(
+                    CallErrorCode::Throttled,
+                    "the plugin already shows a dialog; one is shown at a time",
+                );
+            }
+        };
+        info!(plugin = %plugin, kind = dialog_kind(request), seconds, "a plugin shows a dialog");
+        let until = started + std::time::Duration::from_secs(u64::from(seconds));
+        let cancelled = |reason: CancelReason| {
+            serde_json::to_value(DialogResult::cancelled(reason)).map_or_else(
+                |e| CallResult::error(CallErrorCode::Failed, e.to_string()),
+                CallResult::Ok,
+            )
+        };
+        loop {
+            match outcome.recv_timeout(DIALOG_POLL) {
+                Ok(Outcome::Confirmed(value)) => {
+                    debug!(plugin = %plugin, "a plugin dialog was confirmed");
+                    return CallResult::Ok(value);
+                }
+                Ok(Outcome::Cancelled(AppCancelReason::User)) => {
+                    return cancelled(CancelReason::User);
+                }
+                Ok(Outcome::Cancelled(AppCancelReason::AppClosed)) => {
+                    return cancelled(CancelReason::AppClosed);
+                }
+                // Ended by the agent (the plugin is being stopped): the
+                // invocation gets nothing more.
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return CallResult::error(CallErrorCode::Unavailable, DIALOG_STOPPED);
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if interrupt.is_some_and(CallInterrupt::is_raised) {
+                        dialogs.close(&id, DialogCloseReason::PluginStopped);
+                        return CallResult::error(CallErrorCode::Unavailable, DIALOG_STOPPED);
+                    }
+                    if std::time::Instant::now() >= until {
+                        dialogs.close(&id, DialogCloseReason::Timeout);
+                        return cancelled(CancelReason::Timeout);
+                    }
+                }
+            }
         }
     }
 
@@ -966,6 +1160,30 @@ fn redacted(exchange: Exchange, forms: &[String]) -> Exchange {
 
 /// A plugin's severity as the core's: how the notification looks, and
 /// (with a routing) whether it is less severe than the user shows.
+/// Why `dialog.open` is `unavailable` without an app.
+const NO_DIALOG_APP: &str = "no DeckPilot window that shows plugin dialogs is open";
+/// What a dialog whose plugin was stopped answers (no guest reads it).
+const DIALOG_STOPPED: &str = "the plugin was stopped; its dialog was closed";
+
+/// A random dialog id: 128 bits from the operating system's CSPRNG, hex.
+fn dialog_id() -> Option<String> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).ok()?;
+    Some(bytes.iter().fold(String::with_capacity(32), |mut out, b| {
+        let _ = write!(out, "{b:02x}");
+        out
+    }))
+}
+
+fn dialog_kind(request: &DialogRequest) -> &'static str {
+    match request {
+        DialogRequest::Confirm { .. } => "confirm",
+        DialogRequest::Alert { .. } => "alert",
+        DialogRequest::Form { .. } => "form",
+        DialogRequest::Selection { .. } => "selection",
+    }
+}
+
 fn notification_severity(severity: NotifySeverity) -> Severity {
     match severity {
         NotifySeverity::Info => Severity::Info,
@@ -1104,6 +1322,9 @@ impl Executor {
             Allowed::VariableClear { id: Some(id) } => self.publish(plugin, id, None),
             Allowed::VariableClear { id: None } => self.clear(plugin),
             Allowed::OpenUrl { url, origin } => self.open_url(plugin, url, origin),
+            Allowed::DialogOpen { request } => self.dialog(plugin, request, interrupt),
+            Allowed::LocaleGet => self.locale(plugin),
+            Allowed::LocaleTranslate { request } => self.translate(plugin, request),
             Allowed::TimeNow => super::ambient::now(),
             Allowed::RandomBytes { length } => super::ambient::random(*length),
             Allowed::RunContext(context) => serde_json::to_value(context).map_or_else(
@@ -1832,5 +2053,480 @@ pub(super) mod test_transport {
                 body: route.body.clone().into_bytes(),
             })
         }
+    }
+}
+
+/// `dialog.open` through the broker and the executor, with the app's side
+/// played by the registry (plugin API 1.5).
+#[cfg(test)]
+mod dialog_tests {
+    use std::time::{Duration, Instant};
+
+    use deckpilot_ipc::plugin_dialogs::{AppCancelReason, DialogAnswer, DialogCloseReason};
+    use deckpilot_ipc::plugins::PluginEvent;
+    use deckpilot_plugin_abi::CapabilityRequest;
+    use deckpilot_plugin_abi::capability::{RunCause, RunTrigger};
+    use deckpilot_plugin_supervisor::AbortSignal;
+    use serde_json::json;
+
+    use super::*;
+    use crate::plugin_dialogs::PluginDialogs;
+
+    struct Fixture {
+        broker: Broker,
+        dialogs: Arc<PluginDialogs>,
+        plugin: PluginId,
+    }
+
+    fn fixture(grants: &str) -> Fixture {
+        let broker = Broker::new(
+            Arc::new(deckpilot_plugin_broker::MemoryAudit::new(100)),
+            Arc::new(deckpilot_plugin_broker::ManualClock::default()),
+            deckpilot_plugin_broker::RateLimits::default(),
+        );
+        let plugin = PluginId::new("acme.repo").unwrap();
+        broker
+            .set_grants(
+                &plugin,
+                &deckpilot_plugin_broker::ApprovedPermissions::from_json(grants).unwrap(),
+            )
+            .unwrap();
+        Fixture {
+            broker,
+            dialogs: Arc::default(),
+            plugin,
+        }
+    }
+
+    impl Fixture {
+        fn executor(&self, run: RunContext) -> Executor {
+            let (events, _) = broadcast::channel(4);
+            Executor::new(
+                self.broker.clone(),
+                "Repo tools".into(),
+                events,
+                Transport::Network,
+                OwnVariables {
+                    store: PublishedVariables::default(),
+                    namespace: "plugins.acme.repo".into(),
+                    generation: 0,
+                    declared: Vec::new(),
+                },
+                Opener::System,
+            )
+            .with_dialogs(self.dialogs.clone())
+            .with_run(run)
+        }
+
+        /// What the supervisor does with one call: the broker decides with
+        /// the executor's context, the executor carries it out.
+        fn call(
+            &self,
+            executor: &mut Executor,
+            request: &CapabilityRequest,
+            interrupt: &CallInterrupt,
+        ) -> CallResult {
+            let session = self.broker.session(self.plugin.clone());
+            match session.authorize_in(request, executor.run_context()) {
+                Decision::Allow(allowed) => {
+                    executor.execute_interruptible(&self.plugin, &allowed, interrupt)
+                }
+                Decision::Deny(reason) => {
+                    CallResult::error(reason.call_error_code(), reason.to_string())
+                }
+            }
+        }
+
+        /// Runs `request` in a key press on another thread, as the lane would.
+        fn spawn(
+            &self,
+            request: CapabilityRequest,
+            interrupt: CallInterrupt,
+        ) -> std::thread::JoinHandle<CallResult> {
+            let mut executor = self.executor(RunContext::direct(RunTrigger::Key));
+            let me = Fixture {
+                broker: self.broker.clone(),
+                dialogs: self.dialogs.clone(),
+                plugin: self.plugin.clone(),
+            };
+            std::thread::spawn(move || me.call(&mut executor, &request, &interrupt))
+        }
+    }
+
+    fn request(args: Value) -> CapabilityRequest {
+        let mut request = json!({"op": "dialog.open"});
+        request["args"] = args;
+        serde_json::from_value(request).unwrap()
+    }
+
+    fn form() -> CapabilityRequest {
+        request(
+            json!({"type": "form", "title": "Configure repository", "fields": [
+                {"id": "repository", "kind": "text", "label": "Repository path", "required": true},
+                {"id": "branch", "kind": "choice", "label": "Branch", "default": "main",
+                 "options": [{"value": "main", "label": "main"}, {"value": "dev", "label": "dev"}]},
+                {"id": "depth", "kind": "integer", "label": "Depth", "min": 1, "max": 5}
+            ]}),
+        )
+    }
+
+    fn later() -> CallInterrupt {
+        CallInterrupt::new(None, Instant::now() + Duration::from_secs(60))
+    }
+
+    /// The next dialog event, waiting up to 5 s.
+    fn next(events: &mut broadcast::Receiver<PluginEvent>) -> PluginEvent {
+        let until = Instant::now() + Duration::from_secs(5);
+        loop {
+            match events.try_recv() {
+                Ok(event) => return event,
+                Err(broadcast::error::TryRecvError::Empty) if Instant::now() < until => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(other) => panic!("no dialog event: {other:?}"),
+            }
+        }
+    }
+
+    fn opened(
+        events: &mut broadcast::Receiver<PluginEvent>,
+    ) -> deckpilot_ipc::plugin_dialogs::PluginDialog {
+        match next(events) {
+            PluginEvent::DialogOpened { dialog } => dialog,
+            other => panic!("expected an opened dialog, got {other:?}"),
+        }
+    }
+
+    fn closed(events: &mut broadcast::Receiver<PluginEvent>) -> DialogCloseReason {
+        match next(events) {
+            PluginEvent::DialogClosed { reason, .. } => reason,
+            other => panic!("expected a closed dialog, got {other:?}"),
+        }
+    }
+
+    fn values(v: Value) -> DialogAnswer {
+        let Value::Object(v) = v else {
+            panic!("values are an object")
+        };
+        DialogAnswer::Confirmed {
+            values: Some(v.into_iter().collect()),
+            selected: None,
+        }
+    }
+
+    fn code(result: &CallResult) -> Option<CallErrorCode> {
+        match result {
+            CallResult::Error(e) => Some(e.code),
+            CallResult::Ok(_) => None,
+        }
+    }
+
+    /// `locale.get` and `locale.translate` (plugin API 1.6): always
+    /// allowed, answered from the plugin's own translator only; a
+    /// translator of another plugin is never used.
+    #[test]
+    fn a_plugin_reads_the_language_and_only_its_own_translations() {
+        let f = fixture(r#"[{"kind":"notifications"}]"#);
+        let later = later();
+        let get: CapabilityRequest =
+            serde_json::from_value(json!({"op": "locale.get", "args": {}})).unwrap();
+        let translate: CapabilityRequest =
+            serde_json::from_value(json!({"op": "locale.translate", "args": {"key": "face.back"}}))
+                .unwrap();
+        // Without a translator: English, every key falls back.
+        let mut plain = f.executor(RunContext::direct(RunTrigger::Key));
+        assert_eq!(
+            f.call(&mut plain, &get, &later),
+            CallResult::Ok(json!({"locale": "en"}))
+        );
+        assert_eq!(
+            f.call(&mut plain, &translate, &later),
+            CallResult::Ok(json!({"text": "Back", "missing": true}))
+        );
+        // Another plugin's translator is refused, whatever it holds.
+        let mut crossed = f
+            .executor(RunContext::direct(RunTrigger::Key))
+            .with_translator(super::super::locales::Translator::empty("acme.other"));
+        assert_eq!(
+            code(&f.call(&mut crossed, &translate, &later)),
+            Some(CallErrorCode::NotPermitted)
+        );
+        assert_eq!(
+            code(&f.call(&mut crossed, &get, &later)),
+            Some(CallErrorCode::NotPermitted)
+        );
+        // In a run the user did not start too: reading is always allowed.
+        let mut scheduled = f.executor(RunContext::workflow(
+            deckpilot_plugin_abi::capability::RunCause::Schedule,
+            None,
+        ));
+        assert!(matches!(
+            f.call(&mut scheduled, &get, &later),
+            CallResult::Ok(_)
+        ));
+    }
+
+    #[test]
+    fn without_an_app_or_a_grant_or_the_users_run_no_dialog_opens() {
+        let f = fixture(r#"[{"kind":"dialogs"}]"#);
+        let mut events = f.dialogs.subscribe();
+        // No app connection shows plugin dialogs: `unavailable` at once.
+        let result = f.call(
+            &mut f.executor(RunContext::direct(RunTrigger::Key)),
+            &form(),
+            &later(),
+        );
+        assert_eq!(
+            code(&result),
+            Some(CallErrorCode::Unavailable),
+            "{result:?}"
+        );
+        assert!(events.try_recv().is_err());
+
+        let _app = f.dialogs.app_connected();
+        // Not started by the user: refused, nothing reaches the app.
+        for run in [
+            RunContext::workflow(RunCause::Schedule, None),
+            RunContext::workflow(RunCause::Event, None),
+            RunContext::workflow(RunCause::Startup, None),
+            RunContext::unknown(),
+        ] {
+            let result = f.call(&mut f.executor(run.clone()), &form(), &later());
+            assert_eq!(code(&result), Some(CallErrorCode::NotPermitted), "{run:?}");
+        }
+        // The executor checks its own run again, whatever it is handed.
+        let allowed = Allowed::DialogOpen {
+            request: match form() {
+                CapabilityRequest::DialogOpen(r) => r,
+                _ => unreachable!(),
+            },
+        };
+        let result = f
+            .executor(RunContext::unknown())
+            .execute(&f.plugin, &allowed);
+        assert_eq!(code(&result), Some(CallErrorCode::NotPermitted));
+        // Without the grant: refused.
+        let ungranted = fixture(r#"[{"kind":"notifications"}]"#);
+        let _app = ungranted.dialogs.app_connected();
+        let result = ungranted.call(
+            &mut ungranted.executor(RunContext::direct(RunTrigger::Key)),
+            &form(),
+            &later(),
+        );
+        assert_eq!(code(&result), Some(CallErrorCode::NotPermitted));
+        assert!(events.try_recv().is_err());
+    }
+
+    #[test]
+    fn the_answer_is_checked_before_the_plugin_receives_it() {
+        let f = fixture(r#"[{"kind":"dialogs"}]"#);
+        let _app = f.dialogs.app_connected();
+        let mut events = f.dialogs.subscribe();
+        let running = f.spawn(form(), later());
+        let dialog = opened(&mut events);
+        assert_eq!(dialog.plugin, "acme.repo");
+        // The name from the installed manifest, never the request's text.
+        assert_eq!(dialog.plugin_name, "Repo tools");
+        assert_eq!(dialog.spec.title, "Configure repository");
+        assert_eq!(dialog.spec.fields.len(), 3);
+        // Capped by the deadline (60 s) less the margin.
+        assert!(
+            (57..=58).contains(&dialog.spec.timeout_seconds),
+            "{}",
+            dialog.spec.timeout_seconds
+        );
+        assert_eq!(dialog.id.len(), 32);
+        assert!(dialog.id.bytes().all(|b| b.is_ascii_hexdigit()));
+
+        // Answers that do not fit: refused, the dialog stays open.
+        for bad in [
+            json!({}),
+            json!({"repository": 7}),
+            json!({"repository": "x", "unknown": 1}),
+            json!({"repository": "x", "branch": "release"}),
+            json!({"repository": "x", "depth": 9}),
+            json!({"repository": "x", "depth": "2"}),
+        ] {
+            let error = f
+                .dialogs
+                .answer(true, &dialog.id, "acme.repo", values(bad.clone()))
+                .unwrap_err();
+            assert_eq!(
+                error.code,
+                deckpilot_ipc::ErrorCode::InvalidRequest,
+                "{bad}"
+            );
+        }
+        assert!(!running.is_finished());
+        // Another plugin cannot answer it.
+        assert_eq!(
+            f.dialogs
+                .answer(
+                    true,
+                    &dialog.id,
+                    "acme.other",
+                    values(json!({"repository": "x"}))
+                )
+                .unwrap_err()
+                .code,
+            deckpilot_ipc::ErrorCode::NotFound
+        );
+        f.dialogs
+            .answer(
+                true,
+                &dialog.id,
+                "acme.repo",
+                values(json!({"repository": "~/code/shop", "branch": "dev", "depth": 2})),
+            )
+            .unwrap();
+        let result = running.join().unwrap();
+        assert_eq!(
+            result,
+            CallResult::Ok(json!({"outcome": "confirmed", "values":
+                {"repository": "~/code/shop", "branch": "dev", "depth": 2}}))
+        );
+        assert_eq!(closed(&mut events), DialogCloseReason::Answered);
+
+        // Cancelled by the user.
+        let running = f.spawn(
+            request(json!({"type": "confirm", "title": "Pull?"})),
+            later(),
+        );
+        let dialog = opened(&mut events);
+        f.dialogs
+            .answer(
+                true,
+                &dialog.id,
+                "acme.repo",
+                DialogAnswer::Cancelled {
+                    reason: AppCancelReason::User,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            running.join().unwrap(),
+            CallResult::Ok(json!({"outcome": "cancelled", "reason": "user"}))
+        );
+    }
+
+    #[test]
+    fn one_dialog_per_plugin_with_random_ids() {
+        let f = fixture(r#"[{"kind":"dialogs"}]"#);
+        let _app = f.dialogs.app_connected();
+        let mut events = f.dialogs.subscribe();
+        let first = f.spawn(form(), later());
+        let a = opened(&mut events);
+        // While it is open, another invocation of the plugin is refused.
+        let second = f.call(
+            &mut f.executor(RunContext::direct(RunTrigger::Key)),
+            &form(),
+            &later(),
+        );
+        assert_eq!(code(&second), Some(CallErrorCode::Throttled), "{second:?}");
+        f.dialogs
+            .answer(
+                true,
+                &a.id,
+                "acme.repo",
+                DialogAnswer::Cancelled {
+                    reason: AppCancelReason::User,
+                },
+            )
+            .unwrap();
+        first.join().unwrap();
+        let _ = closed(&mut events);
+        let again = f.spawn(form(), later());
+        let b = opened(&mut events);
+        assert_ne!(a.id, b.id);
+        f.dialogs.close_plugin("acme.repo");
+        let _ = again.join().unwrap();
+    }
+
+    #[test]
+    fn time_outs_stops_and_a_closed_app_end_the_dialog() {
+        let f = fixture(r#"[{"kind":"dialogs"}]"#);
+        let app = f.dialogs.app_connected();
+        let mut events = f.dialogs.subscribe();
+
+        // Capped by the invocation's deadline, less the margin: 1 s here,
+        // then `timeout` and the app is told.
+        let soon = CallInterrupt::new(None, Instant::now() + Duration::from_millis(3_500));
+        let running = f.spawn(form(), soon);
+        assert_eq!(opened(&mut events).spec.timeout_seconds, 1);
+        assert_eq!(closed(&mut events), DialogCloseReason::Timeout);
+        assert_eq!(
+            running.join().unwrap(),
+            CallResult::Ok(json!({"outcome": "cancelled", "reason": "timeout"}))
+        );
+        // Too little time left for a dialog at all.
+        let now = CallInterrupt::new(None, Instant::now() + Duration::from_millis(1_500));
+        let result = f.spawn(form(), now).join().unwrap();
+        assert_eq!(code(&result), Some(CallErrorCode::Unavailable));
+
+        // Aborted (disabled, updated, uninstalled, cancelled): closed in the
+        // app as `pluginStopped`.
+        let abort = AbortSignal::new();
+        let running = f.spawn(
+            form(),
+            CallInterrupt::new(
+                Some(abort.clone()),
+                Instant::now() + Duration::from_secs(60),
+            ),
+        );
+        let _ = opened(&mut events);
+        abort.abort();
+        assert_eq!(closed(&mut events), DialogCloseReason::PluginStopped);
+        assert_eq!(
+            code(&running.join().unwrap()),
+            Some(CallErrorCode::Unavailable)
+        );
+
+        // The host crashed while it waited: the same.
+        let exited = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let running = f.spawn(
+            form(),
+            CallInterrupt::new(None, Instant::now() + Duration::from_secs(60))
+                .with_host_exit(exited.clone()),
+        );
+        let _ = opened(&mut events);
+        exited.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(closed(&mut events), DialogCloseReason::PluginStopped);
+        assert_eq!(
+            code(&running.join().unwrap()),
+            Some(CallErrorCode::Unavailable)
+        );
+
+        // The agent stops the plugin (`stop_host`): closed, nothing more
+        // reaches the invocation.
+        let running = f.spawn(form(), later());
+        let dialog = opened(&mut events);
+        f.dialogs.close_plugin("acme.repo");
+        assert_eq!(closed(&mut events), DialogCloseReason::PluginStopped);
+        assert_eq!(
+            code(&running.join().unwrap()),
+            Some(CallErrorCode::Unavailable)
+        );
+        assert_eq!(
+            f.dialogs
+                .answer(
+                    true,
+                    &dialog.id,
+                    "acme.repo",
+                    values(json!({"repository": "x"}))
+                )
+                .unwrap_err()
+                .code,
+            deckpilot_ipc::ErrorCode::NotFound
+        );
+
+        // The app went away: `appClosed`.
+        let running = f.spawn(form(), later());
+        let _ = opened(&mut events);
+        drop(app);
+        assert_eq!(closed(&mut events), DialogCloseReason::AppClosed);
+        assert_eq!(
+            running.join().unwrap(),
+            CallResult::Ok(json!({"outcome": "cancelled", "reason": "appClosed"}))
+        );
     }
 }

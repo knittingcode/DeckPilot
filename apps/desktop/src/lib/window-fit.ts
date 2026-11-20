@@ -31,7 +31,16 @@ export interface Measurement extends Size {
 
 /**
  * Coalesces size reports: at most one per `delay` ms, and only when the
- * size changed by at least a pixel. Returns `schedule` and `dispose`.
+ * measurement changed by at least a pixel in any of its values: the
+ * content size, and the viewport where the measurement has one.
+ *
+ * The viewport counts because the native side derives the window's
+ * decorations (the macOS title bar) from window size minus viewport. A
+ * viewport measured while the window was still being resized gives a
+ * wrong difference, and the window ends up taller than its content; the
+ * report after the viewport settles corrects it. This cannot loop: a fit
+ * that keeps the window's size does not resize it (`windows::fit` skips
+ * changes below a pixel), so the viewport stays and nothing is reported.
  *
  * Timers, not animation frames: windows stay hidden until they are sized,
  * and WebKit does not run animation frames for hidden windows.
@@ -43,19 +52,21 @@ export function coalescedReporter<M extends Size>(
 ): { schedule: () => void; dispose: () => void } {
   let pending = false
   let timer: ReturnType<typeof setTimeout> | undefined
-  let last: Size | null = null
+  let last: M | null = null
   let disposed = false
+  const same = (a: M, b: M) =>
+    (Object.keys(b) as (keyof M)[]).every((key) => {
+      const x = a[key]
+      const y = b[key]
+      return typeof x === "number" && typeof y === "number" ? Math.abs(x - y) < 1 : x === y
+    })
   const flush = () => {
     pending = false
     if (disposed) return
     const size = measure()
     if (!size || size.width <= 0 || size.height <= 0) return
-    if (last && Math.abs(last.width - size.width) < 1 && Math.abs(last.height - size.height) < 1) {
-      return
-    }
-    // Only the content size decides whether to report: the viewport changes
-    // as a result of the report, which must not trigger another one.
-    last = { width: size.width, height: size.height }
+    if (last && same(last, size)) return
+    last = size
     report(size)
   }
   return {

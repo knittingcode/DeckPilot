@@ -1,13 +1,16 @@
 import { Page } from "@/components/page"
 import { SettingsHeader } from "@/components/settings-layout"
+import { useTranslation } from "@/i18n"
 import { useAppContext } from "@/lib/app-context"
+import { DEFAULT_SETTINGS_PAGE } from "@/lib/navigation"
 import { ModuleSettingsForm } from "@/settings/pages/module-settings"
-import { CATEGORIES, findSettingsPage } from "@/settings/registry"
+import { categoryLabel, findSettingsPage } from "@/settings/registry"
 
 /** The settings page `id`; the navigation only opens pages that exist. */
 export function SettingsView({ id }: { id: string }) {
+  const { t } = useTranslation()
   const { modules, openSettings } = useAppContext()
-  const page = findSettingsPage(modules, id) ?? findSettingsPage(modules, "appearance")
+  const page = findSettingsPage(modules, id) ?? findSettingsPage(modules, DEFAULT_SETTINGS_PAGE)
   if (!page) return null
   const View = page.view
   return (
@@ -17,12 +20,12 @@ export function SettingsView({ id }: { id: string }) {
       title=""
       breadcrumbs={[
         {
-          label: "Settings",
+          label: t("settings:title"),
           onSelect: () => {
-            openSettings("appearance")
+            openSettings(DEFAULT_SETTINGS_PAGE)
           },
         },
-        { label: CATEGORIES.find((c) => c.id === page.category)?.label ?? "" },
+        { label: categoryLabel(page.category) },
       ]}
     >
       {/* The page's sections: 2rem apart, each a heading over plain rows. */}

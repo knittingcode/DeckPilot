@@ -63,7 +63,7 @@ const V0_8_1: Fixture = Fixture {
 };
 const FIXTURES: [Fixture; 4] = [V0_5_0, V0_6_0, SCHEMA_8, V0_8_1];
 /// The schema this build upgrades to.
-const CURRENT: u32 = 10;
+const CURRENT: u32 = 13;
 /// The tables schema 10 adds (shared layouts). `device_layouts` starts
 /// empty; the others hold what the profile documents held.
 const SCHEMA_10_TABLES: [&str; 9] = [
@@ -400,6 +400,36 @@ fn profile_documents(
         .unwrap()
 }
 
+/// What migrations 11, 12 and 13 make of `layouts`: folder pages get their
+/// Back setting ([`deckpilot_core::DeviceLayout::assign_folder_backs`]),
+/// with no binding changed; folder keys keep only what opens their folder
+/// ([`deckpilot_core::DeviceLayout::normalize_folder_controls`]), nothing
+/// is lost (the rest is recovered); folder keys show their folder's name
+/// ([`deckpilot_core::DeviceLayout::normalize_folder_labels`]).
+fn with_folder_backs(layouts: &mut [deckpilot_core::DeviceLayout]) {
+    let catalog = deckpilot_device::ModelCatalog::builtin();
+    for layout in layouts {
+        let before: Vec<_> = layout.pages.iter().map(|p| p.bindings.clone()).collect();
+        if let Some(model) = catalog.get(&layout.model) {
+            layout.assign_folder_backs(&model.capabilities);
+        }
+        let after: Vec<_> = layout.pages.iter().map(|p| p.bindings.clone()).collect();
+        assert_eq!(before, after, "the folder Back migration changed bindings");
+        let count = |layout: &deckpilot_core::DeviceLayout| {
+            layout.pages.iter().map(|p| p.bindings.len()).sum::<usize>()
+                + layout.recovered_bindings().count()
+        };
+        let total = count(layout);
+        layout.normalize_folder_controls();
+        assert_eq!(
+            count(layout),
+            total,
+            "the folder key migration lost bindings"
+        );
+        layout.normalize_folder_labels();
+    }
+}
+
 /// Migration 10 kept every profile exactly: loading it gives what its
 /// document held (layouts, their order, pages, folders and bindings, the
 /// active layouts, actions and icons in their order), each layout is
@@ -434,6 +464,8 @@ fn assert_shared_layouts_hold_the_documents(
         let loaded = store.load_profile(id.parse().unwrap()).unwrap().unwrap();
         expected.projects.clone_from(&loaded.projects);
         expected.default_project = loaded.default_project;
+        // Migration 11 gave folder pages their Back setting, nothing else.
+        with_folder_backs(&mut expected.layouts);
         // An active layout that does not exist, or is for another model,
         // had no effect and is not kept.
         let kept = expected.layouts.clone();
@@ -713,9 +745,13 @@ fn bindings_of_released_versions_stay_raw_and_unchanged() {
                 .find(|(id, ..)| *id == summary.id.to_string())
                 .unwrap()
                 .4;
+            // Unchanged but for the folder Back setting of migration 11.
+            let mut expected: Vec<deckpilot_core::DeviceLayout> =
+                serde_json::from_value(stored["layouts"].clone()).unwrap();
+            with_folder_backs(&mut expected);
             assert_eq!(
                 serde_json::to_value(&profile.layouts).unwrap(),
-                stored["layouts"],
+                serde_json::to_value(&expected).unwrap(),
                 "{fixture:?}"
             );
             for page in profile.layouts.iter().flat_map(|l| &l.pages) {

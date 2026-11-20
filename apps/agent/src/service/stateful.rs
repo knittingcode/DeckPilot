@@ -83,7 +83,9 @@ impl StatefulKeys {
 
 impl Agent {
     /// Captures the work session's state when a press starts a sequence
-    /// on a stateful key. Called before the gesture engine sees the press.
+    /// on a stateful key. Called before the gesture engine sees the press;
+    /// `idle`: whether that engine has no sequence of the key under way
+    /// (the physical one, or a simulated press's own).
     pub(super) fn capture_stateful_press(
         &mut self,
         connection: u64,
@@ -91,9 +93,10 @@ impl Agent {
         control: ControlId,
         input: ControlInput,
         at: Instant,
+        idle: bool,
     ) {
         if input != ControlInput::Press
-            || !self.gestures.is_idle(device, connection, control)
+            || !idle
             || self.runtime.stateful_binding(device, control).is_none()
         {
             return;

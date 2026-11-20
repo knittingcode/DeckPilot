@@ -3,12 +3,12 @@ import { useEffect, useRef } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { useTranslation } from "@/i18n"
 
 import { Notice, PermissionList, PluginIcon, PublisherLine } from "./components"
 import { DependencySection, DependentsSection } from "./dependencies"
 import type { MarketplaceActions } from "./marketplace"
 import {
-  STATE_LABELS,
   categoryLabel,
   compareSemver,
   formatDate,
@@ -16,6 +16,7 @@ import {
   offeredVersion,
   platformLabel,
   platformsText,
+  stateLabel,
   storageText,
   type UpdateCandidate,
 } from "./model"
@@ -40,6 +41,7 @@ export function PluginDetailsView({
   actions: MarketplaceActions
   onBack: () => void
 }) {
+  const { t } = useTranslation()
   const heading = useRef<HTMLHeadingElement>(null)
 
   // Move focus to the page that replaced the list.
@@ -58,21 +60,30 @@ export function PluginDetailsView({
   const installReason = installed
     ? null
     : !offered
-      ? "No version can be installed: every version was withdrawn or does not run here."
+      ? t("marketplace:details.noVersion")
       : actions.blocked
 
   const facts: [string, string][] = [
-    ...(plugin.license ? [["License", plugin.license] as [string, string]] : []),
-    ...(plugin.homepage ? [["Homepage", plugin.homepage] as [string, string]] : []),
-    ...(plugin.sourceRepository
-      ? [["Source", `github.com/${plugin.sourceRepository}`] as [string, string]]
+    ...(plugin.license
+      ? [[t("marketplace:details.license"), plugin.license] as [string, string]]
       : []),
-    ...((plugin.categories ?? []).length > 0
+    ...(plugin.homepage
+      ? [[t("marketplace:details.homepage"), plugin.homepage] as [string, string]]
+      : []),
+    ...(plugin.sourceRepository
       ? [
-          ["Categories", (plugin.categories ?? []).map(categoryLabel).join(", ")] as [
+          [t("marketplace:details.source"), `github.com/${plugin.sourceRepository}`] as [
             string,
             string,
           ],
+        ]
+      : []),
+    ...((plugin.categories ?? []).length > 0
+      ? [
+          [
+            t("marketplace:details.categories"),
+            (plugin.categories ?? []).map(categoryLabel).join(", "),
+          ] as [string, string],
         ]
       : []),
   ]
@@ -81,7 +92,7 @@ export function PluginDetailsView({
     <>
       <div>
         <Button variant="ghost" size="sm" onClick={onBack}>
-          <ArrowLeft /> Back to plugins
+          <ArrowLeft /> {t("marketplace:details.back")}
         </Button>
       </div>
       <article className="grid gap-5" aria-labelledby="plugin-detail-name">
@@ -107,7 +118,7 @@ export function PluginDetailsView({
         {facts.length > 0 && (
           <dl
             className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1.5 border-t pt-4 text-sm"
-            aria-label="About"
+            aria-label={t("marketplace:details.about")}
           >
             {facts.map(([term, value]) => (
               <div key={term} className="contents">
@@ -119,20 +130,23 @@ export function PluginDetailsView({
         )}
 
         {plugin.deprecated && (
-          <Notice title="Deprecated by the registry">
+          <Notice title={t("marketplace:details.deprecated")}>
             <p>{plugin.deprecated}</p>
           </Notice>
         )}
 
         <section
           className="flex flex-wrap items-center gap-3 border-y py-3"
-          aria-label="Install status"
+          aria-label={t("marketplace:details.installStatus")}
         >
           {installed ? (
             <>
               <Badge variant="secondary">
-                <CircleCheck aria-hidden /> Installed {installed.summary.version} (
-                {STATE_LABELS[installed.summary.state].toLowerCase()})
+                <CircleCheck aria-hidden />{" "}
+                {t("marketplace:details.installed", {
+                  version: installed.summary.version,
+                  state: stateLabel(installed.summary.state).toLowerCase(),
+                })}
               </Badge>
               {update ? (
                 <Button
@@ -142,11 +156,15 @@ export function PluginDetailsView({
                     actions.update(update)
                   }}
                 >
-                  <RefreshCw /> Update to{" "}
-                  {update.kind === "staged" ? update.pending.version : update.version}
+                  <RefreshCw />{" "}
+                  {t("marketplace:details.updateTo", {
+                    version: update.kind === "staged" ? update.pending.version : update.version,
+                  })}
                 </Button>
               ) : (
-                <span className="text-sm text-muted-foreground">No update available</span>
+                <span className="text-sm text-muted-foreground">
+                  {t("marketplace:details.noUpdate")}
+                </span>
               )}
             </>
           ) : (
@@ -158,7 +176,10 @@ export function PluginDetailsView({
                 if (offered) actions.install(plugin, offered)
               }}
             >
-              <Download /> Install{offered ? ` ${offered.version}` : ""}
+              <Download />{" "}
+              {offered
+                ? t("marketplace:details.installVersion", { version: offered.version })
+                : t("marketplace:details.install")}
             </Button>
           )}
           {installReason && (
@@ -168,14 +189,16 @@ export function PluginDetailsView({
           )}
           {installed?.summary.installedFor && (
             <span className="text-sm text-muted-foreground">
-              Installed for {installed.summary.installedFor}; it is offered for removal once nothing
-              needs it.
+              {t("marketplace:details.installedFor", { plugin: installed.summary.installedFor })}
             </span>
           )}
           {known && (
             <span className="text-sm text-muted-foreground">
-              Installed here before as {known.name}, last version {known.lastVersion} (
-              {formatDate(known.lastSeenAt)}). Actions that still use it say it is not installed.
+              {t("marketplace:details.knownBefore", {
+                name: known.name,
+                version: known.lastVersion,
+                date: formatDate(known.lastSeenAt),
+              })}
             </span>
           )}
         </section>
@@ -183,38 +206,38 @@ export function PluginDetailsView({
         {installed?.storage && (
           <section aria-labelledby="plugin-detail-storage" className="grid gap-1">
             <h4 id="plugin-detail-storage" className="text-sm font-medium">
-              Storage
+              {t("marketplace:details.storage")}
             </h4>
             <p className="text-sm">{storageText(installed.storage)}</p>
-            <p className="text-xs text-muted-foreground">
-              What the plugin keeps for itself in DeckPilot. It is deleted when the plugin is
-              uninstalled.
-            </p>
+            <p className="text-xs text-muted-foreground">{t("marketplace:details.storageHint")}</p>
           </section>
         )}
 
         {shown && (
           <section aria-labelledby="plugin-detail-compatibility" className="grid gap-2">
             <h4 id="plugin-detail-compatibility" className="text-sm font-medium">
-              Compatibility of version {shown.version}
+              {t("marketplace:details.compatibility", { version: shown.version })}
             </h4>
             <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1.5 text-sm">
               <dt className="text-muted-foreground">DeckPilot</dt>
-              <dd>{shown.deckpilot ?? "Not stated by the registry"}</dd>
-              <dt className="text-muted-foreground">Platforms</dt>
+              <dd>{shown.deckpilot ?? t("marketplace:details.notStated")}</dd>
+              <dt className="text-muted-foreground">{t("marketplace:details.platforms")}</dt>
               <dd>{platformsText(shown.platforms)}</dd>
-              <dt className="text-muted-foreground">This computer</dt>
+              <dt className="text-muted-foreground">{t("marketplace:details.thisComputer")}</dt>
               <dd>
-                {platformLabel(snapshot.runtime.platform)}
-                {(shown.incompatible ?? []).length === 0 && !shown.withdrawn ? ": compatible" : ""}
+                {(shown.incompatible ?? []).length === 0 && !shown.withdrawn
+                  ? t("marketplace:details.compatibleOn", {
+                      platform: platformLabel(snapshot.runtime.platform),
+                    })
+                  : platformLabel(snapshot.runtime.platform)}
               </dd>
             </dl>
           </section>
         )}
 
         {shown && (shown.incompatible ?? []).length > 0 && (
-          <Notice title="Not compatible with this DeckPilot">
-            <ul className="grid gap-0.5" aria-label="Incompatibility reasons">
+          <Notice title={t("marketplace:details.incompatible")}>
+            <ul className="grid gap-0.5" aria-label={t("marketplace:details.incompatibleReasons")}>
               {(shown.incompatible ?? []).map((reason) => (
                 <li key={reason}>{reason}</li>
               ))}
@@ -222,20 +245,23 @@ export function PluginDetailsView({
           </Notice>
         )}
         {shown?.withdrawn && (
-          <Notice tone="destructive" title={`Version ${shown.version} was withdrawn`}>
+          <Notice
+            tone="destructive"
+            title={t("marketplace:details.withdrawn", { version: shown.version })}
+          >
             <p>{shown.withdrawn}</p>
           </Notice>
         )}
 
         {installed && installed.summary.version === shown?.version ? (
           <DependencySection
-            title="Dependencies"
+            title={t("plugins:dependencies.title")}
             dependencies={installed.dependencies ?? shown.dependencies ?? []}
           />
         ) : (
           shown && (
             <DependencySection
-              title={`Dependencies of version ${shown.version}`}
+              title={t("plugins:dependencies.titleOfVersion", { version: shown.version })}
               dependencies={shown.dependencies ?? []}
             />
           )
@@ -245,13 +271,15 @@ export function PluginDetailsView({
         {shown && (
           <section aria-labelledby="plugin-detail-permissions" className="grid gap-2">
             <h4 id="plugin-detail-permissions" className="text-sm font-medium">
-              Permissions of version {shown.version}
+              {t("marketplace:details.permissions", { version: shown.version })}
             </h4>
             <p className="text-xs text-muted-foreground">
-              Each with the publisher's reason. DeckPilot asks for your consent before it installs
-              anything.
+              {t("marketplace:details.permissionsHint")}
             </p>
-            <PermissionList label="Permissions" grants={grantsOf(shown.permissions)} />
+            <PermissionList
+              label={t("marketplace:details.permissionsLabel")}
+              grants={grantsOf(shown.permissions)}
+            />
           </section>
         )}
 
@@ -259,27 +287,36 @@ export function PluginDetailsView({
 
         <section aria-labelledby="plugin-detail-versions" className="grid gap-2">
           <h4 id="plugin-detail-versions" className="text-sm font-medium">
-            Versions
+            {t("marketplace:details.versions")}
           </h4>
-          <ul className="grid divide-y border-y text-sm" aria-label="Versions">
+          <ul
+            className="grid divide-y border-y text-sm"
+            aria-label={t("marketplace:details.versions")}
+          >
             {versions.map((v) => (
               <li key={v.version} className="flex flex-wrap items-center gap-2 py-1.5">
                 <span className="font-mono text-xs">{v.version}</span>
                 {v.publishedAt !== undefined && (
                   <span className="text-xs text-muted-foreground">
-                    published {formatDate(v.publishedAt)}
+                    {t("marketplace:details.published", { date: formatDate(v.publishedAt) })}
                   </span>
                 )}
                 {v.deckpilot && (
                   <span className="text-xs text-muted-foreground">DeckPilot {v.deckpilot}</span>
                 )}
-                {v.version === plugin.latest && <Badge variant="outline">Latest</Badge>}
-                {v.withdrawn && <Badge variant="destructive">Withdrawn: {v.withdrawn}</Badge>}
+                {v.version === plugin.latest && (
+                  <Badge variant="outline">{t("marketplace:details.latest")}</Badge>
+                )}
+                {v.withdrawn && (
+                  <Badge variant="destructive">
+                    {t("marketplace:details.withdrawnBecause", { reason: v.withdrawn })}
+                  </Badge>
+                )}
                 {(v.incompatible ?? []).length > 0 && (
-                  <Badge variant="outline">Not compatible</Badge>
+                  <Badge variant="outline">{t("marketplace:badge.incompatible")}</Badge>
                 )}
                 {installed?.summary.version === v.version && (
-                  <Badge variant="secondary">Installed</Badge>
+                  <Badge variant="secondary">{t("marketplace:details.installedBadge")}</Badge>
                 )}
               </li>
             ))}
@@ -292,25 +329,26 @@ export function PluginDetailsView({
 
 /** The actions the installed version adds; the registry does not list them. */
 function ActionsSection({ installed }: { installed: PluginDetails | undefined }) {
+  const { t } = useTranslation()
   return (
     <section aria-labelledby="plugin-detail-actions" className="grid gap-2">
       <h4 id="plugin-detail-actions" className="text-sm font-medium">
-        Actions
+        {t("marketplace:details.actions")}
       </h4>
       {!installed ? (
-        <p className="text-xs text-muted-foreground">
-          The registry does not list a plugin's actions; they are shown here once it is installed.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("marketplace:details.actionsNotListed")}</p>
       ) : installed.summary.actions.length === 0 ? (
-        <p className="text-xs text-muted-foreground">This plugin adds no actions.</p>
+        <p className="text-xs text-muted-foreground">{t("marketplace:details.noActions")}</p>
       ) : (
-        <ul className="grid divide-y border-y" aria-label="Actions">
+        <ul className="grid divide-y border-y" aria-label={t("marketplace:details.actions")}>
           {installed.summary.actions.map((action) => (
             <li key={action.action} className="grid gap-0.5 py-2.5 text-sm">
               <span className="flex flex-wrap items-center gap-2">
                 <span className="font-medium">{action.name}</span>
                 <span className="font-mono text-xs text-muted-foreground">{action.actionType}</span>
-                {!action.available && <Badge variant="outline">Unavailable</Badge>}
+                {!action.available && (
+                  <Badge variant="outline">{t("marketplace:details.unavailable")}</Badge>
+                )}
               </span>
               {action.description && (
                 <span className="text-xs text-muted-foreground">{action.description}</span>

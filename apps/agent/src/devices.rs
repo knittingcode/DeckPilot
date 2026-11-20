@@ -3,7 +3,11 @@
 //! HID handles are not shareable between threads, so a dedicated thread owns
 //! each handle. It blocks in `read_input` with a short timeout (no busy
 //! polling) and, between reads, applies queued image and brightness updates.
+//! While keys scroll (`marquee.rs`) the read timeout is shorter, so their
+//! frames are written on time.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -15,6 +19,13 @@ use tracing::warn;
 /// Upper bound for how long queued image updates wait while the thread is
 /// blocked reading input. Input itself is delivered immediately.
 const READ_TIMEOUT: Duration = Duration::from_millis(100);
+
+/// The read timeout while keys scroll: half a marquee frame, so frames
+/// wait at most that long.
+const ANIMATION_READ_TIMEOUT: Duration = Duration::from_millis(30);
+
+/// How long after the last scrolling frame the shorter timeout is kept.
+const ANIMATION_LINGER: Duration = Duration::from_millis(500);
 
 /// How long stopping waits for device threads to blank their keys and end.
 /// They normally take one read timeout; a driver stuck beyond that must
@@ -46,6 +57,12 @@ pub enum DeviceSignal {
 enum IoCommand {
     /// `None` clears the control.
     Images(Vec<(ControlId, Option<Frame>)>),
+    /// Frames of scrolling keys, made in `epoch`: dropped unless it is
+    /// still the current one.
+    Animation {
+        epoch: u64,
+        images: Vec<(ControlId, Frame)>,
+    },
     Brightness(u8),
     Close {
         blank: Vec<ControlId>,
@@ -60,6 +77,8 @@ pub struct DeviceIo {
     /// Disconnects when the thread ends (its sender is dropped then, also
     /// on a panic), so waiting for it can be bounded.
     finished: mpsc::Receiver<()>,
+    /// The current epoch of scrolling frames ([`DeviceIo::next_epoch`]).
+    epoch: Arc<AtomicU64>,
 }
 
 impl DeviceIo {
@@ -72,11 +91,13 @@ impl DeviceIo {
         let (finished_tx, finished) = mpsc::channel::<()>();
         let device = handle.id().clone();
         let thread_device = device.clone();
+        let epoch = Arc::new(AtomicU64::new(0));
+        let current = epoch.clone();
         let thread = std::thread::Builder::new()
             .name(format!("device-{}", device.serial))
             .spawn(move || {
                 let _finished = finished_tx;
-                let error = io_loop(session, handle.as_mut(), &inbox, &signals);
+                let error = io_loop(session, handle.as_mut(), &inbox, &signals, &current);
                 let _ = signals.send(DeviceSignal::Closed {
                     session,
                     device: thread_device,
@@ -88,6 +109,24 @@ impl DeviceIo {
             commands,
             thread: Some(thread),
             finished,
+            epoch,
+        })
+    }
+
+    /// Starts a new epoch of scrolling frames and returns it: frames of
+    /// earlier epochs still on their way are dropped. Called before the
+    /// images that replace them are queued.
+    pub fn next_epoch(&self) -> u64 {
+        self.epoch.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// Where an animator sends scrolling frames for this device.
+    pub fn animation_sink(&self) -> crate::marquee::FrameSink {
+        let commands = self.commands.clone();
+        Box::new(move |epoch, images| {
+            if !images.is_empty() {
+                let _ = commands.send(IoCommand::Animation { epoch, images });
+            }
         })
     }
 
@@ -141,9 +180,16 @@ fn io_loop(
     handle: &mut dyn DeviceHandle,
     inbox: &mpsc::Receiver<IoCommand>,
     signals: &UnboundedSender<DeviceSignal>,
+    epoch: &AtomicU64,
 ) -> Option<DeviceError> {
+    let mut animating_until: Option<Instant> = None;
     loop {
-        match handle.read_input(READ_TIMEOUT) {
+        let timeout = if animating_until.is_some_and(|until| Instant::now() < until) {
+            ANIMATION_READ_TIMEOUT
+        } else {
+            READ_TIMEOUT
+        };
+        match handle.read_input(timeout) {
             Ok(events) => {
                 let at = Instant::now();
                 for (control, input) in events {
@@ -162,9 +208,38 @@ fn io_loop(
             }
             Err(error) => return Some(error),
         }
+        let mut next = None;
         loop {
-            let result = match inbox.try_recv() {
-                Ok(IoCommand::Images(images)) => apply_images(handle, images),
+            let command = match next.take() {
+                Some(command) => Ok(command),
+                None => inbox.try_recv(),
+            };
+            let result = match command {
+                Ok(IoCommand::Images(images)) => {
+                    // Images queued meanwhile (the agent redraws faster
+                    // than the device takes them, e.g. while the editor's
+                    // preview changes): one write per key, the latest.
+                    let (images, after) = coalesce(images, inbox);
+                    next = after;
+                    apply_images(handle, images)
+                }
+                Ok(IoCommand::Animation {
+                    epoch: made,
+                    images,
+                }) => {
+                    if made == epoch.load(Ordering::SeqCst) {
+                        animating_until = Some(Instant::now() + ANIMATION_LINGER);
+                        apply_images(
+                            handle,
+                            images
+                                .into_iter()
+                                .map(|(control, frame)| (control, Some(frame)))
+                                .collect(),
+                        )
+                    } else {
+                        Ok(())
+                    }
+                }
                 Ok(IoCommand::Brightness(percent)) => handle.set_brightness(percent),
                 Ok(IoCommand::Close { blank }) => {
                     let images = blank.into_iter().map(|control| (control, None)).collect();
@@ -178,6 +253,30 @@ fn io_loop(
             if let Err(error) = result {
                 return Some(error);
             }
+        }
+    }
+}
+
+/// `images` and the image commands queued right after it, as one batch
+/// with the latest image of each control (in the order controls first
+/// appeared); the first other command is handed back.
+fn coalesce(
+    images: Vec<(ControlId, Option<Frame>)>,
+    inbox: &mpsc::Receiver<IoCommand>,
+) -> (Vec<(ControlId, Option<Frame>)>, Option<IoCommand>) {
+    let mut batch = images;
+    loop {
+        match inbox.try_recv() {
+            Ok(IoCommand::Images(more)) => {
+                for (control, frame) in more {
+                    match batch.iter_mut().find(|(c, _)| *c == control) {
+                        Some(slot) => slot.1 = frame,
+                        None => batch.push((control, frame)),
+                    }
+                }
+            }
+            Ok(other) => return (batch, Some(other)),
+            Err(_) => return (batch, None),
         }
     }
 }
@@ -242,6 +341,31 @@ mod tests {
     }
 
     #[test]
+    fn queued_images_are_written_once_per_key_with_the_latest() {
+        let (tx, rx) = mpsc::channel();
+        let key = |index| ControlId::Key { index };
+        let frame = |shade| Some(Frame::filled(2, 2, [shade, 0, 0]));
+        tx.send(IoCommand::Images(vec![
+            (key(1), frame(2)),
+            (key(2), frame(3)),
+        ]))
+        .unwrap();
+        tx.send(IoCommand::Images(vec![(key(1), frame(4))]))
+            .unwrap();
+        tx.send(IoCommand::Brightness(50)).unwrap();
+        tx.send(IoCommand::Images(vec![(key(1), frame(9))]))
+            .unwrap();
+        let (batch, next) = coalesce(vec![(key(1), frame(1)), (key(3), None)], &rx);
+        assert_eq!(
+            batch,
+            vec![(key(1), frame(4)), (key(3), None), (key(2), frame(3))]
+        );
+        // What follows another command is written after it.
+        assert!(matches!(next, Some(IoCommand::Brightness(50))));
+        assert!(matches!(rx.try_recv(), Ok(IoCommand::Images(_))));
+    }
+
+    #[test]
     fn closing_blanks_the_keys_and_waits_for_the_thread() {
         let mut mock = MockBackend::new();
         let id = mock.plug(&models::stream_deck_mk2(), "A1");
@@ -259,6 +383,41 @@ mod tests {
             received.try_recv(),
             Ok(DeviceSignal::Closed { error: None, .. })
         ));
+    }
+
+    #[test]
+    fn scrolling_frames_of_an_old_epoch_are_dropped() {
+        let mut mock = MockBackend::new();
+        let id = mock.plug(&models::stream_deck_mk2(), "A1");
+        let (signals, _received) = tokio::sync::mpsc::unbounded_channel();
+        let io = DeviceIo::spawn(1, mock.open(&id).unwrap(), signals).unwrap();
+        let key = ControlId::Key { index: 0 };
+        let sink = io.animation_sink();
+        let first = io.next_epoch();
+        sink(first, vec![(key, Frame::filled(72, 72, [1, 1, 1]))]);
+        assert!(mock.wait_for(&id, Duration::from_secs(10), |frames, _| {
+            frames.get(&key) == Some(&Frame::filled(72, 72, [1, 1, 1]))
+        }));
+        // A new list: the still image comes first, a late frame of the old
+        // list does not overwrite it.
+        let second = io.next_epoch();
+        io.set_images(vec![(key, Some(Frame::filled(72, 72, [2, 2, 2])))]);
+        sink(first, vec![(key, Frame::filled(72, 72, [9, 9, 9]))]);
+        sink(
+            second,
+            vec![(
+                ControlId::Key { index: 1 },
+                Frame::filled(72, 72, [3, 3, 3]),
+            )],
+        );
+        assert!(mock.wait_for(&id, Duration::from_secs(10), |frames, _| {
+            frames.contains_key(&ControlId::Key { index: 1 })
+        }));
+        assert_eq!(
+            mock.frames(&id).get(&key),
+            Some(&Frame::filled(72, 72, [2, 2, 2]))
+        );
+        assert!(io.close(Vec::new(), CLOSE_TIMEOUT));
     }
 
     #[test]

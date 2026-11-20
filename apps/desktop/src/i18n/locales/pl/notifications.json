@@ -1,0 +1,67 @@
+{
+  "center": {
+    "title": "Powiadomienia",
+    "unread_one": "Powiadomienia, {{count}} nieprzeczytane",
+    "unread_few": "Powiadomienia, {{count}} nieprzeczytane",
+    "unread_many": "Powiadomienia, {{count}} nieprzeczytanych",
+    "unread_other": "Powiadomienia, {{count}} nieprzeczytanego",
+    "empty": "Brak powiadomień"
+  },
+  "severity": {
+    "info": "Informacja",
+    "warning": "Ostrzeżenie",
+    "error": "Błąd"
+  },
+  "operations": {
+    "title": "Aktywność w tle",
+    "failed": "{{title}}: niepowodzenie",
+    "succeeded": "{{title}}: zakończono",
+    "cancelled": "{{title}}: anulowano",
+    "counted": "{{title}} ({{completed}}/{{total}})",
+    "summary": "Aktywność w tle: {{operation}}",
+    "summaryWithMore_one": "Aktywność w tle: {{operation}} i jeszcze {{count}} operacja",
+    "summaryWithMore_few": "Aktywność w tle: {{operation}} i jeszcze {{count}} operacje",
+    "summaryWithMore_many": "Aktywność w tle: {{operation}} i jeszcze {{count}} operacji",
+    "summaryWithMore_other": "Aktywność w tle: {{operation}} i jeszcze {{count}} operacji",
+    "startedAt": "Rozpoczęto {{time}}",
+    "finishedAt": "Zakończono {{time}}"
+  },
+  "agent": {
+    "stopped": {
+      "title": "Agent w tle został zatrzymany",
+      "message": "Urządzenia pozostaną puste, dopóki nie zostanie ponownie uruchomiony."
+    },
+    "otherInstallation": "Agent należy do innej instalacji",
+    "versionsDiffer": "Wersje agenta i aplikacji się różnią",
+    "versions": "Agent {{agent}}, aplikacja {{app}}."
+  },
+  "device": {
+    "disconnected": "Odłączono: {{model}}",
+    "simulated": "Urządzenie symulowane",
+    "serial": "Numer seryjny {{serial}}"
+  },
+  "update": {
+    "checking": "Sprawdzanie aktualizacji…",
+    "downloading": "Pobieranie aktualizacji",
+    "downloadingVersion": "Pobieranie {{version}}",
+    "restart": "Uruchom ponownie, aby zaktualizować do nowej wersji",
+    "restartVersion": "Uruchom ponownie, aby zaktualizować do {{version}}",
+    "installing": "Instalowanie aktualizacji…",
+    "failed": "Aktualizacja nie powiodła się",
+    "available": "Aktualizacja {{version}}",
+    "availableTitle": "Dostępny jest DeckPilot {{version}}",
+    "downloadingTitle": "Pobieranie DeckPilot {{version}}",
+    "downloadingUpdate": "Pobieranie aktualizacji DeckPilot",
+    "downloadFailed": "Pobieranie nie powiodło się",
+    "installingTitle": "Instalowanie aktualizacji",
+    "installFailed": "Instalacja nie powiodła się",
+    "openSettings": "Otwórz ustawienia aktualizacji"
+  },
+  "security": {
+    "attention": "Bezpieczeństwo wymaga Twojej uwagi",
+    "unencryptedCopy": {
+      "title": "Pozostała niezaszyfrowana kopia konfiguracji",
+      "message": "Usuń ją w Ustawienia → Bezpieczeństwo."
+    }
+  }
+}

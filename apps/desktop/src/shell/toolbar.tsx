@@ -23,10 +23,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Separator } from "@/components/ui/separator"
+import { LayoutMenu } from "@/layout-editor/layout-management"
+import { useConfirmDiscard } from "@/layout-editor/layout-selection"
 import { SHORTCUTS } from "@/hooks/use-navigation"
 import { useStatus } from "@/hooks/use-status"
+import { useTranslation } from "@/i18n"
 import { useAppContext } from "@/lib/app-context"
-import { useTheme } from "@/lib/theme"
+import { THEME } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 
 import { type DeviceOption, currentOption, deviceOptions } from "./device-options"
@@ -42,7 +45,12 @@ import {
   useNavigationIcon,
 } from "./plugin-navigation"
 
-const SELECTOR = cn(CONTROL, "max-w-56 justify-start font-normal")
+// Narrower windows truncate the selectors' names; their tooltips and
+// accessible names keep the whole name.
+const SELECTOR = cn(
+  CONTROL,
+  "max-w-56 justify-start font-normal max-[1100px]:max-w-40 max-[820px]:max-w-28",
+)
 
 function Dot({ on, className }: { on: boolean; className?: string }) {
   return (
@@ -62,6 +70,7 @@ function Dot({ on, className }: { on: boolean; className?: string }) {
  * catalog without the hardware. Choosing one opens the editor.
  */
 export function DeviceSelector({ onChosen }: { onChosen?: () => void }) {
+  const { t } = useTranslation()
   const { agent } = useAppContext()
   const selection = useEditorSelection()
   const models = selection.models.status === "ready" ? selection.models.data : []
@@ -70,9 +79,18 @@ export function DeviceSelector({ onChosen }: { onChosen?: () => void }) {
   const connected = options.filter((o) => o.connected)
   const others = options.filter((o) => !o.connected)
   const label = current
-    ? `Device: ${current.label}, ${current.connected ? "connected" : "not connected"}`
-    : "Choose a device"
-  const choose = (option: DeviceOption) => {
+    ? current.connected
+      ? t("navigation:device.selectorConnected", { device: current.label })
+      : t("navigation:device.selectorNotConnected", { device: current.label })
+    : t("navigation:device.choose")
+  const confirmDiscard = useConfirmDiscard()
+  const choose = async (option: DeviceOption) => {
+    // The device shown already: only opens the editor.
+    if (option.key === current?.key) {
+      onChosen?.()
+      return
+    }
+    if (!(await confirmDiscard())) return
     if (selection.selectDevice(option.model, option.device)) onChosen?.()
   }
   const item = (option: DeviceOption) => (
@@ -81,7 +99,7 @@ export function DeviceSelector({ onChosen }: { onChosen?: () => void }) {
       disabled={!option.available}
       aria-current={option.key === current?.key ? "true" : undefined}
       onSelect={() => {
-        choose(option)
+        void choose(option)
       }}
     >
       <Check className={cn(option.key !== current?.key && "invisible")} />
@@ -104,28 +122,32 @@ export function DeviceSelector({ onChosen }: { onChosen?: () => void }) {
           disabled={selection.models.status !== "ready"}
         >
           <Cpu />
-          <span className="truncate">{current?.label ?? "Device"}</span>
+          <span className="truncate">{current?.label ?? t("navigation:device.placeholder")}</span>
           {current && <Dot on={current.connected} />}
           <ChevronDown className="opacity-60" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-72">
         {connected.length > 0 && (
-          <DropdownMenuGroup aria-label="Connected devices">
-            <DropdownMenuLabel>Connected</DropdownMenuLabel>
+          <DropdownMenuGroup aria-label={t("navigation:device.connectedGroup")}>
+            <DropdownMenuLabel>{t("navigation:device.connected")}</DropdownMenuLabel>
             {connected.map(item)}
           </DropdownMenuGroup>
         )}
         {connected.length > 0 && others.length > 0 && <DropdownMenuSeparator />}
         {others.length > 0 && (
-          <DropdownMenuGroup aria-label="Device models">
+          <DropdownMenuGroup aria-label={t("navigation:device.modelsGroup")}>
             <DropdownMenuLabel>
-              {connected.length > 0 ? "Other models" : "Models"}
+              {connected.length > 0
+                ? t("navigation:device.otherModels")
+                : t("navigation:device.models")}
             </DropdownMenuLabel>
             {others.map(item)}
           </DropdownMenuGroup>
         )}
-        {options.length === 0 && <DropdownMenuItem disabled>No device models</DropdownMenuItem>}
+        {options.length === 0 && (
+          <DropdownMenuItem disabled>{t("navigation:device.noModels")}</DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -133,41 +155,50 @@ export function DeviceSelector({ onChosen }: { onChosen?: () => void }) {
 
 /** The profile all editors work on; independent of the profile on the device. */
 export function ProfileSelector() {
+  const { t } = useTranslation()
   const { profiles, editingProfileId, openSettings } = useAppContext()
   const selection = useEditorSelection()
+  const confirmDiscard = useConfirmDiscard()
   const editing = profiles.profiles.find((p) => p.id === editingProfileId)
   const onDevice = editing !== undefined && editing.id === profiles.activeProfileId
   const label = editing
-    ? `Profile: ${editing.name}${onDevice ? ", active on the device" : ""}`
-    : "Choose the profile to edit"
+    ? onDevice
+      ? t("navigation:profile.selectorActive", { profile: editing.name })
+      : t("navigation:profile.selector", { profile: editing.name })
+    : t("navigation:profile.choose")
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="sm" className={SELECTOR} aria-label={label} title={label}>
           <UserRound />
-          <span className="truncate">{editing?.name ?? "No profile"}</span>
+          <span className="truncate">{editing?.name ?? t("navigation:profile.none")}</span>
           {editing && <Dot on={onDevice} />}
           <ChevronDown className="opacity-60" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent className="w-64" align="start">
-        <DropdownMenuLabel>Edit profile</DropdownMenuLabel>
+        <DropdownMenuLabel>{t("navigation:profile.edit")}</DropdownMenuLabel>
         <DropdownMenuSeparator />
         {profiles.profiles.length === 0 && (
-          <DropdownMenuItem disabled>No profiles yet</DropdownMenuItem>
+          <DropdownMenuItem disabled>{t("navigation:profile.noProfiles")}</DropdownMenuItem>
         )}
         {profiles.profiles.map((profile) => (
           <DropdownMenuItem
             key={profile.id}
             aria-current={profile.id === editingProfileId ? "true" : undefined}
             onSelect={() => {
-              selection.selectProfile(profile.id)
+              if (profile.id === editingProfileId) return
+              void confirmDiscard().then((ok) => {
+                if (ok) selection.selectProfile(profile.id)
+              })
             }}
           >
             <Check className={cn(profile.id !== editingProfileId && "invisible")} />
             <span className="flex-1 truncate">{profile.name}</span>
             {profile.id === profiles.activeProfileId && (
-              <span className="text-xs text-muted-foreground">on device</span>
+              <span className="text-xs text-muted-foreground">
+                {t("navigation:profile.onDevice")}
+              </span>
             )}
           </DropdownMenuItem>
         ))}
@@ -177,16 +208,24 @@ export function ProfileSelector() {
             openSettings("profiles")
           }}
         >
-          <Settings /> Manage profiles…
+          <Settings /> {t("navigation:profile.manage")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   )
 }
 
+/**
+ * The layout the Device Editor shows, of the profile being edited for the
+ * device's model, and the layouts' management (layout-editor/layout-management.tsx).
+ */
+export function LayoutSelector() {
+  return <LayoutMenu className={SELECTOR} />
+}
+
 function PluginIcon({ item }: { item: PluginNavigationItem }) {
-  const { resolved } = useTheme()
-  const source = useNavigationIcon(item, resolved === "dark" ? "dark" : "light")
+  // DeckPilot is always dark: the plugin's icon for dark backgrounds.
+  const source = useNavigationIcon(item, THEME)
   // Only ever an image: the agent's sanitised data URL, else the app's own icon.
   if (!source) return <Puzzle aria-hidden data-slot="plugin-icon-fallback" />
   return (
@@ -233,6 +272,7 @@ export function PluginNavigation({
   current?: string | null
   onSelect: (item: PluginNavigationItem) => void
 }) {
+  const { t } = useTranslation()
   const [order, setOrderState] = useState(loadNavigationOrder)
   const narrow = useSyncExternalStore(subscribeNarrow, isNarrow, () => false)
   if (items.length === 0) return null
@@ -244,7 +284,10 @@ export function PluginNavigation({
     saveNavigationOrder(next)
   }
   return (
-    <nav aria-label="Plugins" className="flex items-center gap-(--titlebar-gap)">
+    <nav
+      aria-label={t("navigation:plugins.label")}
+      className="flex items-center gap-(--titlebar-gap)"
+    >
       {inline.map((item, index) => {
         const open = current === navigationKey(item)
         return (
@@ -272,7 +315,7 @@ export function PluginNavigation({
                   move(item, index - 1)
                 }}
               >
-                Move left
+                {t("navigation:plugins.moveLeft")}
               </ContextMenuItem>
               <ContextMenuItem
                 disabled={index === ordered.length - 1}
@@ -280,7 +323,7 @@ export function PluginNavigation({
                   move(item, index + 1)
                 }}
               >
-                Move right
+                {t("navigation:plugins.moveRight")}
               </ContextMenuItem>
             </ContextMenuContent>
           </ContextMenu>
@@ -293,14 +336,14 @@ export function PluginNavigation({
               variant="ghost"
               size="icon"
               className={CONTROL_ICON}
-              aria-label="More plugin views"
-              title="More plugin views"
+              aria-label={t("navigation:plugins.more")}
+              title={t("navigation:plugins.more")}
             >
               <Ellipsis />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel>Plugins</DropdownMenuLabel>
+            <DropdownMenuLabel>{t("navigation:plugins.label")}</DropdownMenuLabel>
             {overflow.map((item) => (
               <DropdownMenuItem
                 key={navigationKey(item)}
@@ -317,7 +360,9 @@ export function PluginNavigation({
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>Move to the toolbar</DropdownMenuSubTrigger>
+                  <DropdownMenuSubTrigger>
+                    {t("navigation:plugins.moveToToolbar")}
+                  </DropdownMenuSubTrigger>
                   <DropdownMenuSubContent>
                     {overflow.map((item) => (
                       <DropdownMenuItem
@@ -366,12 +411,19 @@ export function ToolbarEnd({
   /** The settings are the view on screen. */
   settingsOpen?: boolean
 }) {
+  const { t } = useTranslation()
   const { updates, openSettings } = useAppContext()
   const stores = useStatus()
   const updateAvailable = Boolean(updates?.available)
-  const settingsLabel = updateAvailable ? "Settings, an update is available" : "Settings"
+  const settingsLabel = updateAvailable
+    ? t("navigation:toolbar.settingsUpdate")
+    : t("navigation:toolbar.settings")
   return (
-    <div role="group" aria-label="App" className="flex items-center gap-(--titlebar-gap)">
+    <div
+      role="group"
+      aria-label={t("navigation:toolbar.app")}
+      className="flex items-center gap-(--titlebar-gap)"
+    >
       <PluginNavigation items={plugins} current={pluginOpen} onSelect={onPlugin} />
       {plugins.length > 0 && (
         <Separator
@@ -386,9 +438,9 @@ export function ToolbarEnd({
           variant="ghost"
           size="icon"
           className={cn(CONTROL_ICON, marketplaceOpen && "bg-accent text-accent-foreground")}
-          aria-label="Marketplace"
+          aria-label={t("navigation:toolbar.marketplace")}
           aria-pressed={marketplaceOpen}
-          title="Marketplace"
+          title={t("navigation:toolbar.marketplace")}
           onClick={onMarketplace}
         >
           <Store />
@@ -400,7 +452,10 @@ export function ToolbarEnd({
         className={cn(CONTROL_ICON, "relative", settingsOpen && "bg-accent text-accent-foreground")}
         aria-label={settingsLabel}
         aria-pressed={settingsOpen}
-        title={`${settingsLabel} (${SHORTCUTS.settings})`}
+        title={t("navigation:toolbar.withShortcut", {
+          label: settingsLabel,
+          shortcut: SHORTCUTS.settings,
+        })}
         onClick={() => {
           openSettings(updateAvailable ? "updates" : undefined)
         }}

@@ -1,0 +1,62 @@
+{
+  "toolbar": {
+    "label": "Toolbar",
+    "location": "Location",
+    "pageActions": "Page actions",
+    "moreActions": "More actions",
+    "progress": "Progress",
+    "app": "App",
+    "marketplace": "Marketplace",
+    "settings": "Settings",
+    "settingsUpdate": "Settings, an update is available",
+    "withShortcut": "{{label}} ({{shortcut}})"
+  },
+  "rail": {
+    "label": "Workspace",
+    "workspace": "Workspace",
+    "configure": "Configure"
+  },
+  "pages": {
+    "designer": "Device Editor",
+    "layouts": "Layouts",
+    "dashboard": "Dashboard",
+    "actions": "Action Library",
+    "workflows": "Workflows"
+  },
+  "statusBar": {
+    "label": "Status bar",
+    "more": "More status"
+  },
+  "device": {
+    "choose": "Choose a device",
+    "placeholder": "Device",
+    "selectorConnected": "Device: {{device}}, connected",
+    "selectorNotConnected": "Device: {{device}}, not connected",
+    "connectedGroup": "Connected devices",
+    "connected": "Connected",
+    "modelsGroup": "Device models",
+    "otherModels": "Other models",
+    "models": "Models",
+    "noModels": "No device models",
+    "optionConnected": "Connected · {{serial}}",
+    "optionNotInCatalog": "Connected · {{serial}} · not in the device catalog",
+    "optionNotConnected": "Not connected"
+  },
+  "profile": {
+    "choose": "Choose the profile to edit",
+    "selector": "Profile: {{profile}}",
+    "selectorActive": "Profile: {{profile}}, active on the device",
+    "none": "No profile",
+    "edit": "Edit profile",
+    "noProfiles": "No profiles yet",
+    "onDevice": "on device",
+    "manage": "Manage profiles…"
+  },
+  "plugins": {
+    "label": "Plugins",
+    "more": "More plugin views",
+    "moveLeft": "Move left",
+    "moveRight": "Move right",
+    "moveToToolbar": "Move to the toolbar"
+  }
+}

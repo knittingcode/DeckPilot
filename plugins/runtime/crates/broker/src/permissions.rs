@@ -34,6 +34,7 @@ pub const NEVER_GRANTABLE: &[&str] = &[
     "firmware",
     "workflows",
     "customUi",
+    "ui",
 ];
 
 /// One approved permission, as stored after consent.
@@ -65,6 +66,11 @@ pub enum ApprovedPermission {
     /// `state: true`): a typed description the agent draws, never pixels
     /// and nothing of a device (`rawDevice` stays never grantable).
     KeyState {},
+    /// Showing standard dialogs (plugin API 1.5, `dialog.open`): declarative
+    /// confirm, alert, form and selection dialogs, titled with the
+    /// plugin's name, only in runs the user started. Never plugin UI code
+    /// and never a secret field.
+    Dialogs {},
     /// Opening https URLs of one exact origin in the user's browser
     /// (design §5.2 `openUrl`). Independent of `network`: it gives no
     /// request to that origin, and a network grant gives no `openUrl`.
@@ -158,6 +164,8 @@ pub struct Grants {
     pub(crate) storage_quota: Option<u64>,
     /// Origins whose URLs the plugin may open in the browser.
     pub(crate) open_url: BTreeSet<Origin>,
+    /// Whether the plugin may show dialogs (`dialog.open`).
+    pub(crate) dialogs: bool,
     /// Origins the user entered and consented to (G2).
     pub(crate) user_origins: Vec<UserOriginGrant>,
     /// Credential origins withheld because they have no network grant
@@ -251,6 +259,7 @@ impl Grants {
                 }
                 ApprovedPermission::Notifications {} => g.notifications = true,
                 ApprovedPermission::KeyState {} => g.key_state = true,
+                ApprovedPermission::Dialogs {} => g.dialogs = true,
                 ApprovedPermission::Credential {
                     key,
                     origins,
@@ -406,6 +415,11 @@ impl Grants {
 
     pub fn notifications(&self) -> bool {
         self.notifications
+    }
+
+    /// Whether the plugin may show dialogs.
+    pub fn dialogs(&self) -> bool {
+        self.dialogs
     }
 
     /// The plugin's storage quota: the granted one, or the default.

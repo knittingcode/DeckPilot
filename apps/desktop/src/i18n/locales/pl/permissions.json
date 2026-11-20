@@ -1,0 +1,164 @@
+{
+  "tier": {
+    "high": {
+      "label": "Wysokie ryzyko",
+      "description": "Dostęp do sekretów lub do urządzeń w Twojej sieci lokalnej."
+    },
+    "medium": {
+      "label": "Średnie ryzyko",
+      "description": "Dane opuszczają ten komputer lub wtyczka odczytuje Twoją konfigurację."
+    },
+    "low": {
+      "label": "Niskie ryzyko",
+      "description": "Ograniczone do własnych zasobów wtyczki."
+    }
+  },
+  "host": {
+    "wildcard": "dowolna subdomena {{domain}} (https://*.{{domain}})"
+  },
+  "grant": {
+    "allMethods": "dowolna metoda HTTP wybrana przez wtyczkę (GET, HEAD, POST, PUT, PATCH, DELETE)",
+    "httpsMethods": "Tylko HTTPS. Metody: {{methods}}.",
+    "userOrigin": {
+      "title": "Łączenie z serwerem, który wprowadzisz w jej ustawieniu „{{setting}}”",
+      "none": "Żadnego serwera, dopóki go nie wprowadzisz: DeckPilot poprosi wtedy o zezwolenie na dokładnie ten serwer i zapyta ponownie po każdej zmianie ustawienia.",
+      "pathPrefix": "Możesz ograniczyć dostęp do ścieżki (https://serwer/api).",
+      "privateNetwork": "Serwer może znajdować się w Twojej sieci lokalnej, ale tylko jeśli osobno na to zezwolisz."
+    },
+    "privateNetwork": {
+      "title": "Łączenie z dodanymi przez Ciebie urządzeniami w Twojej sieci lokalnej",
+      "detail": "Tylko z hostami, które wprowadzisz samodzielnie w ustawieniach wtyczki; z żadnym, dopóki go nie dodasz. Dla nich dozwolony jest nieszyfrowany HTTP."
+    },
+    "network": {
+      "title": "Wysyłanie danych do {{host}} i odbieranie danych z tego hosta",
+      "detail": "Tylko HTTPS. Metody: {{methods}}. Wszystko, co wtyczka może odczytać, może zostać wysłane do tego hosta."
+    },
+    "credentials": {
+      "title": "Używanie sekretu „{{secret}}”, który dla niej przechowujesz",
+      "detail": "DeckPilot dodaje sekret do żądań wtyczki tylko do hostów zadeklarowanych dla tego sekretu. Wtyczka otrzymuje odwołanie, a nie wartość."
+    },
+    "notifications": {
+      "title": "Wyświetlanie powiadomień",
+      "detail": "Poprzedzonych nazwą wtyczki.",
+      "detailRouted": "Poprzedzonych nazwą wtyczki. Na biurku i na pasku stanu, zgodnie z ustawieniami wtyczki."
+    },
+    "profile": {
+      "titleProfile": "Odczytywanie aktywnego profilu",
+      "titleProject": "Odczytywanie aktywnego projektu",
+      "titleBoth": "Odczytywanie aktywnego profilu i projektu",
+      "detail": "Tylko identyfikator, klucz i nazwa; nie ich zawartość."
+    },
+    "variables": {
+      "title": "Odczytywanie zmiennej {{name}}",
+      "titlePrefix": "Odczytywanie zmiennych w {{prefix}}",
+      "detail": "Wrażliwe zmienne innych właścicieli i wartości sekretów nigdy nie są dostępne do odczytu."
+    },
+    "storage": {
+      "title": "Przechowywanie własnych danych",
+      "titleQuota_one": "Przechowywanie do {{count}} KB własnych danych",
+      "titleQuota_few": "Przechowywanie do {{count}} KB własnych danych",
+      "titleQuota_many": "Przechowywanie do {{count}} KB własnych danych",
+      "titleQuota_other": "Przechowywanie do {{count}} KB własnych danych",
+      "detail": "Zwiększa własną pamięć wtyczki ponad domyślny limit."
+    },
+    "openUserOrigin": {
+      "title": "Otwieranie w przeglądarce stron serwera, który wprowadzisz w jej ustawieniu „{{setting}}”",
+      "detail": "Żadnych, dopóki nie wprowadzisz serwera i nie zezwolisz dokładnie na niego. Tylko strony https tego serwera i tylko w akcji, którą uruchomisz (klawiszem, gestem lub w aplikacji albo w uruchomionym przez Ciebie przepływie pracy); nigdy z harmonogramu, zdarzenia ani przy starcie. Najwyżej jedna na 2 sekundy."
+    },
+    "openUrl": {
+      "title": "Otwieranie w przeglądarce linków do {{host}}",
+      "detail": "Tylko strony https tego hosta i tylko w akcji, którą uruchomisz (klawiszem, gestem lub w aplikacji albo w uruchomionym przez Ciebie przepływie pracy); nigdy z harmonogramu, zdarzenia ani przy starcie. Najwyżej jedna na 2 sekundy."
+    },
+    "background": {
+      "title": "Działanie w tle",
+      "detail": "Proces wtyczki działa cały czas.",
+      "detailInterval_one": "Liczniki czasu najwyżej co {{count}} sekundę; proces wtyczki działa cały czas.",
+      "detailInterval_few": "Liczniki czasu najwyżej co {{count}} sekundy; proces wtyczki działa cały czas.",
+      "detailInterval_many": "Liczniki czasu najwyżej co {{count}} sekund; proces wtyczki działa cały czas.",
+      "detailInterval_other": "Liczniki czasu najwyżej co {{count}} sekundy; proces wtyczki działa cały czas."
+    },
+    "device": {
+      "titleIcons": "Stream Deck: używanie własnych ikon na klawiszach",
+      "titleState": "Stream Deck: zmiana tego, co pokazują jej własne klawisze",
+      "detail": "Tylko klawisze przypisane do własnych akcji wtyczki."
+    }
+  },
+  "list": {
+    "none": "Ta wtyczka nie prosi o żadne uprawnienia.",
+    "publisherReason": "Uzasadnienie wydawcy:"
+  },
+  "review": {
+    "title": {
+      "install": "Zainstalować {{name}} {{version}}?",
+      "update": "Uaktualnić {{name}} do wersji {{version}}?",
+      "enable": "Włączyć {{name}}?"
+    },
+    "intro": {
+      "install": "Sprawdź, co ta wtyczka może robić. Zaznacz każde uprawnienie, aby wyrazić na nie zgodę; później możesz odebrać uprawnienia w sekcji Zainstalowane.",
+      "update": "Ta wersja prosi o więcej, niż przyznano. Zaznacz każde nowe lub rozszerzone uprawnienie, aby wyrazić na nie zgodę, odrzuć aktualizację albo anuluj, aby zdecydować później.",
+      "enable": "Wtyczka działa tylko ze wszystkimi uprawnieniami, które deklaruje. Zaznacz każde, które nie zostało jeszcze przyznane."
+    },
+    "confirm": {
+      "install": "Zainstaluj",
+      "update": "Uaktualnij",
+      "enable": "Włącz"
+    },
+    "status": {
+      "allGranted": "Przyznano wszystkie uprawnienia.",
+      "consented": "Wyrażono zgodę na wszystkie uprawnienia.",
+      "missing": "Uprawnienia oczekujące na Twoją zgodę: {{missing}} z {{total}}."
+    },
+    "decline": "Odrzuć aktualizację",
+    "enforced": "Agent egzekwuje te uprawnienia przy każdym wywołaniu wykonywanym przez wtyczkę. Środowisko wykonawcze wtyczek jest eksperymentalne; instaluj tylko wtyczki, którym ufasz.",
+    "allowAll": "Zezwól na wszystkie ({{number}})",
+    "requested": "Żądane uprawnienia",
+    "alreadyGranted": "Już przyznane",
+    "allowNamed": "Zezwól: {{title}}",
+    "allow": "Zezwól",
+    "allowNew": "Nowe: zezwól",
+    "allowBroadened": "Rozszerzone: zezwól",
+    "removed": "Już niewymagane"
+  },
+  "capability": {
+    "profileRead": {
+      "title": "Odczytywanie aktywnego profilu",
+      "description": "Odczytuje akcje, przepływy pracy i układy profilu aktywnego na urządzeniu."
+    },
+    "projectContext": {
+      "title": "Zmiana aktywnego projektu",
+      "description": "Przełącza aktywny projekt aktywnego profilu, na przykład z klawisza."
+    },
+    "machineResources": {
+      "title": "Odczytywanie powiązań zasobów na tym komputerze",
+      "description": "Odczytuje ścieżki, adresy URL i polecenia powiązane z zasobami projektów na tym komputerze. Nigdy nie są eksportowane."
+    },
+    "openExternal": {
+      "title": "Otwieranie aplikacji, plików i stron internetowych",
+      "description": "Otwiera aplikacje, pliki, foldery i strony internetowe w programach, które wybiera dla nich system."
+    },
+    "processExecution": {
+      "title": "Uruchamianie programów na tym komputerze",
+      "description": "Uruchamia programy, takie jak git, docker lub przypisane przez Ciebie polecenie, z limitem czasu. Uruchamianie własnych poleceń musi być także dozwolone w ustawieniach modułu."
+    },
+    "processInspect": {
+      "title": "Sprawdzanie, które programy są uruchomione",
+      "description": "Odczytuje nazwy uruchomionych programów, nigdy ich wiersze poleceń ani środowisko."
+    },
+    "network": {
+      "title": "Wysyłanie żądań sieciowych",
+      "description": "Wysyła żądania HTTP. Żądania do tego komputera lub do sieci lokalnej muszą być dozwolone osobno."
+    },
+    "notifications": {
+      "title": "Wyświetlanie powiadomień na pulpicie",
+      "description": "Wyświetla powiadomienia na tym komputerze i na pasku stanu."
+    },
+    "variablesRead": {
+      "title": "Odczytywanie zmiennych współdzielonych",
+      "description": "Odczytuje zmienne współdzielone i systemowe podczas działania akcji. Wartości poufne pozostają ukryte wszędzie indziej."
+    },
+    "credentials": {
+      "title": "Używanie zapisanych poświadczeń",
+      "description": "Używa poświadczeń zapisanych na tym komputerze, wskazując je po nazwie. Sekrety nigdy nie są częścią przepływu pracy ani eksportu."
+    }
+  }
+}

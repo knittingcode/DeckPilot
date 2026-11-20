@@ -195,15 +195,13 @@ describe("the layout editor with plugins", () => {
         /Unavailable: Hello Weather \(acme\.hello-weather\): the plugin is disabled\. It stays assigned/,
       ),
     ).toBeInTheDocument()
-    expect(screen.getByRole("combobox", { name: "Single click (immediate)" })).toHaveTextContent(
-      "Greet Ada",
-    )
+    expect(screen.getByRole("combobox", { name: "Single press" })).toHaveTextContent("Greet Ada")
 
-    // Another key cannot choose it.
+    // Another key cannot choose it: it is not offered there.
     await user.click(screen.getByRole("button", { name: "Key 2" }))
-    await user.click(screen.getByRole("combobox", { name: "Single click (immediate)" }))
-    const option = await screen.findByRole("option", { name: "Greet Ada (unavailable)" })
-    expect(option).toHaveAttribute("aria-disabled", "true")
+    await user.click(screen.getByRole("combobox", { name: "Assign an action to: Single press" }))
+    await screen.findByRole("listbox")
+    expect(screen.queryByRole("option", { name: /Greet Ada/ })).toBeNull()
     await user.keyboard("{Escape}")
 
     // Saving keeps the reference as it was.
@@ -220,9 +218,7 @@ describe("the layout editor with plugins", () => {
     expect(
       screen.getByText(/Unavailable: The plugin acme\.hello-weather is not installed/),
     ).toBeInTheDocument()
-    expect(screen.getByRole("combobox", { name: "Single click (immediate)" })).toHaveTextContent(
-      "Greet Ada",
-    )
+    expect(screen.getByRole("combobox", { name: "Single press" })).toHaveTextContent("Greet Ada")
   })
 })
 

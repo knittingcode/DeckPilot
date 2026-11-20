@@ -12,6 +12,7 @@ import type {
   Trigger,
   Workflow,
 } from "./types"
+import { type TranslationKey, i18n } from "@/i18n"
 
 export interface ModelControls {
   keys: { control: ControlId; row: number; column: number }[]
@@ -103,33 +104,34 @@ export function bindableTriggers(model: DeviceModel, control: ControlId): Trigge
   return acceptsGestures(model, control) ? [...raw, ...GESTURE_TRIGGERS] : raw
 }
 
-const TRIGGER_LABELS: Record<string, string> = {
-  click: "Click",
-  doubleClick: "Double click",
-  longPress: "Long press",
-  press: "Press",
-  release: "Release",
-  rotateClockwise: "Turn right",
-  rotateCounterClockwise: "Turn left",
-  "touch:tap": "Tap",
-  "touch:longPress": "Long press",
-  "touch:swipe": "Swipe",
+const TRIGGER_LABELS: Record<string, TranslationKey> = {
+  click: "editor:triggerName.click",
+  doubleClick: "editor:triggerName.doubleClick",
+  longPress: "editor:triggerName.longPress",
+  press: "editor:triggerName.press",
+  release: "editor:triggerName.release",
+  rotateClockwise: "editor:triggerName.rotateClockwise",
+  rotateCounterClockwise: "editor:triggerName.rotateCounterClockwise",
+  "touch:tap": "editor:triggerName.touchTap",
+  "touch:longPress": "editor:triggerName.touchLongPress",
+  "touch:swipe": "editor:triggerName.touchSwipe",
 }
 
+/** A trigger's name in the window's language. */
 export function triggerLabel(trigger: Trigger): string {
-  return TRIGGER_LABELS[triggerKey(trigger)] ?? triggerKey(trigger)
+  const key = TRIGGER_LABELS[triggerKey(trigger)]
+  return key ? i18n.t(key) : triggerKey(trigger)
 }
 
+const CONTROL_NAMES: Record<ControlId["kind"], TranslationKey> = {
+  key: "editor:controlName.key",
+  encoder: "editor:controlName.encoder",
+  touchZone: "editor:controlName.touchZone",
+}
+
+/** A control's name in the window's language ("Key 1", "Klawisz 1"). */
 export function controlLabel(control: ControlId): string {
-  const n = control.index + 1
-  switch (control.kind) {
-    case "key":
-      return `Key ${n}`
-    case "encoder":
-      return `Dial ${n}`
-    case "touchZone":
-      return `Touch zone ${n}`
-  }
+  return i18n.t(CONTROL_NAMES[control.kind], { number: control.index + 1 })
 }
 
 export function page(layout: DeviceLayout, pageId: string): LayoutPage | undefined {
@@ -365,15 +367,22 @@ export function targetLabel(
 ): string {
   switch (target.type) {
     case "action":
-      return actions.find((a) => a.id === target.action)?.name ?? "Missing action"
+      return (
+        actions.find((a) => a.id === target.action)?.name ?? i18n.t("editor:drag.missingAction")
+      )
     case "workflow":
-      return workflows.find((w) => w.id === target.workflow)?.name ?? "Missing workflow"
+      return (
+        workflows.find((w) => w.id === target.workflow)?.name ??
+        i18n.t("editor:targetName.missingWorkflow")
+      )
     case "openPage":
-      return `Open “${page(layout, target.page)?.name ?? "missing page"}”`
+      return i18n.t("editor:targetName.openPage", {
+        page: page(layout, target.page)?.name ?? i18n.t("editor:targetName.missingPage"),
+      })
     case "back":
-      return "Back"
+      return i18n.t("editor:targets.back")
     case "stateful":
-      return "Work Session"
+      return i18n.t("editor:targets.workSession")
   }
 }
 

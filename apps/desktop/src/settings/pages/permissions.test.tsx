@@ -4,6 +4,7 @@ import "@testing-library/jest-dom/vitest"
 import { cleanup, screen, within } from "@testing-library/react"
 import { afterEach, beforeAll, describe, expect, it } from "vitest"
 
+import { i18n } from "@/i18n"
 import { CAPABILITIES } from "@/lib/capabilities"
 import { PermissionsSettings } from "@/settings/pages/permissions"
 import { installDomStubs } from "@/test/dom"
@@ -23,17 +24,17 @@ describe("Permissions settings", () => {
     renderWithApp(<PermissionsSettings />, {
       modules: builtInModules({ docker: { enabled: false } }),
     })
-    expect(grants(CAPABILITIES["process-execution"].title)).toEqual([
+    expect(grants(i18n.t(CAPABILITIES["process-execution"].title))).toEqual([
       "SystemGranted",
       "GitGranted",
       "DockerDisabled",
     ])
-    expect(grants(CAPABILITIES.network.title)).toEqual(["HTTPGranted"])
-    expect(grants(CAPABILITIES.notifications.title)).toEqual(["NotificationsGranted"])
-    expect(grants(CAPABILITIES.credentials.title)).toEqual(["HTTPGranted"])
+    expect(grants(i18n.t(CAPABILITIES.network.title))).toEqual(["HTTPGranted"])
+    expect(grants(i18n.t(CAPABILITIES.notifications.title))).toEqual(["NotificationsGranted"])
+    expect(grants(i18n.t(CAPABILITIES.credentials.title))).toEqual(["HTTPGranted"])
     // Every capability is described, used or not.
     for (const { description } of Object.values(CAPABILITIES)) {
-      expect(screen.getByText(description)).toBeInTheDocument()
+      expect(screen.getByText(i18n.t(description))).toBeInTheDocument()
     }
   })
 
@@ -44,7 +45,7 @@ describe("Permissions settings", () => {
     expect(screen.getAllByText("No module uses this permission.")).toHaveLength(
       Object.keys(CAPABILITIES).length - 1,
     )
-    expect(grants(CAPABILITIES["profile-read"].title)).toEqual(["GeneralGranted"])
+    expect(grants(i18n.t(CAPABILITIES["profile-read"].title))).toEqual(["GeneralGranted"])
   })
 
   it("leads to the modules page to withdraw a permission", async () => {

@@ -244,7 +244,8 @@ restoring its `deckpilot-schema9-…` backup.
   the plan until the user turns it on.
 - A plugin of the application bundle that the user uninstalled
   (tombstoned) is not reinstalled by a plan. The plan says to restore it
-  first. A bundled plugin the user only turned off is turned on again when
+  first, with Restore under *Removed DeckPilot plugins* in Settings ›
+  Plugins › Installed (`restoreBundledPlugin`). A bundled plugin the user only turned off is turned on again when
   the user confirms a plan that needs it.
 - Device capabilities (`supports.device.requires`) are not part of
   resolution. The registry detail does not carry them.

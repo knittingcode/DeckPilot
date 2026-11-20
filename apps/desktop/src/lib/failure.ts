@@ -2,7 +2,9 @@
 
 import { toast } from "sonner"
 
-import { errorMessage } from "./api"
+import { i18n } from "@/i18n"
+
+import { errorMessage } from "./backend-error"
 
 /** A message as a sentence: trimmed, ending with a full stop. */
 export function sentence(message: string): string {
@@ -25,7 +27,7 @@ export function failureDetail(error: unknown, next?: string): string {
  * `The brightness was not changed: No device is connected.`
  */
 export function failureMessage(what: string, error: unknown, next?: string): string {
-  return `${what}: ${failureDetail(error, next)}`
+  return i18n.t("errors:failure.withDetail", { what, detail: failureDetail(error, next) })
 }
 
 /** A toast for a failed operation: what failed as title, why and what to do below. */

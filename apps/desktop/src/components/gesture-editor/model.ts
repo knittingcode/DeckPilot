@@ -2,6 +2,7 @@
 // sections 2.2, 3 and D1/D2). A control is in raw mode (press/release, fired
 // at once), in gesture mode (click, double click, long press) or empty.
 
+import { i18n, type TranslationKey } from "@/i18n"
 import { bindingsFor, controlLabel, isGestureTrigger, sameControl } from "@/lib/layout-model"
 import type {
   BindingTarget,
@@ -25,15 +26,37 @@ export function gestureSlotId(control: ControlId, gesture: Gesture): string {
   return `gesture-slot:${control.kind}:${control.index}:${gesture}`
 }
 
+/** The id of the raw release's slot of `control` (keys without gestures). */
+export function releaseSlotId(control: ControlId): string {
+  return `gesture-slot:${control.kind}:${control.index}:release`
+}
+
 /** The gesture of the slot `id` of `control`, if it is one of its slots. */
 export function slotGesture(control: ControlId, id: unknown): Gesture | null {
   return GESTURES.find((gesture) => gestureSlotId(control, gesture) === id) ?? null
 }
 
-export const GESTURE_LABELS: Record<Gesture, string> = {
-  click: "Single click",
-  doubleClick: "Double click",
-  longPress: "Long press",
+/** The translation key of each gesture's name. */
+export const GESTURE_LABEL_KEYS: Record<Gesture, TranslationKey> = {
+  click: "editor:gesture.names.click",
+  doubleClick: "editor:gesture.names.doubleClick",
+  longPress: "editor:gesture.names.longPress",
+}
+
+/**
+ * Each gesture's name in the window's language, read when used (components
+ * that show it re-render with `useTranslation`).
+ */
+export const GESTURE_LABELS: Readonly<Record<Gesture, string>> = {
+  get click() {
+    return i18n.t(GESTURE_LABEL_KEYS.click)
+  },
+  get doubleClick() {
+    return i18n.t(GESTURE_LABEL_KEYS.doubleClick)
+  },
+  get longPress() {
+    return i18n.t(GESTURE_LABEL_KEYS.longPress)
+  },
 }
 
 /** Built-in defaults (`GestureTimings::default`), used until the setting is read. */
@@ -42,9 +65,22 @@ export const DEFAULT_TIMINGS: GestureTimings = { doubleClickMs: 300, longPressMs
 export type TimingField = keyof GestureTimings
 
 /** Allowed ranges (`DOUBLE_CLICK_RANGE_MS`, `LONG_PRESS_RANGE_MS`). */
+// `label` is the name in the window's language, read when used.
 export const TIMING_LIMITS: Record<TimingField, { min: number; max: number; label: string }> = {
-  doubleClickMs: { min: 150, max: 1000, label: "Double-click window" },
-  longPressMs: { min: 300, max: 5000, label: "Long-press time" },
+  doubleClickMs: {
+    min: 150,
+    max: 1000,
+    get label() {
+      return i18n.t("editor:gesture.timing.doubleClickMs")
+    },
+  },
+  longPressMs: {
+    min: 300,
+    max: 5000,
+    get label() {
+      return i18n.t("editor:gesture.timing.longPressMs")
+    },
+  },
 }
 
 export type KeyMode = "empty" | "raw" | "gesture"
@@ -259,8 +295,8 @@ export function timingError(field: TimingField, text: string): string | null {
   const { min, max, label } = TIMING_LIMITS[field]
   if (text.trim() === "") return null
   const value = Number(text)
-  if (!Number.isInteger(value)) return `${label} must be a whole number of milliseconds.`
-  if (value < min || value > max) return `${label} must be between ${min} and ${max} ms.`
+  if (!Number.isInteger(value)) return i18n.t("editor:gesture.timing.wholeNumber", { label })
+  if (value < min || value > max) return i18n.t("editor:gesture.timing.range", { label, min, max })
   return null
 }
 

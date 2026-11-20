@@ -11,6 +11,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use crate::dialog::DialogRequest;
 use crate::limits::{
     MAX_BODY_LEN, MAX_CREDENTIAL_KEY, MAX_HEADER_LEN, MAX_HEADERS, MAX_LOG_LEN, MAX_NOTIFY_BODY,
     MAX_NOTIFY_REASON, MAX_NOTIFY_TITLE, MAX_OPEN_URL_LEN, MAX_RANDOM_BYTES, MAX_RUN_FAILED_NODES,
@@ -85,6 +86,28 @@ pub enum CapabilityRequest {
     /// bytes. Added compatibly within ABI 1 (plugin API 1.1).
     #[serde(rename = "random.bytes")]
     RandomBytes(RandomBytes),
+    /// Asks DeckPilot to show a standard dialog and waits for the answer
+    /// ([`DialogRequest`], [`DialogResult`](crate::dialog::DialogResult);
+    /// plugin API 1.5). Needs the `dialogs` permission and a run the user
+    /// started. Added compatibly within ABI 1: a guest built before it
+    /// never sends it; a host or agent that predates it refuses the
+    /// unknown op.
+    #[serde(rename = "dialog.open")]
+    DialogOpen(DialogRequest),
+    /// The app's language ([`LocaleReply`](crate::locale::LocaleReply);
+    /// plugin API 1.6): a tag such as `pl` or `pl-PL`, nothing else. Always
+    /// allowed. Added compatibly within ABI 1: a guest built before it
+    /// never sends it; a host or agent that predates it refuses the
+    /// unknown op.
+    #[serde(rename = "locale.get")]
+    LocaleGet(NoArgs),
+    /// Resolves one of the plugin's own translation keys in the app's
+    /// language ([`Translate`](crate::locale::Translate),
+    /// [`Translation`](crate::locale::Translation); plugin API 1.6). Always
+    /// allowed, only for the plugin's own locale files. Added compatibly
+    /// within ABI 1.
+    #[serde(rename = "locale.translate")]
+    LocaleTranslate(crate::locale::Translate),
 }
 
 /// The `ok` value of `time.now`. Unknown fields are **ignored** (host to
@@ -618,6 +641,9 @@ impl CapabilityRequest {
             Self::RunContext(_) => "run.context",
             Self::TimeNow(_) => "time.now",
             Self::RandomBytes(_) => "random.bytes",
+            Self::DialogOpen(_) => "dialog.open",
+            Self::LocaleGet(_) => "locale.get",
+            Self::LocaleTranslate(_) => "locale.translate",
         }
     }
 
@@ -684,7 +710,9 @@ impl CapabilityRequest {
             Self::StorageUsage(_)
             | Self::SettingsGet(_)
             | Self::RunContext(_)
-            | Self::TimeNow(_) => {}
+            | Self::TimeNow(_)
+            | Self::LocaleGet(_) => {}
+            Self::LocaleTranslate(t) => t.validate().map_err(|e| RequestError::Invalid(e.0))?,
             Self::RandomBytes(r) => {
                 if r.length == 0 || r.length as usize > MAX_RANDOM_BYTES {
                     return Err(RequestError::TooLarge("length"));
@@ -711,6 +739,7 @@ impl CapabilityRequest {
                     return Err(RequestError::TooLarge("url"));
                 }
             }
+            Self::DialogOpen(d) => d.validate().map_err(|e| RequestError::Invalid(e.0))?,
         }
         Ok(())
     }
@@ -729,12 +758,16 @@ fn validate_key(key: &str) -> Result<(), RequestError> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequestError {
     TooLarge(&'static str),
+    /// A member breaks a rule other than a size (a dialog's field id, an
+    /// option that is not unique…).
+    Invalid(&'static str),
 }
 
 impl fmt::Display for RequestError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::TooLarge(field) => write!(f, "{field} exceeds its limit"),
+            Self::Invalid(field) => write!(f, "{field} is invalid"),
         }
     }
 }
@@ -1004,6 +1037,64 @@ mod tests {
 
     fn parse(json: &str) -> Result<CapabilityRequest, serde_json::Error> {
         serde_json::from_str(json)
+    }
+
+    #[test]
+    fn locale_ops_are_strict_compatible_additions() {
+        let get = r#"{"op":"locale.get","args":{}}"#;
+        let r = parse(get).unwrap();
+        assert_eq!(r.op(), "locale.get");
+        r.validate().unwrap();
+        assert_eq!(serde_json::to_string(&r).unwrap(), get);
+        let translate =
+            r#"{"op":"locale.translate","args":{"key":"repos.count","params":{"count":3}}}"#;
+        let r = parse(translate).unwrap();
+        assert_eq!(r.op(), "locale.translate");
+        r.validate().unwrap();
+        assert_eq!(serde_json::to_string(&r).unwrap(), translate);
+        let bad_key = parse(r#"{"op":"locale.translate","args":{"key":"a b"}}"#).unwrap();
+        assert_eq!(
+            bad_key.validate().unwrap_err(),
+            RequestError::Invalid("key")
+        );
+        // No namespace, no plugin id, no other locale: identity comes from
+        // the channel.
+        for bad in [
+            r#"{"op":"locale.get","args":{"locale":"de"}}"#,
+            r#"{"op":"locale.translate","args":{"key":"a","plugin":"other.plugin"}}"#,
+            r#"{"op":"locale.translate","args":{"key":"a","namespace":"core"}}"#,
+            r#"{"op":"locale.translate","args":{"key":"a","params":{"x":{"html":"<b>"}}}}"#,
+            r#"{"op":"locale.set","args":{"locale":"de"}}"#,
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn dialog_open_is_a_strict_compatible_addition() {
+        let json = r#"{"op":"dialog.open","args":{"type":"confirm","title":"Delete it?","destructive":true}}"#;
+        let r = parse(json).unwrap();
+        assert_eq!(r.op(), "dialog.open");
+        r.validate().unwrap();
+        assert_eq!(serde_json::to_string(&r).unwrap(), json);
+        // A bound is refused by `validate`, the member named, not its value.
+        let long = format!(
+            r#"{{"op":"dialog.open","args":{{"type":"alert","title":"{}"}}}}"#,
+            "t".repeat(81)
+        );
+        let error = parse(&long).unwrap().validate().unwrap_err();
+        assert_eq!(error, RequestError::Invalid("title"));
+        assert_eq!(error.to_string(), "title is invalid");
+        // A secret field, an unknown member or a plugin id does not parse.
+        for bad in [
+            r#"{"op":"dialog.open","args":{"type":"form","title":"t","fields":[{"id":"p","kind":"secret","label":"P"}]}}"#,
+            r#"{"op":"dialog.open","args":{"type":"alert","title":"t","plugin":"other.plugin"}}"#,
+            r#"{"op":"dialog.open","args":{"type":"alert","title":"t"},"id":"0f"}"#,
+            r#"{"op":"dialog.close","args":{"id":"0f"}}"#,
+            r#"{"op":"dialog.open","args":{}}"#,
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

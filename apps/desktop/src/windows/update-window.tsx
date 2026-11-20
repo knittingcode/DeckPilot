@@ -14,15 +14,16 @@ import { UPDATE_STATE_EVENT, api } from "@/lib/api"
 import { failureMessage } from "@/lib/failure"
 import type { UpdateState } from "@/lib/types"
 import { CHANNEL_LABELS, notConfiguredExplanation, updateControls } from "@/lib/update-distribution"
+import { type TranslationKey, i18n, useTranslation } from "@/i18n"
+import { useFormat } from "@/i18n/format"
 
 import { useWindow } from "./window-context"
 
-const PHASES: Record<UpdateState["phase"], string> = {
-  idle: "",
-  checking: "Checking for updates…",
-  downloading: "Downloading…",
-  ready: "Downloaded and verified. Installing restarts DeckPilot and its background agent.",
-  installing: "Installing…",
+const PHASES: Record<Exclude<UpdateState["phase"], "idle">, TranslationKey> = {
+  checking: "settings:updates.checking",
+  downloading: "settings:updates.downloading",
+  ready: "settings:updateWindow.ready",
+  installing: "settings:updateWindow.installing",
 }
 
 /**
@@ -33,13 +34,15 @@ const PHASES: Record<UpdateState["phase"], string> = {
  * how they are updated; the window offers nothing else.
  */
 export function UpdateWindow() {
+  const { t } = useTranslation()
+  const format = useFormat()
   const { close } = useWindow()
   const [state, setState] = useState<UpdateState | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   useEffect(() => {
     api.updateState().then(setState, (e: unknown) => {
-      setError(failureMessage("The update status could not be read", e))
+      setError(failureMessage(i18n.t("settings:updateWindow.statusUnreadable"), e))
     })
     const stop = listen<UpdateState>(UPDATE_STATE_EVENT, (event) => {
       setState(event.payload)
@@ -73,38 +76,38 @@ export function UpdateWindow() {
   const controls = state ? updateControls(state) : null
   const selfUpdate = controls?.selfUpdate ?? false
   const primary = !selfUpdate
-    ? { label: "Close", onClick: close }
+    ? { label: t("settings:shared.close"), onClick: close }
     : !available
       ? {
-          label: "Check now",
-          loadingLabel: "Checking…",
+          label: t("settings:updateWindow.checkNow"),
+          loadingLabel: t("settings:updateWindow.checkingShort"),
           loading: busy || phase === "checking",
           onClick: () => {
             run(
               () => api.checkForUpdates(),
-              "Checking for updates failed",
-              "Check your internet connection and try again",
+              t("settings:updates.checkFailed"),
+              t("settings:updates.checkInternet"),
             )
           },
         }
       : phase === "ready" || phase === "installing"
         ? {
-            label: "Install and restart",
-            loadingLabel: "Installing…",
+            label: t("settings:updates.installAndRestart"),
+            loadingLabel: t("settings:updateWindow.installing"),
             loading: busy || phase === "installing",
             onClick: () => {
-              run(() => api.installUpdate(), "The update was not installed")
+              run(() => api.installUpdate(), t("settings:updates.notInstalled"))
             },
           }
         : {
-            label: "Download",
-            loadingLabel: "Downloading…",
+            label: t("settings:updates.download"),
+            loadingLabel: t("settings:updates.downloading"),
             loading: busy || phase === "downloading",
             onClick: () => {
               run(
                 () => api.downloadUpdate(),
-                "The update was not downloaded",
-                "Check your internet connection and try again",
+                t("settings:updates.notDownloaded"),
+                t("settings:updates.checkInternet"),
               )
             },
           }
@@ -112,20 +115,27 @@ export function UpdateWindow() {
     <ModalShell
       size="compact"
       icon={phase === "ready" ? RotateCw : available ? Download : RefreshCw}
-      title={selfUpdate && available ? `DeckPilot ${available.version}` : "DeckPilot update"}
+      title={
+        selfUpdate && available
+          ? t("settings:updateWindow.titleVersion", { version: available.version })
+          : t("settings:updateWindow.title")
+      }
       description={
         state
           ? selfUpdate
-            ? `Installed: ${state.currentVersion}`
+            ? t("settings:updateWindow.installed", { version: state.currentVersion })
             : state.updateProvider === "none"
-              ? `Installed: ${state.currentVersion}. Updates are not available in this build.`
-              : `Installed: ${state.currentVersion} from ${CHANNEL_LABELS[state.distributionChannel]}`
+              ? t("settings:updateWindow.installedNoUpdates", { version: state.currentVersion })
+              : t("settings:updateWindow.installedFrom", {
+                  version: state.currentVersion,
+                  channel: t(CHANNEL_LABELS[state.distributionChannel]),
+                })
           : undefined
       }
       loading={!state && !error}
       error={error}
       onClose={close}
-      secondary={selfUpdate ? { label: "Close", onClick: close } : undefined}
+      secondary={selfUpdate ? { label: t("settings:shared.close"), onClick: close } : undefined}
       primary={primary}
     >
       {state?.developmentOverride && <DevelopmentOverrideNotice state={state} />}
@@ -140,34 +150,36 @@ export function UpdateWindow() {
       )}
       {controls?.versionNotice && available && (
         <p className="text-sm">
-          Version {available.version} is available; update with your package manager.
+          {t("settings:updateWindow.versionNotice", { version: available.version })}
         </p>
       )}
       {state?.error && <UpdateErrorNotice error={state.error} />}
       {selfUpdate && !available && phase === "idle" && (
-        <p className="text-sm text-muted-foreground">DeckPilot is up to date.</p>
+        <p className="text-sm text-muted-foreground">{t("settings:updates.upToDate")}</p>
       )}
       {selfUpdate && phase !== "idle" && (
-        <p className="text-sm text-muted-foreground">{PHASES[phase]}</p>
+        <p className="text-sm text-muted-foreground">{t(PHASES[phase])}</p>
       )}
       {selfUpdate && phase === "downloading" && (
         <div className="grid gap-1">
-          <Progress value={percent ?? undefined} aria-label="Download progress" />
+          <Progress
+            value={percent ?? undefined}
+            aria-label={t("settings:updates.downloadProgress")}
+          />
           <span className="text-xs text-muted-foreground">
-            {percent !== null ? `${percent}%` : "Size unknown"}
+            {percent !== null
+              ? format.percent(percent / 100)
+              : t("settings:updateWindow.sizeUnknown")}
           </span>
         </div>
       )}
       {selfUpdate && available?.notes && (
-        <pre className="max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">
+        <pre className="relative max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">
           {available.notes}
         </pre>
       )}
       {selfUpdate && (
-        <p className="text-xs text-muted-foreground">
-          Updates are installed only if their signature verifies. Your configuration stays encrypted
-          and is never uploaded.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("settings:updateWindow.signature")}</p>
       )}
     </ModalShell>
   )

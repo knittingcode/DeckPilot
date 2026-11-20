@@ -1,5 +1,7 @@
 // Pure helpers for the workflow editor.
 
+import { i18n } from "@/i18n"
+
 import type { ActionParameters, Project, StepCondition, Workflow, WorkflowStep } from "./types"
 
 export function newStep(action: string): WorkflowStep {
@@ -68,14 +70,20 @@ export function describeCondition(condition: StepCondition | undefined, projects
   }
 }
 
-/** Client-side checks mirroring the backend, for immediate feedback. */
+/**
+ * Client-side checks mirroring the backend, for immediate feedback, in the
+ * window's language. Call it while rendering so the messages follow a
+ * change of the language.
+ */
 export function validateWorkflow(workflow: Workflow, actionIds: Set<string>): string[] {
   const issues: string[] = []
-  if (!workflow.name.trim()) issues.push("Enter a name.")
+  if (!workflow.name.trim()) issues.push(i18n.t("workflows:steps.validation.name"))
   workflow.steps.forEach((step, index) => {
-    if (!actionIds.has(step.action)) issues.push(`Step ${index + 1}: choose an action.`)
+    if (!actionIds.has(step.action)) {
+      issues.push(i18n.t("workflows:steps.validation.chooseAction", { step: index + 1 }))
+    }
     if (step.condition && !conditionAllowed(step.condition, index)) {
-      issues.push(`Step ${index + 1}: there is no previous step.`)
+      issues.push(i18n.t("workflows:steps.validation.noPrevious", { step: index + 1 }))
     }
   })
   return issues

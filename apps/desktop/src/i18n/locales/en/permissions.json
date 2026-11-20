@@ -1,0 +1,160 @@
+{
+  "tier": {
+    "high": {
+      "label": "High risk",
+      "description": "Access to secrets or to devices on your local network."
+    },
+    "medium": {
+      "label": "Medium risk",
+      "description": "Data leaves this computer or the plugin reads your configuration."
+    },
+    "low": {
+      "label": "Low risk",
+      "description": "Limited to the plugin's own resources."
+    }
+  },
+  "host": {
+    "wildcard": "any subdomain of {{domain}} (https://*.{{domain}})"
+  },
+  "grant": {
+    "allMethods": "any HTTP method the plugin chooses (GET, HEAD, POST, PUT, PATCH, DELETE)",
+    "httpsMethods": "HTTPS only. Methods: {{methods}}.",
+    "userOrigin": {
+      "title": "Connect to a server you enter in its setting “{{setting}}”",
+      "none": "None until you enter one: DeckPilot then asks you to allow exactly that server, and asks again whenever the setting changes.",
+      "pathPrefix": "You may limit it to a path (https://server/api).",
+      "privateNetwork": "The server may be on your local network, only if you allow that for it separately."
+    },
+    "privateNetwork": {
+      "title": "Connect to devices on your local network that you add",
+      "detail": "Only hosts you enter yourself in the plugin's settings; none until you add one. Plain HTTP is allowed for them."
+    },
+    "network": {
+      "title": "Send data to and receive data from {{host}}",
+      "detail": "HTTPS only. Methods: {{methods}}. Whatever the plugin can read can be sent to this host."
+    },
+    "credentials": {
+      "title": "Use the secret “{{secret}}” that you store for it",
+      "detail": "DeckPilot adds the secret to the plugin's requests, only to the hosts declared for this secret. The plugin gets a reference, not the value."
+    },
+    "notifications": {
+      "title": "Show notifications",
+      "detail": "Prefixed with the plugin's name.",
+      "detailRouted": "Prefixed with the plugin's name. On the desktop and in the status bar as you set it in the plugin's settings."
+    },
+    "profile": {
+      "titleProfile": "Read the active profile",
+      "titleProject": "Read the active project",
+      "titleBoth": "Read the active profile and project",
+      "detail": "Id, key and name only; not their contents."
+    },
+    "variables": {
+      "title": "Read the variable {{name}}",
+      "titlePrefix": "Read the variables under {{prefix}}",
+      "detail": "Sensitive variables of other owners and secret values are never readable."
+    },
+    "storage": {
+      "title": "Store its own data",
+      "titleQuota_one": "Store up to {{count}} KB of its own data",
+      "titleQuota_other": "Store up to {{count}} KB of its own data",
+      "detail": "Raises the plugin's own storage above the default."
+    },
+    "openUserOrigin": {
+      "title": "Open pages of the server you enter in its setting “{{setting}}” in your browser",
+      "detail": "None until you enter a server and allow exactly it. Only https pages of that server, and only in an action you start (a key, a gesture or the app, or a workflow you start); never from a schedule, an event or startup. At most one every 2 seconds."
+    },
+    "openUrl": {
+      "title": "Open links to {{host}} in your browser",
+      "detail": "Only https pages of this host, and only in an action you start (a key, a gesture or the app, or a workflow you start); never from a schedule, an event or startup. At most one every 2 seconds."
+    },
+    "background": {
+      "title": "Run in the background",
+      "detail": "The plugin's process keeps running.",
+      "detailInterval_one": "Timers at most every {{count}} second; the plugin's process keeps running.",
+      "detailInterval_other": "Timers at most every {{count}} seconds; the plugin's process keeps running."
+    },
+    "device": {
+      "titleIcons": "Stream Deck: use its own icons on keys",
+      "titleState": "Stream Deck: change what its own keys show",
+      "detail": "Only keys bound to the plugin's own actions."
+    }
+  },
+  "list": {
+    "none": "This plugin asks for no permissions.",
+    "publisherReason": "Publisher's reason:"
+  },
+  "review": {
+    "title": {
+      "install": "Install {{name}} {{version}}?",
+      "update": "Update {{name}} to {{version}}?",
+      "enable": "Enable {{name}}?"
+    },
+    "intro": {
+      "install": "Review what this plugin may do. Check each permission to consent to it; you can revoke permissions later in Installed.",
+      "update": "This version asks for more than you granted. Check each new or broadened permission to consent, decline the update, or cancel to decide later.",
+      "enable": "A plugin runs only with every permission it declares. Check each one that is not granted yet."
+    },
+    "confirm": {
+      "install": "Install",
+      "update": "Update",
+      "enable": "Enable"
+    },
+    "status": {
+      "allGranted": "Every permission is granted.",
+      "consented": "You consented to every permission.",
+      "missing": "{{missing}} of {{total}} permissions still need your consent."
+    },
+    "decline": "Decline update",
+    "enforced": "The agent enforces these permissions on every call the plugin makes. The plugin runtime is experimental; only install plugins you trust.",
+    "allowAll": "Allow all {{number}}",
+    "requested": "Requested permissions",
+    "alreadyGranted": "Already granted",
+    "allowNamed": "Allow: {{title}}",
+    "allow": "Allow",
+    "allowNew": "New: allow",
+    "allowBroadened": "Broadened: allow",
+    "removed": "No longer requested"
+  },
+  "capability": {
+    "profileRead": {
+      "title": "Read the active profile",
+      "description": "Reads the actions, workflows and layouts of the profile active on the device."
+    },
+    "projectContext": {
+      "title": "Change the active project",
+      "description": "Switches the active project of the active profile, for example from a key."
+    },
+    "machineResources": {
+      "title": "Read this computer's resource bindings",
+      "description": "Reads the paths, URLs and commands bound to project resources on this computer. They are never exported."
+    },
+    "openExternal": {
+      "title": "Open applications, files and web pages",
+      "description": "Opens applications, files, folders and web pages with the programs your system chooses for them."
+    },
+    "processExecution": {
+      "title": "Run programs on this computer",
+      "description": "Starts programs such as git, docker or a command you bound, with a time limit. Running your own commands must also be allowed in the module's settings."
+    },
+    "processInspect": {
+      "title": "See which programs are running",
+      "description": "Reads the names of running programs, never their command lines or environment."
+    },
+    "network": {
+      "title": "Send network requests",
+      "description": "Sends HTTP requests. Requests to this computer or the local network must be allowed separately."
+    },
+    "notifications": {
+      "title": "Show desktop notifications",
+      "description": "Shows notifications on this computer and in the status bar."
+    },
+    "variablesRead": {
+      "title": "Read shared variables",
+      "description": "Reads shared and system variables while an action runs. Sensitive values stay hidden everywhere else."
+    },
+    "credentials": {
+      "title": "Use stored credentials",
+      "description": "Uses credentials stored on this computer by their name. Secrets are never part of a workflow or an export."
+    }
+  }
+}

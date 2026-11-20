@@ -17,8 +17,10 @@ import { api } from "@/lib/api"
 import { failureMessage } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
 import { formatTimestamp } from "@/lib/format"
+import { useTranslation } from "@/i18n"
 
 export function AgentSettings() {
+  const { t } = useTranslation()
   const { agent, setAgent } = useAppContext()
   const [loadedAutostart, setAutostart] = useState<boolean | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -44,7 +46,7 @@ export function AgentSettings() {
     actions: [
       {
         id: "agent.refresh",
-        label: "Refresh status",
+        label: t("settings:agent.refresh"),
         icon: RefreshCw,
         placement: "primary",
         busy: refreshing,
@@ -57,9 +59,9 @@ export function AgentSettings() {
             .then(setAgent, (e: unknown) => {
               setError(
                 failureMessage(
-                  "The agent status could not be read",
+                  t("settings:agent.statusUnreadable"),
                   e,
-                  "Try again; if the agent does not respond, restart it",
+                  t("settings:agent.statusUnreadableNext"),
                 ),
               )
             })
@@ -79,10 +81,10 @@ export function AgentSettings() {
       <SettingsSection
         title={
           <>
-            Status <AgentBadge />
+            {t("settings:agent.status")} <AgentBadge />
           </>
         }
-        description="The agent owns device communication and action execution and keeps running when this window is closed."
+        description={t("settings:agent.description")}
       >
         {agent && !agent.running && (
           <SettingsGroup>
@@ -92,18 +94,24 @@ export function AgentSettings() {
         {status && (
           <>
             <PropertyList className="border-t pt-3">
-              <Property label="Version">
-                {status.version} (protocol {status.protocol})
+              <Property label={t("devices:agent.version")}>
+                {t("devices:agent.versionValue", {
+                  version: status.version,
+                  protocol: status.protocol,
+                })}
               </Property>
-              <Property label="Process">
-                PID {status.pid}, started {formatTimestamp(status.startedAt)}
+              <Property label={t("settings:agent.process")}>
+                {t("settings:agent.processValue", {
+                  pid: status.pid,
+                  time: formatTimestamp(status.startedAt),
+                })}
               </Property>
-              <Property label="Device backend">{status.backend}</Property>
+              <Property label={t("settings:agent.backend")}>{status.backend}</Property>
             </PropertyList>
             <SettingsGroup>
               <SettingsRow
-                label="Stop the agent"
-                description="Stopping the agent blanks connected devices until it is started again."
+                label={t("settings:agent.stopLabel")}
+                description={t("settings:agent.stopDescription")}
               >
                 <Button
                   variant="outline"
@@ -112,26 +120,26 @@ export function AgentSettings() {
                     run(async () => {
                       await api.stopAgent()
                       setAgent(await api.agentStatus())
-                    }, "The agent was not stopped")
+                    }, t("settings:agent.notStopped"))
                   }}
                 >
-                  <Square /> Stop agent
+                  <Square /> {t("settings:agent.stop")}
                 </Button>
               </SettingsRow>
             </SettingsGroup>
           </>
         )}
       </SettingsSection>
-      <SettingsSection title="Startup">
+      <SettingsSection title={t("settings:agent.startup")}>
         <SettingsGroup>
           <SettingsRow
-            label="Start the agent when I log in"
+            label={t("settings:agent.autostart")}
             htmlFor="autostart"
             description={
               autostart === null
                 ? running
-                  ? "Not available on this computer."
-                  : "Start the agent to change this."
+                  ? t("settings:agent.autostartUnavailable")
+                  : t("settings:agent.autostartNeedsAgent")
                 : undefined
             }
           >
@@ -145,8 +153,8 @@ export function AgentSettings() {
                     setAutostart(await api.setAutostart(enabled))
                   },
                   enabled
-                    ? "Starting the agent at login was not turned on"
-                    : "Starting the agent at login was not turned off",
+                    ? t("settings:agent.autostartNotOn")
+                    : t("settings:agent.autostartNotOff"),
                 )
               }}
             />

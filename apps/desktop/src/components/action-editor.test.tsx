@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest"
 
-import { cleanup, render, screen, within } from "@testing-library/react"
+import { act, cleanup, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ActionEditor } from "./action-editor"
 import type { ActionInstance, ActionType, ModuleInfo, Project } from "@/lib/types"
+import { i18n } from "@/i18n"
 import { api, resetApi } from "@/test/api-mock"
 import { installDomStubs } from "@/test/dom"
 
@@ -307,5 +308,51 @@ describe("ActionEditor", () => {
     }
     renderEditor(action, 0, [module("projects", "Projects", [selectType])])
     expect(screen.getByText(/not part of this profile/)).toBeInTheDocument()
+  })
+})
+
+describe("ActionEditor in Polish", () => {
+  beforeEach(async () => {
+    resetApi()
+    await act(async () => {
+      await i18n.changeLanguage("pl")
+    })
+  })
+  afterEach(async () => {
+    cleanup()
+    await act(async () => {
+      await i18n.changeLanguage("en")
+    })
+  })
+
+  it("labels the form and its validation in Polish; parameter labels stay as provided", async () => {
+    const user = userEvent.setup()
+    renderEditor(null)
+    expect(screen.getByLabelText("Nazwa")).toHaveAttribute("placeholder", "Otwórz Terminal")
+    expect(screen.getByLabelText("Etykieta klawisza")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Utwórz akcję" }))
+    expect(screen.getByText("Wprowadź nazwę.")).toBeInTheDocument()
+    // "Message" comes from the module and is not translated.
+    expect(screen.getByText("Pole „Message” jest wymagane.")).toBeInTheDocument()
+    expect(createAction).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [2, "Akcja jest używana w 2 miejscach.", "2 odwołania wymagają wyboru."],
+    [5, "Akcja jest używana w 5 miejscach.", "5 odwołań wymaga wyboru."],
+  ])("counts %i references with Polish plurals", async (count, used, undecided) => {
+    const user = userEvent.setup()
+    const action: ActionInstance = {
+      id: "a1",
+      name: "Greet",
+      actionType: logType.id,
+      parameters: { message: { type: "text", value: "hi" } },
+    }
+    renderEditor(action, count)
+    await user.click(screen.getByRole("button", { name: /usuń/i }))
+    const dialog = screen.getByRole("dialog", { name: "Usunąć „Greet”?" })
+    expect(within(dialog).getByText(new RegExp(`^${used}`))).toBeInTheDocument()
+    expect(within(dialog).getByText(new RegExp(undecided))).toBeInTheDocument()
+    expect(within(dialog).getByRole("button", { name: "Zastosuj i usuń" })).toBeDisabled()
   })
 })

@@ -1,21 +1,34 @@
 // Wording and decisions of the dependency screens (dependencies.tsx), kept
 // apart from the components.
 
+import { i18n } from "@/i18n"
+
 import type { PluginDependencyInfo, PluginRemovalPlan } from "./types"
 
 /** How a dependency stands here, in a few words. */
 export function dependencyStateText(d: PluginDependencyInfo): string {
   switch (d.state) {
     case "satisfied":
-      return d.installedVersion ? `Installed ${d.installedVersion}` : "Available"
+      return d.installedVersion
+        ? i18n.t("plugins:dependencies.state.installed", { version: d.installedVersion })
+        : i18n.t("plugins:dependencies.state.available")
     case "disabled":
-      return d.installedVersion ? `Installed ${d.installedVersion}, turned off` : "Turned off"
+      return d.installedVersion
+        ? i18n.t("plugins:dependencies.state.installedOff", { version: d.installedVersion })
+        : i18n.t("plugins:dependencies.state.off")
     case "wrongVersion":
-      return `Installed ${d.installedVersion ?? "in another version"}; needs ${d.version}`
+      return d.installedVersion
+        ? i18n.t("plugins:dependencies.state.wrongVersion", {
+            version: d.installedVersion,
+            needed: d.version,
+          })
+        : i18n.t("plugins:dependencies.state.otherVersion", { needed: d.version })
     case "missing":
-      return d.builtin ? "Not available in this DeckPilot" : "Not installed"
+      return d.builtin
+        ? i18n.t("plugins:dependencies.state.notInDeckPilot")
+        : i18n.t("plugins:dependencies.state.notInstalled")
     case "unusable":
-      return "Installed, but cannot be used"
+      return i18n.t("plugins:dependencies.state.unusable")
   }
 }
 

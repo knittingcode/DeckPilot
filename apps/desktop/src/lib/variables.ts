@@ -20,6 +20,7 @@ import type {
   VariableType,
   VariableValue,
 } from "./types"
+import { type TranslationKey, i18n } from "@/i18n"
 
 /** The node whose outputs are the workflow's variables (`steps.vars.output.<key>`). */
 export const WORKFLOW_VARIABLES_NODE = "vars"
@@ -214,39 +215,43 @@ export function variableTypeOf(kind: ValueKind): VariableType {
   }
 }
 
-const TYPE_LABEL: Record<VariableType["type"], string> = {
-  string: "text",
-  integer: "number",
-  boolean: "yes/no",
-  projectId: "project",
-  profileId: "profile",
-  resource: "resource",
-  json: "JSON",
-  secretRef: "credential name",
+const TYPE_LABEL: Record<VariableType["type"], TranslationKey> = {
+  string: "editor:variableText.type.string",
+  integer: "editor:variableText.type.integer",
+  boolean: "editor:variableText.type.boolean",
+  projectId: "editor:variableText.type.projectId",
+  profileId: "editor:variableText.type.profileId",
+  resource: "editor:variableText.type.resource",
+  json: "editor:variableText.type.json",
+  secretRef: "editor:variableText.type.secretRef",
 }
 
+/** A value type in words, in the window's language. */
 export function typeLabel(type: VariableType): string {
-  return type.type === "resource" && type.kind ? `resource (${type.kind})` : TYPE_LABEL[type.type]
+  return type.type === "resource" && type.kind
+    ? i18n.t("editor:variableText.type.resourceOfKind", { kind: type.kind })
+    : i18n.t(TYPE_LABEL[type.type])
 }
 
-export const SCOPE_LABEL: Record<VariableScope, string> = {
-  global: "global",
-  profile: "profile",
-  project: "project",
-  execution: "run",
+/** Translation keys, resolved with `t` when shown. */
+export const SCOPE_LABEL: Record<VariableScope, TranslationKey> = {
+  global: "editor:variableText.scope.global",
+  profile: "editor:variableText.scope.profile",
+  project: "editor:variableText.scope.project",
+  execution: "editor:variableText.scope.execution",
 }
 
 // --- Catalog ----------------------------------------------------------------
 
 /** Groups in the order the picker shows them. */
-export const GROUPS: { group: VariableGroup; label: string }[] = [
-  { group: "shared", label: "Shared" },
-  { group: "system", label: "System" },
-  { group: "profile", label: "Profile" },
-  { group: "project", label: "Project" },
-  { group: "module", label: "Modules" },
-  { group: "workflow", label: "Workflow" },
-  { group: "stepOutput", label: "Step outputs" },
+export const GROUPS: { group: VariableGroup; label: TranslationKey }[] = [
+  { group: "shared", label: "editor:variableText.group.shared" },
+  { group: "system", label: "editor:variableText.group.system" },
+  { group: "profile", label: "editor:variableText.group.profile" },
+  { group: "project", label: "editor:variableText.group.project" },
+  { group: "module", label: "editor:variableText.group.module" },
+  { group: "workflow", label: "editor:variableText.group.workflow" },
+  { group: "stepOutput", label: "editor:variableText.group.stepOutput" },
 ]
 
 /** Mirrors `CatalogFilter::matches` in deckpilot-core, for entries listed here. */
@@ -270,13 +275,13 @@ export function matchesFilter(entry: CatalogEntry, filter: CatalogFilter): boole
     .every((word) => haystack.includes(word.toLowerCase()))
 }
 
-/** Entries sorted into the picker's groups, empty groups left out. */
+/** Entries sorted into the picker's groups (labels in the window's language), empty groups left out. */
 export function groupEntries(
   entries: CatalogEntry[],
 ): { group: VariableGroup; label: string; entries: CatalogEntry[] }[] {
   return GROUPS.map(({ group, label }) => ({
     group,
-    label,
+    label: i18n.t(label),
     entries: entries.filter((entry) => entry.group === group),
   })).filter((g) => g.entries.length > 0)
 }
@@ -303,67 +308,101 @@ export function stepOutputEntries(outputs: StepOutput[]): CatalogEntry[] {
   }))
 }
 
+const SYSTEM_TEXT = {
+  projectId: {
+    label: "editor:variableText.system.projectId.label",
+    description: "editor:variableText.system.projectId.description",
+  },
+  projectKey: {
+    label: "editor:variableText.system.projectKey.label",
+    description: "editor:variableText.system.projectKey.description",
+  },
+  projectName: {
+    label: "editor:variableText.system.projectName.label",
+    description: "editor:variableText.system.projectName.description",
+  },
+  profileId: {
+    label: "editor:variableText.system.profileId.label",
+    description: "editor:variableText.system.profileId.description",
+  },
+  profileName: {
+    label: "editor:variableText.system.profileName.label",
+    description: "editor:variableText.system.profileName.description",
+  },
+  device: {
+    label: "editor:variableText.system.device.label",
+    description: "editor:variableText.system.device.description",
+  },
+  platform: {
+    label: "editor:variableText.system.platform.label",
+    description: "editor:variableText.system.platform.description",
+  },
+  workflowId: {
+    label: "editor:variableText.system.workflowId.label",
+    description: "editor:variableText.system.workflowId.description",
+  },
+  executionId: {
+    label: "editor:variableText.system.executionId.label",
+    description: "editor:variableText.system.executionId.description",
+  },
+} satisfies Record<string, { label: TranslationKey; description: TranslationKey }>
+
+type SystemText = keyof typeof SYSTEM_TEXT
+
 /**
  * System references, for listing when the agent cannot (an agent before
  * protocol 7). Metadata only: without the agent there are no values.
  */
 export const SYSTEM_ENTRIES: CatalogEntry[] = [
-  system(
-    "system.project.current.id",
-    "Project id",
-    "Id of the project in the context",
-    "projectId",
-  ),
-  system("system.project.current.key", "Project key", "Key of the project in the context"),
-  system("system.project.current.name", "Project name", "Name of the project in the context"),
-  system(
-    "system.profile.current.id",
-    "Profile id",
-    "Id of the profile in the context",
-    "profileId",
-  ),
-  system("system.profile.current.name", "Profile name", "Name of the profile in the context"),
-  system("system.device.current.id", "Device", "The device whose control started the run"),
-  system("system.platform", "Platform", "Operating system of this computer"),
-  {
-    ...system("workflow.id", "Workflow id", "Id of the running workflow"),
-    group: "workflow",
-  },
-  {
-    ...system("workflow.execution.id", "Run id", "Id of this run of the workflow"),
+  system("system.project.current.id", "projectId", "projectId"),
+  system("system.project.current.key", "projectKey"),
+  system("system.project.current.name", "projectName"),
+  system("system.profile.current.id", "profileId", "profileId"),
+  system("system.profile.current.name", "profileName"),
+  system("system.device.current.id", "device"),
+  system("system.platform", "platform"),
+  system("workflow.id", "workflowId", "string", { group: "workflow" }),
+  system("workflow.execution.id", "executionId", "string", {
     group: "workflow",
     availability: "runtimeOnly",
-  },
+  }),
 ]
 
+/**
+ * A system entry whose label and description are read in the window's
+ * language when used (the reference stays as it is).
+ */
 function system(
   reference: string,
-  label: string,
-  description: string,
+  text: SystemText,
   type: "string" | "projectId" | "profileId" = "string",
+  fields: Partial<Pick<CatalogEntry, "group" | "availability">> = {},
 ): CatalogEntry {
-  return {
+  const entry = {
     reference,
-    label,
-    description,
     group: "system",
     valueType: { type },
     dynamic: reference !== "system.platform",
     availability: "available",
-  }
+    ...fields,
+  } as Omit<CatalogEntry, "label" | "description">
+  return Object.defineProperties(entry, {
+    label: { enumerable: true, get: () => i18n.t(SYSTEM_TEXT[text].label) },
+    description: { enumerable: true, get: () => i18n.t(SYSTEM_TEXT[text].description) },
+  }) as CatalogEntry
 }
 
 // --- Statuses, values and contexts ------------------------------------------
 
-const MISSING: Record<MissingReason, string> = {
-  unknownVariable: "There is no such variable.",
-  noValue: "No value is set and there is no default.",
-  noProject: "No project is active.",
-  noDevice: "No device is in the context.",
-  noWorkflow: "No workflow is in the context.",
-  noExecution: "No run is in the context.",
-  noOutput: "The step has not produced it.",
-  otherProfile: "The value belongs to another profile.",
+const MISSING: Record<MissingReason, TranslationKey> = {
+  unknownVariable: "editor:variableText.missing.unknownVariable",
+  noValue: "editor:variableText.missing.noValue",
+  noProject: "editor:variableText.missing.noProject",
+  noDevice: "editor:variableText.missing.noDevice",
+  noWorkflow: "editor:variableText.missing.noWorkflow",
+  noExecution: "editor:variableText.missing.noExecution",
+  noOutput: "editor:variableText.missing.noOutput",
+  otherProfile: "editor:variableText.missing.otherProfile",
 }
 
 export type StatusTone = "ok" | "info" | "error"
@@ -374,45 +413,55 @@ export interface StatusDescription {
   detail?: string
 }
 
-/** How a status is shown. Never contains a value. */
+/** How a status is shown, in the window's language. Never contains a value. */
 export function describeStatus(status: ReferenceStatus): StatusDescription {
   switch (status.status) {
     case "resolved":
-      return { tone: "ok", label: "Resolved" }
+      return { tone: "ok", label: i18n.t("editor:variableText.status.resolved") }
     case "redacted":
       return {
         tone: "info",
-        label: "Redacted",
-        detail: "The value is sensitive and never shown.",
+        label: i18n.t("editor:variableText.status.redacted"),
+        detail: i18n.t("editor:variableText.status.redactedDetail"),
       }
     case "unavailableUntilRuntime":
       return {
         tone: "info",
-        label: "Available when it runs",
-        detail: "The value exists only while the workflow runs.",
+        label: i18n.t("editor:variableText.status.runtime"),
+        detail: i18n.t("editor:variableText.status.runtimeDetail"),
       }
     case "missing":
-      return { tone: "error", label: "Missing", detail: MISSING[status.reason] }
+      return {
+        tone: "error",
+        label: i18n.t("editor:variableText.status.missing"),
+        detail: i18n.t(MISSING[status.reason]),
+      }
     case "typeMismatch":
       return {
         tone: "error",
-        label: "Type mismatch",
-        detail: `The value is ${typeLabel(status.found)}, which does not fit this field.`,
+        label: i18n.t("editor:variableText.status.typeMismatch"),
+        detail: i18n.t("editor:variableText.status.typeMismatchDetail", {
+          type: typeLabel(status.found),
+        }),
       }
     case "permissionDenied":
       return {
         tone: "error",
-        label: "Permission denied",
-        detail: "This action may not read it.",
+        label: i18n.t("editor:variableText.status.permissionDenied"),
+        detail: i18n.t("editor:variableText.status.permissionDeniedDetail"),
       }
     case "unavailable":
       return {
         tone: "error",
-        label: "Unavailable",
-        detail: `The ${status.owner} module is disabled or not installed. The reference is kept.`,
+        label: i18n.t("editor:variableText.status.unavailable"),
+        detail: i18n.t("editor:variableText.status.unavailableDetail", { module: status.owner }),
       }
     case "invalid":
-      return { tone: "error", label: "Invalid reference", detail: status.message }
+      return {
+        tone: "error",
+        label: i18n.t("editor:variableText.status.invalid"),
+        detail: status.message,
+      }
   }
 }
 
@@ -431,37 +480,39 @@ export function formatValue(value: VariableValue): string {
     case "resource":
       return value.value.type === "fixed"
         ? value.value.key
-        : `role ${value.value.role} of the project`
+        : i18n.t("editor:variableText.projectRole", { role: value.value.role })
     case "json":
       return JSON.stringify(value.value)
   }
 }
 
-const SOURCE_LABEL: Record<VariableScope, string> = {
-  global: "Global value",
-  profile: "Profile value",
-  project: "Project value",
-  execution: "Value set by the run",
+const SOURCE_LABEL: Record<VariableScope, TranslationKey> = {
+  global: "editor:variableText.source.global",
+  profile: "editor:variableText.source.profile",
+  project: "editor:variableText.source.project",
+  execution: "editor:variableText.source.execution",
 }
 
+/** Where a value comes from, in the window's language. */
 export function describeSource(source: ValueSource): string {
   switch (source.type) {
     case "scope":
-      return SOURCE_LABEL[source.scope.kind]
+      return i18n.t(SOURCE_LABEL[source.scope.kind])
     case "default":
-      return "Default value"
+      return i18n.t("editor:variableText.source.default")
     case "system":
-      return "From the context"
+      return i18n.t("editor:variableText.source.system")
     case "stepOutput":
-      return `Output of step “${source.node}”`
+      return i18n.t("editor:variableText.source.stepOutput", { node: source.node })
   }
 }
 
-export const AVAILABILITY_LABEL: Record<CatalogEntry["availability"], string> = {
-  available: "Available in this context",
-  runtimeOnly: "Only while the workflow runs",
-  notInContext: "Not in this context",
-  unavailable: "Its module is disabled or not installed",
+/** Translation keys, resolved with `t` when shown. */
+export const AVAILABILITY_LABEL: Record<CatalogEntry["availability"], TranslationKey> = {
+  available: "editor:variableText.availability.available",
+  runtimeOnly: "editor:variableText.availability.runtimeOnly",
+  notInContext: "editor:variableText.availability.notInContext",
+  unavailable: "editor:variableText.availability.unavailable",
 }
 
 /** Names shown for the ids of a context. */
@@ -478,26 +529,46 @@ export interface ContextNames {
  * project of a run.
  */
 export function describeContext(context: ResolutionContext, names: ContextNames = {}): string {
-  const parts = [`Profile ${names.profile ?? context.profile}`]
+  const parts = [
+    i18n.t("editor:variableText.context.profile", { profile: names.profile ?? context.profile }),
+  ]
   const project = names.project ?? context.project
   switch (context.projectSource ?? "application") {
     case "application":
-      parts.push(project ? `active project ${project}` : "the active project")
+      parts.push(
+        project
+          ? i18n.t("editor:variableText.context.activeProject", { project })
+          : i18n.t("editor:variableText.context.theActiveProject"),
+      )
       break
     case "execution":
       parts.push(
         context.execution
-          ? `the project of run ${context.execution}`
-          : "the project of the run (known when it runs)",
+          ? i18n.t("editor:variableText.context.runProject", { run: context.execution })
+          : i18n.t("editor:variableText.context.runProjectLater"),
       )
       break
     case "explicit":
-      parts.push(project ? `project ${project} (chosen for this preview)` : "no project")
+      parts.push(
+        project
+          ? i18n.t("editor:variableText.context.chosenProject", { project })
+          : i18n.t("editor:variableText.context.noProject"),
+      )
       break
   }
-  if (context.workflow) parts.push(`workflow ${names.workflow ?? context.workflow}`)
+  if (context.workflow) {
+    parts.push(
+      i18n.t("editor:variableText.context.workflow", {
+        workflow: names.workflow ?? context.workflow,
+      }),
+    )
+  }
   if (context.device) {
-    parts.push(`device ${names.device ?? `${context.device.model}#${context.device.serial}`}`)
+    parts.push(
+      i18n.t("editor:variableText.context.device", {
+        device: names.device ?? `${context.device.model}#${context.device.serial}`,
+      }),
+    )
   }
   return parts.join(" · ")
 }

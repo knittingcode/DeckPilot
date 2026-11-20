@@ -4,6 +4,7 @@ import { useState } from "react"
 import { ActionIcon } from "@/components/action-icon"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { useTranslation } from "@/i18n"
 import type { ActionType } from "@/lib/types"
 
 import { type CatalogEntry, type CatalogGroup, DRAG_TYPE, searchCatalog } from "./catalog"
@@ -38,6 +39,7 @@ export function CatalogPanel({
   onAdd: (entry: CatalogEntry) => void
   onCreateAction: (type: ActionType) => void
 }) {
+  const { t } = useTranslation()
   const [query, setQuery] = useState("")
   const visible = searchCatalog(groups, query)
   return (
@@ -49,14 +51,20 @@ export function CatalogPanel({
           onChange={(e) => {
             setQuery(e.target.value)
           }}
-          placeholder="Search nodes"
-          aria-label="Search nodes"
+          placeholder={t("workflows:catalog.search")}
+          aria-label={t("workflows:catalog.search")}
           className="h-8 pl-7 text-sm"
         />
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-2" role="list" aria-label="Nodes">
+      <div
+        className="relative min-h-0 flex-1 overflow-y-auto p-2"
+        role="list"
+        aria-label={t("workflows:catalog.list")}
+      >
         {visible.length === 0 && (
-          <p className="px-2 py-6 text-center text-xs text-muted-foreground">No matching nodes</p>
+          <p className="px-2 py-6 text-center text-xs text-muted-foreground">
+            {t("workflows:catalog.empty")}
+          </p>
         )}
         {visible.map((group) => (
           <section key={group.id} className="mb-3 grid gap-0.5">
@@ -72,7 +80,10 @@ export function CatalogPanel({
                   role="listitem"
                   disabled
                   className="flex cursor-not-allowed items-center gap-2 rounded-md px-2 py-1.5 text-left opacity-60"
-                  title={`${entry.title} — unavailable: ${entry.unavailable}`}
+                  title={t("workflows:catalog.unavailableEntry", {
+                    title: entry.title,
+                    reason: entry.unavailable,
+                  })}
                 >
                   <span className="flex size-6 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground">
                     <EntryIcon entry={entry} />
@@ -80,7 +91,7 @@ export function CatalogPanel({
                   <span className="grid min-w-0">
                     <span className="truncate text-sm">{entry.title}</span>
                     <span className="truncate text-xs text-muted-foreground">
-                      Unavailable: {entry.unavailable}
+                      {t("workflows:catalog.unavailable", { reason: entry.unavailable })}
                     </span>
                   </span>
                 </button>
@@ -98,7 +109,7 @@ export function CatalogPanel({
                     onAdd(entry)
                   }}
                   className="flex cursor-grab items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none active:cursor-grabbing"
-                  title={`${entry.title} — drag onto the canvas or click to add`}
+                  title={t("workflows:catalog.addHint", { title: entry.title })}
                 >
                   <span className="flex size-6 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground">
                     <EntryIcon entry={entry} />
@@ -141,7 +152,7 @@ export function CatalogPanel({
                       size="sm"
                       disabled
                       className="h-6 px-1.5 text-xs text-muted-foreground"
-                      title={`Unavailable: ${reason}`}
+                      title={t("workflows:catalog.unavailable", { reason })}
                     >
                       <Plus className="size-3" />
                       {type.name}
@@ -149,8 +160,9 @@ export function CatalogPanel({
                   ))}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Unavailable:{" "}
-                  {[...new Set(group.unavailableTypes.map((u) => u.reason))].join("; ")}
+                  {t("workflows:catalog.unavailable", {
+                    reason: [...new Set(group.unavailableTypes.map((u) => u.reason))].join("; "),
+                  })}
                 </p>
               </div>
             )}

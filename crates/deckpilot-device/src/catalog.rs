@@ -5,9 +5,9 @@ use crate::{DeviceDescriptor, DeviceId, DeviceModel, DeviceModelId, DriverInfo};
 /// Built-in device descriptors.
 pub mod models {
     use crate::{
-        DeviceCapabilities, DeviceModel, DeviceModelId, EncoderSpec, HardwareSupport, ImageFormat,
-        ImageSpec, ImageTransform, KeyGrid, ModelVerification, Platform, PlatformVerification,
-        TouchGesture, TouchSurface, UsbIdentity, VerificationLevel,
+        DefaultAppearance, DeviceCapabilities, DeviceModel, DeviceModelId, EncoderSpec,
+        HardwareSupport, ImageFormat, ImageSpec, ImageTransform, KeyGrid, ModelVerification,
+        Platform, PlatformVerification, TouchGesture, TouchSurface, UsbIdentity, VerificationLevel,
     };
 
     pub const STREAM_DECK_MK2_ID: &str = "elgato.streamdeck.mk2";
@@ -26,6 +26,10 @@ pub mod models {
             },
         }
     }
+
+    /// Keys of the Stream Deck models without colours of their own:
+    /// transparent on the black LCD, white text.
+    const STREAM_DECK_LOOK: DefaultAppearance = DefaultAppearance::BUILTIN;
 
     /// Day the verification data below was last reviewed.
     const RECORDED: &str = "2026-11-13";
@@ -72,6 +76,7 @@ pub mod models {
             },
             support: HardwareSupport::DescriptorOnly,
             verification: defined_only(),
+            default_appearance: Some(STREAM_DECK_LOOK),
         }
     }
 
@@ -109,6 +114,7 @@ pub mod models {
             },
             support: HardwareSupport::DescriptorOnly,
             verification: defined_only(),
+            default_appearance: Some(STREAM_DECK_LOOK),
         }
     }
 
@@ -159,6 +165,7 @@ pub mod models {
                 automated_only(Platform::Windows),
                 automated_only(Platform::Linux),
             ]),
+            default_appearance: Some(STREAM_DECK_LOOK),
         }
     }
 
@@ -312,6 +319,38 @@ mod tests {
             caps.validate_input(ControlId::Encoder { index: 3 }, ControlInput::Press)
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn stream_decks_default_to_transparent_keys_on_black_with_white_text() {
+        use crate::{Color, DefaultAppearance, KeyBackground};
+
+        for model in ModelCatalog::builtin().iter() {
+            let look = model.effective_appearance();
+            assert_eq!(model.default_appearance, Some(look), "{}", model.id);
+            assert_eq!(look.key_background, KeyBackground::Transparent);
+            assert_eq!(look.text_color, Color::WHITE);
+            assert_eq!(look.display_background, Color::BLACK);
+            assert_eq!(look.effective_background(None), Color::BLACK);
+        }
+        // A model without defaults (e.g. from an older driver) gets the
+        // built-in ones; its JSON has no `defaultAppearance`.
+        let bare = DeviceModel {
+            default_appearance: None,
+            ..models::stream_deck_mk2()
+        };
+        assert_eq!(bare.effective_appearance(), DefaultAppearance::BUILTIN);
+        let mut json = serde_json::to_value(&bare).unwrap();
+        assert!(json.get("defaultAppearance").is_none());
+        json["defaultAppearance"] = serde_json::json!({
+            "keyBackground": "#102030", "textColor": "#000000", "displayBackground": "#ffffff"
+        });
+        let own: DeviceModel = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            own.effective_appearance().effective_background(None),
+            Color([16, 32, 48])
+        );
+        assert_eq!(own.effective_appearance().text_color, Color::BLACK);
     }
 
     #[test]

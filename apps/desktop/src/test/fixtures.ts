@@ -280,6 +280,22 @@ export const DEVICE_MODELS = {
       touch: { zones: 4, image: { width: 800, height: 100, format: "jpeg" }, gestures: ["tap"] },
     },
   }),
+  /**
+   * A hypothetical device of 50 × 4 keys (no such hardware): far wider
+   * than any editor, for the canvas' fit, zoom, pan and culling.
+   */
+  wide: deviceModel({
+    id: "test.wide-50x4",
+    name: "Wide test device",
+    usb: null,
+    capabilities: {
+      keys: { rows: 4, columns: 50, image: { width: 72, height: 72, format: "jpeg" } },
+      encoders: null,
+      touch: null,
+    },
+    support: "unverified",
+    verification: [],
+  }),
 } satisfies Record<string, DeviceModel>
 
 /** A connected device as the agent reports it. */

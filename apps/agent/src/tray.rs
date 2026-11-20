@@ -5,6 +5,7 @@
 //! thread; state snapshots reach the tray through the event loop proxy, and
 //! menu selections go back to the agent as [`TrayCommand`]s.
 
+use deckpilot_core::i18n::{Language, SystemText};
 use deckpilot_device::ConnectionState;
 use deckpilot_ipc::{AgentEvent, AgentStatus, LockReason, SecurityState};
 use tao::event::{Event, StartCause};
@@ -199,7 +200,78 @@ fn build_tray() -> Result<TrayIcon, String> {
         .map_err(|e| e.to_string())
 }
 
+/// The tray's language: the app's (`setLocale`), English until it said.
+fn language(status: Option<&AgentStatus>) -> Language {
+    status
+        .and_then(|s| s.locale.as_deref())
+        .map_or(Language::En, Language::from_tag)
+}
+
+/// The labels of the tray menu for `status`, in the app's language.
+#[derive(Debug, PartialEq, Eq)]
+struct Labels {
+    open: &'static str,
+    notice: Option<&'static str>,
+    profiles: &'static str,
+    no_profiles: &'static str,
+    project: Option<String>,
+    devices: &'static str,
+    no_devices: &'static str,
+    device_lines: Vec<String>,
+    refresh: &'static str,
+    about: &'static str,
+    quit: &'static str,
+}
+
+fn labels(status: Option<&AgentStatus>) -> Labels {
+    let l = language(status);
+    let security = status.map_or(SecurityState::Locked, |s| s.security);
+    let open = match security {
+        SecurityState::Unlocked => SystemText::TrayOpen,
+        _ => SystemText::TrayOpenToUnlock,
+    };
+    Labels {
+        open: open.text(l),
+        notice: security_notice(security, status.and_then(|s| s.lock_reason))
+            .map(|text| text.text(l)),
+        profiles: SystemText::TrayActiveProfile.text(l),
+        no_profiles: SystemText::TrayNoProfiles.text(l),
+        project: status
+            .and_then(|s| s.active_project.as_ref())
+            .map(|project| {
+                deckpilot_core::i18n::format(
+                    SystemText::TrayProject,
+                    l,
+                    &[("key", &project.key.to_string()), ("name", &project.name)],
+                )
+            }),
+        devices: SystemText::TrayDevices.text(l),
+        no_devices: SystemText::TrayNoDevices.text(l),
+        device_lines: status
+            .map(|s| s.devices.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .map(|device| {
+                let state = match device.state {
+                    ConnectionState::Connected => SystemText::TrayConnected,
+                    ConnectionState::Disconnected => SystemText::TrayDisconnected,
+                };
+                format!(
+                    "{} ({}) – {}",
+                    device.model_name,
+                    device.id.serial,
+                    state.text(l)
+                )
+            })
+            .collect(),
+        refresh: SystemText::TrayRefresh.text(l),
+        about: SystemText::TrayAbout.text(l),
+        quit: SystemText::TrayQuit.text(l),
+    }
+}
+
 fn build_menu(status: Option<&AgentStatus>) -> Menu {
+    let labels = labels(status);
     let menu = Menu::new();
     let append = |result: Result<(), tray_icon::menu::Error>| {
         if let Err(error) = result {
@@ -208,21 +280,16 @@ fn build_menu(status: Option<&AgentStatus>) -> Menu {
     };
 
     let security = status.map_or(SecurityState::Locked, |s| s.security);
-    let open_label = match security {
-        SecurityState::Unlocked => "Open DeckPilot",
-        _ => "Open DeckPilot to Unlock…",
-    };
-    append(menu.append(&MenuItem::with_id(OPEN, open_label, true, None)));
+    append(menu.append(&MenuItem::with_id(OPEN, labels.open, true, None)));
     append(menu.append(&PredefinedMenuItem::separator()));
-    let reason = status.and_then(|s| s.lock_reason);
-    if let Some(notice) = security_notice(security, reason) {
+    if let Some(notice) = labels.notice {
         append(menu.append(&MenuItem::new(notice, false, None)));
         append(menu.append(&PredefinedMenuItem::separator()));
     }
 
-    let profiles = Submenu::new("Active Profile", security == SecurityState::Unlocked);
+    let profiles = Submenu::new(labels.profiles, security == SecurityState::Unlocked);
     match status.map(|s| s.profiles.as_slice()).unwrap_or_default() {
-        [] => append(profiles.append(&MenuItem::new("No profiles", false, None))),
+        [] => append(profiles.append(&MenuItem::new(labels.no_profiles, false, None))),
         list => {
             let active = status.and_then(|s| s.active_profile.as_ref()).map(|p| p.id);
             for profile in list {
@@ -240,27 +307,19 @@ fn build_menu(status: Option<&AgentStatus>) -> Menu {
     }
     append(menu.append(&profiles));
 
-    if let Some(project) = status.and_then(|s| s.active_project.as_ref()) {
-        let label = format!("Project: {} – {}", project.key, project.name);
+    if let Some(label) = &labels.project {
         append(menu.append(&MenuItem::new(label, false, None)));
     }
 
-    let devices = Submenu::new("Connected Devices", true);
-    match status.map(|s| s.devices.as_slice()).unwrap_or_default() {
-        [] => append(devices.append(&MenuItem::new("No devices", false, None))),
-        list => {
-            for device in list {
-                let state = match device.state {
-                    ConnectionState::Connected => "connected",
-                    ConnectionState::Disconnected => "disconnected",
-                };
-                let label = format!("{} ({}) – {state}", device.model_name, device.id.serial);
-                append(devices.append(&MenuItem::new(label, false, None)));
-            }
-        }
+    let devices = Submenu::new(labels.devices, true);
+    if labels.device_lines.is_empty() {
+        append(devices.append(&MenuItem::new(labels.no_devices, false, None)));
+    }
+    for label in &labels.device_lines {
+        append(devices.append(&MenuItem::new(label, false, None)));
     }
     append(menu.append(&devices));
-    append(menu.append(&MenuItem::with_id(REFRESH, "Refresh Devices", true, None)));
+    append(menu.append(&MenuItem::with_id(REFRESH, labels.refresh, true, None)));
     append(menu.append(&PredefinedMenuItem::separator()));
 
     let about = AboutMetadata {
@@ -270,24 +329,21 @@ fn build_menu(status: Option<&AgentStatus>) -> Menu {
         website: Some("https://github.com/knittingcode/deckpilot".into()),
         ..Default::default()
     };
-    append(menu.append(&PredefinedMenuItem::about(
-        Some("About DeckPilot"),
-        Some(about),
-    )));
-    append(menu.append(&MenuItem::with_id(QUIT, "Quit DeckPilot", true, None)));
+    append(menu.append(&PredefinedMenuItem::about(Some(labels.about), Some(about))));
+    append(menu.append(&MenuItem::with_id(QUIT, labels.quit, true, None)));
     menu
 }
 
 /// What the tray says while the configuration cannot be read.
-fn security_notice(security: SecurityState, reason: Option<LockReason>) -> Option<&'static str> {
+fn security_notice(security: SecurityState, reason: Option<LockReason>) -> Option<SystemText> {
     match (security, reason) {
         (SecurityState::Unlocked, _) => None,
         (SecurityState::Locked, Some(LockReason::KeyUnavailable)) => {
-            Some("Locked – the key could not be read from the credential store")
+            Some(SystemText::TrayLockedKeyUnavailable)
         }
-        (SecurityState::Locked, _) => Some("Locked – actions are paused"),
-        (SecurityState::Uninitialized, _) => Some("Set up DeckPilot to start"),
-        (SecurityState::LegacyPlaintext, _) => Some("Encrypt your configuration to continue"),
+        (SecurityState::Locked, _) => Some(SystemText::TrayLocked),
+        (SecurityState::Uninitialized, _) => Some(SystemText::TraySetUp),
+        (SecurityState::LegacyPlaintext, _) => Some(SystemText::TrayEncrypt),
     }
 }
 
@@ -339,6 +395,45 @@ mod tests {
             assert!(security_notice(state, None).is_some());
             assert!(security_notice(state, Some(LockReason::KeyUnavailable)).is_some());
         }
+    }
+
+    fn status(locale: Option<&str>, security: SecurityState) -> AgentStatus {
+        let mut status: AgentStatus = serde_json::from_value(serde_json::json!({
+            "version": "0.10.0", "protocol": 13, "pid": 1, "startedAt": 0, "dataDir": "/d",
+            "logDir": "/l", "endpoint": "e", "backend": "mock", "profiles": [],
+            "activeProfile": null, "activeProject": {"id": "00000000-0000-0000-0000-000000000001",
+                "key": "DP", "name": "Deck"},
+            "devices": [], "brightness": 50, "lastInputAt": null,
+        }))
+        .unwrap();
+        status.security = security;
+        status.locale = locale.map(str::to_owned);
+        status
+    }
+
+    #[test]
+    fn tray_labels_follow_the_apps_language() {
+        let en = labels(Some(&status(None, SecurityState::Unlocked)));
+        assert_eq!(en.open, "Open DeckPilot");
+        assert_eq!(en.quit, "Quit DeckPilot");
+        assert_eq!(en.project.as_deref(), Some("Project: DP – Deck"));
+        assert_eq!(en.notice, None);
+        let pl = labels(Some(&status(Some("pl-PL"), SecurityState::Locked)));
+        assert_eq!(pl.open, "Otwórz DeckPilot, aby odblokować…");
+        assert_eq!(pl.notice, Some("Zablokowano – akcje są wstrzymane"));
+        assert_eq!(pl.profiles, "Aktywny profil");
+        assert_eq!(pl.devices, "Podłączone urządzenia");
+        assert_eq!(pl.no_devices, "Brak urządzeń");
+        assert_eq!(pl.refresh, "Odśwież urządzenia");
+        assert_eq!(pl.quit, "Zakończ DeckPilot");
+        assert_eq!(pl.project.as_deref(), Some("Projekt: DP – Deck"));
+        // Another language: English, as the app shows it.
+        assert_eq!(
+            labels(Some(&status(Some("de"), SecurityState::Unlocked))).open,
+            "Open DeckPilot"
+        );
+        // Before any status: English, locked.
+        assert_eq!(labels(None).open, "Open DeckPilot to Unlock…");
     }
 
     #[test]

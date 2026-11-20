@@ -211,11 +211,11 @@ describe("previews drawn for the display", { timeout: 20_000 }, () => {
     vi.stubGlobal("devicePixelRatio", 2)
     renderEditor(profileView(null))
     // jsdom measures nothing: the fallback key size, 72 CSS px, less the
-    // key's border, on a 2x display.
+    // key's border on both sides (4px each at that size), on a 2x display.
     await waitFor(() => {
       expect(previewLayout).toHaveBeenCalled()
     })
-    expect(previewLayout.mock.calls[0]?.slice(4)).toEqual([true, null, 140])
+    expect(previewLayout.mock.calls[0]?.slice(4)).toEqual([true, null, 128])
   })
 
   it("asks for the CSS size on a 1x display, and never for a fraction", () => {
@@ -256,8 +256,8 @@ describe("previews drawn for the display", { timeout: 20_000 }, () => {
   })
 })
 
-describe("light and dark", { timeout: 20_000 }, () => {
-  it("draws keys and the library from theme tokens, the same images in both", async () => {
+describe("dark appearance", { timeout: 20_000 }, () => {
+  it("draws keys and the library from tokens, the controls without an enclosure", async () => {
     previewLayout.mockResolvedValue([
       {
         control: { kind: "key", index: 0 },
@@ -265,27 +265,23 @@ describe("light and dark", { timeout: 20_000 }, () => {
         image: "data:image/png;base64,key",
       },
     ] as ControlFace[])
-    const sources: (string | null)[] = []
-    for (const theme of ["light", "dark"]) {
-      document.documentElement.classList.toggle("dark", theme === "dark")
-      renderEditor(profileView(null))
-      await waitFor(() => {
-        expect(key("Key 1").querySelector("img")).not.toBeNull()
-      })
-      sources.push(key("Key 1").querySelector("img")?.getAttribute("src") ?? null)
-      // Tokens that index.css defines for both themes; no fixed colours.
-      expect(key("Key 2").className).toContain("bg-device-key")
-      expect(key("Key 2").className).not.toMatch(/bg-(black|white|neutral|zinc|gray)/)
-      const library = screen.getByRole("complementary", { name: "Action Library" })
-      expect(library.className).toContain("bg-sidebar")
-      expect(screen.getByRole("group", { name: "Stream Deck MK.2 controls" }).className).toContain(
-        "bg-device-body",
-      )
-      cleanup()
-    }
+    document.documentElement.classList.add("dark")
+    renderEditor(profileView(null))
+    await waitFor(() => {
+      expect(key("Key 1").querySelector("img")).not.toBeNull()
+    })
+    // The key image is what the device shows, unchanged by the editor.
+    expect(key("Key 1").querySelector("img")).toHaveAttribute("src", "data:image/png;base64,key")
+    // Tokens from index.css; no fixed colours.
+    expect(key("Key 2").className).toContain("bg-device-key")
+    expect(key("Key 2").className).not.toMatch(/bg-(black|white|neutral|zinc|gray)/)
+    const library = screen.getByRole("complementary", { name: "Action Library" })
+    expect(library.className).toContain("bg-sidebar")
+    // The controls sit directly on the workspace: no imitation of the
+    // device's body (background, border, rounded enclosure).
+    const controls = screen.getByRole("group", { name: "Stream Deck MK.2 controls" })
+    expect(controls.className).not.toMatch(/\b(bg-|border|rounded|shadow)/)
     document.documentElement.classList.remove("dark")
-    // The key image is what the device shows: the same in either theme.
-    expect(sources).toEqual(["data:image/png;base64,key", "data:image/png;base64,key"])
   })
 })
 

@@ -20,6 +20,10 @@
 //! icons: the faces this agent shows for the database, drawn with the
 //! previous renderer, give exactly the digests of the original fixture
 //! (checked when they were recorded again), so only the drawing changed.
+//! They were recorded once more when keys that set no colours took their
+//! device model's defaults (transparent on the MK.2's black display, white
+//! text) instead of a background per kind of key: the faces are the same,
+//! only their colours changed.
 
 mod support;
 

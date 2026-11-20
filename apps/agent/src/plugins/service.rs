@@ -55,6 +55,7 @@ use super::data;
 use super::engine::CatalogPlugin;
 use super::executor::{DataAccess, Executor, Opener, OwnVariables, SharedData, Transport};
 use super::lane::{Done, Ended, Job, Lane, LaneEnd, LaneError, Reply, StateDone};
+use super::locales::Locales;
 use super::migration::LegacySnapshot;
 use super::registry::{Registry, download_error};
 use super::variables::PublishedVariables;
@@ -74,9 +75,14 @@ const INVALID_PARAMETERS: &str = "invalid-parameters";
 /// 1.3 the manifest's action `controls`, `navigation` and `views`
 /// (`docs/device-controls.md` §4), 1.4 a view's `context` (which toolbar
 /// selectors the app shows with it), `dependencies` and actions'
-/// `requiresDependencies` (`docs/marketplace/dependencies.md`). A plugin
-/// whose manifest asks for a higher minor is `incompatible`.
-const PLUGIN_API: ApiLevel = ApiLevel::new(1, 4);
+/// `requiresDependencies` (`docs/marketplace/dependencies.md`), 1.5 the
+/// `dialogs` permission and `dialog.open` (`docs/dialogs.md`), 1.6 the
+/// manifest's `locales`, `defaultLocale` and `t:` texts and `locale.get` and
+/// `locale.translate` (`docs/marketplace/sdk/localization.md`), 1.7 the
+/// actions' `editorNavigation` (`docs/editor-navigation-and-simulation.md`),
+/// 1.8 the actions' `title` (`docs/key-text.md`, "Plugin titles").
+/// A plugin whose manifest asks for a higher minor is `incompatible`.
+const PLUGIN_API: ApiLevel = ApiLevel::new(1, 8);
 /// Longest any invocation may take, whatever the manifest says.
 const MAX_INVOCATION: Duration = Duration::from_secs(600);
 /// Where the registry's verified state is kept (outside `plugins/`,
@@ -331,6 +337,17 @@ pub(super) struct PluginService {
     builtins: BTreeMap<String, deckpilot_plugin_store::deps::BuiltinModule>,
     /// The verified packages of the last install plan.
     plan_cache: Option<dependencies::PlanCache>,
+    /// The app's language and the plugins' verified translations (plugin
+    /// API 1.6).
+    locales: Locales,
+    /// Decoded visual asset images by the sha256 of their file, so the
+    /// catalog decodes each file once.
+    asset_images: std::sync::Mutex<
+        std::collections::HashMap<
+            deckpilot_plugin_manifest::Sha256Digest,
+            deckpilot_render::LibraryAsset,
+        >,
+    >,
 }
 
 /// What the agent saw of each plugin's host since it started
@@ -476,6 +493,8 @@ impl PluginService {
             snapshot: None,
             builtins: BTreeMap::new(),
             plan_cache: None,
+            locales: Locales::default(),
+            asset_images: std::sync::Mutex::default(),
         };
         if service.registry.is_some() {
             let _ = service.refresh();
@@ -632,6 +651,7 @@ impl PluginService {
             .map(|known| CatalogPlugin {
                 id: known.id.to_string(),
                 name: known.display_name,
+                default_names: BTreeMap::new(),
                 version: known.last_version,
                 description: String::new(),
                 actions: known.actions,
@@ -641,14 +661,34 @@ impl PluginService {
                 unavailable: Some("the plugin is not installed".to_owned()),
                 action_unavailable: BTreeMap::new(),
                 requires: Vec::new(),
+                visual_assets: Vec::new(),
             });
         let graph = self.graph();
+        self.locales
+            .retain(&records.iter().map(|r| r.id.to_string()).collect());
         records
             .iter()
             .filter_map(|record| {
-                let manifest = &record.active()?.manifest;
+                let active = record.active()?;
+                let dir = self.manager.layout().resolve(&active.install_dir);
+                // What the app and the keys show, in the app's language.
+                let shown = self.locales.manifest(record.id.as_str(), active, &dir);
+                let manifest = &shown;
                 let grants = store.grants(&record.id).unwrap_or_default();
-                let (missing, action_unmet) = self.unmet(manifest, &graph);
+                let (missing, action_unmet) = self.unmet(&active.manifest, &graph);
+                let default_names = active
+                    .manifest
+                    .contributes
+                    .actions()
+                    .iter()
+                    .map(|a| {
+                        let names =
+                            self.locales
+                                .action_names(record.id.as_str(), active, &dir, &a.id);
+                        (a.id.clone(), names)
+                    })
+                    .filter(|(_, names)| !names.is_empty())
+                    .collect();
                 Some(CatalogPlugin {
                     id: record.id.to_string(),
                     name: manifest.name.clone(),
@@ -662,10 +702,111 @@ impl PluginService {
                         .required_dependencies()
                         .map(|d| d.id.to_string())
                         .collect(),
+                    default_names,
+                    visual_assets: self.drawable_assets(record, &dir),
                 })
             })
             .chain(gone)
             .collect()
+    }
+
+    /// The visual assets keys may draw of `record` (installed in `dir`):
+    /// only while the plugin is enabled, each file checked against the
+    /// integrity record and decoded with limits (a file that fails is left
+    /// out; its keys draw their fallback). No plugin code runs for it.
+    fn drawable_assets(
+        &self,
+        record: &deckpilot_plugin_store::PluginRecord,
+        dir: &std::path::Path,
+    ) -> Vec<(deckpilot_core::AssetId, deckpilot_render::LibraryAsset)> {
+        use deckpilot_plugin_manifest::VisualBackgroundKind;
+        if record.state != PluginState::Enabled {
+            return Vec::new();
+        }
+        let Some(active) = record.active() else {
+            return Vec::new();
+        };
+        let plugin = record.id.to_string();
+        let assets = active.manifest.contributes.visual_assets();
+        let image = |asset: &str| -> Option<deckpilot_render::LibraryAsset> {
+            let (_, bytes) = convert::visual_asset_file(dir, record, asset)?;
+            let digest = convert::sha256_of(&bytes);
+            let mut cache = self.asset_images.lock().ok()?;
+            if let Some(image) = cache.get(&digest) {
+                return Some(image.clone());
+            }
+            let decoded = match deckpilot_render::icons::decode_asset(&bytes) {
+                Ok(decoded) => deckpilot_render::LibraryAsset::Image(Arc::new(decoded)),
+                Err(error) => {
+                    warn!(%plugin, asset, %error, "a visual asset cannot be decoded");
+                    return None;
+                }
+            };
+            cache.insert(digest, decoded.clone());
+            Some(decoded)
+        };
+        let icons = assets
+            .icons()
+            .iter()
+            .filter_map(|icon| Some((icon.id.as_str(), image(&icon.id)?)));
+        let backgrounds = assets.backgrounds().iter().filter_map(|background| {
+            let drawn = match background.kind {
+                VisualBackgroundKind::Image => image(&background.id)?,
+                VisualBackgroundKind::Gradient => {
+                    let gradient = deckpilot_core::Gradient {
+                        colors: background
+                            .colors
+                            .iter()
+                            .flatten()
+                            .map(|c| deckpilot_core::Color::parse(c).ok())
+                            .collect::<Option<_>>()?,
+                        angle: background.angle.unwrap_or(180),
+                    };
+                    gradient.check().ok()?;
+                    deckpilot_render::LibraryAsset::Gradient(gradient)
+                }
+            };
+            Some((background.id.as_str(), drawn))
+        });
+        icons
+            .chain(backgrounds)
+            .filter_map(|(id, asset)| {
+                Some((deckpilot_core::AssetId::of_plugin(&plugin, id).ok()?, asset))
+            })
+            .collect()
+    }
+
+    /// The app's language changed (`setLocale`, protocol 13): the
+    /// plugins whose manifests name translations are announced as changed,
+    /// so the app reads their texts again, and the worker publishes the
+    /// catalog in the new language (the Action Library and the keys).
+    /// Whether it changed.
+    pub fn set_locale(&mut self, locale: &str) -> bool {
+        if !self.locales.set_locale(locale) {
+            return false;
+        }
+        info!(locale = %self.locales.tag(), "plugin texts follow the app's language");
+        let Ok(records) = self.manager.store().plugins() else {
+            return true;
+        };
+        for record in records.iter().filter(|r| {
+            r.versions
+                .iter()
+                .any(|v| v.manifest.reads_translation_keys())
+        }) {
+            let _ = self.events.plugins.send(PluginEvent::Changed {
+                plugin: record.id.to_string(),
+                state: Some(convert::state(record.state)),
+            });
+        }
+        true
+    }
+
+    /// `record` as the app shows it: its manifests' `t:` texts in the
+    /// app's language.
+    fn shown(&self, record: &PluginRecord) -> PluginRecord {
+        let layout = self.manager.layout();
+        self.locales.localized(record, &|dir| layout.resolve(dir))
     }
 
     pub fn status(&self) -> PluginRuntimeStatus {
@@ -753,6 +894,7 @@ impl PluginService {
             .manager
             .pending_update(id)
             .map_err(|e| store_error(&e))?;
+        let record = self.shown(&record);
         let mut details = convert::details(&record, &grants, &audit, pending);
         details.summary.health = self.health.get(id.as_str());
         if paged {
@@ -779,8 +921,9 @@ impl PluginService {
             plugins: plugins
                 .iter()
                 .map(|record| {
+                    let shown = self.shown(record);
                     let mut summary =
-                        convert::summary(record, &store.grants(&record.id).unwrap_or_default());
+                        convert::summary(&shown, &store.grants(&record.id).unwrap_or_default());
                     summary.health = self.health.get(record.id.as_str());
                     self.apply_unmet(&mut summary, record, &graph);
                     summary.installed_for = auto.get(&record.id).cloned();
@@ -801,7 +944,7 @@ impl PluginService {
             .store()
             .grants(id)
             .map_err(|e| store_error(&e))?;
-        let mut entries = convert::action_entries(&record, &grants);
+        let mut entries = convert::action_entries(&self.shown(&record), &grants);
         if let Some(manifest) = record.active().map(|v| &v.manifest) {
             let (missing, unmet) = self.unmet(manifest, &self.graph());
             for entry in &mut entries {
@@ -844,13 +987,15 @@ impl PluginService {
         id: &PluginId,
         offset: u64,
         navigation: Option<&ipc::NavigationIconRef>,
+        asset: Option<&str>,
     ) -> Result<Response, IpcError> {
         let record = self.record(id)?;
         let icon = record.active().and_then(|v| {
             let dir = self.manager.layout().resolve(&v.install_dir);
-            match navigation {
-                None => convert::icon_chunk(&dir, &record, offset),
-                Some(navigation) => {
+            match (navigation, asset) {
+                (_, Some(asset)) => convert::visual_asset_chunk(&dir, &record, asset, offset),
+                (None, None) => convert::icon_chunk(&dir, &record, offset),
+                (Some(navigation), None) => {
                     convert::navigation_icon_chunk(&dir, &record, navigation, offset)
                 }
             }
@@ -1249,6 +1394,9 @@ impl PluginService {
     /// plugin published are dropped too, and a late publish from the
     /// stopped invocation is refused (a new generation).
     fn stop_host(&mut self, id: &PluginId) {
+        // Its dialog closes in the app at once (`pluginStopped`); the
+        // invocation that waits for it is stopped with the lane.
+        self.events.dialogs.close_plugin(id.as_str());
         if let Some(lane) = self.lanes.remove(id.as_str()) {
             lane.stop();
         }
@@ -1301,7 +1449,13 @@ impl PluginService {
                 plugin,
                 offset,
                 navigation,
-            } => self.icon_chunk(&plugin_id(&plugin)?, offset, navigation.as_ref()),
+                asset,
+            } => self.icon_chunk(
+                &plugin_id(&plugin)?,
+                offset,
+                navigation.as_ref(),
+                asset.as_deref(),
+            ),
             Request::ListAvailablePlugins { refresh } => self.available(refresh),
             Request::InstallPlugin { source, consent } => self.install(&source, &consent),
             Request::EnablePlugin { plugin, consent } => {
@@ -1347,6 +1501,7 @@ impl PluginService {
                     },
                 )
             }
+            Request::RestoreBundledPlugin { plugin } => self.restore_bundled(&plugin_id(&plugin)?),
             request @ (Request::PlanPluginInstall { .. }
             | Request::InstallPluginPlan { .. }
             | Request::PlanPluginRemoval { .. }
@@ -1367,7 +1522,12 @@ impl PluginService {
                         .known()
                         .map_err(|e| store_error(&e))?
                         .iter()
-                        .map(|k| data::known(k, installed.iter().any(|r| r.id == k.id)))
+                        .map(|k| {
+                            let present = installed.iter().any(|r| r.id == k.id);
+                            let restorable =
+                                !present && bundled::restorable(&self.manager, &self.bundle, &k.id);
+                            data::known(k, present, restorable)
+                        })
                         .collect(),
                 })
             }
@@ -1747,13 +1907,13 @@ impl PluginService {
                 self.after_version_change(id);
                 PluginUpdateOutcome::Applied {
                     version: version.to_string(),
-                    changes: convert::changes(&diff, &self.active_manifest(id)?),
+                    changes: convert::changes(&diff, &self.shown_manifest(id)?),
                 }
             }
             UpdateOutcome::AwaitingConsent { version, diff } => {
                 let escalations: BTreeSet<GrantKey> = diff.escalations().into_iter().collect();
                 if !escalations.is_empty() && escalations.is_subset(&consent.keys) {
-                    let changes = convert::changes(&diff, &self.staged_manifest(id)?);
+                    let changes = convert::changes(&diff, &self.shown_staged_manifest(id)?);
                     self.manager
                         .approve_update(id, &consent)
                         .map_err(|e| store_error(&e))?;
@@ -1765,7 +1925,7 @@ impl PluginService {
                 } else {
                     PluginUpdateOutcome::AwaitingConsent {
                         version: version.to_string(),
-                        changes: convert::changes(&diff, &self.staged_manifest(id)?),
+                        changes: convert::changes(&diff, &self.shown_staged_manifest(id)?),
                     }
                 }
             }
@@ -1849,7 +2009,7 @@ impl PluginService {
             .pending_update(id)
             .map_err(|e| store_error(&e))?
             .ok_or_else(|| store_error(&StoreError::NoStagedUpdate(id.clone())))?;
-        let changes = convert::changes(&diff, &self.staged_manifest(id)?);
+        let changes = convert::changes(&diff, &self.shown_staged_manifest(id)?);
         let version = self
             .manager
             .approve_update(id, &consent)
@@ -1879,7 +2039,7 @@ impl PluginService {
     }
 
     fn settings(&self, id: &PluginId) -> Result<Response, IpcError> {
-        let manifest = self.active_manifest(id)?;
+        let manifest = self.shown_manifest(id)?;
         let store = self.manager.store();
         let saved = store.settings(id).map_err(|e| store_error(&e))?;
         let grants = store.grants(id).map_err(|e| store_error(&e))?;
@@ -1893,7 +2053,7 @@ impl PluginService {
     }
 
     fn credentials(&self, id: &PluginId) -> Result<Response, IpcError> {
-        let manifest = self.active_manifest(id)?;
+        let manifest = self.shown_manifest(id)?;
         let store = self.manager.store();
         let stored = store.credentials(id).map_err(|e| store_error(&e))?;
         let grants = store.grants(id).map_err(|e| store_error(&e))?;
@@ -1923,6 +2083,7 @@ impl PluginService {
             .uninstall_by_user(id, keep)
             .map_err(|e| store_error(&e))?;
         self.health.forget(id.as_str());
+        self.locales.forget(id.as_str());
         info!(plugin = %id, ?keep, "plugin uninstalled");
         self.progress(
             id.as_str(),
@@ -1936,9 +2097,78 @@ impl PluginService {
         Ok(Response::Ok)
     }
 
+    /// `restoreBundledPlugin`: a bundled plugin the user uninstalled is
+    /// installed again from the application bundle (its tombstone
+    /// cleared), or a broken bundled copy is replaced by the bundle's; both
+    /// verified against the pins compiled into the agent before anything
+    /// changes ([`bundled::restore`]). Progress arrives as `install`
+    /// events; the migration of a module the plugin replaces routes to it
+    /// again (the worker publishes the routing after every request).
+    fn restore_bundled(&mut self, id: &PluginId) -> Result<Response, IpcError> {
+        use bundled::RestoreRefusal;
+        platform_gate()?;
+        self.progress(
+            id.as_str(),
+            PluginOperation::Install,
+            PluginStage::Verifying,
+        );
+        let broken = matches!(
+            self.manager.store().plugin(id),
+            Ok(Some(record)) if record.state == PluginState::Broken
+        );
+        if broken {
+            // The broken copy's host, values and dialogs go before its
+            // files do.
+            self.stop_host(id);
+        }
+        let result = bundled::restore(&mut self.manager, &self.bundle, id).map_err(|refusal| {
+            match refusal {
+                RestoreRefusal::NotBundled(why) => {
+                    error(ErrorCode::InvalidRequest, reason::NOT_BUNDLED, why)
+                }
+                RestoreRefusal::NotPinned(why) => {
+                    error(ErrorCode::NotFound, reason::NOT_PINNED, why)
+                }
+                RestoreRefusal::Installed(why) => {
+                    error(ErrorCode::Failed, reason::ALREADY_INSTALLED, why)
+                }
+                RestoreRefusal::InvalidState(why) => {
+                    error(ErrorCode::Failed, reason::INVALID_STATE, why)
+                }
+                RestoreRefusal::Verification(why) => error(
+                    ErrorCode::Failed,
+                    reason::INVALID_PACKAGE,
+                    format!(
+                        "the bundled copy of {id} failed verification; nothing was changed: {why}"
+                    ),
+                ),
+                RestoreRefusal::Store(e) => store_error(&e),
+            }
+        });
+        let restored = match result {
+            Ok(restored) => restored,
+            Err(e) => {
+                self.failed(id.as_str(), PluginOperation::Install, &e);
+                // A failed reinstall may have changed the plugin's state.
+                if broken {
+                    self.changed(id);
+                }
+                return Err(e);
+            }
+        };
+        info!(plugin = %id, ?restored, "bundled plugin restored by the user");
+        self.health.forget(id.as_str());
+        self.after_version_change(id);
+        self.progress(id.as_str(), PluginOperation::Install, PluginStage::Finished);
+        self.changed(id);
+        self.details(id)
+    }
+
     /// The running module changed: its host is restarted on demand.
     fn after_version_change(&mut self, id: &PluginId) {
         self.stop_host(id);
+        // Another version: its own verified translations, read again.
+        self.locales.forget(id.as_str());
         self.forget_undeclared_origins(id);
         self.sync_grants(id);
     }
@@ -1972,8 +2202,17 @@ impl PluginService {
             .ok_or_else(|| store_error(&StoreError::NotInstalled(id.clone())))
     }
 
-    fn staged_manifest(&self, id: &PluginId) -> Result<Manifest, IpcError> {
-        self.record(id)?
+    /// The active manifest in the app's language (for what it shows).
+    fn shown_manifest(&self, id: &PluginId) -> Result<Manifest, IpcError> {
+        self.shown(&self.record(id)?)
+            .active()
+            .map(|v| v.manifest.clone())
+            .ok_or_else(|| store_error(&StoreError::NotInstalled(id.clone())))
+    }
+
+    /// The staged manifest in the app's language.
+    fn shown_staged_manifest(&self, id: &PluginId) -> Result<Manifest, IpcError> {
+        self.shown(&self.record(id)?)
             .staged()
             .map(|v| v.manifest.clone())
             .ok_or_else(|| store_error(&StoreError::NoStagedUpdate(id.clone())))
@@ -2118,7 +2357,10 @@ impl PluginService {
         let node = declaration.node.clone().unwrap_or_default();
         let timeout = Duration::from_millis(node.timeout_ms()).min(MAX_INVOCATION);
         let outputs = super::lane::declared_outputs(&declaration);
-        let name = active.manifest.name.clone();
+        let dir = self.manager.layout().resolve(&active.install_dir);
+        // Notifications and dialogs are titled with the name the app shows.
+        let name = self.locales.manifest(id.as_str(), active, &dir).name;
+        let translator = self.locales.translator(id.as_str(), active, &dir);
         let definition = super::engine::action_type(id.as_str(), &declaration).map_err(|e| {
             error(
                 ErrorCode::Failed,
@@ -2146,6 +2388,8 @@ impl PluginService {
             self.opener.clone(),
         )
         .with_notifier(self.events.notifier.clone())
+        .with_dialogs(self.events.dialogs.clone())
+        .with_translator(translator)
         .with_data(access);
         Ok((
             record,

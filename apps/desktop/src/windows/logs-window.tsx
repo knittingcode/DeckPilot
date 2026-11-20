@@ -5,6 +5,7 @@ import { ModalShell } from "@/components/modal-shell"
 import { api } from "@/lib/api"
 import { failureMessage } from "@/lib/failure"
 import type { LogView } from "@/lib/types"
+import { i18n, useTranslation } from "@/i18n"
 
 import { useWindow } from "./window-context"
 
@@ -16,6 +17,7 @@ const LINES = 500
  * configuration is locked, e.g. when the system key cannot be read.
  */
 export function LogsWindow() {
+  const { t } = useTranslation()
   const { close } = useWindow()
   const [view, setView] = useState<LogView | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -32,9 +34,9 @@ export function LogsWindow() {
         (e: unknown) => {
           setError(
             failureMessage(
-              "The agent log could not be read",
+              i18n.t("settings:logs.unreadable"),
               e,
-              "The agent may not have written a log yet; start it and try again",
+              i18n.t("settings:logs.unreadableNext"),
             ),
           )
         },
@@ -57,21 +59,21 @@ export function LogsWindow() {
     <ModalShell
       size="large"
       icon={ScrollText}
-      title="Background agent log"
+      title={t("settings:logs.title")}
       description={
         view?.file ? (
           <span className="font-mono text-xs break-all select-text">{view.file}</span>
         ) : view ? (
-          `No log in ${view.directory} yet.`
+          t("settings:logs.empty", { directory: view.directory })
         ) : undefined
       }
       loading={!view && !error}
       error={error}
       onClose={close}
-      secondary={{ label: "Close", onClick: close }}
+      secondary={{ label: t("settings:shared.close"), onClick: close }}
       primary={{
-        label: "Refresh",
-        loadingLabel: "Loading…",
+        label: t("settings:shared.refresh"),
+        loadingLabel: t("common:status.loading"),
         loading: busy && Boolean(view),
         onClick: load,
       }}
@@ -80,12 +82,12 @@ export function LogsWindow() {
         <div className="grid gap-1">
           {view.truncated && (
             <p className="text-xs text-muted-foreground">
-              Showing the last {view.lines.length} lines.
+              {t("settings:logs.truncated", { count: view.lines.length })}
             </p>
           )}
           <pre
             className="rounded-md bg-muted p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap select-text"
-            aria-label="Log lines"
+            aria-label={t("settings:logs.lines")}
           >
             {view.lines.join("\n")}
             <div ref={end} />

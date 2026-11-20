@@ -60,6 +60,15 @@ pub struct Manifest {
     /// `dependency.rs`). Absent: none. A dependency grants nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dependencies: Option<Vec<crate::dependency::Dependency>>,
+    /// The language of the manifest's own texts, the last locale tried
+    /// before English (plugin API 1.6, `locale.rs`). Absent: `en`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_locale: Option<String>,
+    /// The locales the package carries as `locales/<tag>.json` (plugin
+    /// API 1.6): canonical tags such as `en`, `pl` or `pl-PL`. Each is a
+    /// package file the manifest names, hashed and checked like the rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locales: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports: Option<Supports>,
     pub contributes: Contributes,
@@ -282,6 +291,12 @@ pub enum Permission {
         icons: Option<bool>,
         justification: String,
     },
+    /// Standard dialogs DeckPilot draws for the plugin (plugin API 1.5,
+    /// `docs/dialogs.md`): confirm, alert, form and selection, described
+    /// as data and titled with the plugin's name, only in runs the user
+    /// started. Not plugin UI code (`ui` stays forbidden) and never a
+    /// secret field.
+    Dialogs { justification: String },
 }
 
 /// Where a plugin's notifications go, as the user sets it in the plugin's
@@ -405,6 +420,7 @@ pub enum PermissionKind {
     OpenUrl,
     Background,
     Device,
+    Dialogs,
 }
 
 impl PermissionKind {
@@ -420,6 +436,7 @@ impl PermissionKind {
             Self::OpenUrl => "openUrl",
             Self::Background => "background",
             Self::Device => "device",
+            Self::Dialogs => "dialogs",
         }
     }
 }
@@ -436,6 +453,7 @@ impl Permission {
             Self::OpenUrl { .. } => PermissionKind::OpenUrl,
             Self::Background { .. } => PermissionKind::Background,
             Self::Device { .. } => PermissionKind::Device,
+            Self::Dialogs { .. } => PermissionKind::Dialogs,
         }
     }
 
@@ -457,7 +475,24 @@ impl Permission {
             | Self::Storage { justification, .. }
             | Self::OpenUrl { justification, .. }
             | Self::Background { justification, .. }
-            | Self::Device { justification, .. } => justification,
+            | Self::Device { justification, .. }
+            | Self::Dialogs { justification } => justification,
+        }
+    }
+
+    /// The justification, to translate it (`Manifest::localized`).
+    pub fn justification_mut(&mut self) -> &mut String {
+        match self {
+            Self::Network { justification, .. }
+            | Self::Credentials { justification, .. }
+            | Self::Notifications { justification, .. }
+            | Self::Profile { justification, .. }
+            | Self::Variables { justification, .. }
+            | Self::Storage { justification, .. }
+            | Self::OpenUrl { justification, .. }
+            | Self::Background { justification, .. }
+            | Self::Device { justification, .. }
+            | Self::Dialogs { justification } => justification,
         }
     }
 }
@@ -511,9 +546,21 @@ pub struct Contributes {
     /// Host-rendered views the navigation entries open (plugin API 1.3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub views: Option<Vec<View>>,
+    /// Icons and backgrounds for the shared libraries (plugin API 1.8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visual_assets: Option<crate::visual::VisualAssets>,
 }
 
 impl Contributes {
+    /// `visualAssets`, empty when absent.
+    pub fn visual_assets(&self) -> &crate::visual::VisualAssets {
+        static NONE: crate::visual::VisualAssets = crate::visual::VisualAssets {
+            icons: None,
+            backgrounds: None,
+        };
+        self.visual_assets.as_ref().unwrap_or(&NONE)
+    }
+
     pub fn navigation(&self) -> &[NavigationEntry] {
         self.navigation.as_deref().unwrap_or_default()
     }
@@ -856,6 +903,75 @@ pub struct Action {
     /// unavailable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requires_dependencies: Option<Vec<String>>,
+    /// What running the action does to the page or layout a device shows,
+    /// for the editor's interactive preview (plugin API 1.7): data only.
+    /// The editor moves its own view; the plugin is never called for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor_navigation: Option<EditorNavigation>,
+    /// What the action suggests for its keys' titles (plugin API 1.8):
+    /// data only, the user's own title and look always win.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<ActionTitle>,
+}
+
+/// The plugin API level that introduced `contributes.actions[].title`.
+pub const TITLE_API: ApiLevel = ApiLevel::new(1, 8);
+
+/// The positions `title.position` may name (the core's `TitleAlign`).
+pub const TITLE_POSITIONS: [&str; 3] = ["top", "middle", "bottom"];
+
+/// The parts of the look `title.supports` may name (the core's
+/// `TitleFeature`).
+pub const TITLE_FEATURES: [&str; 6] =
+    ["visibility", "position", "font", "style", "color", "layout"];
+
+/// Longest suggested title, in characters (a key label's limit).
+pub const MAX_TITLE_DEFAULT: usize = 32;
+
+/// `contributes.actions[].title` (plugin API 1.8): a suggested title, whether
+/// the action sets its title while it runs (its state's `label`), a
+/// suggested position and the parts of the look the editor offers for its
+/// keys. The editor is always DeckPilot's own; a plugin cannot replace it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ActionTitle {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports: Option<Vec<String>>,
+}
+
+/// The plugin API level that introduced `contributes.actions[].editorNavigation`.
+pub const EDITOR_NAVIGATION_API: ApiLevel = ApiLevel::new(1, 7);
+
+/// The operations `editorNavigation.operation` may name, and whether each
+/// takes a `targetParameter`. The same allowlist as
+/// `deckpilot_core::NavigationOperation`.
+pub const EDITOR_NAVIGATION_OPERATIONS: [(&str, bool); 6] = [
+    ("folder.open", true),
+    ("folder.back", false),
+    ("page.next", false),
+    ("page.previous", false),
+    ("layout.switch", true),
+    ("layout.back", false),
+];
+
+/// `contributes.actions[].editorNavigation` (plugin API 1.7): which
+/// allowlisted navigation the action performs, and which of its own text
+/// parameters holds the target (a page id for `folder.open`, a layout id
+/// for `layout.switch`, optionally with `pageParameter`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EditorNavigation {
+    pub operation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_parameter: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_parameter: Option<String>,
 }
 
 /// Most inputs an action may declare for one control kind (the core's
@@ -890,6 +1006,10 @@ pub const NAVIGATION_API: ApiLevel = ApiLevel::new(1, 3);
 
 /// The plugin API level that introduced `contributes.views[].context`.
 pub const VIEW_CONTEXT_API: ApiLevel = ApiLevel::new(1, 4);
+
+/// The plugin API level that introduced the `dialogs` permission
+/// (`dialog.open`).
+pub const DIALOGS_API: ApiLevel = ApiLevel::new(1, 5);
 
 /// Most `contributes.navigation` entries.
 pub const MAX_NAVIGATION_ENTRIES: usize = 4;

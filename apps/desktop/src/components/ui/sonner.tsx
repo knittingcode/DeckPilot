@@ -7,14 +7,12 @@ import {
 } from "lucide-react"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 
-import { useTheme } from "@/lib/theme"
+import { THEME } from "@/lib/theme"
 
 const Toaster = ({ ...props }: ToasterProps) => {
-  const { resolved } = useTheme()
-
   return (
     <Sonner
-      theme={resolved}
+      theme={THEME}
       className="toaster group"
       icons={{
         success: <CircleCheckIcon className="size-4" />,

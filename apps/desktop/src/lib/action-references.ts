@@ -1,6 +1,7 @@
 import type { FocusTarget } from "./focus"
 import { controlLabel, triggerLabel } from "./layout-model"
 import type { ActionReference, Profile, ReferenceSite } from "./types"
+import { i18n } from "@/i18n"
 import { describeTrigger } from "@/workflow-builder/trigger-model"
 
 /** A stable identity of the place a site names. */
@@ -72,20 +73,36 @@ export function isDirect(reference: ActionReference): boolean {
   return reference.site.type !== "trigger"
 }
 
+/** Where a reference is, in the window's language. */
 export function describeReference(reference: ActionReference): string {
   const { site, ownerName, detail } = reference
   switch (site.type) {
     case "binding": {
-      const trigger = site.trigger.type === "press" ? "" : ` (${triggerLabel(site.trigger)})`
-      return `Layout “${ownerName}”, page “${detail ?? ""}”, ${controlLabel(site.control)}${trigger}`
+      const values = { layout: ownerName, page: detail ?? "", control: controlLabel(site.control) }
+      return site.trigger.type === "press"
+        ? i18n.t("actions:referenceSite.binding", values)
+        : i18n.t("actions:referenceSite.bindingTrigger", {
+            ...values,
+            trigger: triggerLabel(site.trigger),
+          })
     }
     case "step":
-      return `Workflow “${ownerName}”, step ${site.index + 1}`
+      return i18n.t("actions:referenceSite.step", { workflow: ownerName, step: site.index + 1 })
     case "node":
-      return `Workflow “${ownerName}”, node “${detail ?? site.node}”`
+      return i18n.t("actions:referenceSite.node", {
+        workflow: ownerName,
+        node: detail ?? site.node,
+      })
     case "trigger": {
-      const what = reference.trigger ? describeTrigger(reference.trigger) : "a trigger"
-      return `Workflow “${ownerName}” starts by trigger: ${what}${detail === "paused" ? " (paused)" : ""}`
+      const values = {
+        workflow: ownerName,
+        trigger: reference.trigger
+          ? describeTrigger(reference.trigger)
+          : i18n.t("actions:referenceSite.aTrigger"),
+      }
+      return detail === "paused"
+        ? i18n.t("actions:referenceSite.triggerPaused", values)
+        : i18n.t("actions:referenceSite.trigger", values)
     }
   }
 }

@@ -1107,6 +1107,8 @@ fn normalize_config(
     config: &ActionParameters,
 ) -> Result<ActionParameters, ModuleError> {
     let schema = ActionType {
+        editor_navigation: None,
+        title: None,
         id: ActionTypeId::new(format!("{}.config", manifest.id)).expect("module ids are valid"),
         name: manifest.name.clone(),
         description: String::new(),

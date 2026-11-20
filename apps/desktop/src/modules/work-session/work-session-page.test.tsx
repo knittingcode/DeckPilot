@@ -4,6 +4,7 @@ import "@testing-library/jest-dom/vitest"
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { i18n } from "@/i18n"
 import type { WorkSessionState } from "@/lib/types"
 import { api, resetApi } from "@/test/api-mock"
 import { installDomStubs } from "@/test/dom"
@@ -82,8 +83,8 @@ describe("Work Session page", () => {
         project: state === "idle" ? undefined : shop.id,
       }),
     )
-    expect(screen.getByText(STATE_TEXT[state].label)).toBeInTheDocument()
-    expect(screen.getByText(STATE_TEXT[state].hint)).toBeInTheDocument()
+    expect(screen.getByText(i18n.t(STATE_TEXT[state].label))).toBeInTheDocument()
+    expect(screen.getByText(i18n.t(STATE_TEXT[state].hint))).toBeInTheDocument()
     const timer = screen.queryByRole("timer", { name: "Elapsed" })
     if (state === "idle" || state === "starting") {
       expect(timer).not.toBeInTheDocument()

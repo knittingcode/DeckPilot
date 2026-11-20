@@ -7,6 +7,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { useTranslation } from "@/i18n"
 import { AppContext } from "@/lib/app-context"
 
 /** The action type and parameter this control replaces the text field of. */
@@ -30,6 +31,7 @@ export function ProfileField({
   value: string
   onChange: (profileId: string) => void
 }) {
+  const { t } = useTranslation()
   const profiles = useContext(AppContext)?.profiles.profiles ?? []
   const missing = value !== "" && !profiles.some((p) => p.id === value)
   return (
@@ -44,8 +46,8 @@ export function ProfileField({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={NONE}>No profile</SelectItem>
-          {missing && <SelectItem value={value}>Deleted profile</SelectItem>}
+          <SelectItem value={NONE}>{t("actions:deck.profile.none")}</SelectItem>
+          {missing && <SelectItem value={value}>{t("actions:deck.profile.deleted")}</SelectItem>}
           {profiles.map((profile) => (
             <SelectItem key={profile.id} value={profile.id}>
               {profile.name}
@@ -55,7 +57,7 @@ export function ProfileField({
       </Select>
       {missing && (
         <p className="text-xs text-destructive" role="note">
-          This profile no longer exists. Choose another one, or the key will fail.
+          {t("actions:deck.profile.missing")}
         </p>
       )}
     </div>

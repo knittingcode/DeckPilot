@@ -7,6 +7,7 @@ use thiserror::Error;
 use tokio::io::BufReader;
 
 use crate::framing::{FrameError, read_message, write_message};
+use crate::live_preview::LivePreviewEvent;
 use crate::{
     AgentEvent, AgentPaths, Capability, ClientKind, ClientMessage, ErrorCode, IpcError,
     KeyStateEntry, MIN_COMPATIBLE_AGENT_PROTOCOL, PROTOCOL_VERSION, Request, Response,
@@ -104,6 +105,8 @@ pub struct AgentClient {
     plugin_events: VecDeque<PluginEvent>,
     /// `keyStates` messages after `watchKeyStates`.
     key_states: VecDeque<Vec<KeyStateEntry>>,
+    /// `livePreview` messages of this connection's session (protocol 16).
+    live_preview: VecDeque<LivePreviewEvent>,
 }
 
 impl Drop for AgentClient {
@@ -191,6 +194,7 @@ impl AgentClient {
             events: VecDeque::new(),
             plugin_events: VecDeque::new(),
             key_states: VecDeque::new(),
+            live_preview: VecDeque::new(),
         };
         let hello = ClientMessage::Hello {
             protocol,
@@ -298,6 +302,7 @@ impl AgentClient {
                 ServerMessage::Event { event } => self.events.push_back(event),
                 ServerMessage::PluginEvent { event } => self.plugin_events.push_back(event),
                 ServerMessage::KeyStates { states } => self.key_states.push_back(states),
+                ServerMessage::LivePreview { event } => self.live_preview.push_back(event),
                 other => return Err(ClientError::Protocol(format!("{other:?}"))),
             }
         }
@@ -334,6 +339,26 @@ impl AgentClient {
                 ServerMessage::KeyStates { states } => return Ok(states),
                 ServerMessage::Event { event } => self.events.push_back(event),
                 ServerMessage::PluginEvent { event } => self.plugin_events.push_back(event),
+                ServerMessage::LivePreview { event } => self.live_preview.push_back(event),
+                ServerMessage::Error { error, .. } => return Err(ClientError::Agent(error)),
+                other => return Err(ClientError::Protocol(format!("{other:?}"))),
+            }
+        }
+    }
+
+    /// Waits for the next `livePreview` message of this connection's
+    /// session (protocol 16). Other messages that arrive meanwhile are
+    /// kept for their own `next_…`.
+    pub async fn next_live_preview(&mut self) -> Result<LivePreviewEvent, ClientError> {
+        loop {
+            if let Some(event) = self.live_preview.pop_front() {
+                return Ok(event);
+            }
+            match self.receive().await? {
+                ServerMessage::LivePreview { event } => return Ok(event),
+                ServerMessage::Event { event } => self.events.push_back(event),
+                ServerMessage::PluginEvent { event } => self.plugin_events.push_back(event),
+                ServerMessage::KeyStates { states } => self.key_states.push_back(states),
                 ServerMessage::Error { error, .. } => return Err(ClientError::Agent(error)),
                 other => return Err(ClientError::Protocol(format!("{other:?}"))),
             }
@@ -351,8 +376,49 @@ impl AgentClient {
         &mut self,
         migrations: bool,
     ) -> Result<(), ClientError> {
+        self.subscribe_plugin_events_announcing(migrations, Vec::new())
+            .await
+    }
+
+    /// Tells the agent the app's effective language (`setLocale`, protocol
+    /// 13). Returns `false` without sending anything when the connection's
+    /// protocol is older: such an agent keeps English, and nothing else
+    /// changes.
+    pub async fn set_locale(&mut self, locale: &str) -> Result<bool, ClientError> {
+        if !self.capabilities().contains(&Capability::Locale) {
+            return Ok(false);
+        }
         match self
-            .request(Request::SubscribePluginEvents { migrations })
+            .request(Request::SetLocale {
+                locale: locale.to_owned(),
+            })
+            .await?
+        {
+            Response::Ok => Ok(true),
+            other => Err(ClientError::Protocol(format!("{other:?}"))),
+        }
+    }
+
+    /// Subscribes to plugin events, announcing `features` this client
+    /// renders: [`crate::plugin_dialogs::FEATURE`] also delivers plugin
+    /// dialogs (protocol 12). Features are sent only on a connection whose
+    /// protocol has [`Capability::PluginDialogs`]; on an older one they are
+    /// left out, as an older agent would not know them.
+    pub async fn subscribe_plugin_events_announcing(
+        &mut self,
+        migrations: bool,
+        features: Vec<String>,
+    ) -> Result<(), ClientError> {
+        let features = if self.capabilities().contains(&Capability::PluginDialogs) {
+            features
+        } else {
+            Vec::new()
+        };
+        match self
+            .request(Request::SubscribePluginEvents {
+                migrations,
+                features,
+            })
             .await?
         {
             Response::Ok => Ok(()),
@@ -372,6 +438,7 @@ impl AgentClient {
                 ServerMessage::PluginEvent { event } => return Ok(event),
                 ServerMessage::Event { event } => self.events.push_back(event),
                 ServerMessage::KeyStates { states } => self.key_states.push_back(states),
+                ServerMessage::LivePreview { event } => self.live_preview.push_back(event),
                 ServerMessage::Error { error, .. } => return Err(ClientError::Agent(error)),
                 other => return Err(ClientError::Protocol(format!("{other:?}"))),
             }
@@ -397,10 +464,116 @@ impl AgentClient {
                 // Kept for `next_plugin_event`.
                 ServerMessage::PluginEvent { event } => self.plugin_events.push_back(event),
                 ServerMessage::KeyStates { states } => self.key_states.push_back(states),
+                ServerMessage::LivePreview { event } => self.live_preview.push_back(event),
                 ServerMessage::Error { error, .. } => return Err(ClientError::Agent(error)),
                 other => return Err(ClientError::Protocol(format!("{other:?}"))),
             }
         }
+    }
+}
+
+impl AgentClient {
+    /// Splits the connection into a writer of requests and a channel of
+    /// everything the agent sends (answers, errors, events, `livePreview`
+    /// messages), read by a task of its own: waiting on the channel can be
+    /// cancelled at any time, so a client can wait for the agent and for
+    /// its own work at once (protocol 16's live preview). Messages already
+    /// received come first. Dropping the writer stops the reader and
+    /// closes the connection.
+    pub fn split(mut self) -> (RequestWriter, MessageReceiver) {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let queued = self
+            .events
+            .drain(..)
+            .map(|event| ServerMessage::Event { event })
+            .chain(
+                self.plugin_events
+                    .drain(..)
+                    .map(|event| ServerMessage::PluginEvent { event }),
+            )
+            .chain(
+                self.key_states
+                    .drain(..)
+                    .map(|states| ServerMessage::KeyStates { states }),
+            )
+            .chain(
+                self.live_preview
+                    .drain(..)
+                    .map(|event| ServerMessage::LivePreview { event }),
+            );
+        for message in queued {
+            let _ = sender.send(Ok(message));
+        }
+        let writer = self.writer.clone();
+        let mut reader = std::mem::replace(&mut self.reader, BufReader::new(writer.clone()));
+        let task = tokio::spawn(async move {
+            loop {
+                let message = match read_message::<_, ServerMessage>(&mut reader).await {
+                    Ok(Some(message)) => Ok(message),
+                    Ok(None) => Err(ClientError::Closed),
+                    Err(error) => Err(error.into()),
+                };
+                let end = message.is_err();
+                if sender.send(message).is_err() || end {
+                    return;
+                }
+            }
+        });
+        let writer = RequestWriter {
+            writer,
+            next_id: self.next_id,
+            protocol: self.protocol,
+            agent_version: self.agent_version.clone(),
+            reader: task,
+        };
+        (writer, receiver)
+    }
+}
+
+/// What the agent sends on a split connection ([`AgentClient::split`]);
+/// ends with an error (`Closed` when the agent closed it).
+pub type MessageReceiver = tokio::sync::mpsc::UnboundedReceiver<Result<ServerMessage, ClientError>>;
+
+/// The writing half of a split connection.
+#[derive(Debug)]
+pub struct RequestWriter {
+    writer: SharedStream,
+    next_id: u64,
+    protocol: u32,
+    agent_version: String,
+    reader: tokio::task::JoinHandle<()>,
+}
+
+impl RequestWriter {
+    /// Sends `request` and returns its id, which its answer carries.
+    /// Refused locally, as by [`AgentClient::request`], when the
+    /// connection's protocol does not have it.
+    pub async fn send(&mut self, request: Request) -> Result<u64, ClientError> {
+        let needs = request.since_protocol();
+        if needs > self.protocol {
+            return Err(ClientError::Unsupported {
+                request: request.name(),
+                needs,
+                protocol: self.protocol,
+                agent: self.agent_version.clone(),
+            });
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        write_message(&mut self.writer, &ClientMessage::Request { id, request }).await?;
+        Ok(id)
+    }
+
+    /// The protocol of the connection.
+    pub fn protocol(&self) -> u32 {
+        self.protocol
+    }
+}
+
+impl Drop for RequestWriter {
+    fn drop(&mut self) {
+        self.reader.abort();
+        self.writer.skip_flush_on_close();
     }
 }
 

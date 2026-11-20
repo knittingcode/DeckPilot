@@ -703,6 +703,192 @@ pub(crate) fn migrate(tx: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Migration 11: every folder page of every stored layout gets its Back
+/// setting ([`DeviceLayout::assign_folder_backs`]), so the reserved Back
+/// key is part of the stored layout and does not depend on later edits.
+/// Nothing of the user's is lost: a folder whose reserved key binds nothing
+/// or only Back gets the reserved Back (those Back bindings are replaced
+/// by it); a folder whose reserved key runs something else keeps its Back
+/// where it was (`legacy`), with a migration note that says how to move it.
+/// Explicit Back bindings on other keys stay. Layouts of models this build
+/// does not know are left as they are (they behave as before). The
+/// encrypted backup before every migration holds the previous state;
+/// `updated_at` is kept.
+pub(crate) fn migrate_folder_backs(tx: &Connection) -> Result<()> {
+    let catalog = deckpilot_device::ModelCatalog::builtin();
+    let rows: Vec<(String, u32, String)> = tx
+        .prepare("SELECT id, document_version, document FROM layouts ORDER BY id")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (id, version, document) in rows {
+        let mut layout: DeviceLayout = decode_item(version, &document)?;
+        let Some(model) = catalog.get(&layout.model) else {
+            continue;
+        };
+        let report = layout.assign_folder_backs(&model.capabilities);
+        if !report.changed() {
+            continue;
+        }
+        tx.execute(
+            "UPDATE layouts SET document = ?1 WHERE id = ?2",
+            params![encode(&layout)?, id],
+        )?;
+        let profile: Option<String> = tx
+            .query_row(
+                "SELECT profile_id FROM profile_layouts WHERE layout_id = ?1
+                 ORDER BY profile_id LIMIT 1",
+                [&id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        for page in report.legacy.iter().filter_map(|page| layout.page(*page)) {
+            tx.execute(
+                "INSERT INTO migration_notes (schema_version, profile_id, message, created_at)
+                 VALUES (11, ?1, ?2, ?3)",
+                params![
+                    profile,
+                    format!(
+                        "Layout “{}”, folder “{}”: its first key already runs something, so its \
+                         Back stays on the first free key. To use the reserved Back key, select \
+                         the folder's Back key in the layout editor and choose “Move Back to the \
+                         first key”.",
+                        layout.name, page.name
+                    ),
+                    now()
+                ],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Migration 12: every folder control of every stored layout
+/// ([`deckpilot_core::folder_control`]) keeps only the binding that opens its
+/// folder, on the press ([`DeviceLayout::normalize_folder_controls`]). Its
+/// other bindings, with its gesture timings, move to the layout's
+/// `recovered` list: stored, never run, offered in the folder key's
+/// Inspector to be moved to a free key or discarded. Every such key gets a
+/// migration note. Shared layouts are rewritten once (every profile that
+/// uses them sees the same document); nested folders page by page; layouts
+/// without such keys stay byte for byte the same, so the migration is
+/// idempotent. Needs no device model. The encrypted backup before every
+/// migration holds the previous state; `updated_at` is kept.
+pub(crate) fn migrate_folder_controls(tx: &Connection) -> Result<()> {
+    let rows: Vec<(String, u32, String)> = tx
+        .prepare("SELECT id, document_version, document FROM layouts ORDER BY id")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (id, version, document) in rows {
+        let mut layout: DeviceLayout = decode_item(version, &document)?;
+        let before = layout.clone();
+        let report = layout.normalize_folder_controls();
+        if layout == before {
+            continue;
+        }
+        tx.execute(
+            "UPDATE layouts SET document = ?1 WHERE id = ?2",
+            params![encode(&layout)?, id],
+        )?;
+        let profile: Option<String> = tx
+            .query_row(
+                "SELECT profile_id FROM profile_layouts WHERE layout_id = ?1
+                 ORDER BY profile_id LIMIT 1",
+                [&id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        for normalized in &report {
+            let name = |page| {
+                layout
+                    .page(page)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_default()
+            };
+            tx.execute(
+                "INSERT INTO migration_notes (schema_version, profile_id, message, created_at)
+                 VALUES (12, ?1, ?2, ?3)",
+                params![
+                    profile,
+                    format!(
+                        "Layout “{}”, page “{}”: the key that opens the folder “{}” now only \
+                         opens it. Its other {} gesture(s) were kept as “Recovered gestures” \
+                         and do not run; select the folder key in the layout editor to move \
+                         them to a free key or discard them.",
+                        layout.name,
+                        name(normalized.page),
+                        name(normalized.folder),
+                        normalized.recovered
+                    ),
+                    now()
+                ],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Migration 13: the key that opens a folder shows the folder's name, its
+/// one title ([`DeviceLayout::normalize_folder_labels`]). A title of the
+/// key's own equal to the name is dropped; one that differs moves, with the
+/// binding as it was, to the layout's `recovered` list (offered in the
+/// folder key's Inspector: use it as the folder's name, or discard it), and
+/// the key gets a migration note. Shared layouts are rewritten once; layouts
+/// without such titles stay byte for byte the same, so the migration is
+/// idempotent. The encrypted backup before every migration holds the
+/// previous state; `updated_at` is kept.
+pub(crate) fn migrate_folder_labels(tx: &Connection) -> Result<()> {
+    let rows: Vec<(String, u32, String)> = tx
+        .prepare("SELECT id, document_version, document FROM layouts ORDER BY id")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (id, version, document) in rows {
+        let mut layout: DeviceLayout = decode_item(version, &document)?;
+        let before = layout.clone();
+        let report = layout.normalize_folder_labels();
+        if layout == before {
+            continue;
+        }
+        tx.execute(
+            "UPDATE layouts SET document = ?1 WHERE id = ?2",
+            params![encode(&layout)?, id],
+        )?;
+        let profile: Option<String> = tx
+            .query_row(
+                "SELECT profile_id FROM profile_layouts WHERE layout_id = ?1
+                 ORDER BY profile_id LIMIT 1",
+                [&id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        for normalized in &report {
+            let name = |page| {
+                layout
+                    .page(page)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_default()
+            };
+            tx.execute(
+                "INSERT INTO migration_notes (schema_version, profile_id, message, created_at)
+                 VALUES (13, ?1, ?2, ?3)",
+                params![
+                    profile,
+                    format!(
+                        "Layout “{}”, page “{}”: the key that opens the folder “{}” now shows \
+                         the folder's name. Its own title “{}” was kept; select the folder key \
+                         in the layout editor to use it as the folder's name or discard it.",
+                        layout.name,
+                        name(normalized.page),
+                        name(normalized.folder),
+                        normalized.label
+                    ),
+                    now()
+                ],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn assignments(connection: &Connection, layout: &str) -> Result<Vec<LayoutAssignment>> {
     let rows: Vec<(String, String, i64, bool)> = connection
         .prepare(

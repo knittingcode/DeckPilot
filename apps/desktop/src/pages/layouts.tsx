@@ -2,29 +2,12 @@ import { Copy, MoreHorizontal, Pencil, Plus, Search, SquarePen, Trash2, Users } 
 import { useContext, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
+import { DestructiveDialog, FieldError, FormDialog } from "@/components/dialogs"
 import { LayoutCompatibilitySummary, LayoutDevice } from "@/components/layout-compatibility"
 import { EmptyState, ErrorNotice, Loading, Page } from "@/components/page"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -52,9 +35,11 @@ import {
 } from "@/components/ui/table"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useAsync } from "@/hooks/use-async"
+import { useTranslation } from "@/i18n"
+import { useFormat } from "@/i18n/format"
 import { api, errorMessage } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
-import { copyName, hasUnknownModel, modelLabel } from "@/lib/shared-layouts"
+import { hasUnknownModel, modelLabel } from "@/lib/shared-layouts"
 import type { ProfileSummary, SharedLayoutSummary } from "@/lib/types"
 import { isSupported } from "@/lib/verification"
 import { EditorSelectionContext } from "@/shell/editor-selection-context"
@@ -68,6 +53,7 @@ const NO_PROFILE = "none"
  * each of which keeps its own order and default layout per device model.
  */
 export function LayoutsPage() {
+  const { t } = useTranslation()
   const { revision, refresh } = useAppContext()
   const { state, reload } = useAsync(() => api.listSharedLayouts(), `layouts:${revision}`)
   const [creating, setCreating] = useState(false)
@@ -78,12 +64,12 @@ export function LayoutsPage() {
   }
   return (
     <Page
-      title="Layouts"
-      description="Layouts stored once and assigned to any number of profiles"
+      title={t("navigation:pages.layouts")}
+      description={t("layouts:page.description")}
       actions={[
         {
           id: "layouts.new",
-          label: "New layout",
+          label: t("layouts:page.new"),
           icon: Plus,
           placement: "primary",
           onSelect: () => {
@@ -92,7 +78,7 @@ export function LayoutsPage() {
         },
         {
           id: "layouts.search",
-          label: "Search",
+          label: t("layouts:page.search"),
           icon: Search,
           onSelect: () => {
             searchRef.current?.focus()
@@ -112,7 +98,7 @@ export function LayoutsPage() {
           }}
         />
       )}
-      <NewLayoutDialog
+      <NewSharedLayoutDialog
         open={creating}
         onOpenChange={setCreating}
         onCreated={() => {
@@ -140,22 +126,24 @@ function LayoutTable({
   onChanged: () => void
   onNew: () => void
 }) {
+  const { t } = useTranslation()
+  const format = useFormat()
   const [query, setQuery] = useState("")
   const [dialog, setDialog] = useState<RowDialog | null>(null)
   const shown = useMemo(() => {
     const needle = query.trim().toLowerCase()
     return layouts
       .filter((l) => !needle || l.name.toLowerCase().includes(needle))
-      .sort((a, b) => a.name.localeCompare(b.name))
-  }, [layouts, query])
+      .sort((a, b) => format.compare(a.name, b.name))
+  }, [layouts, query, format])
 
   if (layouts.length === 0) {
     return (
-      <EmptyState title="No layouts yet">
-        <p>A layout holds the pages and keys of a device; assign it to any number of profiles.</p>
+      <EmptyState title={t("layouts:page.empty.title")}>
+        <p>{t("layouts:page.empty.body")}</p>
         <Button size="sm" className="mt-3" onClick={onNew}>
           <Plus />
-          New layout
+          {t("layouts:page.new")}
         </Button>
       </EmptyState>
     )
@@ -170,8 +158,8 @@ function LayoutTable({
         <Input
           ref={searchRef}
           className="h-8 pl-8"
-          placeholder="Search layouts"
-          aria-label="Search layouts"
+          placeholder={t("layouts:page.searchPlaceholder")}
+          aria-label={t("layouts:page.searchPlaceholder")}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value)
@@ -179,18 +167,18 @@ function LayoutTable({
         />
       </div>
       {shown.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No layouts match.</p>
+        <p className="text-sm text-muted-foreground">{t("layouts:page.noMatches")}</p>
       ) : (
         <Table className="text-sm">
           <TableHeader>
             <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Device</TableHead>
-              <TableHead>Pages / keys</TableHead>
-              <TableHead>Used by</TableHead>
-              <TableHead>Compatibility</TableHead>
+              <TableHead>{t("layouts:page.table.name")}</TableHead>
+              <TableHead>{t("layouts:page.table.device")}</TableHead>
+              <TableHead>{t("layouts:page.table.contents")}</TableHead>
+              <TableHead>{t("layouts:page.table.usedBy")}</TableHead>
+              <TableHead>{t("layouts:page.table.compatibility")}</TableHead>
               <TableHead className="w-0 text-right">
-                <span className="sr-only">Actions</span>
+                <span className="sr-only">{t("layouts:page.table.actions")}</span>
               </TableHead>
             </TableRow>
           </TableHeader>
@@ -208,14 +196,14 @@ function LayoutTable({
       )}
       {dialog?.kind === "rename" && (
         <NameDialog
-          title="Rename layout"
-          label="Layout name"
-          confirmLabel="Rename"
+          title={t("layouts:page.rename.title")}
+          label={t("layouts:page.rename.label")}
+          confirmLabel={t("layouts:page.rename.confirm")}
           initial={dialog.layout.name}
           onClose={close}
           onSubmit={async (name) => {
             await api.renameSharedLayout(dialog.layout.id, name)
-            toast.success("Layout renamed")
+            toast.success(t("layouts:page.toast.renamed"))
             close()
             onChanged()
           }}
@@ -223,15 +211,15 @@ function LayoutTable({
       )}
       {dialog?.kind === "duplicate" && (
         <NameDialog
-          title="Duplicate layout"
-          description="An independent copy with its own pages; its keys run the same Action Library actions."
-          label="Name of the copy"
-          confirmLabel="Duplicate"
-          initial={copyName(dialog.layout.name)}
+          title={t("layouts:page.duplicate.title")}
+          description={t("layouts:page.duplicate.description")}
+          label={t("layouts:page.duplicate.label")}
+          confirmLabel={t("layouts:page.duplicate.confirm")}
+          initial={t("layouts:page.duplicate.copyName", { layout: dialog.layout.name })}
           onClose={close}
           onSubmit={async (name) => {
             await api.duplicateSharedLayout(dialog.layout.id, name, null)
-            toast.success("Layout duplicated")
+            toast.success(t("layouts:page.toast.duplicated"))
             close()
             onChanged()
           }}
@@ -260,6 +248,7 @@ function LayoutRow({
   onChanged: () => void
   onDialog: (dialog: RowDialog) => void
 }) {
+  const { t } = useTranslation()
   const { open, dialog } = useOpenLayout()
   // Unused: opening offers to assign it to the profile being edited, which
   // a layout of an unknown model cannot be.
@@ -271,8 +260,10 @@ function LayoutRow({
         <LayoutDevice layout={layout} />
       </TableCell>
       <TableCell className="whitespace-nowrap text-muted-foreground tabular-nums">
-        {layout.pages} {layout.pages === 1 ? "page" : "pages"} · {layout.bindings}{" "}
-        {layout.bindings === 1 ? "key" : "keys"}
+        {t("layouts:page.contents", {
+          pages: t("layouts:page.pages", { count: layout.pages }),
+          keys: t("layouts:page.keys", { count: layout.bindings }),
+        })}
       </TableCell>
       <TableCell className="max-w-64">
         <UsedBy layout={layout} />
@@ -289,7 +280,7 @@ function LayoutRow({
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  aria-label={`Open ${layout.name} in the Device Editor`}
+                  aria-label={t("layouts:page.openLabel", { layout: layout.name })}
                   disabled={closed}
                   onClick={() => {
                     open(layout)
@@ -300,14 +291,18 @@ function LayoutRow({
               </span>
             </TooltipTrigger>
             <TooltipContent>
-              {closed ? "Its device model is unknown" : "Open in Device Editor"}
+              {closed ? t("layouts:page.unknownModel") : t("layouts:page.openTooltip")}
             </TooltipContent>
           </Tooltip>
           {dialog}
           <AssignmentPopover layout={layout} onChanged={onChanged} />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label={`More actions for ${layout.name}`}>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={t("layouts:page.more", { layout: layout.name })}
+              >
                 <MoreHorizontal />
               </Button>
             </DropdownMenuTrigger>
@@ -318,7 +313,7 @@ function LayoutRow({
                 }}
               >
                 <Pencil />
-                Rename…
+                {t("layouts:page.menu.rename")}
               </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={() => {
@@ -326,7 +321,7 @@ function LayoutRow({
                 }}
               >
                 <Copy />
-                Duplicate…
+                {t("layouts:page.menu.duplicate")}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
@@ -336,7 +331,7 @@ function LayoutRow({
                 }}
               >
                 <Trash2 />
-                Delete…
+                {t("layouts:page.menu.delete")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -347,24 +342,31 @@ function LayoutRow({
 }
 
 function UsedBy({ layout }: { layout: SharedLayoutSummary }) {
+  const { t } = useTranslation()
+  const format = useFormat()
   if (layout.profiles.length === 0) {
-    return <span className="text-muted-foreground">Not used</span>
+    return <span className="text-muted-foreground">{t("layouts:page.notUsed")}</span>
   }
-  const sorted = [...layout.profiles].sort((a, b) => a.profileName.localeCompare(b.profileName))
+  const sorted = [...layout.profiles].sort((a, b) => format.compare(a.profileName, b.profileName))
   return (
-    <ul className="flex flex-wrap gap-1" aria-label={`Profiles using ${layout.name}`}>
+    <ul
+      className="flex flex-wrap gap-1"
+      aria-label={t("layouts:page.profilesUsing", { layout: layout.name })}
+    >
       {sorted.map((p) => (
         <li key={p.profileId}>
           <Badge
             variant={p.isDefault ? "secondary" : "outline"}
             title={
               p.isDefault
-                ? `Default layout of ${p.profileName} for ${modelLabel(layout)}`
+                ? t("layouts:page.defaultOf", { profile: p.profileName, model: modelLabel(layout) })
                 : undefined
             }
           >
             {p.profileName}
-            {p.isDefault && <span className="text-muted-foreground">· default</span>}
+            {p.isDefault && (
+              <span className="text-muted-foreground">· {t("layouts:menu.defaultMark")}</span>
+            )}
           </Badge>
         </li>
       ))}
@@ -380,6 +382,7 @@ function AssignmentPopover({
   layout: SharedLayoutSummary
   onChanged: () => void
 }) {
+  const { t } = useTranslation()
   const { profiles } = useAppContext()
   const [pending, setPending] = useState<string | null>(null)
   const unknown = hasUnknownModel(layout)
@@ -390,7 +393,9 @@ function AssignmentPopover({
       if (assign) await api.assignLayout(profile.id, layout.id)
       else await api.unassignLayout(profile.id, layout.id)
       toast.success(
-        assign ? `Assigned to ${profile.name}` : `Removed from ${profile.name}; the layout is kept`,
+        assign
+          ? t("layouts:page.toast.assigned", { profile: profile.name })
+          : t("layouts:page.toast.unassigned", { profile: profile.name }),
       )
       onChanged()
     } catch (e) {
@@ -404,17 +409,21 @@ function AssignmentPopover({
       <Tooltip>
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
-            <Button variant="ghost" size="icon-sm" aria-label={`Profiles using ${layout.name}`}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t("layouts:page.profilesUsing", { layout: layout.name })}
+            >
               <Users />
             </Button>
           </PopoverTrigger>
         </TooltipTrigger>
-        <TooltipContent>Assign to profiles</TooltipContent>
+        <TooltipContent>{t("layouts:page.assignTooltip")}</TooltipContent>
       </Tooltip>
       <PopoverContent align="end" className="w-64 p-3">
         <fieldset className="grid gap-2">
           <legend className="mb-1 text-xs font-medium text-muted-foreground">
-            Profiles using {layout.name}
+            {t("layouts:page.profilesUsing", { layout: layout.name })}
           </legend>
           {profiles.profiles.map((profile) => {
             const checked = assigned.has(profile.id)
@@ -436,9 +445,7 @@ function AssignmentPopover({
             )
           })}
           {unknown && (
-            <p className="text-xs text-muted-foreground">
-              Its device model is unknown, so it cannot be assigned to more profiles.
-            </p>
+            <p className="text-xs text-muted-foreground">{t("layouts:page.unknownModelAssign")}</p>
           )}
         </fieldset>
       </PopoverContent>
@@ -465,59 +472,31 @@ function NameDialog({
   onSubmit: (name: string) => Promise<void>
 }) {
   const [name, setName] = useState(initial)
-  const [busy, setBusy] = useState(false)
   const trimmed = name.trim()
-  const submit = async () => {
-    if (!trimmed) return
-    setBusy(true)
-    try {
-      await onSubmit(trimmed)
-    } catch (e) {
-      toast.error(errorMessage(e))
-      setBusy(false)
-    }
-  }
   return (
-    <Dialog
+    <FormDialog
       open
-      onOpenChange={(open) => {
-        if (!open) onClose()
-      }}
+      size="compact"
+      title={title}
+      description={description}
+      submitLabel={confirmLabel}
+      canSubmit={Boolean(trimmed)}
+      dirty={name !== initial}
+      onClose={onClose}
+      onSubmit={() => onSubmit(trimmed)}
     >
-      <DialogContent className="sm:max-w-md">
-        <form
-          className="grid gap-4"
-          onSubmit={(e) => {
-            e.preventDefault()
-            void submit()
+      <div className="grid gap-1.5">
+        <Label htmlFor="layout-name">{label}</Label>
+        <Input
+          id="layout-name"
+          autoFocus
+          value={name}
+          onChange={(e) => {
+            setName(e.target.value)
           }}
-        >
-          <DialogHeader>
-            <DialogTitle>{title}</DialogTitle>
-            {description && <DialogDescription>{description}</DialogDescription>}
-          </DialogHeader>
-          <div className="grid gap-1.5">
-            <Label htmlFor="layout-name">{label}</Label>
-            <Input
-              id="layout-name"
-              autoFocus
-              value={name}
-              onChange={(e) => {
-                setName(e.target.value)
-              }}
-            />
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={!trimmed || busy}>
-              {confirmLabel}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+        />
+      </div>
+    </FormDialog>
   )
 }
 
@@ -534,75 +513,50 @@ function DeleteDialog({
   onClose: () => void
   onDeleted: () => void
 }) {
+  const { t } = useTranslation()
   const users = layout.profiles
-  const remove = async () => {
-    try {
-      await api.deleteSharedLayout(
-        layout.id,
-        users.map((p) => p.profileId),
-      )
-      toast.success("Layout deleted")
-      onDeleted()
-    } catch (e) {
-      toast.error(errorMessage(e))
-      onClose()
-    }
-  }
   return (
-    <AlertDialog
+    <DestructiveDialog
       open
       onOpenChange={(open) => {
         if (!open) onClose()
       }}
+      title={t("layouts:page.delete.title", { layout: layout.name })}
+      description={
+        users.length === 0
+          ? t("layouts:page.delete.unused")
+          : t("layouts:page.delete.usedBy", { count: users.length })
+      }
+      // Stays open, busy, until the backend answered; a refusal is shown inline.
+      onConfirm={async () => {
+        await api.deleteSharedLayout(
+          layout.id,
+          users.map((p) => p.profileId),
+        )
+        toast.success(t("layouts:page.toast.deleted"))
+        onDeleted()
+      }}
     >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete “{layout.name}”?</AlertDialogTitle>
-          <AlertDialogDescription asChild>
-            <div className="grid gap-2">
-              {users.length === 0 ? (
-                <p>No profile uses this layout. Its pages and keys are deleted.</p>
-              ) : (
-                <>
-                  <p>
-                    {users.length === 1 ? "This profile uses" : "These profiles use"} the layout:
-                  </p>
-                  <ul className="list-disc pl-5" aria-label="Profiles using the layout">
-                    {users.map((p) => (
-                      <li key={p.profileId}>
-                        {p.profileName}
-                        {p.isDefault ? " (default layout)" : ""}
-                      </li>
-                    ))}
-                  </ul>
-                  <p>
-                    They fall back to their other layouts. The profiles themselves are not deleted.
-                  </p>
-                </>
-              )}
-            </div>
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            className="bg-destructive text-white hover:bg-destructive/90"
-            onClick={(e) => {
-              // Closes once the backend answered.
-              e.preventDefault()
-              void remove()
-            }}
-          >
-            Delete
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+      {users.length > 0 && (
+        <div className="grid gap-2 text-sm text-muted-foreground">
+          <ul className="list-disc pl-5" aria-label={t("layouts:page.delete.listLabel")}>
+            {users.map((p) => (
+              <li key={p.profileId}>
+                {p.isDefault
+                  ? t("layouts:page.delete.defaultEntry", { profile: p.profileName })
+                  : p.profileName}
+              </li>
+            ))}
+          </ul>
+          <p>{t("layouts:page.delete.fallback", { count: users.length })}</p>
+        </div>
+      )}
+    </DestructiveDialog>
   )
 }
 
-/** Name, device model and (optionally) the profile to assign it to. */
-function NewLayoutDialog({
+/** Name, device model and (optionally) the profile to assign a new shared layout to. */
+function NewSharedLayoutDialog({
   open,
   onOpenChange,
   onCreated,
@@ -611,23 +565,26 @@ function NewLayoutDialog({
   onOpenChange: (open: boolean) => void
   onCreated: () => void
 }) {
+  // Mounted only while open, so every opening starts with an empty form.
+  if (!open) return null
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        {open && (
-          <NewLayoutForm
-            onCancel={() => {
-              onOpenChange(false)
-            }}
-            onCreated={onCreated}
-          />
-        )}
-      </DialogContent>
-    </Dialog>
+    <NewSharedLayoutForm
+      onCancel={() => {
+        onOpenChange(false)
+      }}
+      onCreated={onCreated}
+    />
   )
 }
 
-function NewLayoutForm({ onCancel, onCreated }: { onCancel: () => void; onCreated: () => void }) {
+function NewSharedLayoutForm({
+  onCancel,
+  onCreated,
+}: {
+  onCancel: () => void
+  onCreated: () => void
+}) {
+  const { t } = useTranslation()
   const { profiles, editingProfileId } = useAppContext()
   const selection = useContext(EditorSelectionContext)
   const { state: models } = useAsync(() => api.listDeviceModels(), "models")
@@ -636,39 +593,31 @@ function NewLayoutForm({ onCancel, onCreated }: { onCancel: () => void; onCreate
   const [name, setName] = useState("")
   const [model, setModel] = useState<string | null>(null)
   const [profile, setProfile] = useState(editingProfileId ?? NO_PROFILE)
-  const [busy, setBusy] = useState(false)
   // The model chosen in the toolbar, else the first supported one.
   const modelId =
     model ??
     (catalog.some((m) => m.id === selection?.modelId) ? selection?.modelId : ordered[0]?.id) ??
     null
   const trimmed = name.trim()
-  const submit = async () => {
-    if (!trimmed || !modelId) return
-    setBusy(true)
-    try {
-      await api.createSharedLayout(modelId, trimmed, profile === NO_PROFILE ? null : profile)
-      toast.success("Layout created")
-      onCreated()
-    } catch (e) {
-      toast.error(errorMessage(e))
-      setBusy(false)
-    }
-  }
   return (
-    <form
-      className="grid gap-4"
-      onSubmit={(e) => {
-        e.preventDefault()
-        void submit()
+    <FormDialog
+      open
+      size="compact"
+      title={t("layouts:page.create.title")}
+      description={t("layouts:page.create.description")}
+      submitLabel={t("layouts:page.create.submit")}
+      canSubmit={Boolean(trimmed && modelId)}
+      dirty={Boolean(trimmed)}
+      onClose={onCancel}
+      onSubmit={async () => {
+        if (!trimmed || !modelId) return
+        await api.createSharedLayout(modelId, trimmed, profile === NO_PROFILE ? null : profile)
+        toast.success(t("layouts:page.toast.created"))
+        onCreated()
       }}
     >
-      <DialogHeader>
-        <DialogTitle>New layout</DialogTitle>
-        <DialogDescription>An empty layout for one device model.</DialogDescription>
-      </DialogHeader>
       <div className="grid gap-1.5">
-        <Label htmlFor="new-layout-name">Name</Label>
+        <Label htmlFor="new-layout-name">{t("layouts:page.create.name")}</Label>
         <Input
           id="new-layout-name"
           autoFocus
@@ -679,19 +628,29 @@ function NewLayoutForm({ onCancel, onCreated }: { onCancel: () => void; onCreate
         />
       </div>
       <div className="grid gap-1.5">
-        <Label htmlFor="new-layout-model">Device model</Label>
+        <Label htmlFor="new-layout-model">{t("layouts:page.create.model")}</Label>
         {models.status === "error" ? (
-          <ErrorNotice error={models.error} />
+          <FieldError id="new-layout-model-error" message={errorMessage(models.error)} />
         ) : (
           <Select value={modelId ?? ""} onValueChange={setModel}>
             <SelectTrigger id="new-layout-model" className="w-full">
-              <SelectValue placeholder={models.status === "loading" ? "Loading…" : "Choose"} />
+              <SelectValue
+                placeholder={
+                  models.status === "loading"
+                    ? t("common:status.loading")
+                    : t("layouts:page.create.choose")
+                }
+              />
             </SelectTrigger>
             <SelectContent>
               {ordered.map((m) => (
                 <SelectItem key={m.id} value={m.id}>
                   {m.name}
-                  {!isSupported(m) && <span className="text-muted-foreground">(experimental)</span>}
+                  {!isSupported(m) && (
+                    <span className="text-muted-foreground">
+                      {t("layouts:page.create.experimental")}
+                    </span>
+                  )}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -699,13 +658,13 @@ function NewLayoutForm({ onCancel, onCreated }: { onCancel: () => void; onCreate
         )}
       </div>
       <div className="grid gap-1.5">
-        <Label htmlFor="new-layout-profile">Assign to profile</Label>
+        <Label htmlFor="new-layout-profile">{t("layouts:page.create.profile")}</Label>
         <Select value={profile} onValueChange={setProfile}>
           <SelectTrigger id="new-layout-profile" className="w-full">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={NO_PROFILE}>No profile (unassigned)</SelectItem>
+            <SelectItem value={NO_PROFILE}>{t("layouts:page.create.noProfile")}</SelectItem>
             {profiles.profiles.map((p) => (
               <SelectItem key={p.id} value={p.id}>
                 {p.name}
@@ -714,14 +673,6 @@ function NewLayoutForm({ onCancel, onCreated }: { onCancel: () => void; onCreate
           </SelectContent>
         </Select>
       </div>
-      <DialogFooter>
-        <Button type="button" variant="outline" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button type="submit" disabled={!trimmed || !modelId || busy}>
-          Create
-        </Button>
-      </DialogFooter>
-    </form>
+    </FormDialog>
   )
 }

@@ -99,6 +99,44 @@ describe("SecurityGate (main window)", () => {
   })
 })
 
+describe("SecurityGate locked screen", () => {
+  it("names the action in full and opens the unlock window again", async () => {
+    const user = userEvent.setup()
+    api.securityStatus.mockResolvedValue(view({}))
+    render(
+      <SecurityGate>
+        <p>Configuration studio</p>
+      </SecurityGate>,
+    )
+    const button = await screen.findByRole("button", { name: "Unlock DeckPilot" })
+    expect(screen.getByRole("heading", { name: "DeckPilot is locked" })).toBeInTheDocument()
+    expect(screen.queryByText("Configuration studio")).not.toBeInTheDocument()
+    api.openWindow.mockClear()
+    await user.click(button)
+    expect(api.openWindow).toHaveBeenCalledWith("security.unlock")
+  })
+})
+
+describe("password prompt layout", () => {
+  it("uses the shared header and the compact footer", async () => {
+    api.securityStatus.mockResolvedValue(view({ protection: "password", verification: "password" }))
+    const { container } = render(<UnlockWindow />)
+    await screen.findByLabelText("Password")
+    const footer = container.querySelector('[data-modal-part="footer"]')
+    expect(footer).toHaveClass("py-3")
+    expect(footer).not.toHaveClass("py-4")
+    // The shared header: the tile at the top, the heading at least as tall
+    // as the tile so a title and a one-line description fit beside it.
+    expect(container.querySelector('[data-modal-part="header"]')).toHaveClass("items-start")
+    expect(container.querySelector('[data-modal-part="heading"]')).toHaveClass(
+      "min-h-(--modal-icon)",
+      "justify-center",
+    )
+    // One reserved line for the inline error, nothing else below the field.
+    expect(container.querySelector('[data-modal-part="body"]')?.textContent).toBe("Password")
+  })
+})
+
 describe("security prompt windows", () => {
   it("offers a retry or a password when the system key could not be stored", async () => {
     const user = userEvent.setup()
@@ -135,7 +173,7 @@ describe("security prompt windows", () => {
     // Loaded: the password field replaces the loading state.
     await user.type(await screen.findByLabelText("Password"), "wrong one{Enter}")
     expect(screen.getByRole("alertdialog", { name: "DeckPilot is locked" })).toBeInTheDocument()
-    expect(await screen.findByRole("alert")).toHaveTextContent("the password is not correct")
+    expect(await screen.findByRole("alert")).toHaveTextContent("Incorrect password. Try again.")
     expect(screen.getByLabelText("Password")).toHaveValue("")
     expect(api.finishSecurityPrompt).not.toHaveBeenCalled()
     await user.type(screen.getByLabelText("Password"), "right one{Enter}")
@@ -143,6 +181,105 @@ describe("security prompt windows", () => {
       expect(api.finishSecurityPrompt).toHaveBeenCalledTimes(1)
     })
     expect(api.unlock).toHaveBeenLastCalledWith("right one")
+  })
+
+  describe("password prompt", () => {
+    async function prompt() {
+      api.securityStatus.mockResolvedValue(
+        view({ protection: "password", verification: "password" }),
+      )
+      render(<UnlockWindow />)
+      return screen.findByLabelText("Password")
+    }
+
+    it("shows a wrong password inline, linked to the field, and keeps the focus there", async () => {
+      const user = userEvent.setup()
+      api.unlock.mockRejectedValue("the password is not correct")
+      const field = await prompt()
+      expect(field).toHaveFocus()
+      expect(field).not.toHaveAttribute("aria-invalid")
+      await user.type(field, "wrong{Enter}")
+      const alert = await screen.findByRole("alert")
+      expect(alert).toHaveTextContent("Incorrect password. Try again.")
+      await waitFor(() => {
+        expect(field).toHaveFocus()
+      })
+      expect(field).toHaveAttribute("aria-invalid", "true")
+      expect(field).toHaveAttribute("aria-describedby", alert.id)
+      expect(field).toHaveAccessibleDescription("Incorrect password. Try again.")
+      // No boxed alert from the shell next to the inline message.
+      expect(screen.getAllByRole("alert")).toHaveLength(1)
+      // Repeated failures announce the message again.
+      await user.type(field, "again{Enter}")
+      await waitFor(() => {
+        expect(api.unlock).toHaveBeenCalledTimes(2)
+      })
+      expect(await screen.findByRole("alert")).toHaveTextContent("Incorrect password")
+      expect(api.finishSecurityPrompt).not.toHaveBeenCalled()
+    })
+
+    it("tells an unreachable agent apart from a wrong password and keeps the password", async () => {
+      const user = userEvent.setup()
+      api.unlock.mockRejectedValueOnce("the DeckPilot agent is not running")
+      const field = await prompt()
+      await user.type(field, "secret{Enter}")
+      expect(await screen.findByRole("alert")).toHaveTextContent(/can’t reach its background agent/)
+      expect(field).toHaveValue("secret")
+    })
+
+    it("never shows internal storage errors", async () => {
+      const user = userEvent.setup()
+      api.unlock.mockRejectedValueOnce(
+        "database error: file is not a database (/Users/x/deckpilot.db)",
+      )
+      const field = await prompt()
+      await user.type(field, "secret{Enter}")
+      const alert = await screen.findByRole("alert")
+      expect(alert).toHaveTextContent("Your configuration can’t be opened right now.")
+      expect(alert).not.toHaveTextContent(/deckpilot\.db|database error/)
+    })
+
+    it("does not submit an empty password", async () => {
+      const user = userEvent.setup()
+      const field = await prompt()
+      expect(screen.getByRole("button", { name: "Unlock" })).toBeDisabled()
+      await user.type(field, "{Enter}")
+      expect(api.unlock).not.toHaveBeenCalled()
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+    })
+
+    it("submits once while the password is checked", async () => {
+      const user = userEvent.setup()
+      let resolve: (value: null) => void = () => undefined
+      api.unlock.mockReturnValueOnce(
+        new Promise<null>((r) => {
+          resolve = r
+        }),
+      )
+      const field = await prompt()
+      await user.type(field, "secret{Enter}")
+      expect(field).toBeDisabled()
+      expect(screen.getByRole("button", { name: /Checking/ })).toBeDisabled()
+      await user.keyboard("{Enter}")
+      expect(api.unlock).toHaveBeenCalledTimes(1)
+      resolve(null)
+      await waitFor(() => {
+        expect(api.finishSecurityPrompt).toHaveBeenCalledTimes(1)
+      })
+    })
+
+    it("masks the password by default and shows it on request", async () => {
+      const user = userEvent.setup()
+      const field = await prompt()
+      await user.type(field, "secret")
+      expect(field).toHaveAttribute("type", "password")
+      await user.click(screen.getByRole("button", { name: "Show password" }))
+      expect(field).toHaveAttribute("type", "text")
+      expect(field).toHaveAttribute("spellcheck", "false")
+      await user.click(screen.getByRole("button", { name: "Hide password" }))
+      expect(field).toHaveAttribute("type", "password")
+      expect(api.unlock).not.toHaveBeenCalled()
+    })
   })
 
   it("unlocks a system key configuration with Touch ID after an automatic lock", async () => {

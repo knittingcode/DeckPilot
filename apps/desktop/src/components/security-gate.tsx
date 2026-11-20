@@ -3,8 +3,11 @@ import { LockKeyhole, TriangleAlert } from "lucide-react"
 import { type ReactNode, useCallback, useEffect, useState } from "react"
 
 import { SensitiveOperations } from "@/components/authentication"
+import { ModalIcon } from "@/components/modal-shell"
 import { ErrorNotice, Loading } from "@/components/page"
 import { Button } from "@/components/ui/button"
+import { useWindowChrome, windowDragHandlers } from "@/hooks/use-window-chrome"
+import { i18n, useTranslation } from "@/i18n"
 import { SECURITY_CHANGED_EVENT, api } from "@/lib/api"
 import { failureMessage } from "@/lib/failure"
 import { SecurityContext } from "@/lib/security-context"
@@ -31,12 +34,19 @@ export function SecurityGate({
   secondary?: boolean
   children: ReactNode
 }) {
+  const { t } = useTranslation()
   const [view, setView] = useState<SecurityView | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const refresh = useCallback(() => {
     api.securityStatus().then(setView, (e: unknown) => {
-      setError(failureMessage("The protection status could not be read", e, "Restart DeckPilot"))
+      setError(
+        failureMessage(
+          i18n.t("errors:security.statusUnreadable"),
+          e,
+          i18n.t("errors:next.restart"),
+        ),
+      )
     })
   }, [])
 
@@ -62,7 +72,13 @@ export function SecurityGate({
     } else {
       api.openWindow(promptWindow(view)).catch((e: unknown) => {
         // Without a prompt the user must at least see why.
-        setError(failureMessage("The unlock window did not open", e, "Restart DeckPilot"))
+        setError(
+          failureMessage(
+            i18n.t("errors:security.unlockWindowFailed"),
+            e,
+            i18n.t("errors:next.restart"),
+          ),
+        )
       })
     }
   }, [view, unlocked, secondary])
@@ -75,7 +91,7 @@ export function SecurityGate({
     return (
       <Centered>
         <TriangleAlert className="size-6 text-destructive" aria-hidden />
-        <h1 className="text-lg font-semibold">DeckPilot cannot open its configuration</h1>
+        <h1 className="text-lg font-semibold">{t("security:cannotOpen.title")}</h1>
         <ErrorNotice error={error} />
       </Centered>
     )
@@ -98,24 +114,43 @@ export function SecurityGate({
   // "Lock now"; the prompt window is open as well.
   return (
     <Centered>
-      <LockKeyhole className="size-6 text-muted-foreground" aria-hidden />
-      <h1 className="text-lg font-semibold">DeckPilot is locked</h1>
+      <ModalIcon icon={LockKeyhole} compact />
+      <div className="grid gap-1">
+        <h1 className="text-base leading-tight font-semibold">{t("security:locked.title")}</h1>
+        <p className="text-sm text-muted-foreground">{t("security:locked.resumes")}</p>
+      </div>
       <Button
+        className="mt-1"
         onClick={() => {
           api.openWindow(promptWindow(view)).catch((e: unknown) => {
-            setError(failureMessage("The unlock window did not open", e, "Restart DeckPilot"))
+            setError(
+              failureMessage(t("errors:security.unlockWindowFailed"), e, t("errors:next.restart")),
+            )
           })
         }}
       >
-        Unlock…
+        {t("security:locked.unlock")}
       </Button>
     </Centered>
   )
 }
 
+/**
+ * A full-window state without the app's content (locked, or the
+ * configuration cannot be opened). Its top strip stands in for the
+ * toolbar: on macOS the window has no native titlebar (`Overlay`), so the
+ * strip keeps it movable like the toolbar does.
+ */
 function Centered({ children }: { children: ReactNode }) {
+  const chrome = useWindowChrome()
   return (
-    <main className="flex min-h-svh flex-col items-center justify-center gap-3 p-6 text-center">
+    <main className="relative flex min-h-svh flex-col items-center justify-center gap-3 bg-background p-6 text-center">
+      <div
+        aria-hidden
+        data-slot="window-drag-strip"
+        className="absolute inset-x-0 top-0 h-(--titlebar-height)"
+        {...windowDragHandlers(chrome)}
+      />
       {children}
     </main>
   )

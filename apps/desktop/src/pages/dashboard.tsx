@@ -14,12 +14,16 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useAsync } from "@/hooks/use-async"
+import { type TranslationKey, useTranslation } from "@/i18n"
+import { useFormat } from "@/i18n/format"
 import { api } from "@/lib/api"
 import { toastFailure } from "@/lib/failure"
 import { type PageId, useAppContext } from "@/lib/app-context"
 import { dashboardCards } from "@/modules"
 
 export function DashboardPage() {
+  const { t } = useTranslation()
+  const format = useFormat()
   const { revision, profiles, refresh, agent, updates, navigate, openSettings, modules } =
     useAppContext()
   const { state } = useAsync(
@@ -34,12 +38,12 @@ export function DashboardPage() {
 
   const activate = (id: string) => {
     api.setActiveProfile(id).then(refresh, (e: unknown) => {
-      toastFailure("The profile was not activated", e)
+      toastFailure(t("workspace:dashboard.activateFailed"), e)
     })
   }
 
   return (
-    <Page title="Dashboard" description="What is running right now">
+    <Page title={t("workspace:dashboard.title")} description={t("workspace:dashboard.description")}>
       {state.status === "loading" && <Loading />}
       {state.status === "error" && <ErrorNotice error={state.error} />}
       {state.status === "ready" && (
@@ -47,17 +51,21 @@ export function DashboardPage() {
           {state.data[1].launch?.firstAfterUpdate && (
             <Alert>
               <Info />
-              <AlertTitle>DeckPilot was updated</AlertTitle>
+              <AlertTitle>{t("workspace:dashboard.updated.title")}</AlertTitle>
               <AlertDescription>
-                Updated from {state.data[1].launch.previousVersion} to{" "}
-                {state.data[1].launch.currentVersion}. Your configuration was kept.
+                {t("workspace:dashboard.updated.description", {
+                  from: state.data[1].launch.previousVersion,
+                  to: state.data[1].launch.currentVersion,
+                })}
               </AlertDescription>
             </Alert>
           )}
           {updates?.available && (
             <Alert>
               <Download />
-              <AlertTitle>Version {updates.available.version} is available</AlertTitle>
+              <AlertTitle>
+                {t("workspace:dashboard.updateAvailable", { version: updates.available.version })}
+              </AlertTitle>
               <AlertDescription>
                 <Button
                   size="sm"
@@ -67,23 +75,27 @@ export function DashboardPage() {
                     openSettings("updates")
                   }}
                 >
-                  View update <ArrowRight />
+                  {t("workspace:dashboard.viewUpdate")} <ArrowRight />
                 </Button>
               </AlertDescription>
             </Alert>
           )}
           <AgentCompatibilityNotice />
 
-          <SettingsSection title="Now">
+          <SettingsSection title={t("workspace:dashboard.now")}>
             <SettingsGroup>
               <SettingsRow
-                label="Active profile"
-                description="The profile that runs on the device."
+                label={t("workspace:dashboard.activeProfile")}
+                description={t("workspace:dashboard.activeProfileHint")}
               >
                 {profiles.profiles.length > 0 ? (
                   <Select value={activeId ?? undefined} onValueChange={activate}>
-                    <SelectTrigger size="sm" className="w-56" aria-label="Active profile">
-                      <SelectValue placeholder="Choose a profile" />
+                    <SelectTrigger
+                      size="sm"
+                      className="w-56"
+                      aria-label={t("workspace:dashboard.activeProfile")}
+                    >
+                      <SelectValue placeholder={t("workspace:dashboard.chooseProfile")} />
                     </SelectTrigger>
                     <SelectContent>
                       {profiles.profiles.map((profile) => (
@@ -100,7 +112,7 @@ export function DashboardPage() {
                       navigate("profiles")
                     }}
                   >
-                    Create a profile
+                    {t("workspace:dashboard.createProfile")}
                   </Button>
                 )}
               </SettingsRow>
@@ -115,22 +127,23 @@ export function DashboardPage() {
           <SettingsSection
             title={
               <>
-                Background agent <AgentBadge />
+                {t("workspace:dashboard.agent")} <AgentBadge />
               </>
             }
             description={
               agent?.status &&
-              `Version ${agent.status.version} · ${agent.status.devices.length} device${
-                agent.status.devices.length === 1 ? "" : "s"
-              }`
+              t("workspace:dashboard.agentSummary", {
+                version: agent.status.version,
+                count: agent.status.devices.length,
+              })
             }
           >
             <SettingsGroup>
               {agent && !agent.running && <AgentStopped />}
               {agent?.status &&
                 (agent.status.devices.length === 0 ? (
-                  <EmptyState variant="plain" title="No Stream Deck detected">
-                    Connect a supported device; it is picked up automatically.
+                  <EmptyState variant="plain" title={t("workspace:dashboard.noDevice.title")}>
+                    {t("workspace:dashboard.noDevice.description")}
                   </EmptyState>
                 ) : (
                   agent.status.devices.map((device) => (
@@ -141,14 +154,28 @@ export function DashboardPage() {
           </SettingsSection>
 
           {active.status === "ready" && active.data && (
-            <SettingsSection title={`In ${active.data.profile.name}`}>
+            <SettingsSection
+              title={t("workspace:dashboard.inProfile", { profile: active.data.profile.name })}
+            >
               <SettingsGroup>
                 {(
                   [
-                    ["Actions", active.data.profile.actions.length, "actions"],
-                    ["Workflows", active.data.profile.workflows.length, "workflows"],
-                    ["Layouts", active.data.profile.layouts.length, "designer"],
-                  ] as [string, number, PageId][]
+                    [
+                      "workspace:dashboard.counts.actions",
+                      active.data.profile.actions.length,
+                      "actions",
+                    ],
+                    [
+                      "workspace:dashboard.counts.workflows",
+                      active.data.profile.workflows.length,
+                      "workflows",
+                    ],
+                    [
+                      "workspace:dashboard.counts.layouts",
+                      active.data.profile.layouts.length,
+                      "designer",
+                    ],
+                  ] as [TranslationKey, number, PageId][]
                 ).map(([label, count, target]) => (
                   <button
                     key={label}
@@ -158,8 +185,10 @@ export function DashboardPage() {
                       navigate(target)
                     }}
                   >
-                    <span className="flex-1 font-medium">{label}</span>
-                    <span className="text-muted-foreground tabular-nums">{count}</span>
+                    <span className="flex-1 font-medium">{t(label)}</span>
+                    <span className="text-muted-foreground tabular-nums">
+                      {format.number(count)}
+                    </span>
                     <ChevronRight aria-hidden className="size-4 text-muted-foreground" />
                   </button>
                 ))}

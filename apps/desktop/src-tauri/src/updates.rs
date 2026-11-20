@@ -341,8 +341,9 @@ fn begin<R: Runtime>(app: &AppHandle<R>, phase: Phase) -> CommandResult<()> {
         let manager = app.state::<UpdateManager>();
         let mut inner = manager.lock();
         if !may_start(inner.phase) {
-            return Err(CommandError::Invalid(
-                "another update operation is in progress".into(),
+            return Err(CommandError::invalid(
+                "updateBusy",
+                "another update operation is in progress",
             ));
         }
         inner.phase = phase;
@@ -467,8 +468,12 @@ const READ_TIMEOUT: Duration = Duration::from_secs(60);
 impl Source {
     /// The release source of a build whose provider is `active`.
     fn release(channel: Channel, active: &ActiveProvider) -> CommandResult<Self> {
-        let not_configured =
-            || CommandError::Invalid("updates are not configured in this build".into());
+        let not_configured = || {
+            CommandError::invalid(
+                "updatesNotConfigured",
+                "updates are not configured in this build",
+            )
+        };
         let key = PUBLIC_KEY
             .filter(|_| configured())
             .ok_or_else(not_configured)?;
@@ -877,7 +882,7 @@ pub(crate) async fn download<R: Runtime>(app: &AppHandle<R>) -> CommandResult<()
         .lock()
         .update
         .clone()
-        .ok_or_else(|| CommandError::Invalid("no update is available".into()))?;
+        .ok_or_else(|| CommandError::invalid("noUpdate", "no update is available"))?;
     begin(app, Phase::Downloading)?;
     {
         // A download starts from the beginning and replaces an earlier one.
@@ -945,7 +950,12 @@ pub(crate) async fn replace<R: Runtime>(app: &AppHandle<R>) -> CommandResult<()>
         let inner = manager.lock();
         match (inner.update.clone(), inner.bytes.clone()) {
             (Some(update), Some(bytes)) => (update, bytes),
-            _ => return Err(CommandError::Invalid("download the update first".into())),
+            _ => {
+                return Err(CommandError::invalid(
+                    "downloadFirst",
+                    "download the update first",
+                ));
+            }
         }
     };
     let paths = app.state::<AppState>().paths.clone();
@@ -955,9 +965,9 @@ pub(crate) async fn replace<R: Runtime>(app: &AppHandle<R>) -> CommandResult<()>
     if let Ok(connection) = &current
         && let Some(running) = connection.running_executions().filter(|n| *n > 0)
     {
-        let message = crate::agent::running_workflows_message(running);
-        set_phase(app, Phase::Ready, Some(message.clone()));
-        return Err(CommandError::Invalid(message));
+        let error = crate::agent::running_workflows_error(running);
+        set_phase(app, Phase::Ready, Some(error.to_string()));
+        return Err(error);
     }
     begin(app, Phase::Installing)?;
     log(app, &format!("installing update {}", update.version));
@@ -1185,10 +1195,10 @@ pub fn set_update_preferences<R: Runtime>(
         let manager = app.state::<UpdateManager>();
         let mut inner = manager.lock();
         if !may_start(inner.phase) {
-            return Err(CommandError::Invalid(
+            return Err(CommandError::invalid(
+                "channelBusy",
                 "the update channel cannot change while an update is being checked, \
-                 downloaded or installed"
-                    .into(),
+                 downloaded or installed",
             ));
         }
         inner.available = None;

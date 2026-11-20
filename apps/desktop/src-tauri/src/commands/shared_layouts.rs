@@ -70,8 +70,9 @@ fn stored(state: &AppState, id: LayoutId) -> CommandResult<StoredLayout> {
 
 fn checked_name(name: &str) -> CommandResult<String> {
     match name.trim() {
-        "" => Err(CommandError::Invalid(
-            "layout name must not be empty".into(),
+        "" => Err(CommandError::invalid(
+            "layoutNameEmpty",
+            "layout name must not be empty",
         )),
         name => Ok(name.to_owned()),
     }
@@ -85,22 +86,36 @@ fn check_assignable(
     layout: &DeviceLayout,
 ) -> CommandResult<()> {
     if state.catalog.get(&layout.model).is_none() {
-        return Err(CommandError::Invalid(format!(
-            "this DeckPilot does not know the device model of “{}” ({}); it is kept, but cannot \
-             be used",
-            layout.name, layout.model
-        )));
+        return Err(CommandError::invalid_with(
+            "unknownDeviceModel",
+            format!(
+                "this DeckPilot does not know the device model of “{}” ({}); it is kept, but \
+                 cannot be used",
+                layout.name, layout.model
+            ),
+            [
+                ("layout", layout.name.clone().into()),
+                ("model", layout.model.to_string().into()),
+            ],
+        ));
     }
     let store = state.store()?;
     let current = load_profile(&store, profile)?;
     let mut icons: std::collections::BTreeSet<_> = current.icons.iter().map(|i| i.id).collect();
     icons.extend(layout.shown_icons());
     if icons.len() > deckpilot_core::MAX_ICONS {
-        return Err(CommandError::Invalid(format!(
-            "with “{}”, the profile would show more than {} icons",
-            layout.name,
-            deckpilot_core::MAX_ICONS
-        )));
+        return Err(CommandError::invalid_with(
+            "tooManyIcons",
+            format!(
+                "with “{}”, the profile would show more than {} icons",
+                layout.name,
+                deckpilot_core::MAX_ICONS
+            ),
+            [
+                ("layout", layout.name.clone().into()),
+                ("max", deckpilot_core::MAX_ICONS.into()),
+            ],
+        ));
     }
     Ok(())
 }

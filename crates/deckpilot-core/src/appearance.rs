@@ -20,6 +20,7 @@ use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::IconId;
+use crate::assets::{AssetRef, Background};
 
 /// Largest width and height of a stored icon, in pixels.
 pub const MAX_ICON_SIZE: u32 = 256;
@@ -32,47 +33,10 @@ pub const MAX_ICON_NAME: usize = 64;
 
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 
-/// An RGB colour, written as `#rrggbb`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Color(pub [u8; 3]);
-
-impl Color {
-    pub fn rgb(self) -> [u8; 3] {
-        self.0
-    }
-
-    /// Parses `#rrggbb` (either case).
-    pub fn parse(value: &str) -> Result<Self, String> {
-        let invalid = || format!("“{value}” is not a colour; use #rrggbb");
-        let hex = value.trim().strip_prefix('#').ok_or_else(invalid)?;
-        if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(invalid());
-        }
-        let channel =
-            |index: usize| u8::from_str_radix(&hex[index..index + 2], 16).map_err(|_| invalid());
-        Ok(Self([channel(0)?, channel(2)?, channel(4)?]))
-    }
-}
-
-impl fmt::Display for Color {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let [r, g, b] = self.0;
-        write!(f, "#{r:02x}{g:02x}{b:02x}")
-    }
-}
-
-impl Serialize for Color {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
-impl<'de> Deserialize<'de> for Color {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = String::deserialize(deserializer)?;
-        Self::parse(&value).map_err(serde::de::Error::custom)
-    }
-}
+/// Colours live with the device descriptions (a model's
+/// [`DefaultAppearance`] uses them); re-exported here, where they always
+/// were.
+pub use deckpilot_device::{Color, DefaultAppearance, KeyBackground};
 
 /// Size of a key's title text.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -106,22 +70,321 @@ pub enum IconFit {
     Crop,
 }
 
-/// A key's icon: one of the profile's [`Icon`]s.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// A key's icon: one of the profile's [`Icon`]s (My Icons, by its UUID,
+/// as stored before the library existed) or an icon of the shared library
+/// (`deckpilot.<name>`, `<plugin>.<name>`; [`crate::assets`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IconRef {
-    pub id: IconId,
+    pub id: AssetRef,
     #[serde(default)]
     pub fit: IconFit,
 }
 
-/// How a key looks. Every field is optional; unset fields keep the look of
-/// the key's style.
+/// How a key's title is laid out (`docs/key-text.md`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextMode {
+    /// Wrapped at word boundaries (inside a word only when the word alone
+    /// is wider than the line), explicit line breaks kept, at most
+    /// `maxLines` lines; the last one ends with `…` when text is left.
+    /// The default: what keys did before text modes existed.
+    #[default]
+    Wrap,
+    /// One line at the preferred size, never smaller; what does not fit
+    /// is cut with `…` or clipped ([`TextOverflow`]).
+    SingleLine,
+    /// The preferred size, made smaller only as far as needed (never below
+    /// `minSize`, never larger), on one line or several ([`FitLines`]).
+    AutoFit,
+    /// One line that scrolls sideways when it is wider than the key, with
+    /// a pause at the start and at the end.
+    Marquee,
+}
+
+/// What a single line does with text wider than the key.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextOverflow {
+    /// Cut with `…`.
+    #[default]
+    Ellipsis,
+    /// Cut at the edge of the text area.
+    Clip,
+}
+
+/// Whether auto fit keeps the text on one line or may wrap it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FitLines {
+    #[default]
+    SingleLine,
+    Multiline,
+}
+
+/// Horizontal alignment of the title's lines.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextAlign {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+
+/// Smallest and largest text size, in points (pixels on a 72 px key; see
+/// [`TextAppearance::size`]).
+pub const TEXT_SIZE_POINTS: (u8, u8) = (6, 32);
+/// Smallest auto-fit size when none is set, in points.
+pub const DEFAULT_MIN_TEXT_POINTS: u8 = 7;
+/// Most lines a wrapped or fitted title may have.
+pub const MAX_TEXT_LINES: u8 = 6;
+/// Slowest and fastest marquee speed, in device pixels per second.
+pub const MARQUEE_SPEED: (u16, u16) = (5, 240);
+/// Marquee speed when none is set, in device pixels per second.
+pub const DEFAULT_MARQUEE_SPEED: u16 = 30;
+/// Longest marquee pause, in milliseconds.
+pub const MAX_MARQUEE_PAUSE_MS: u16 = 10_000;
+/// Marquee pause at the start and the end when none is set, in
+/// milliseconds.
+pub const DEFAULT_MARQUEE_PAUSE_MS: u16 = 1_000;
+
+/// How a key's title is laid out. Every field is optional; fields that do
+/// not belong to the mode are kept (so switching modes back and forth keeps
+/// them) but not used. See `docs/key-text.md` for the rules.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextAppearance {
+    #[serde(default)]
+    pub mode: TextMode,
+    /// Preferred size in points: pixels on a 72 px key, scaled with the
+    /// key's shorter side on other keys. `None`: [`KeyAppearance::font_size`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u8>,
+    /// Horizontal alignment. Default: centred.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<TextAlign>,
+    /// Wrap and multiline auto fit: most lines. `None`: as many as the key
+    /// has room for next to its icon (two with an icon, three without).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_lines: Option<u8>,
+    /// Single line: what happens to text that is too wide. Default: `…`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overflow: Option<TextOverflow>,
+    /// Auto fit: the smallest size in points. Default:
+    /// [`DEFAULT_MIN_TEXT_POINTS`] (never above the preferred size).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_size: Option<u8>,
+    /// Auto fit: one line or several. Default: one line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit: Option<FitLines>,
+    /// Marquee: device pixels per second. Default:
+    /// [`DEFAULT_MARQUEE_SPEED`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<u16>,
+    /// Marquee: pause at the start and at the end, in milliseconds.
+    /// Default: [`DEFAULT_MARQUEE_PAUSE_MS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pause: Option<u16>,
+}
+
+impl TextAppearance {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    /// `None` when nothing is set.
+    pub fn normalized(self) -> Option<Self> {
+        (!self.is_default()).then_some(self)
+    }
+
+    /// The preferred size in points, if one is set (clamped to
+    /// [`TEXT_SIZE_POINTS`]).
+    pub fn size_points(&self) -> Option<u8> {
+        self.size
+            .map(|size| size.clamp(TEXT_SIZE_POINTS.0, TEXT_SIZE_POINTS.1))
+    }
+
+    /// The auto-fit minimum in points (clamped to [`TEXT_SIZE_POINTS`]).
+    pub fn min_points(&self) -> u8 {
+        self.min_size
+            .unwrap_or(DEFAULT_MIN_TEXT_POINTS)
+            .clamp(TEXT_SIZE_POINTS.0, TEXT_SIZE_POINTS.1)
+    }
+
+    /// The most lines, if set (clamped to 1–[`MAX_TEXT_LINES`]).
+    pub fn max_lines(&self) -> Option<usize> {
+        self.max_lines
+            .map(|lines| usize::from(lines.clamp(1, MAX_TEXT_LINES)))
+    }
+
+    pub fn align(&self) -> TextAlign {
+        self.align.unwrap_or_default()
+    }
+
+    pub fn overflow(&self) -> TextOverflow {
+        self.overflow.unwrap_or_default()
+    }
+
+    pub fn fit(&self) -> FitLines {
+        self.fit.unwrap_or_default()
+    }
+
+    /// The marquee speed in device pixels per second (clamped).
+    pub fn speed(&self) -> u16 {
+        self.speed
+            .unwrap_or(DEFAULT_MARQUEE_SPEED)
+            .clamp(MARQUEE_SPEED.0, MARQUEE_SPEED.1)
+    }
+
+    /// The marquee pause in milliseconds (clamped).
+    pub fn pause_ms(&self) -> u16 {
+        self.pause
+            .unwrap_or(DEFAULT_MARQUEE_PAUSE_MS)
+            .min(MAX_MARQUEE_PAUSE_MS)
+    }
+
+    /// Refuses values out of range, so the app reports them when saving.
+    /// (The renderer clamps them anyway, e.g. in a hand-edited import.)
+    pub fn check(&self) -> Result<(), String> {
+        let (least, most) = TEXT_SIZE_POINTS;
+        for (name, value) in [
+            ("text size", self.size),
+            ("minimum text size", self.min_size),
+        ] {
+            if let Some(value) = value
+                && !(least..=most).contains(&value)
+            {
+                return Err(format!("{name} must be {least} to {most} points"));
+            }
+        }
+        if let Some(lines) = self.max_lines
+            && !(1..=MAX_TEXT_LINES).contains(&lines)
+        {
+            return Err(format!("a title has 1 to {MAX_TEXT_LINES} lines"));
+        }
+        if let Some(speed) = self.speed
+            && !(MARQUEE_SPEED.0..=MARQUEE_SPEED.1).contains(&speed)
+        {
+            return Err(format!(
+                "scrolling speed must be {} to {} pixels per second",
+                MARQUEE_SPEED.0, MARQUEE_SPEED.1
+            ));
+        }
+        if let Some(pause) = self.pause
+            && pause > MAX_MARQUEE_PAUSE_MS
+        {
+            return Err(format!(
+                "a scrolling pause is at most {} seconds",
+                MAX_MARQUEE_PAUSE_MS / 1000
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A title font, by the id stored in [`KeyAppearance::font_family`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TitleFont {
+    pub id: &'static str,
+    /// Its name as the app shows it (a font's name is not translated).
+    pub name: &'static str,
+}
+
+/// The fonts a key title may use: only fonts built into the renderer, so
+/// every device and the app's previews draw them alike. The one source of
+/// the list (the app asks for it; the renderer has faces for each).
+pub const TITLE_FONTS: &[TitleFont] = &[TitleFont {
+    id: "inter",
+    name: "Inter",
+}];
+
+/// The font of titles that set none.
+pub const DEFAULT_TITLE_FONT: &str = "inter";
+
+/// A title font id (see [`TITLE_FONTS`]). Any string loads and is kept as
+/// it is (a layout from a later version may name a font this one does not
+/// have; it is drawn with the default font); [`KeyAppearance::check`]
+/// refuses ids that are not in the list.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct FontFamilyId(pub String);
+
+impl FontFamilyId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The font, when it is one of [`TITLE_FONTS`].
+    pub fn font(&self) -> Option<&'static TitleFont> {
+        TITLE_FONTS.iter().find(|font| font.id == self.0)
+    }
+}
+
+/// Parts of a key title's look that the editor offers (a plugin action may
+/// support only some, [`ActionTitle::supports`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TitleFeature {
+    /// Show or hide the title.
+    Visibility,
+    /// Top, middle, bottom.
+    Position,
+    /// Font family and size.
+    Font,
+    /// Bold, italic, underline.
+    Style,
+    /// Text colour.
+    Color,
+    /// Wrap, single line, auto fit, scrolling, alignment.
+    Layout,
+}
+
+/// What an action type says about its keys' titles (plugin API 1.8
+/// `contributes.actions[].title`): suggestions only. The user's own title
+/// and look always win; nothing here is stored in a layout.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionTitle {
+    /// The title a key shows while neither the key nor the action has a
+    /// label of its own and the action still has its type's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+    /// The action sets the title while it runs (its state's label).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dynamic: bool,
+    /// Suggested position, used while the key sets none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<TitleAlign>,
+    /// The parts of the look the editor offers; `None`: all of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports: Option<Vec<TitleFeature>>,
+}
+
+impl ActionTitle {
+    /// Whether the editor offers `feature` for keys of this action.
+    pub fn supports(&self, feature: TitleFeature) -> bool {
+        self.supports
+            .as_ref()
+            .is_none_or(|features| features.contains(&feature))
+    }
+}
+
+/// How a key looks. Every field is optional; unset colours are the device
+/// model's defaults ([`DefaultAppearance`]), whatever the kind of key.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyAppearance {
+    /// A colour, `transparent` (the display shows through) or an asset of
+    /// the library (`asset:<ref>`: a gradient or an image). `None`: the
+    /// model's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub background: Option<Color>,
+    pub background: Option<Background>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_color: Option<Color>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -134,16 +397,103 @@ pub struct KeyAppearance {
     pub show_title: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<IconRef>,
+    /// How the title is laid out: wrapped, on one line, fitted or
+    /// scrolling (`docs/key-text.md`). `None`: wrapped, as before text
+    /// modes existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<TextAppearance>,
+    /// The title's font ([`TITLE_FONTS`]). `None`: [`DEFAULT_TITLE_FONT`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<FontFamilyId>,
+    /// Bold title (`Some(false)`: explicitly not bold). `None`: not bold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    /// Italic title. `None`: upright.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
+    /// Underlined title. `None`: not underlined.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underline: Option<bool>,
 }
 
 impl KeyAppearance {
     pub fn is_default(&self) -> bool {
-        self == &Self::default()
+        let mut plain = self.clone();
+        plain.text = plain.text.filter(|text| !text.is_default());
+        plain == Self::default()
     }
 
-    /// `None` when nothing is set, so default appearances are not stored.
-    pub fn normalized(self) -> Option<Self> {
+    /// `None` when nothing is set, so default appearances are not stored;
+    /// a text appearance that sets nothing is dropped too.
+    pub fn normalized(mut self) -> Option<Self> {
+        self.text = self.text.and_then(TextAppearance::normalized);
         (!self.is_default()).then_some(self)
+    }
+
+    /// The text appearance, the default (wrapped) when none is set.
+    pub fn text(&self) -> TextAppearance {
+        self.text.unwrap_or_default()
+    }
+
+    /// Checks the text appearance's values (see [`TextAppearance::check`])
+    /// and the font.
+    pub fn check(&self) -> Result<(), String> {
+        if let Some(family) = &self.font_family
+            && family.font().is_none()
+        {
+            return Err(format!("`{}` is not a title font", family.as_str()));
+        }
+        self.text.as_ref().map_or(Ok(()), TextAppearance::check)
+    }
+
+    pub fn is_bold(&self) -> bool {
+        self.bold.unwrap_or(false)
+    }
+
+    pub fn is_italic(&self) -> bool {
+        self.italic.unwrap_or(false)
+    }
+
+    pub fn is_underlined(&self) -> bool {
+        self.underline.unwrap_or(false)
+    }
+
+    /// The title font: the key's when it is a known one, else the default.
+    pub fn font(&self) -> &'static TitleFont {
+        self.font_family
+            .as_ref()
+            .and_then(FontFamilyId::font)
+            .unwrap_or(&TITLE_FONTS[0])
+    }
+
+    /// This look with an action type's title suggestions filled in where
+    /// the key sets nothing (the key's own values win). For the face only;
+    /// never stored.
+    #[must_use]
+    pub fn with_suggestions(mut self, title: &ActionTitle) -> Self {
+        if self.title_align.is_none() {
+            self.title_align = title.position;
+        }
+        self
+    }
+
+    /// The profile images (My Icons) the look shows: its icon and its
+    /// background image, each once.
+    pub fn profile_icons(&self) -> impl Iterator<Item = IconId> + '_ {
+        let icon = self.icon.as_ref().and_then(|icon| icon.id.profile_icon());
+        let background = self
+            .background
+            .as_ref()
+            .and_then(Background::asset)
+            .and_then(AssetRef::profile_icon)
+            .filter(|background| Some(*background) != icon);
+        icon.into_iter().chain(background)
+    }
+
+    /// Whether the look shows the profile image `id` (as icon or
+    /// background).
+    pub fn shows_icon(&self, id: IconId) -> bool {
+        self.profile_icons().any(|shown| shown == id)
     }
 
     pub fn shows_title(&self) -> bool {
@@ -307,13 +657,34 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn backgrounds_unset_transparent_and_coloured_stay_apart() {
+        let unset: KeyAppearance = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(unset.background, None);
+        let transparent: KeyAppearance =
+            serde_json::from_value(serde_json::json!({"background": "transparent"})).unwrap();
+        assert_eq!(transparent.background, Some(Background::TRANSPARENT));
+        assert_eq!(
+            serde_json::to_value(&transparent).unwrap(),
+            serde_json::json!({"background": "transparent"})
+        );
+        assert!(!transparent.is_default(), "an explicit transparent is kept");
+        // An explicit black or white is stored as such, never as "unset".
+        for colour in ["#000000", "#ffffff"] {
+            let look: KeyAppearance =
+                serde_json::from_value(serde_json::json!({"background": colour})).unwrap();
+            assert_eq!(serde_json::to_value(&look).unwrap()["background"], colour);
+            assert!(look.clone().normalized().is_some());
+        }
+    }
+
+    #[test]
     fn appearances_serialize_compactly_and_default_to_nothing() {
         let appearance = KeyAppearance {
-            background: Some(Color([0, 0, 255])),
+            background: Some(Color([0, 0, 255]).into()),
             font_size: Some(FontSize::Large),
             show_title: Some(false),
             icon: Some(IconRef {
-                id: IconId::new(),
+                id: IconId::new().into(),
                 fit: IconFit::Crop,
             }),
             ..KeyAppearance::default()
@@ -333,6 +704,207 @@ pub(crate) mod tests {
         let id = IconId::new();
         let reference: IconRef = serde_json::from_value(serde_json::json!({"id": id})).unwrap();
         assert_eq!(reference.fit, IconFit::Fit);
+    }
+
+    #[test]
+    fn title_typography_is_optional_and_round_trips() {
+        // A look stored before typography existed loads unchanged.
+        let old: KeyAppearance = serde_json::from_value(serde_json::json!({
+            "textColor": "#ffcc00", "titleAlign": "top", "showTitle": false
+        }))
+        .unwrap();
+        assert_eq!(old.font_family, None);
+        assert_eq!((old.bold, old.italic, old.underline), (None, None, None));
+        assert!(!old.is_bold() && !old.is_italic() && !old.is_underlined());
+        assert_eq!(old.font().id, DEFAULT_TITLE_FONT);
+        let value = serde_json::to_value(&old).unwrap();
+        for field in ["fontFamily", "bold", "italic", "underline"] {
+            assert!(value.get(field).is_none(), "{field} is not written");
+        }
+
+        let look = KeyAppearance {
+            font_family: Some(FontFamilyId::new("inter")),
+            bold: Some(true),
+            italic: Some(false),
+            underline: Some(true),
+            ..KeyAppearance::default()
+        };
+        let value = serde_json::to_value(&look).unwrap();
+        assert_eq!(value["fontFamily"], "inter");
+        assert_eq!(value["bold"], true);
+        // An explicit "not italic" is kept: it can beat a suggestion.
+        assert_eq!(value["italic"], false);
+        let back: KeyAppearance = serde_json::from_value(value).unwrap();
+        assert_eq!(back, look);
+        assert!(back.check().is_ok());
+        assert!(back.normalized().is_some());
+    }
+
+    #[test]
+    fn unknown_title_fonts_are_kept_but_refused_when_saved() {
+        let later: KeyAppearance =
+            serde_json::from_value(serde_json::json!({"fontFamily": "someday-sans"})).unwrap();
+        // Kept as it is (a later version's font) and drawn with Inter.
+        assert_eq!(
+            serde_json::to_value(&later).unwrap()["fontFamily"],
+            "someday-sans"
+        );
+        assert_eq!(later.font().id, "inter");
+        assert!(later.check().unwrap_err().contains("someday-sans"));
+        // Every listed font is known.
+        for font in TITLE_FONTS {
+            assert_eq!(FontFamilyId::new(font.id).font(), Some(font));
+        }
+    }
+
+    #[test]
+    fn suggestions_fill_in_only_unset_fields() {
+        let title = ActionTitle {
+            position: Some(TitleAlign::Top),
+            ..ActionTitle::default()
+        };
+        assert_eq!(
+            KeyAppearance::default()
+                .with_suggestions(&title)
+                .title_align,
+            Some(TitleAlign::Top)
+        );
+        let own = KeyAppearance {
+            title_align: Some(TitleAlign::Bottom),
+            ..KeyAppearance::default()
+        };
+        assert_eq!(
+            own.with_suggestions(&title).title_align,
+            Some(TitleAlign::Bottom)
+        );
+        assert!(title.supports(TitleFeature::Color));
+        let limited = ActionTitle {
+            supports: Some(vec![TitleFeature::Position]),
+            ..ActionTitle::default()
+        };
+        assert!(limited.supports(TitleFeature::Position));
+        assert!(!limited.supports(TitleFeature::Color));
+        // Sent without empty fields.
+        assert_eq!(
+            serde_json::to_value(ActionTitle::default()).unwrap(),
+            serde_json::json!({})
+        );
+    }
+
+    #[test]
+    fn text_appearances_default_to_wrapping_and_are_not_stored_empty() {
+        // Layouts written before text modes: no `text`, wrapped.
+        let old: KeyAppearance =
+            serde_json::from_value(serde_json::json!({"fontSize": "large"})).unwrap();
+        assert_eq!(old.text, None);
+        assert_eq!(old.text().mode, TextMode::Wrap);
+        assert!(serde_json::to_value(&old).unwrap().get("text").is_none());
+        // A text appearance that sets nothing is not stored.
+        let empty = KeyAppearance {
+            text: Some(TextAppearance::default()),
+            ..KeyAppearance::default()
+        };
+        assert!(empty.is_default());
+        assert_eq!(empty.normalized(), None);
+        let only_mode: TextAppearance = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(only_mode, TextAppearance::default());
+
+        let text = TextAppearance {
+            mode: TextMode::Marquee,
+            size: Some(14),
+            align: Some(TextAlign::Left),
+            speed: Some(60),
+            pause: Some(500),
+            ..TextAppearance::default()
+        };
+        let look = KeyAppearance {
+            text: Some(text),
+            ..KeyAppearance::default()
+        };
+        let value = serde_json::to_value(&look).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"text": {
+                "mode": "marquee", "size": 14, "align": "left", "speed": 60, "pause": 500
+            }})
+        );
+        let back: KeyAppearance = serde_json::from_value(value).unwrap();
+        assert_eq!(back, look);
+        assert_eq!(back.clone().normalized(), Some(look));
+        for (json, mode) in [
+            ("wrap", TextMode::Wrap),
+            ("singleLine", TextMode::SingleLine),
+            ("autoFit", TextMode::AutoFit),
+            ("marquee", TextMode::Marquee),
+        ] {
+            let text: TextAppearance =
+                serde_json::from_value(serde_json::json!({"mode": json})).unwrap();
+            assert_eq!(text.mode, mode);
+        }
+        assert!(
+            serde_json::from_value::<TextAppearance>(serde_json::json!({"mode": "spin"})).is_err()
+        );
+    }
+
+    #[test]
+    fn text_values_are_checked_and_clamped() {
+        let defaults = TextAppearance::default();
+        assert_eq!(defaults.min_points(), DEFAULT_MIN_TEXT_POINTS);
+        assert_eq!(defaults.speed(), DEFAULT_MARQUEE_SPEED);
+        assert_eq!(defaults.pause_ms(), DEFAULT_MARQUEE_PAUSE_MS);
+        assert_eq!(defaults.align(), TextAlign::Center);
+        assert_eq!(defaults.overflow(), TextOverflow::Ellipsis);
+        assert_eq!(defaults.fit(), FitLines::SingleLine);
+        assert!(defaults.check().is_ok());
+        for bad in [
+            TextAppearance {
+                size: Some(2),
+                ..defaults
+            },
+            TextAppearance {
+                min_size: Some(99),
+                ..defaults
+            },
+            TextAppearance {
+                max_lines: Some(0),
+                ..defaults
+            },
+            TextAppearance {
+                max_lines: Some(9),
+                ..defaults
+            },
+            TextAppearance {
+                speed: Some(1),
+                ..defaults
+            },
+            TextAppearance {
+                pause: Some(60_000),
+                ..defaults
+            },
+        ] {
+            assert!(bad.check().is_err(), "{bad:?}");
+            assert!(
+                KeyAppearance {
+                    text: Some(bad),
+                    ..KeyAppearance::default()
+                }
+                .check()
+                .is_err()
+            );
+        }
+        let wild = TextAppearance {
+            size: Some(200),
+            min_size: Some(1),
+            max_lines: Some(40),
+            speed: Some(9999),
+            pause: Some(u16::MAX),
+            ..defaults
+        };
+        assert_eq!(wild.size_points(), Some(TEXT_SIZE_POINTS.1));
+        assert_eq!(wild.min_points(), TEXT_SIZE_POINTS.0);
+        assert_eq!(wild.max_lines(), Some(usize::from(MAX_TEXT_LINES)));
+        assert_eq!(wild.speed(), MARQUEE_SPEED.1);
+        assert_eq!(wild.pause_ms(), MAX_MARQUEE_PAUSE_MS);
     }
 
     #[test]

@@ -9,23 +9,44 @@
 // manifest the way the agent does. Installed plugins come with the
 // agent's own normalization (`GrantInfo`) and are only described here.
 
+import { type TranslationKey, i18n } from "@/i18n"
+
 import type { GrantInfo, ManifestPermission, PermissionTier } from "./types"
 
 export type RiskTier = PermissionTier
 
-export const TIERS: { tier: RiskTier; label: string; description: string }[] = [
+const TIER_KEYS = [
   {
     tier: "high",
-    label: "High risk",
-    description: "Access to secrets or to devices on your local network.",
+    label: "permissions:tier.high.label",
+    description: "permissions:tier.high.description",
   },
   {
     tier: "medium",
-    label: "Medium risk",
-    description: "Data leaves this computer or the plugin reads your configuration.",
+    label: "permissions:tier.medium.label",
+    description: "permissions:tier.medium.description",
   },
-  { tier: "low", label: "Low risk", description: "Limited to the plugin's own resources." },
-]
+  {
+    tier: "low",
+    label: "permissions:tier.low.label",
+    description: "permissions:tier.low.description",
+  },
+] as const satisfies { tier: RiskTier; label: TranslationKey; description: TranslationKey }[]
+
+/** The risk tiers, highest first, with their names in the window's language. */
+export function tiers(): { tier: RiskTier; label: string; description: string }[] {
+  return TIER_KEYS.map(({ tier, label, description }) => ({
+    tier,
+    label: i18n.t(label),
+    description: i18n.t(description),
+  }))
+}
+
+/** The name of a risk tier ("High risk"). */
+export function tierLabel(tier: RiskTier): string {
+  const entry = TIER_KEYS.find((t) => t.tier === tier)
+  return entry ? i18n.t(entry.label) : tier
+}
 
 /** The key of the grant `privateNetwork: true` adds. */
 export const PRIVATE_NETWORK_KEY = "network:private-network"
@@ -47,12 +68,15 @@ export interface Grant {
 /** `https://host[:port]`, or a description of a wildcard pattern. */
 export function describeHost(pattern: string): string {
   if (pattern.startsWith("*.")) {
-    return `any subdomain of ${pattern.slice(2)} (https://*.${pattern.slice(2)})`
+    return i18n.t("permissions:host.wildcard", { domain: pattern.slice(2) })
   }
   return `https://${pattern}`
 }
 
-const ALL_METHODS = "any HTTP method the plugin chooses (GET, HEAD, POST, PUT, PATCH, DELETE)"
+/** The methods a network grant allows, in words. */
+function methodsText(methods: string[] | undefined): string {
+  return methods?.length ? methods.join(", ") : i18n.t("permissions:grant.allMethods")
+}
 
 interface Facts {
   methods?: string[]
@@ -65,7 +89,16 @@ interface Facts {
   privateNetwork?: boolean
 }
 
-/** Title, detail and tier of one grant key. */
+/** "Read the active profile", "… project", "… profile and project". */
+function profileTitle(read: string[] | undefined): string {
+  const profile = read?.includes("profile") ?? false
+  const project = read?.includes("project") ?? false
+  if (profile && project) return i18n.t("permissions:grant.profile.titleBoth")
+  if (project) return i18n.t("permissions:grant.profile.titleProject")
+  return i18n.t("permissions:grant.profile.titleProfile")
+}
+
+/** Title, detail and tier of one grant key, in the window's language. */
 function describe(key: string, facts: Facts): Omit<Grant, "key" | "justification"> {
   const colon = key.indexOf(":")
   const kind = colon < 0 ? key : key.slice(0, colon)
@@ -76,14 +109,12 @@ function describe(key: string, facts: Facts): Omit<Grant, "key" | "justification
         const setting = key.slice(USER_ORIGIN_PREFIX.length)
         return {
           tier: facts.privateNetwork ? "high" : "medium",
-          title: `Connect to a server you enter in its setting “${setting}”`,
+          title: i18n.t("permissions:grant.userOrigin.title", { setting }),
           detail: [
-            "None until you enter one: DeckPilot then asks you to allow exactly that server, and asks again whenever the setting changes.",
-            `HTTPS only. Methods: ${facts.methods?.length ? facts.methods.join(", ") : ALL_METHODS}.`,
-            facts.pathPrefix ? "You may limit it to a path (https://server/api)." : null,
-            facts.privateNetwork
-              ? "The server may be on your local network, only if you allow that for it separately."
-              : null,
+            i18n.t("permissions:grant.userOrigin.none"),
+            i18n.t("permissions:grant.httpsMethods", { methods: methodsText(facts.methods) }),
+            facts.pathPrefix ? i18n.t("permissions:grant.userOrigin.pathPrefix") : null,
+            facts.privateNetwork ? i18n.t("permissions:grant.userOrigin.privateNetwork") : null,
           ]
             .filter(Boolean)
             .join(" "),
@@ -92,87 +123,85 @@ function describe(key: string, facts: Facts): Omit<Grant, "key" | "justification
       if (key === PRIVATE_NETWORK_KEY) {
         return {
           tier: "high",
-          title: "Connect to devices on your local network that you add",
-          detail:
-            "Only hosts you enter yourself in the plugin's settings; none until you add one. Plain HTTP is allowed for them.",
+          title: i18n.t("permissions:grant.privateNetwork.title"),
+          detail: i18n.t("permissions:grant.privateNetwork.detail"),
         }
       }
       return {
         tier: "medium",
-        title: `Send data to and receive data from ${describeHost(target)}`,
-        detail: `HTTPS only. Methods: ${facts.methods?.length ? facts.methods.join(", ") : ALL_METHODS}. Whatever the plugin can read can be sent to this host.`,
+        title: i18n.t("permissions:grant.network.title", { host: describeHost(target) }),
+        detail: i18n.t("permissions:grant.network.detail", { methods: methodsText(facts.methods) }),
       }
     case "credentials":
       return {
         tier: "high",
-        title: `Use the secret “${target}” that you store for it`,
-        detail:
-          "DeckPilot adds the secret to the plugin's requests, only to the hosts declared for this secret. The plugin gets a reference, not the value.",
+        title: i18n.t("permissions:grant.credentials.title", { secret: target }),
+        detail: i18n.t("permissions:grant.credentials.detail"),
       }
     case "notifications":
       return {
         tier: "low",
-        title: "Show notifications",
+        title: i18n.t("permissions:grant.notifications.title"),
         detail: facts.routed
-          ? "Prefixed with the plugin's name. On the desktop and in the status bar as you set it in the plugin's settings."
-          : "Prefixed with the plugin's name.",
+          ? i18n.t("permissions:grant.notifications.detailRouted")
+          : i18n.t("permissions:grant.notifications.detail"),
       }
     case "profile":
       return {
         tier: "medium",
-        title: `Read the active ${facts.read?.length ? facts.read.join(" and ") : "profile"}`,
-        detail: "Id, key and name only; not their contents.",
+        title: profileTitle(facts.read),
+        detail: i18n.t("permissions:grant.profile.detail"),
       }
     case "variables":
       return {
         tier: "medium",
         title: target.endsWith(".*")
-          ? `Read the variables under ${target.slice(0, -2)}`
-          : `Read the variable ${target}`,
-        detail: "Sensitive variables of other owners and secret values are never readable.",
+          ? i18n.t("permissions:grant.variables.titlePrefix", { prefix: target.slice(0, -2) })
+          : i18n.t("permissions:grant.variables.title", { name: target }),
+        detail: i18n.t("permissions:grant.variables.detail"),
       }
     case "storage":
       return {
         tier: "low",
         title:
           facts.quotaKb === undefined
-            ? "Store its own data"
-            : `Store up to ${String(facts.quotaKb)} KB of its own data`,
-        detail: "Raises the plugin's own storage above the default.",
+            ? i18n.t("permissions:grant.storage.title")
+            : i18n.t("permissions:grant.storage.titleQuota", { count: facts.quotaKb }),
+        detail: i18n.t("permissions:grant.storage.detail"),
       }
     case "openUrl":
       if (key.startsWith(OPEN_USER_ORIGIN_PREFIX)) {
         const setting = key.slice(OPEN_USER_ORIGIN_PREFIX.length)
         return {
           tier: "medium",
-          title: `Open pages of the server you enter in its setting “${setting}” in your browser`,
-          detail:
-            "None until you enter a server and allow exactly it. Only https pages of that server, and only in an action you start (a key, a gesture or the app, or a workflow you start); never from a schedule, an event or startup. At most one every 2 seconds.",
+          title: i18n.t("permissions:grant.openUserOrigin.title", { setting }),
+          detail: i18n.t("permissions:grant.openUserOrigin.detail"),
         }
       }
       return {
         tier: "medium",
-        title: `Open links to ${describeHost(target)} in your browser`,
-        detail:
-          "Only https pages of this host, and only in an action you start (a key, a gesture or the app, or a workflow you start); never from a schedule, an event or startup. At most one every 2 seconds.",
+        title: i18n.t("permissions:grant.openUrl.title", { host: describeHost(target) }),
+        detail: i18n.t("permissions:grant.openUrl.detail"),
       }
     case "background":
       return {
         tier: "medium",
-        title: "Run in the background",
+        title: i18n.t("permissions:grant.background.title"),
         detail:
           facts.minIntervalSeconds === undefined
-            ? "The plugin's process keeps running."
-            : `Timers at most every ${String(facts.minIntervalSeconds)} seconds; the plugin's process keeps running.`,
+            ? i18n.t("permissions:grant.background.detail")
+            : i18n.t("permissions:grant.background.detailInterval", {
+                count: facts.minIntervalSeconds,
+              }),
       }
     case "device":
       return {
         tier: "low",
         title:
           target === "icons"
-            ? "Stream Deck: use its own icons on keys"
-            : "Stream Deck: change what its own keys show",
-        detail: "Only keys bound to the plugin's own actions.",
+            ? i18n.t("permissions:grant.device.titleIcons")
+            : i18n.t("permissions:grant.device.titleState"),
+        detail: i18n.t("permissions:grant.device.detail"),
       }
     default:
       return { tier: "medium", title: key, detail: "" }
@@ -268,8 +297,10 @@ export function grantOfInfo(info: GrantInfo): Grant {
 }
 
 export function grantsByTier<T extends { tier: RiskTier }>(grants: T[]) {
-  return TIERS.map((tier) => ({
-    ...tier,
-    grants: grants.filter((g) => g.tier === tier.tier),
-  })).filter((group) => group.grants.length > 0)
+  return tiers()
+    .map((tier) => ({
+      ...tier,
+      grants: grants.filter((g) => g.tier === tier.tier),
+    }))
+    .filter((group) => group.grants.length > 0)
 }

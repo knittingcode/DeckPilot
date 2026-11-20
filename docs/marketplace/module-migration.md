@@ -163,9 +163,18 @@ are not part of the default set.
   normal dialog.
 - **Explicit choices stick.** Uninstalling or disabling a bundled plugin
   writes a tombstone. Seeding checks the tombstone first and never
-  reinstalls or re-enables. Only the user can undo it, by installing or
-  enabling the plugin again in Settings › Plugins, which clears the
-  tombstone.
+  reinstalls or re-enables. Only the user can undo it: enabling a disabled
+  plugin again, or **Restore** under *Removed DeckPilot plugins* in
+  Settings › Plugins › Installed for an uninstalled one
+  (`restoreBundledPlugin`, protocol 15), which clears the tombstone and
+  installs the pinned copy from the application bundle exactly as seeding
+  does (the same pin and seal checks, low-tier grants only, the rest
+  waiting for consent), with the settings and credentials kept at the
+  uninstall. A refused check changes nothing: the tombstone stays. A broken
+  bundled copy gets **Reinstall** there, the same request: the broken copy
+  is replaced by the bundle's, with its settings, credentials, grants and
+  revocations, and no tombstone is written. The module's routing goes from
+  `PluginWithdrawn` back to `Plugin` with the restore.
 
 ### 4.3 Bundled classes
 

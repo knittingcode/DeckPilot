@@ -10,20 +10,24 @@ import { toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
 import { describeLayout } from "@/lib/format"
 import type { AgentCapability, DeviceInfo } from "@/lib/types"
+import { type TranslationKey, Trans, useTranslation } from "@/i18n"
+import { useFormat } from "@/i18n/format"
 
 /** The agent's state as an inline status: running, stopped or being checked. */
 export function AgentBadge() {
+  const { t } = useTranslation()
   const { agent } = useAppContext()
-  if (!agent) return <InlineStatus>Checking…</InlineStatus>
+  if (!agent) return <InlineStatus>{t("devices:agent.badge.checking")}</InlineStatus>
   return agent.running ? (
-    <InlineStatus tone="positive">Running</InlineStatus>
+    <InlineStatus tone="positive">{t("devices:agent.badge.running")}</InlineStatus>
   ) : (
-    <InlineStatus tone="negative">Stopped</InlineStatus>
+    <InlineStatus tone="negative">{t("devices:agent.badge.stopped")}</InlineStatus>
   )
 }
 
 /** Start button and explanation shown while the agent is not running. */
 export function AgentStopped() {
+  const { t } = useTranslation()
   const { agent, setAgent } = useAppContext()
   const [busy, setBusy] = useState(false)
 
@@ -32,9 +36,13 @@ export function AgentStopped() {
     try {
       const connection = await api.startAgent()
       setAgent(connection)
-      if (!connection.running) toast.error("The agent did not start. Check its log for details.")
+      if (!connection.running) toast.error(t("devices:agent.stoppedPanel.notStartedCheckLog"))
     } catch (e) {
-      toastFailure("The agent did not start", e, "Check its log in Settings › Diagnostics")
+      toastFailure(
+        t("devices:agent.stoppedPanel.notStarted"),
+        e,
+        t("devices:agent.checkLogInDiagnostics"),
+      )
     } finally {
       setBusy(false)
     }
@@ -42,18 +50,17 @@ export function AgentStopped() {
 
   return (
     <div className="grid gap-2 py-3">
-      <p className="text-sm text-muted-foreground">
-        The background agent handles devices and runs actions. It keeps running when this window is
-        closed.
-      </p>
+      <p className="text-sm text-muted-foreground">{t("devices:agent.stoppedPanel.explanation")}</p>
       <div>
         <Button size="sm" disabled={busy || !agent?.canStart} onClick={() => void start()}>
-          <Play /> Start agent
+          <Play /> {t("devices:agent.stoppedPanel.start")}
         </Button>
         {agent && !agent.canStart && (
           <p className="mt-2 text-xs text-muted-foreground">
-            The agent executable was not found next to this application. Start
-            <code className="mx-1">deckpilot-agent</code>manually.
+            <Trans
+              i18nKey="devices:agent.stoppedPanel.notFound"
+              components={{ code: <code className="mx-1" /> }}
+            />
           </p>
         )}
       </div>
@@ -62,29 +69,27 @@ export function AgentStopped() {
 }
 
 /** Features the running agent's protocol does not have, as the user knows them. */
-const MISSING_FEATURES: Partial<Record<AgentCapability, string>> = {
-  encryptedDatabase: "the encrypted configuration",
-  backgroundExecutions: "background workflow runs and their history",
-  notifications: "workflow notifications",
+const MISSING_FEATURES: Partial<Record<AgentCapability, TranslationKey>> = {
+  encryptedDatabase: "devices:compatibility.feature.encryptedDatabase",
+  backgroundExecutions: "devices:compatibility.feature.backgroundExecutions",
+  notifications: "devices:compatibility.feature.notifications",
 }
 
 /** How a distribution channel is named to the user. */
-const CHANNEL_NAMES: Record<string, string> = {
-  github: "GitHub Releases",
-  homebrew: "Homebrew",
-  winget: "WinGet",
-  apt: "the APT repository",
-  flathub: "Flathub",
-  mac_app_store: "the Mac App Store",
-  microsoft_store: "the Microsoft Store",
-}
-
-function channelName(channel: string): string {
-  return CHANNEL_NAMES[channel] ?? channel
+const CHANNEL_NAMES: Record<string, TranslationKey> = {
+  github: "devices:compatibility.channel.github",
+  homebrew: "devices:compatibility.channel.homebrew",
+  winget: "devices:compatibility.channel.winget",
+  apt: "devices:compatibility.channel.apt",
+  flathub: "devices:compatibility.channel.flathub",
+  mac_app_store: "devices:compatibility.channel.macAppStore",
+  microsoft_store: "devices:compatibility.channel.microsoftStore",
 }
 
 /** Shown when the running agent is not the one shipped with this app. */
 export function AgentCompatibilityNotice() {
+  const { t } = useTranslation()
+  const format = useFormat()
   const { agent, setAgent } = useAppContext()
   const [busy, setBusy] = useState(false)
   const [confirming, setConfirming] = useState(false)
@@ -95,9 +100,13 @@ export function AgentCompatibilityNotice() {
     setBusy(true)
     try {
       setAgent(await api.restartAgent(interruptRunning))
-      toast.success("The agent was restarted")
+      toast.success(t("devices:compatibility.restarted"))
     } catch (e) {
-      toastFailure("The agent was not restarted", e, "Check its log in Settings › Diagnostics")
+      toastFailure(
+        t("devices:compatibility.notRestarted"),
+        e,
+        t("devices:agent.checkLogInDiagnostics"),
+      )
     } finally {
       setBusy(false)
     }
@@ -107,7 +116,11 @@ export function AgentCompatibilityNotice() {
       ? []
       : Object.entries(MISSING_FEATURES)
           .filter(([capability]) => !agent.capabilities?.includes(capability as AgentCapability))
-          .map(([, label]) => label)
+          .map(([, label]) => t(label))
+  const channelName = (channel: string) => {
+    const key = CHANNEL_NAMES[channel]
+    return key ? t(key) : channel
+  }
   const required = compatibility.type === "updateRequired"
   const otherInstallation = compatibility.type === "otherDistribution"
   return (
@@ -115,35 +128,33 @@ export function AgentCompatibilityNotice() {
       <TriangleAlert />
       <AlertTitle>
         {required
-          ? "The running agent is too old for this app"
+          ? t("devices:compatibility.title.updateRequired")
           : otherInstallation
-            ? "The running agent belongs to another installation"
-            : "The running agent does not match this app"}
+            ? t("devices:compatibility.title.otherInstallation")
+            : t("devices:compatibility.title.mismatch")}
       </AlertTitle>
       <AlertDescription>
         <p>
-          {otherInstallation ? (
-            <>
-              The agent was installed from {channelName(compatibility.agent)}, this app from{" "}
-              {channelName(compatibility.app)}. DeckPilot works only with the agent of its own
-              installation; restarting replaces it with this app&apos;s agent.
-            </>
-          ) : (
-            <>
-              Agent {compatibility.agent}, app {compatibility.app}.{" "}
-              {required
-                ? "Nothing can be configured until it is replaced by the agent of this app."
-                : "Restart the agent so both run the same version."}
-            </>
-          )}
+          {otherInstallation
+            ? t("devices:compatibility.otherInstallation", {
+                agent: channelName(compatibility.agent),
+                app: channelName(compatibility.app),
+              })
+            : `${t("devices:compatibility.versions", {
+                agent: compatibility.agent,
+                app: compatibility.app,
+              })} ${
+                required
+                  ? t("devices:compatibility.replaceRequired")
+                  : t("devices:compatibility.restartToMatch")
+              }`}
         </p>
-        {missing.length > 0 && <p>Until then these are unavailable: {missing.join(", ")}.</p>}
-        {running > 0 && (
+        {missing.length > 0 && (
           <p>
-            {running === 1 ? "A workflow is" : `${running} workflows are`} running in the agent.
-            Restarting now interrupts {running === 1 ? "it" : "them"}; the history records that.
+            {t("devices:compatibility.unavailable", { features: format.list(missing, "unit") })}
           </p>
         )}
+        {running > 0 && <p>{t("devices:compatibility.running", { count: running })}</p>}
         <div className="mt-2 flex gap-2">
           {running > 0 && !confirming ? (
             <Button
@@ -153,7 +164,7 @@ export function AgentCompatibilityNotice() {
                 setConfirming(true)
               }}
             >
-              <RotateCw /> Restart agent…
+              <RotateCw /> {t("devices:compatibility.restartEllipsis")}
             </Button>
           ) : (
             <Button
@@ -162,7 +173,10 @@ export function AgentCompatibilityNotice() {
               disabled={busy}
               onClick={() => void restart(running > 0)}
             >
-              <RotateCw /> {running > 0 ? "Interrupt workflows and restart" : "Restart agent"}
+              <RotateCw />{" "}
+              {running > 0
+                ? t("devices:compatibility.interruptAndRestart")
+                : t("devices:compatibility.restart")}
             </Button>
           )}
           {confirming && (
@@ -174,7 +188,7 @@ export function AgentCompatibilityNotice() {
                 setConfirming(false)
               }}
             >
-              Wait for them
+              {t("devices:compatibility.wait")}
             </Button>
           )}
         </div>
@@ -184,25 +198,27 @@ export function AgentCompatibilityNotice() {
 }
 
 export function RefreshDevicesButton() {
+  const { t } = useTranslation()
   return (
     <Button
       variant="outline"
       size="sm"
       onClick={() => {
         api.refreshDevices().then(
-          () => toast.success("Devices refreshed"),
+          () => toast.success(t("devices:refresh.done")),
           (e: unknown) => {
-            toastFailure("The devices were not refreshed", e, "Check that the agent is running")
+            toastFailure(t("devices:refresh.failed"), e, t("devices:refresh.next"))
           },
         )
       }}
     >
-      <RefreshCw /> Refresh devices
+      <RefreshCw /> {t("devices:refresh.label")}
     </Button>
   )
 }
 
 export function DeviceRow({ device, action }: { device: DeviceInfo; action?: React.ReactNode }) {
+  const { t } = useTranslation()
   const connected = device.state === "connected"
   const layout = device.layout
   // A row of a list: separated from its neighbours by the list, not boxed.
@@ -214,17 +230,17 @@ export function DeviceRow({ device, action }: { device: DeviceInfo; action?: Rea
           {device.id.serial}
         </span>
         <InlineStatus tone={connected ? "positive" : "neutral"}>
-          {connected ? "Connected" : "Disconnected"}
+          {connected ? t("devices:detail.connected") : t("devices:detail.disconnected")}
         </InlineStatus>
         <span className="text-caption text-muted-foreground">
-          {device.source === "mock" ? "Simulated" : "USB"}
+          {device.source === "mock" ? t("devices:detail.simulated") : t("devices:row.usb")}
         </span>
         <div className="flex-1" />
         {action}
       </div>
       <p className="text-caption text-muted-foreground">
         {describeLayout(layout)}
-        {connected && device.page && ` · showing page “${device.page}”`}
+        {connected && device.page && ` · ${t("devices:row.showingPage", { page: device.page })}`}
       </p>
       {layout.type === "invalid" && (
         <ul className="list-disc pl-5 text-xs text-destructive">
@@ -239,13 +255,18 @@ export function DeviceRow({ device, action }: { device: DeviceInfo; action?: Rea
 
 /** Compact connection state for the titlebar; opens the agent settings. */
 export function AgentIndicator({ onOpen }: { onOpen: () => void }) {
+  const { t } = useTranslation()
   const { agent } = useAppContext()
   const running = agent?.running ?? false
-  const label = !agent ? "Checking the agent" : running ? "Agent running" : "Agent stopped"
+  const label = !agent
+    ? t("devices:indicator.checking")
+    : running
+      ? t("devices:agent.state.running")
+      : t("devices:agent.state.stopped")
   return (
     <button
       type="button"
-      aria-label={`${label}, open agent settings`}
+      aria-label={t("devices:indicator.openSettings", { label })}
       title={label}
       className="flex size-(--titlebar-control) shrink-0 items-center justify-center rounded-md hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
       onClick={onOpen}

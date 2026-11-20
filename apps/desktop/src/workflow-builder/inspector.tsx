@@ -12,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Trans, type TranslationKey, useTranslation } from "@/i18n"
 import { initialValue } from "@/lib/parameters"
 import type {
   ErrorPolicy,
@@ -79,9 +80,10 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 }
 
 export function IssueList({ issues }: { issues: GraphIssue[] }) {
+  const { t } = useTranslation()
   if (issues.length === 0) return null
   return (
-    <ul className="grid gap-1.5" aria-label="Problems">
+    <ul className="grid gap-1.5" aria-label={t("workflows:inspector.problems")}>
       {issues.map((issue, index) => (
         <li key={index} className="flex gap-1.5 text-xs">
           {issue.severity === "error" ? (
@@ -122,14 +124,15 @@ export interface InspectorProps {
 
 /** Configuration of the selected node. */
 export function NodeInspector(props: InspectorProps) {
+  const { t } = useTranslation()
   const { node, issues, onChange, onDelete } = props
   return (
     <div className="grid grid-cols-[minmax(0,1fr)]">
       <div className="grid grid-cols-[minmax(0,1fr)] gap-3 px-4 py-3">
         <div className="flex items-start gap-2">
           <div className="grid flex-1 gap-0.5">
-            <h2 className="text-sm font-semibold">{FLOW_TITLE[node.type]}</h2>
-            <p className="text-xs text-muted-foreground">{FLOW_DESCRIPTION[node.type]}</p>
+            <h2 className="text-sm font-semibold">{t(FLOW_TITLE[node.type])}</h2>
+            <p className="text-xs text-muted-foreground">{t(FLOW_DESCRIPTION[node.type])}</p>
           </div>
           {node.type !== "trigger" && (
             <Button
@@ -137,24 +140,24 @@ export function NodeInspector(props: InspectorProps) {
               size="icon"
               className="size-7"
               onClick={onDelete}
-              aria-label="Delete node"
+              aria-label={t("workflows:inspector.deleteNode")}
             >
               <Trash2 />
             </Button>
           )}
         </div>
-        <Field label="Label" htmlFor="node-label">
+        <Field label={t("workflows:inspector.label")} htmlFor="node-label">
           <Input
             id="node-label"
             value={node.label ?? ""}
-            placeholder="Default title"
+            placeholder={t("workflows:inspector.labelPlaceholder")}
             onChange={(e) => {
               const label = e.target.value
               onChange((n) => ({ ...n, label: label || undefined }))
             }}
           />
         </Field>
-        <Field label="Node id" hint="Used to refer to this node's outputs.">
+        <Field label={t("workflows:inspector.nodeId")} hint={t("workflows:inspector.nodeIdHint")}>
           <code className="rounded bg-muted px-2 py-1 font-mono text-xs">{node.id}</code>
         </Field>
         <IssueList issues={issues} />
@@ -166,6 +169,7 @@ export function NodeInspector(props: InspectorProps) {
 }
 
 function KindEditor(props: InspectorProps) {
+  const { t } = useTranslation()
   const { node, onChange } = props
   switch (node.type) {
     case "action":
@@ -180,8 +184,8 @@ function KindEditor(props: InspectorProps) {
       return <SetVariableEditor {...props} />
     case "loop":
       return (
-        <Section title="Loop">
-          <Field label="Workflow" htmlFor="loop-workflow">
+        <Section title={t("workflows:node.title.loop")}>
+          <Field label={t("workflows:inspector.workflow")} htmlFor="loop-workflow">
             <Select
               value={node.workflow}
               onValueChange={(workflow) => {
@@ -200,7 +204,11 @@ function KindEditor(props: InspectorProps) {
               </SelectContent>
             </Select>
           </Field>
-          <Field label="Times" htmlFor="loop-times" hint={`1 to ${MAX_LOOP_ITERATIONS}`}>
+          <Field
+            label={t("workflows:inspector.loop.times")}
+            htmlFor="loop-times"
+            hint={t("workflows:inspector.loop.timesHint", { max: MAX_LOOP_ITERATIONS })}
+          >
             <Input
               id="loop-times"
               type="number"
@@ -217,11 +225,14 @@ function KindEditor(props: InspectorProps) {
       )
     case "delay":
       return (
-        <Section title="Delay">
+        <Section title={t("workflows:node.title.delay")}>
           <Field
-            label="Seconds"
+            label={t("workflows:inspector.delay.seconds")}
             htmlFor="delay-seconds"
-            hint={`${formatMs(node.ms)}; at most ${MAX_DELAY_MS / 60000} minutes`}
+            hint={t("workflows:inspector.delay.hint", {
+              duration: formatMs(node.ms, t),
+              count: MAX_DELAY_MS / 60000,
+            })}
           >
             <Input
               id="delay-seconds"
@@ -267,6 +278,7 @@ function setParameterMode(
 }
 
 function ActionEditor({ graph, node, lookup, projects, values, onChange }: InspectorProps) {
+  const { t } = useTranslation()
   if (node.type !== "action") return null
   const { action, type } = actionOf(node, lookup)
   const outputs = outputOptions(graph, node.id, lookup)
@@ -277,8 +289,8 @@ function ActionEditor({ graph, node, lookup, projects, values, onChange }: Inspe
   }
   return (
     <>
-      <Section title="Action">
-        <Field label="Action" htmlFor="node-action">
+      <Section title={t("workflows:node.title.action")}>
+        <Field label={t("workflows:node.title.action")} htmlFor="node-action">
           <Select
             value={action ? node.action : undefined}
             onValueChange={(id) => {
@@ -288,7 +300,7 @@ function ActionEditor({ graph, node, lookup, projects, values, onChange }: Inspe
             }}
           >
             <SelectTrigger id="node-action" className="w-full">
-              <SelectValue placeholder="The action no longer exists" />
+              <SelectValue placeholder={t("workflows:node.actionGone")} />
             </SelectTrigger>
             <SelectContent>
               {lookup.actions.map((a) => (
@@ -302,7 +314,7 @@ function ActionEditor({ graph, node, lookup, projects, values, onChange }: Inspe
         {type?.description && <p className="text-xs text-muted-foreground">{type.description}</p>}
       </Section>
       {type && type.parameters.length > 0 && (
-        <Section title="Parameters">
+        <Section title={t("workflows:inspector.parameters")}>
           {type.parameters.map((parameter) => {
             const mode = parameterMode(node, parameter.key)
             // A resource comes only from a variable that holds one.
@@ -333,20 +345,20 @@ function ActionEditor({ graph, node, lookup, projects, values, onChange }: Inspe
                   >
                     <SelectTrigger
                       className="h-7 w-36 text-xs"
-                      aria-label={`${parameter.label} source`}
+                      aria-label={t("workflows:inspector.source", { label: parameter.label })}
                     >
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="action">Action’s value</SelectItem>
-                      <SelectItem value="fixed">Value for this node</SelectItem>
-                      <SelectItem value="mapped">From earlier nodes or variables</SelectItem>
+                      <SelectItem value="action">{t("workflows:inspector.mode.action")}</SelectItem>
+                      <SelectItem value="fixed">{t("workflows:inspector.mode.fixed")}</SelectItem>
+                      <SelectItem value="mapped">{t("workflows:inspector.mode.mapped")}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 {mode === "fixed" && (
                   <ParameterField
-                    spec={{ ...parameter, label: "Value" }}
+                    spec={{ ...parameter, label: t("workflows:inspector.value") }}
                     value={node.overrides?.[parameter.key] ?? initialValue(parameter)}
                     projects={projects}
                     onChange={(value) => {
@@ -381,11 +393,11 @@ function ActionEditor({ graph, node, lookup, projects, values, onChange }: Inspe
           })}
         </Section>
       )}
-      <Section title="On failure">
+      <Section title={t("workflows:inspector.failure.title")}>
         <Field
-          label="When the action fails"
+          label={t("workflows:inspector.failure.whenAction")}
           htmlFor="node-on-error"
-          hint="A connected “On error” output always handles the failure."
+          hint={t("workflows:inspector.failure.actionHint")}
         >
           <Select
             value={policy.onError}
@@ -397,16 +409,20 @@ function ActionEditor({ graph, node, lookup, projects, values, onChange }: Inspe
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="stop">Stop the workflow</SelectItem>
-              <SelectItem value="continue">Continue with Next</SelectItem>
+              <SelectItem value="stop">{t("workflows:inspector.failure.stop")}</SelectItem>
+              <SelectItem value="continue">{t("workflows:inspector.failure.continue")}</SelectItem>
             </SelectContent>
           </Select>
         </Field>
         <div className="grid grid-cols-2 gap-2">
           <Field
-            label="Retries"
+            label={t("workflows:inspector.failure.retries")}
             htmlFor="node-retries"
-            hint={spec?.retrySafe ? `Up to ${MAX_RETRIES}` : "Not safe to repeat"}
+            hint={
+              spec?.retrySafe
+                ? t("workflows:inspector.failure.retriesHint", { max: MAX_RETRIES })
+                : t("workflows:inspector.failure.notRetrySafe")
+            }
           >
             <Input
               id="node-retries"
@@ -422,7 +438,11 @@ function ActionEditor({ graph, node, lookup, projects, values, onChange }: Inspe
               }}
             />
           </Field>
-          <Field label="Wait between (ms)" htmlFor="node-backoff" hint="Doubles each time">
+          <Field
+            label={t("workflows:inspector.failure.backoff")}
+            htmlFor="node-backoff"
+            hint={t("workflows:inspector.failure.backoffHint")}
+          >
             <Input
               id="node-backoff"
               type="number"
@@ -442,13 +462,14 @@ function ActionEditor({ graph, node, lookup, projects, values, onChange }: Inspe
           </Field>
         </div>
         <Field
-          label="Timeout (seconds)"
+          label={t("workflows:inspector.failure.timeout")}
           htmlFor="node-timeout"
-          hint={`Default ${formatMs(spec?.timeoutMs ?? 30000)}. ${
+          hint={t(
             spec?.cancellable
-              ? "Stops at once when the run is cancelled or the time is up."
-              : "Cannot be interrupted: it finishes before a cancellation or timeout takes effect, and a late result is discarded."
-          }`}
+              ? "workflows:inspector.failure.timeoutCancellable"
+              : "workflows:inspector.failure.timeoutNotCancellable",
+            { duration: formatMs(spec?.timeoutMs ?? 30000, t) },
+          )}
         >
           <Input
             id="node-timeout"
@@ -466,7 +487,7 @@ function ActionEditor({ graph, node, lookup, projects, values, onChange }: Inspe
         </Field>
       </Section>
       {spec && spec.outputs.length > 0 && (
-        <Section title="Outputs">
+        <Section title={t("workflows:node.title.output")}>
           <ul className="grid gap-1 text-xs">
             {spec.outputs.map((output) => (
               <li key={output.key} className="flex gap-2">
@@ -483,14 +504,15 @@ function ActionEditor({ graph, node, lookup, projects, values, onChange }: Inspe
   )
 }
 
-const PREDICATES: { value: GraphPredicate["type"]; label: string }[] = [
-  { value: "succeeded", label: "A node succeeded" },
-  { value: "equals", label: "An output equals" },
-  { value: "notEmpty", label: "An output is set" },
-  { value: "activeProject", label: "The active project is" },
+const PREDICATES: { value: GraphPredicate["type"]; label: TranslationKey }[] = [
+  { value: "succeeded", label: "workflows:inspector.condition.succeeded" },
+  { value: "equals", label: "workflows:inspector.condition.equals" },
+  { value: "notEmpty", label: "workflows:inspector.condition.notEmpty" },
+  { value: "activeProject", label: "workflows:inspector.condition.activeProject" },
 ]
 
 function ConditionEditor({ graph, node, lookup, projects, onChange }: InspectorProps) {
+  const { t } = useTranslation()
   if (node.type !== "condition") return null
   const predicate = node.predicate
   const outputs = outputOptions(graph, node.id, lookup)
@@ -512,8 +534,8 @@ function ConditionEditor({ graph, node, lookup, projects, onChange }: InspectorP
     }
   }
   return (
-    <Section title="Condition">
-      <Field label="Check" htmlFor="condition-type">
+    <Section title={t("workflows:node.title.condition")}>
+      <Field label={t("workflows:inspector.condition.check")} htmlFor="condition-type">
         <Select
           value={predicate.type}
           onValueChange={(type) => {
@@ -527,14 +549,14 @@ function ConditionEditor({ graph, node, lookup, projects, onChange }: InspectorP
           <SelectContent>
             {PREDICATES.map((p) => (
               <SelectItem key={p.value} value={p.value} disabled={defaults(p.value) === null}>
-                {p.label}
+                {t(p.label)}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
       </Field>
       {predicate.type === "succeeded" && (
-        <Field label="Node" htmlFor="condition-node">
+        <Field label={t("workflows:inspector.condition.node")} htmlFor="condition-node">
           <Select
             value={predicate.node}
             onValueChange={(id) => {
@@ -555,7 +577,7 @@ function ConditionEditor({ graph, node, lookup, projects, onChange }: InspectorP
         </Field>
       )}
       {(predicate.type === "equals" || predicate.type === "notEmpty") && (
-        <Field label="Output" htmlFor="condition-reference">
+        <Field label={t("workflows:inspector.condition.output")} htmlFor="condition-reference">
           <OutputSelect
             id="condition-reference"
             value={predicate.reference}
@@ -567,7 +589,7 @@ function ConditionEditor({ graph, node, lookup, projects, onChange }: InspectorP
         </Field>
       )}
       {predicate.type === "equals" && (
-        <Field label="Value" htmlFor="condition-value">
+        <Field label={t("workflows:inspector.value")} htmlFor="condition-value">
           <Input
             id="condition-value"
             value={predicate.value}
@@ -578,7 +600,7 @@ function ConditionEditor({ graph, node, lookup, projects, onChange }: InspectorP
         </Field>
       )}
       {predicate.type === "activeProject" && (
-        <Field label="Project" htmlFor="condition-project">
+        <Field label={t("workflows:inspector.condition.project")} htmlFor="condition-project">
           <Select
             value={predicate.key || undefined}
             onValueChange={(key) => {
@@ -586,7 +608,7 @@ function ConditionEditor({ graph, node, lookup, projects, onChange }: InspectorP
             }}
           >
             <SelectTrigger id="condition-project" className="w-full">
-              <SelectValue placeholder="Choose a project" />
+              <SelectValue placeholder={t("workflows:inspector.condition.chooseProject")} />
             </SelectTrigger>
             <SelectContent>
               {projects.map((p) => (
@@ -598,9 +620,7 @@ function ConditionEditor({ graph, node, lookup, projects, onChange }: InspectorP
           </Select>
         </Field>
       )}
-      <p className="text-xs text-muted-foreground">
-        Yes and No continue with different nodes; connect them on the canvas.
-      </p>
+      <p className="text-xs text-muted-foreground">{t("workflows:inspector.condition.hint")}</p>
     </Section>
   )
 }
@@ -636,6 +656,7 @@ function ValueRow({
   values?: Record<string, Record<string, string>>
   onChange: (mapping: GraphMapping | undefined) => void
 }) {
+  const { t } = useTranslation()
   const first = outputs[0]?.reference
   const fallback: GraphMapping = first
     ? { type: "output", reference: first }
@@ -654,8 +675,8 @@ function ValueRow({
           <span className="font-normal text-muted-foreground">
             {" "}
             · {VALUE_KIND_LABEL[kind]}
-            {required ? " · required" : ""}
-            {sensitive ? " · sensitive" : ""}
+            {required ? ` · ${t("workflows:inspector.valueRow.required")}` : ""}
+            {sensitive ? ` · ${t("workflows:inspector.valueRow.sensitive")}` : ""}
           </span>
         </span>
         <Select
@@ -664,12 +685,15 @@ function ValueRow({
             onChange(mode === "mapped" ? fallback : undefined)
           }}
         >
-          <SelectTrigger className="h-7 w-36 text-xs" aria-label={`${label} source`}>
+          <SelectTrigger
+            className="h-7 w-36 text-xs"
+            aria-label={t("workflows:inspector.source", { label })}
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="unset">No value</SelectItem>
-            <SelectItem value="mapped">From earlier nodes or variables</SelectItem>
+            <SelectItem value="unset">{t("workflows:inspector.valueRow.none")}</SelectItem>
+            <SelectItem value="mapped">{t("workflows:inspector.mode.mapped")}</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -686,7 +710,7 @@ function ValueRow({
         />
       ) : (
         <p className={required ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
-          {required ? "Needs a value." : fallbackText}
+          {required ? t("workflows:inspector.valueRow.needsValue") : fallbackText}
         </p>
       )}
     </div>
@@ -705,6 +729,7 @@ function withValue(
 
 /** A sub-workflow: the workflow it runs, its inputs and failure handling. */
 function CallEditor({ graph, node, lookup, values, loopTargets, onChange }: InspectorProps) {
+  const { t } = useTranslation()
   if (node.type !== "call") return null
   const callee = lookup.workflows.find((w) => w.id === node.workflow)
   const outputs = outputOptions(graph, node.id, lookup)
@@ -718,11 +743,11 @@ function CallEditor({ graph, node, lookup, values, loopTargets, onChange }: Insp
   )
   return (
     <>
-      <Section title="Sub-workflow">
+      <Section title={t("workflows:node.title.call")}>
         <Field
-          label="Workflow"
+          label={t("workflows:inspector.workflow")}
           htmlFor="call-workflow"
-          hint="Runs once, with this run's project context; this run waits for it."
+          hint={t("workflows:inspector.call.hint")}
         >
           <Select
             value={callee ? node.workflow : undefined}
@@ -731,7 +756,7 @@ function CallEditor({ graph, node, lookup, values, loopTargets, onChange }: Insp
             }}
           >
             <SelectTrigger id="call-workflow" className="w-full">
-              <SelectValue placeholder="The workflow no longer exists" />
+              <SelectValue placeholder={t("workflows:inspector.call.gone")} />
             </SelectTrigger>
             <SelectContent>
               {loopTargets.map((w) => (
@@ -747,10 +772,10 @@ function CallEditor({ graph, node, lookup, values, loopTargets, onChange }: Insp
         )}
       </Section>
       {callee && (
-        <Section title="Inputs">
+        <Section title={t("workflows:inspector.call.inputs")}>
           {declared.length === 0 && (
             <p className="text-xs text-muted-foreground">
-              {callee.name} declares no inputs. Inputs are declared in its workflow panel.
+              {t("workflows:inspector.call.noInputs", { name: callee.name })}
             </p>
           )}
           {declared.map((input) => (
@@ -763,8 +788,8 @@ function CallEditor({ graph, node, lookup, values, loopTargets, onChange }: Insp
               sensitive={input.sensitive}
               fallbackText={
                 input.default !== undefined
-                  ? `Uses the default “${input.default}”.`
-                  : "Not set; the workflow gets no value."
+                  ? t("workflows:inspector.call.usesDefault", { value: input.default })
+                  : t("workflows:inspector.call.notSet")
               }
               mapping={node.inputs?.[input.key]}
               outputs={outputs}
@@ -782,7 +807,11 @@ function CallEditor({ graph, node, lookup, values, loopTargets, onChange }: Insp
           {unknown.map((key) => (
             <div key={key} className="flex items-center gap-2 text-xs text-destructive">
               <span className="flex-1">
-                <code className="font-mono">{key}</code> is no longer an input of {callee.name}.
+                <Trans
+                  i18nKey="workflows:inspector.call.unknownInput"
+                  values={{ key, workflow: callee.name }}
+                  components={{ code: <code className="font-mono" /> }}
+                />
               </span>
               <Button
                 variant="ghost"
@@ -794,17 +823,17 @@ function CallEditor({ graph, node, lookup, values, loopTargets, onChange }: Insp
                   )
                 }}
               >
-                Remove
+                {t("workflows:inspector.call.remove")}
               </Button>
             </div>
           ))}
         </Section>
       )}
-      <Section title="On failure">
+      <Section title={t("workflows:inspector.failure.title")}>
         <Field
-          label="When the sub-workflow fails"
+          label={t("workflows:inspector.failure.whenCall")}
           htmlFor="call-on-error"
-          hint="A connected “On error” output always handles the failure. Sub-workflows are not retried."
+          hint={t("workflows:inspector.failure.callHint")}
         >
           <Select
             value={policy.onError}
@@ -816,15 +845,17 @@ function CallEditor({ graph, node, lookup, values, loopTargets, onChange }: Insp
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="stop">Stop the workflow</SelectItem>
-              <SelectItem value="continue">Continue with Next</SelectItem>
+              <SelectItem value="stop">{t("workflows:inspector.failure.stop")}</SelectItem>
+              <SelectItem value="continue">{t("workflows:inspector.failure.continue")}</SelectItem>
             </SelectContent>
           </Select>
         </Field>
         <Field
-          label="Timeout (seconds)"
+          label={t("workflows:inspector.failure.timeout")}
           htmlFor="call-timeout"
-          hint={`Default ${formatMs(DEFAULT_CALL_TIMEOUT_MS)}. Cancelling the run or reaching the timeout stops the sub-workflow too.`}
+          hint={t("workflows:inspector.failure.callTimeoutHint", {
+            duration: formatMs(DEFAULT_CALL_TIMEOUT_MS, t),
+          })}
         >
           <Input
             id="call-timeout"
@@ -842,17 +873,19 @@ function CallEditor({ graph, node, lookup, values, loopTargets, onChange }: Insp
         </Field>
       </Section>
       {callee && (
-        <Section title="Outputs">
+        <Section title={t("workflows:node.title.output")}>
           {(callee.outputs ?? []).length === 0 ? (
-            <p className="text-xs text-muted-foreground">{callee.name} returns no outputs.</p>
+            <p className="text-xs text-muted-foreground">
+              {t("workflows:inspector.call.noOutputs", { name: callee.name })}
+            </p>
           ) : (
-            <ul className="grid gap-1 text-xs" aria-label="Sub-workflow outputs">
+            <ul className="grid gap-1 text-xs" aria-label={t("workflows:inspector.call.outputs")}>
               {(callee.outputs ?? []).map((output) => (
                 <li key={output.key} className="flex gap-2">
                   <code className="font-mono">{output.key}</code>
                   <span className="flex-1 text-muted-foreground">
                     {output.label || output.key}
-                    {output.sensitive ? " · not kept in history" : ""}
+                    {output.sensitive ? ` · ${t("workflows:inspector.docs.notKept")}` : ""}
                   </span>
                   <span className="text-muted-foreground">{VALUE_KIND_LABEL[output.kind]}</span>
                 </li>
@@ -867,16 +900,14 @@ function CallEditor({ graph, node, lookup, values, loopTargets, onChange }: Insp
 
 /** An Output node: values of the open workflow's declared outputs. */
 function OutputEditor({ graph, node, lookup, values, onChange }: InspectorProps) {
+  const { t } = useTranslation()
   if (node.type !== "output") return null
   const declared = lookup.outputs ?? []
   const outputs = outputOptions(graph, node.id, lookup)
   return (
-    <Section title="Outputs">
+    <Section title={t("workflows:node.title.output")}>
       {declared.length === 0 && (
-        <p className="text-xs text-muted-foreground">
-          This workflow declares no outputs. Declare them in the workflow panel (click the canvas
-          background).
-        </p>
+        <p className="text-xs text-muted-foreground">{t("workflows:inspector.output.none")}</p>
       )}
       {declared.map((output) => (
         <ValueRow
@@ -885,7 +916,7 @@ function OutputEditor({ graph, node, lookup, values, onChange }: InspectorProps)
           label={output.label || output.key}
           kind={output.kind}
           sensitive={output.sensitive}
-          fallbackText="Not set by this node."
+          fallbackText={t("workflows:inspector.output.notSet")}
           mapping={node.values?.[output.key]}
           outputs={outputs}
           graph={graph}
@@ -899,26 +930,21 @@ function OutputEditor({ graph, node, lookup, values, onChange }: InspectorProps)
           }}
         />
       ))}
-      <p className="text-xs text-muted-foreground">
-        The node that calls this workflow gets these values. When several Output nodes run, the one
-        that finishes later wins.
-      </p>
+      <p className="text-xs text-muted-foreground">{t("workflows:inspector.output.hint")}</p>
     </Section>
   )
 }
 
 /** A Set variable node: new values of the open workflow's variables. */
 function SetVariableEditor({ graph, node, lookup, values, onChange }: InspectorProps) {
+  const { t } = useTranslation()
   if (node.type !== "setVariable") return null
   const declared = lookup.variables ?? []
   const outputs = outputOptions(graph, node.id, lookup)
   return (
-    <Section title="Variables">
+    <Section title={t("workflows:inspector.variables.title")}>
       {declared.length === 0 && (
-        <p className="text-xs text-muted-foreground">
-          This workflow declares no variables. Declare them in the workflow panel (click the canvas
-          background).
-        </p>
+        <p className="text-xs text-muted-foreground">{t("workflows:inspector.variables.none")}</p>
       )}
       {declared.map((variable) => (
         <ValueRow
@@ -927,7 +953,7 @@ function SetVariableEditor({ graph, node, lookup, values, onChange }: InspectorP
           label={variable.label || variable.key}
           kind={variable.kind}
           sensitive={variable.sensitive}
-          fallbackText="Not changed by this node."
+          fallbackText={t("workflows:inspector.variables.notChanged")}
           mapping={node.values?.[variable.key]}
           outputs={outputs}
           graph={graph}
@@ -943,10 +969,7 @@ function SetVariableEditor({ graph, node, lookup, values, onChange }: InspectorP
           }}
         />
       ))}
-      <p className="text-xs text-muted-foreground">
-        Nodes after this one read the new values as “Variable · …”. Variables last for one run; a
-        sub-workflow gets them only through its inputs.
-      </p>
+      <p className="text-xs text-muted-foreground">{t("workflows:inspector.variables.hint")}</p>
     </Section>
   )
 }

@@ -10,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { useTranslation } from "@/i18n"
 import type { GraphMapping, GraphReference, ParameterSpec, VariableDefinition } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -41,6 +42,7 @@ export function OutputSelect({
   onChange: (reference: GraphReference) => void
   className?: string
 }) {
+  const { t } = useTranslation()
   const known = value && options.some((o) => key(o.reference) === key(value))
   return (
     <Select
@@ -52,12 +54,16 @@ export function OutputSelect({
       disabled={options.length === 0 && !value}
     >
       <SelectTrigger id={id} className={cn("w-full min-w-0 [&>span]:truncate", className)}>
-        <SelectValue placeholder={options.length ? "Choose an output" : "No earlier outputs"} />
+        <SelectValue
+          placeholder={
+            options.length ? t("workflows:mapping.chooseOutput") : t("workflows:mapping.noOutputs")
+          }
+        />
       </SelectTrigger>
       <SelectContent>
         {value && !known && (
           <SelectItem value={key(value)} disabled>
-            {key(value)} (missing)
+            {t("workflows:mapping.missingOutput", { output: key(value) })}
           </SelectItem>
         )}
         {options.map((o) => (
@@ -155,6 +161,7 @@ export function MappingEditor({
   picker?: VariablePicker
   onChange: (mapping: GraphMapping) => void
 }) {
+  const { t } = useTranslation()
   // The parts being edited. Kept locally so an empty text part (which
   // adds nothing to the stored template) stays while it is being typed;
   // replaced by the stored template when that changes elsewhere (undo).
@@ -206,20 +213,20 @@ export function MappingEditor({
           }
         }}
       >
-        <SelectTrigger className="h-7 text-xs" aria-label="Mapping">
+        <SelectTrigger className="h-7 text-xs" aria-label={t("workflows:mapping.label")}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="output" disabled={outputs.length === 0}>
-            One output
+            {t("workflows:mapping.type.output")}
           </SelectItem>
-          <SelectItem value="variable">One variable</SelectItem>
-          <SelectItem value="template">Text with outputs and variables</SelectItem>
+          <SelectItem value="variable">{t("workflows:mapping.type.variable")}</SelectItem>
+          <SelectItem value="template">{t("workflows:mapping.type.template")}</SelectItem>
         </SelectContent>
       </Select>
       {mapping.type === "variable" ? (
         <ReferenceInput
-          label="Variable"
+          label={t("workflows:mapping.variable")}
           value={mapping.reference}
           parameter={parameter}
           picker={picker}
@@ -238,8 +245,8 @@ export function MappingEditor({
             }}
           />
           <Input
-            aria-label="Default value"
-            placeholder="Default when the output is missing"
+            aria-label={t("workflows:mapping.default")}
+            placeholder={t("workflows:mapping.defaultPlaceholder")}
             value={mapping.default ?? ""}
             onChange={(e) => {
               onChange({ ...mapping, default: e.target.value || undefined })
@@ -247,18 +254,20 @@ export function MappingEditor({
           />
         </>
       ) : (
-        <div className="grid grid-cols-[minmax(0,1fr)] gap-1.5" role="list" aria-label="Parts">
+        <div
+          className="grid grid-cols-[minmax(0,1fr)] gap-1.5"
+          role="list"
+          aria-label={t("workflows:mapping.parts")}
+        >
           {segments.length === 0 && (
-            <p className="text-xs text-muted-foreground">
-              Add text and outputs to compose the value.
-            </p>
+            <p className="text-xs text-muted-foreground">{t("workflows:mapping.emptyParts")}</p>
           )}
           {segments.map((segment, index) => (
             <div key={index} className="flex min-w-0 items-center gap-1" role="listitem">
               {segment.type === "variable" ? (
                 <ReferenceInput
                   className="flex-1"
-                  label={`Variable ${index + 1}`}
+                  label={t("workflows:mapping.variablePart", { index: index + 1 })}
                   value={segment.reference}
                   picker={picker}
                   onChange={(reference) => {
@@ -269,7 +278,7 @@ export function MappingEditor({
                 />
               ) : segment.type === "text" ? (
                 <Input
-                  aria-label={`Text ${index + 1}`}
+                  aria-label={t("workflows:mapping.textPart", { index: index + 1 })}
                   className="h-7 min-w-0 flex-1 text-xs"
                   value={segment.text}
                   onChange={(e) => {
@@ -296,7 +305,7 @@ export function MappingEditor({
                 variant="ghost"
                 size="icon"
                 className="size-7 shrink-0"
-                aria-label="Remove part"
+                aria-label={t("workflows:mapping.removePart")}
                 onClick={() => {
                   setSegments(segments.filter((_, i) => i !== index))
                 }}
@@ -314,7 +323,7 @@ export function MappingEditor({
                 setSegments([...segments, { type: "text", text: "" }])
               }}
             >
-              <Plus className="size-3" /> Text
+              <Plus className="size-3" /> {t("workflows:mapping.addText")}
             </Button>
             <Button
               variant="ghost"
@@ -325,7 +334,7 @@ export function MappingEditor({
                 if (first) setSegments([...segments, { type: "output", reference: first }])
               }}
             >
-              <Plus className="size-3" /> Output
+              <Plus className="size-3" /> {t("workflows:mapping.addOutput")}
             </Button>
             <Button
               variant="ghost"
@@ -335,14 +344,19 @@ export function MappingEditor({
                 setSegments([...segments, { type: "variable", reference: "" }])
               }}
             >
-              <Plus className="size-3" /> Variable
+              <Plus className="size-3" /> {t("workflows:mapping.addVariable")}
             </Button>
           </div>
         </div>
       )}
-      <p className="rounded bg-muted px-2 py-1 text-xs break-words" aria-label="Preview">
-        <span className="text-muted-foreground">Preview: </span>
-        {previewMapping(mapping, values) || <span className="text-muted-foreground">empty</span>}
+      <p
+        className="rounded bg-muted px-2 py-1 text-xs break-words"
+        aria-label={t("workflows:mapping.preview")}
+      >
+        <span className="text-muted-foreground">{t("workflows:mapping.previewPrefix")} </span>
+        {previewMapping(mapping, values) || (
+          <span className="text-muted-foreground">{t("workflows:mapping.previewEmpty")}</span>
+        )}
       </p>
       {problems.map((p) => (
         <Message key={p} level="error">

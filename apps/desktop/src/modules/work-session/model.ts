@@ -2,7 +2,9 @@
 // texts for states, notices and gaps. Pure, so it is tested without React.
 // See docs/gestures-and-work-session.md (sections 5 to 10).
 
-import { errorMessage } from "@/lib/api"
+import { type TranslationKey, currentLanguage, i18n } from "@/i18n"
+import { formatList } from "@/i18n/format"
+import { errorCode, rawErrorMessage } from "@/lib/backend-error"
 import { sentence } from "@/lib/failure"
 import type {
   ElapsedFormat,
@@ -63,8 +65,11 @@ export function formatElapsed(ms: number, format: ElapsedFormat = "minutes"): st
 export function describeDuration(ms: number): string {
   const minutes = Math.floor(Math.max(0, ms) / 60_000)
   const hours = Math.floor(minutes / 60)
-  if (hours === 0) return `${minutes} min`
-  return `${hours} h ${String(minutes % 60).padStart(2, "0")} min`
+  if (hours === 0) return i18n.t("common:duration.minutes", { minutes })
+  return i18n.t("common:duration.hoursMinutes", {
+    hours,
+    minutes: String(minutes % 60).padStart(2, "0"),
+  })
 }
 
 /** Milliseconds until the shown elapsed text changes: the next minute (or second) boundary. */
@@ -75,78 +80,82 @@ export function nextTickMs(elapsedMs: number, format: ElapsedFormat): number {
 
 // States -------------------------------------------------------------------------
 
-export const STATE_TEXT: Record<WorkSessionState, { label: string; hint: string }> = {
-  idle: {
-    label: "No work session",
-    hint: "Click the Work Session key to start one.",
-  },
-  starting: {
-    label: "Starting…",
-    hint: "The start workflow is running. Time counts once it succeeds. Hold the key to cancel.",
-  },
-  working: {
-    label: "Working",
-    hint: "To finish, click the key to run the end check. Without a verification workflow, hold the key instead.",
-  },
-  verifyingEnd: {
-    label: "Checking…",
-    hint: "The verification workflow is running; the timer keeps going. Hold the key to cancel the check.",
-  },
-  readyToFinish: {
-    label: "Ready to finish",
-    hint: "Click the key to finish and stop the timer. Hold it to keep working.",
-  },
-  stopping: {
-    label: "Stopping…",
-    hint: "The session is being closed. The stop time is already fixed.",
-  },
-}
+export const STATE_TEXT: Record<WorkSessionState, { label: TranslationKey; hint: TranslationKey }> =
+  {
+    idle: {
+      label: "workspace:workSession.state.idle.label",
+      hint: "workspace:workSession.state.idle.hint",
+    },
+    starting: {
+      label: "workspace:workSession.state.starting.label",
+      hint: "workspace:workSession.state.starting.hint",
+    },
+    working: {
+      label: "workspace:workSession.state.working.label",
+      hint: "workspace:workSession.state.working.hint",
+    },
+    verifyingEnd: {
+      label: "workspace:workSession.state.verifyingEnd.label",
+      hint: "workspace:workSession.state.verifyingEnd.hint",
+    },
+    readyToFinish: {
+      label: "workspace:workSession.state.readyToFinish.label",
+      hint: "workspace:workSession.state.readyToFinish.hint",
+    },
+    stopping: {
+      label: "workspace:workSession.state.stopping.label",
+      hint: "workspace:workSession.state.stopping.hint",
+    },
+  }
 
-export const RECORD_TEXT: Record<WorkSessionRecordState, string> = {
-  starting: "Starting",
-  working: "Active",
-  verifyingEnd: "Active",
-  readyToFinish: "Active",
-  stopping: "Stopping",
-  stopped: "Finished",
-  aborted: "Did not start",
+export const RECORD_TEXT: Record<WorkSessionRecordState, TranslationKey> = {
+  starting: "workspace:workSession.record.starting",
+  working: "workspace:workSession.record.active",
+  verifyingEnd: "workspace:workSession.record.active",
+  readyToFinish: "workspace:workSession.record.active",
+  stopping: "workspace:workSession.record.stopping",
+  stopped: "workspace:workSession.record.stopped",
+  aborted: "workspace:workSession.record.aborted",
 }
 
 // Notices ------------------------------------------------------------------------
 
 /** What each problem means and what to do about it. */
-export const NOTICE_TEXT: Record<WorkSessionProblem, { title: string; next: string }> = {
+export const NOTICE_TEXT: Record<
+  WorkSessionProblem,
+  { title: TranslationKey; next: TranslationKey }
+> = {
   startFailed: {
-    title: "The work session did not start",
-    next: "Check the start workflow's run in its history, then click the key to start again.",
+    title: "workspace:workSession.notice.startFailed.title",
+    next: "workspace:workSession.notice.startFailed.next",
   },
   startInterrupted: {
-    title: "Starting the work session was interrupted",
-    next: "The start workflow may have run partly. Click the key to start again.",
+    title: "workspace:workSession.notice.startInterrupted.title",
+    next: "workspace:workSession.notice.startInterrupted.next",
   },
   verificationFailed: {
-    title: "The end check failed",
-    next: "The timer keeps running. Check the verification workflow's run, then check again from the key.",
+    title: "workspace:workSession.notice.verificationFailed.title",
+    next: "workspace:workSession.notice.verificationFailed.next",
   },
   verificationInterrupted: {
-    title: "The end check was interrupted",
-    next: "The timer keeps running. Check again from the key.",
+    title: "workspace:workSession.notice.verificationInterrupted.title",
+    next: "workspace:workSession.notice.verificationInterrupted.next",
   },
   notReady: {
-    title: "Not ready to finish yet",
-    next: "The verification workflow answered no. The timer keeps running.",
+    title: "workspace:workSession.notice.notReady.title",
+    next: "workspace:workSession.notice.notReady.next",
   },
   approvalExpired: {
-    title: "The approval to finish expired",
-    next: "Run the end check again from the key, then click it to finish.",
+    title: "workspace:workSession.notice.approvalExpired.title",
+    next: "workspace:workSession.notice.approvalExpired.next",
   },
   approvalInvalidated: {
-    title: "The approval to finish was withdrawn",
-    next: "Run the end check again from the key, then click it to finish.",
+    title: "workspace:workSession.notice.approvalInvalidated.title",
+    next: "workspace:workSession.notice.approvalInvalidated.next",
   },
   needsReview: {
-    title: "A gap in the session needs review",
-    next: "It is counted. Exclude it in the session history if you did not work then.",
+    title: "workspace:workSession.notice.needsReview.title",
+    next: "workspace:workSession.notice.needsReview.next",
   },
 }
 
@@ -154,16 +163,24 @@ export const NOTICE_TEXT: Record<WorkSessionProblem, { title: string; next: stri
 export function noticeText(notice: WorkSessionNotice): { title: string; detail: string } {
   const text = NOTICE_TEXT[notice.problem]
   return {
-    title: text.title,
-    detail: [sentence(notice.message), sentence(text.next)].filter(Boolean).join(" "),
+    title: i18n.t(text.title),
+    detail: [sentence(notice.message), sentence(i18n.t(text.next))].filter(Boolean).join(" "),
   }
 }
 
-export const REVIEW_KIND_TEXT: Record<WorkSessionReviewKind, string> = {
-  agentDown: "DeckPilot's agent was not running",
-  sleep: "The computer was asleep",
-  clockBack: "The clock was set back",
-  clockForward: "The clock jumped forward",
+export const REVIEW_KIND_TEXT: Record<WorkSessionReviewKind, TranslationKey> = {
+  agentDown: "workspace:workSession.review.agentDown",
+  sleep: "workspace:workSession.review.sleep",
+  clockBack: "workspace:workSession.review.clockBack",
+  clockForward: "workspace:workSession.review.clockForward",
+}
+
+/** The result of an end check, as a label. */
+export function outcomeKey(outcome: { canFinish: boolean } | undefined): TranslationKey {
+  if (outcome === undefined) return "workspace:workSession.check.noResult"
+  return outcome.canFinish
+    ? "workspace:workSession.check.canFinish"
+    : "workspace:workSession.check.notReady"
 }
 
 /** Flagged gaps nobody has decided on yet. */
@@ -173,7 +190,8 @@ export function openReviews(reviews: WorkSessionReview[]): WorkSessionReview[] {
 
 /** Whether an error says the agent is older than protocol 8. */
 export function isNotSupported(error: unknown): boolean {
-  return /not supported/i.test(errorMessage(error))
+  if (errorCode(error) === "invalid.workSessionAgentTooOld") return true
+  return /not supported/i.test(rawErrorMessage(error))
 }
 
 // Settings ------------------------------------------------------------------------
@@ -183,10 +201,10 @@ export const SESSION_INPUTS = ["sessionId", "projectId", "elapsedSeconds"]
 
 export type VerificationIssue = "missingCanFinish" | "canFinishNotBoolean" | "detailsNotText"
 
-export const VERIFICATION_ISSUE_TEXT: Record<VerificationIssue, string> = {
-  missingCanFinish: "Has no output “canFinish”. Add a Boolean output named canFinish.",
-  canFinishNotBoolean: "Its output “canFinish” is not a Boolean. Change its kind to Boolean.",
-  detailsNotText: "Its output “details” is not text. Change its kind to Text.",
+export const VERIFICATION_ISSUE_TEXT: Record<VerificationIssue, TranslationKey> = {
+  missingCanFinish: "workspace:workSession.verificationIssue.missingCanFinish",
+  canFinishNotBoolean: "workspace:workSession.verificationIssue.canFinishNotBoolean",
+  detailsNotText: "workspace:workSession.verificationIssue.detailsNotText",
 }
 
 /** Why a workflow cannot be the verification workflow; like `verification_contract`. */
@@ -213,14 +231,17 @@ function unfilledInputs(workflow: Workflow): string[] {
 export function inputIssue(workflow: Workflow): string | null {
   const missing = unfilledInputs(workflow)
   if (missing.length === 0) return null
-  const names = missing.map((name) => `“${name}”`).join(", ")
-  return `Needs the input ${names}, which a work session cannot give. Give it a default or make it optional.`
+  const names = formatList(
+    currentLanguage(),
+    missing.map((name) => i18n.t("workspace:workSession.issues.quoted", { name })),
+  )
+  return i18n.t("workspace:workSession.issues.unfilledInputs", { count: missing.length, names })
 }
 
 /** Why a workflow cannot be the verification workflow, as text. */
 export function verificationWorkflowIssue(workflow: Workflow): string | null {
   const issue = verificationIssue(workflow)
-  return issue ? VERIFICATION_ISSUE_TEXT[issue] : inputIssue(workflow)
+  return issue ? i18n.t(VERIFICATION_ISSUE_TEXT[issue]) : inputIssue(workflow)
 }
 
 /** The settings form: numbers as typed, so a half-typed value stays visible. */
@@ -251,8 +272,6 @@ function integerIn(text: string, range: { min: number; max: number }): number | 
   return value >= range.min && value <= range.max ? value : null
 }
 
-const MISSING_WORKFLOW = "This workflow no longer exists. Choose another one or none."
-
 /**
  * Checks the form against the workflows of the profile. Returns the settings
  * to save, or `null` with the issues per field.
@@ -262,19 +281,20 @@ export function validateSettings(
   workflows: Workflow[],
 ): { settings: WorkSessionSettings | null; issues: SettingsIssues } {
   const issues: SettingsIssues = {}
+  const missingWorkflow = i18n.t("workspace:workSession.issues.missingWorkflow")
   const find = (id: string | null) => (id ? workflows.find((w) => w.id === id) : undefined)
 
   if (draft.startWorkflow) {
     const workflow = find(draft.startWorkflow)
-    const issue = workflow ? inputIssue(workflow) : MISSING_WORKFLOW
+    const issue = workflow ? inputIssue(workflow) : missingWorkflow
     if (issue) issues.startWorkflow = issue
   }
   if (draft.verificationWorkflow) {
     const workflow = find(draft.verificationWorkflow)
-    const issue = workflow ? verificationWorkflowIssue(workflow) : MISSING_WORKFLOW
+    const issue = workflow ? verificationWorkflowIssue(workflow) : missingWorkflow
     if (issue) issues.verificationWorkflow = issue
   }
-  const minutes = `Enter whole minutes from ${MINUTES_RANGE.min} to ${MINUTES_RANGE.max}.`
+  const minutes = i18n.t("workspace:workSession.issues.minutesRange", MINUTES_RANGE)
   const approval = integerIn(draft.approvalMinutes, MINUTES_RANGE)
   if (approval === null) issues.approvalMinutes = minutes
   const reviewGap = integerIn(draft.reviewGapMinutes, MINUTES_RANGE)

@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { SettingsSection } from "@/components/settings-layout"
 import { useAsync } from "@/hooks/use-async"
+import { useTranslation } from "@/i18n"
+import { useFormat } from "@/i18n/format"
 import { api } from "@/lib/api"
 import { failureMessage, toastFailure } from "@/lib/failure"
 import type { WorkSessionReview, WorkSessionSummary } from "@/lib/types"
@@ -18,12 +20,11 @@ import {
   formatElapsed,
   noticeText,
   openReviews,
+  outcomeKey,
 } from "./model"
 
 /** Sessions loaded at a time. */
 export const HISTORY_PAGE = 20
-
-const time = (ms: number) => new Date(ms).toLocaleString()
 
 /**
  * Past and current sessions with their intervals, transitions and flagged
@@ -37,6 +38,7 @@ export function HistoryCard({
   reloadKey: string
   projectName: (id: string) => string
 }) {
+  const { t } = useTranslation()
   const [limit, setLimit] = useState(HISTORY_PAGE)
   const history = useAsync(() => api.listWorkSessions(limit), `${reloadKey}:${limit}`)
   // Entries changed here since the last load (a gap excluded or kept).
@@ -49,13 +51,8 @@ export function HistoryCard({
 
   return (
     <SettingsSection
-      title="History"
-      description={
-        <>
-          Sessions kept on this computer, newest first. Gaps longer than the review threshold are
-          counted and flagged; exclude one if you did not work then.
-        </>
-      }
+      title={t("workspace:workSession.history.title")}
+      description={t("workspace:workSession.history.description")}
     >
       <div className="grid gap-3">
         {history.state.status === "loading" ? (
@@ -63,18 +60,21 @@ export function HistoryCard({
         ) : history.state.status === "error" ? (
           <ErrorNotice
             error={failureMessage(
-              "The session history could not be loaded",
+              t("workspace:workSession.history.loadFailed"),
               history.state.error,
-              "Check that the agent is running in Settings › Agent.",
+              t("workspace:workSession.checkAgent"),
             )}
           />
         ) : history.state.data.length === 0 ? (
-          <EmptyState title="No sessions yet">
-            Sessions appear here once the Work Session key has started one.
+          <EmptyState title={t("workspace:workSession.history.empty")}>
+            {t("workspace:workSession.history.emptyHint")}
           </EmptyState>
         ) : (
           <div className="grid gap-3">
-            <ul aria-label="Work sessions" className="grid divide-y border-y">
+            <ul
+              aria-label={t("workspace:workSession.history.sessions")}
+              className="grid divide-y border-y"
+            >
               {history.state.data.map((entry) => {
                 const summary = updated[entry.session] ?? entry
                 return (
@@ -98,7 +98,7 @@ export function HistoryCard({
                     setLimit(limit + HISTORY_PAGE)
                   }}
                 >
-                  Show older sessions
+                  {t("workspace:workSession.history.showOlder")}
                 </Button>
               </div>
             )}
@@ -118,6 +118,9 @@ function SessionRow({
   projectName: (id: string) => string
   onChange: (summary: WorkSessionSummary) => void
 }) {
+  const { t } = useTranslation()
+  const format = useFormat()
+  const time = (ms: number) => format.dateTime(ms)
   const [open, setOpen] = useState(false)
   // An open interval is shown up to when the list was drawn.
   const [now] = useState(() => Date.now())
@@ -146,17 +149,19 @@ function SessionRow({
         {project && <span className="text-muted-foreground">{project}</span>}
         <span
           className="font-mono tabular-nums"
-          aria-label={`Duration ${describeDuration(elapsed)}`}
+          aria-label={t("workspace:workSession.history.duration", {
+            duration: describeDuration(elapsed),
+          })}
         >
           {summary.state === "aborted" ? "–" : formatElapsed(elapsed)}
         </span>
         <Badge variant={summary.state === "aborted" ? "destructive" : "secondary"}>
-          {RECORD_TEXT[summary.state]}
+          {t(RECORD_TEXT[summary.state])}
         </Badge>
         {flagged > 0 && (
           <Badge variant="outline" className="border-amber-500/60 text-amber-700">
             <TriangleAlert aria-hidden />
-            {flagged === 1 ? "1 gap to review" : `${flagged} gaps to review`}
+            {t("workspace:workSession.history.gapsToReview", { count: flagged })}
           </Badge>
         )}
       </div>
@@ -164,7 +169,7 @@ function SessionRow({
         <div id={detailsId} className="grid gap-4 border-t px-3 py-3 text-sm">
           {summary.notice && (
             <section className="grid gap-1">
-              <h4 className="font-medium">Notice</h4>
+              <h4 className="font-medium">{t("workspace:workSession.history.notice")}</h4>
               <p>
                 <span className="font-medium">{noticeText(summary.notice).title}</span>
                 <span className="text-muted-foreground">
@@ -176,8 +181,11 @@ function SessionRow({
           )}
           {summary.reviews.length > 0 && (
             <section className="grid gap-2">
-              <h4 className="font-medium">Flagged gaps</h4>
-              <ul aria-label="Flagged gaps" className="grid gap-2">
+              <h4 className="font-medium">{t("workspace:workSession.history.flaggedGaps")}</h4>
+              <ul
+                aria-label={t("workspace:workSession.history.flaggedGaps")}
+                className="grid gap-2"
+              >
                 {summary.reviews.map((review) => (
                   <GapRow
                     key={review.id}
@@ -190,18 +198,24 @@ function SessionRow({
             </section>
           )}
           <section className="grid gap-1">
-            <h4 className="font-medium">Intervals</h4>
+            <h4 className="font-medium">{t("workspace:workSession.history.intervals")}</h4>
             {summary.intervals.length === 0 ? (
               <p className="text-muted-foreground">
-                None: the timer never started (the start workflow did not succeed).
+                {t("workspace:workSession.history.noIntervals")}
               </p>
             ) : (
-              <ol aria-label="Intervals" className="grid gap-1">
+              <ol aria-label={t("workspace:workSession.history.intervals")} className="grid gap-1">
                 {summary.intervals.map((interval) => (
                   <li key={interval.seq} className="flex flex-wrap gap-x-3">
                     <span>
-                      {time(interval.startedAtMs)} –{" "}
-                      {interval.endedAtMs === undefined ? "now" : time(interval.endedAtMs)}
+                      {interval.endedAtMs === undefined
+                        ? t("workspace:workSession.history.intervalOpen", {
+                            from: time(interval.startedAtMs),
+                          })
+                        : t("workspace:workSession.history.interval", {
+                            from: time(interval.startedAtMs),
+                            to: time(interval.endedAtMs),
+                          })}
                     </span>
                     <span className="font-mono text-muted-foreground tabular-nums">
                       {formatElapsed(
@@ -209,7 +223,9 @@ function SessionRow({
                       )}
                     </span>
                     {interval.endReason === "gapExcluded" && (
-                      <span className="text-muted-foreground">(a gap after it is excluded)</span>
+                      <span className="text-muted-foreground">
+                        {t("workspace:workSession.history.gapExcluded")}
+                      </span>
                     )}
                   </li>
                 ))}
@@ -218,27 +234,30 @@ function SessionRow({
           </section>
           {summary.verification && (
             <section className="grid gap-1">
-              <h4 className="font-medium">Last end check</h4>
+              <h4 className="font-medium">{t("workspace:workSession.history.lastCheck")}</h4>
               <p className="text-muted-foreground">
-                {summary.verification.outcome === undefined
-                  ? "No result"
-                  : summary.verification.outcome.canFinish
-                    ? "Can finish"
-                    : "Not ready to finish"}
-                {summary.verification.outcome?.details
-                  ? ` — ${summary.verification.outcome.details}`
-                  : ""}{" "}
-                ({time(summary.verification.atMs)})
+                {t("workspace:workSession.check.withTime", {
+                  result: summary.verification.outcome?.details
+                    ? t("workspace:workSession.check.withDetails", {
+                        outcome: t(outcomeKey(summary.verification.outcome)),
+                        details: summary.verification.outcome.details,
+                      })
+                    : t(outcomeKey(summary.verification.outcome)),
+                  time: time(summary.verification.atMs),
+                })}
               </p>
             </section>
           )}
           {summary.transitions.length > 0 && (
             <section className="grid gap-1">
-              <h4 className="font-medium">Transitions</h4>
-              <ol aria-label="Transitions" className="grid gap-0.5 text-muted-foreground">
-                {summary.transitions.map((t) => (
-                  <li key={t.seq}>
-                    {time(t.atMs)}: {t.from} → {t.to} ({t.event})
+              <h4 className="font-medium">{t("workspace:workSession.history.transitions")}</h4>
+              <ol
+                aria-label={t("workspace:workSession.history.transitions")}
+                className="grid gap-0.5 text-muted-foreground"
+              >
+                {summary.transitions.map((step) => (
+                  <li key={step.seq}>
+                    {time(step.atMs)}: {step.from} → {step.to} ({step.event})
                   </li>
                 ))}
               </ol>
@@ -259,6 +278,9 @@ function GapRow({
   review: WorkSessionReview
   onChange: (summary: WorkSessionSummary) => void
 }) {
+  const { t } = useTranslation()
+  const format = useFormat()
+  const time = (ms: number) => format.dateTime(ms)
   const [busy, setBusy] = useState(false)
   const resolve = (count: boolean) => {
     setBusy(true)
@@ -266,31 +288,43 @@ function GapRow({
       (next) => {
         setBusy(false)
         onChange(next)
-        toast.success(count ? "The gap is counted" : "The gap is excluded")
+        toast.success(
+          count
+            ? t("workspace:workSession.history.gap.counted")
+            : t("workspace:workSession.history.gap.excluded"),
+        )
       },
       (e: unknown) => {
         setBusy(false)
         toastFailure(
-          count ? "The gap was not counted" : "The gap was not excluded",
+          count
+            ? t("workspace:workSession.history.gap.countFailed")
+            : t("workspace:workSession.history.gap.excludeFailed"),
           e,
-          "Unlock DeckPilot if it is locked, then try again.",
+          t("workspace:workSession.unlockNext"),
         )
       },
     )
   }
-  const span = `${time(review.fromMs)} – ${time(review.toMs)}`
+  const span = t("workspace:workSession.history.interval", {
+    from: time(review.fromMs),
+    to: time(review.toMs),
+  })
   const status =
     review.resolution === "excluded"
-      ? "Excluded"
+      ? t("workspace:workSession.history.gap.statusExcluded")
       : review.resolution === "counted"
-        ? "Counted"
-        : "Counted, not reviewed"
+        ? t("workspace:workSession.history.gap.statusCounted")
+        : t("workspace:workSession.history.gap.statusUnreviewed")
   return (
     <li className="flex flex-wrap items-center gap-x-3 gap-y-1">
       <TriangleAlert className="size-4 shrink-0 text-amber-600" aria-hidden />
       <span>
-        {REVIEW_KIND_TEXT[review.kind]}: {span} (
-        {formatElapsed(Math.max(0, review.toMs - review.fromMs))})
+        {t("workspace:workSession.history.gap.summary", {
+          kind: t(REVIEW_KIND_TEXT[review.kind]),
+          span,
+          duration: formatElapsed(Math.max(0, review.toMs - review.fromMs)),
+        })}
       </span>
       <Badge variant="outline">{status}</Badge>
       <span className="flex gap-1">
@@ -299,12 +333,12 @@ function GapRow({
             variant="outline"
             size="sm"
             disabled={busy}
-            aria-label={`Include the gap ${span}`}
+            aria-label={t("workspace:workSession.history.gap.includeLabel", { span })}
             onClick={() => {
               resolve(true)
             }}
           >
-            Include
+            {t("workspace:workSession.history.gap.include")}
           </Button>
         ) : (
           <>
@@ -312,24 +346,24 @@ function GapRow({
               variant="outline"
               size="sm"
               disabled={busy}
-              aria-label={`Exclude the gap ${span}`}
+              aria-label={t("workspace:workSession.history.gap.excludeLabel", { span })}
               onClick={() => {
                 resolve(false)
               }}
             >
-              Exclude
+              {t("workspace:workSession.history.gap.exclude")}
             </Button>
             {review.resolution === undefined && (
               <Button
                 variant="ghost"
                 size="sm"
                 disabled={busy}
-                aria-label={`Keep the gap ${span} counted`}
+                aria-label={t("workspace:workSession.history.gap.keepLabel", { span })}
                 onClick={() => {
                   resolve(true)
                 }}
               >
-                Keep counted
+                {t("workspace:workSession.history.gap.keep")}
               </Button>
             )}
           </>

@@ -3,6 +3,7 @@ import { toast } from "sonner"
 
 import { useExecutions } from "@/hooks/use-executions"
 import { useSnapshot } from "@/hooks/use-status"
+import { useTranslation } from "@/i18n"
 import { api, errorMessage } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
 import { ExecutionStore } from "@/lib/executions"
@@ -41,6 +42,7 @@ function useNow(active: boolean) {
  * the deck or before the window opened shows the same way.
  */
 export function WorkflowRun(props: Props) {
+  const { t } = useTranslation()
   const { agent, profiles } = useAppContext()
   const executions = useExecutions()
   const all = useSnapshot(executions ?? NO_EXECUTIONS)
@@ -101,7 +103,7 @@ export function WorkflowRun(props: Props) {
     api
       .cancelExecution(id)
       .catch((e: unknown) =>
-        toast.error("The run was not cancelled", { description: errorMessage(e) }),
+        toast.error(t("workflows:run.toast.cancelFailed"), { description: errorMessage(e) }),
       )
   }
   const runBlocked = runBlockedReason({
@@ -143,7 +145,8 @@ export function WorkflowRun(props: Props) {
               onShow={setChosen}
               onCancel={cancel}
               projectKey={(id) =>
-                props.view.profile.projects.find((p) => p.id === id)?.key ?? "no project"
+                props.view.profile.projects.find((p) => p.id === id)?.key ??
+                t("workflows:run.project.none")
               }
               onClear={() => {
                 api
@@ -153,7 +156,7 @@ export function WorkflowRun(props: Props) {
                     setChosen(undefined)
                   })
                   .catch((e: unknown) =>
-                    toast.error("The run history was not cleared", {
+                    toast.error(t("workflows:run.toast.clearFailed"), {
                       description: errorMessage(e),
                     }),
                   )
@@ -173,7 +176,9 @@ export function WorkflowRun(props: Props) {
           .startWorkflow(props.profileId, workflowId)
           .then((execution) => executions?.apply({ type: "executionStarted", execution }))
           .catch((e: unknown) =>
-            toast.error(`“${props.initial.name}” did not start`, { description: errorMessage(e) }),
+            toast.error(t("workflows:run.toast.startFailed", { workflow: props.initial.name }), {
+              description: errorMessage(e),
+            }),
           )
           .finally(() => {
             setStarting(false)

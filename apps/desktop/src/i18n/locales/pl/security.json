@@ -1,0 +1,188 @@
+{
+  "locked": {
+    "title": "DeckPilot jest zablokowany",
+    "resumes": "Stream Deck wznowi działanie zaraz po odblokowaniu.",
+    "unlock": "Odblokuj DeckPilot"
+  },
+  "cannotOpen": {
+    "title": "DeckPilot nie może otworzyć konfiguracji",
+    "keyUnavailable": "Klucz jest przechowywany w: {{keyStore}}, ale nie został udostępniony. Odblokuj {{keyStore}} lub zaloguj się ponownie, a następnie spróbuj ponownie. Nic nie zostało zmienione.",
+    "keyDeleted": "Jeśli klucz został usunięty (na przykład po zresetowaniu pęku kluczy), tej konfiguracji nie da się już otworzyć. Przywróć zaszyfrowany eksport w nowej konfiguracji; zobacz dokumentację bezpieczeństwa."
+  },
+  "password": {
+    "label": "Hasło",
+    "repeat": "Powtórz hasło",
+    "show": "Pokaż hasło",
+    "hide": "Ukryj hasło",
+    "checking": "Sprawdzanie…",
+    "tooShort_one": "Użyj co najmniej {{count}} znak.",
+    "tooShort_few": "Użyj co najmniej {{count}} znaki.",
+    "tooShort_many": "Użyj co najmniej {{count}} znaków.",
+    "tooShort_other": "Użyj co najmniej {{count}} znaku.",
+    "mismatch": "Hasła nie są zgodne."
+  },
+  "keyStore": {
+    "waitingTitle": "Oczekiwanie na: {{keyStore}}",
+    "waitingDescription": "DeckPilot odczytuje swój klucz. Jeśli {{keyStore}} zapyta, czy DeckPilot może go użyć, zezwól na to."
+  },
+  "missingDatabase": {
+    "title": "Brak konfiguracji",
+    "description": "DeckPilot został skonfigurowany na tym komputerze, ale baza danych konfiguracji zniknęła — mogła zostać przeniesiona, usunięta lub znajduje się na niepodłączonym dysku. Nic nie zostało utworzone ani nadpisane.",
+    "startNewEllipsis": "Rozpocznij nową konfigurację…",
+    "startNew": "Rozpocznij nową konfigurację",
+    "creating": "Tworzenie…",
+    "startNewExplanation": "DeckPilot uruchomi się z pustą konfiguracją. Stary plik klucza zostanie zachowany obok, a jego klucz pozostanie w magazynie poświadczeń, więc starą konfigurację nadal można otworzyć, jeśli odnajdziesz jej bazę danych. Zaimportuj zaszyfrowany eksport, aby przywrócić profile.",
+    "restore": "Przywróć plik <file>{{file}}</file> do folderu danych (lub podłącz jego dysk) i spróbuj ponownie."
+  },
+  "newPassword": {
+    "encrypting": "Szyfrowanie…",
+    "notRecoverable": "Hasła nie można odzyskać. Zachowaj zaszyfrowany eksport jako kopię zapasową."
+  },
+  "systemKey": {
+    "usePassword": "Użyj hasła",
+    "agentNotRunning": "Agent DeckPilot działający w tle nie jest uruchomiony. Przechowuje on klucz i uruchamia się po zalogowaniu; uruchom go z Pulpitu lub spróbuj ponownie.",
+    "showLog": "Pokaż dziennik agenta"
+  },
+  "setup": {
+    "welcome": "Witamy w DeckPilot",
+    "passwordTitle": "Chroń DeckPilot hasłem",
+    "passwordDescription": "Konfiguracja jest szyfrowana kluczem utworzonym z tego hasła. Wprowadzasz je po każdym ponownym uruchomieniu.",
+    "create": "Utwórz zaszyfrowaną konfigurację",
+    "keyStoreFailed": "DeckPilot szyfruje konfigurację kluczem przechowywanym w: {{keyStore}}, ale nie udało się go tam zapisać."
+  },
+  "migrate": {
+    "title": "Zaszyfruj konfigurację",
+    "originalKept": "Niezaszyfrowany oryginał zostaje zachowany",
+    "originalReadable": "Dopóki nie usuniesz go w Ustawieniach, każdy z dostępem do Twoich plików może go odczytać.",
+    "passwordDescription": "Została zapisana przez wcześniejszą wersję DeckPilot bez szyfrowania. Wybierz hasło; wszystko zostanie zachowane.",
+    "encrypt": "Zaszyfruj konfigurację",
+    "keyStoreFailed": "Została zapisana przez wcześniejszą wersję DeckPilot bez szyfrowania. DeckPilot szyfruje ją kluczem przechowywanym w: {{keyStore}}, ale nie udało się zapisać klucza."
+  },
+  "unlock": {
+    "action": "Odblokuj",
+    "withTouchId": "Odblokuj za pomocą Touch ID",
+    "macPassword": "W oknie systemowym możesz też użyć hasła logowania do Maca.",
+    "passwordDescription": "Wprowadź hasło, aby odblokować DeckPilot.",
+    "reason": {
+      "idle": "Zablokowano po okresie bezczynności. Stream Deck wznowi działanie zaraz po odblokowaniu.",
+      "sleep": "Zablokowano, gdy komputer przeszedł w stan uśpienia. Stream Deck wznowi działanie zaraz po odblokowaniu.",
+      "screenLocked": "Zablokowano po zablokowaniu ekranu. Stream Deck wznowi działanie zaraz po odblokowaniu.",
+      "other": "Zablokowano. Stream Deck wznowi działanie zaraz po odblokowaniu."
+    }
+  },
+  "confirm": {
+    "title": "Potwierdź swoją tożsamość",
+    "passwordDescription": "Ustawienia bezpieczeństwa wymagają hasła przy uruchomieniu DeckPilot lub po aktualizacji.",
+    "systemDescription": "Ustawienia bezpieczeństwa wymagają uwierzytelnienia przy uruchomieniu DeckPilot lub po aktualizacji."
+  },
+  "authenticate": {
+    "purpose": "Uwierzytelnij się, aby: {{purpose}}.",
+    "password": {
+      "title": "Wprowadź hasło",
+      "text": "Hasło DeckPilot potwierdza tę zmianę.",
+      "action": "Potwierdź"
+    },
+    "touchId": {
+      "title": "Potwierdź swoją tożsamość",
+      "text": "Użyj Touch ID lub hasła logowania do Maca.",
+      "action": "Kontynuuj z Touch ID"
+    },
+    "devicePassword": {
+      "title": "Potwierdź swoją tożsamość",
+      "text": "Komputer poprosi o hasło logowania.",
+      "action": "Kontynuuj"
+    },
+    "confirmationOnly": {
+      "title": "Potwierdź tę zmianę",
+      "text": "Ten komputer nie oferuje uwierzytelniania systemowego, więc DeckPilot może jedynie poprosić o potwierdzenie. Jeśli z tego komputera korzystają inne osoby, ustaw hasło DeckPilot w Ustawieniach.",
+      "action": "Potwierdź"
+    }
+  },
+  "card": {
+    "intro": "Konfiguracja jest na tym komputerze zawsze zaszyfrowana (SQLCipher, AES-256). Te ustawienia określają, jak chroniony jest jej klucz i kiedy DeckPilot prosi o potwierdzenie tożsamości.",
+    "reEncrypting": "Ponowne szyfrowanie…",
+    "autoLock": {
+      "never": "Nigdy",
+      "sleep": "Gdy komputer przechodzi w stan uśpienia",
+      "screenLock": "Gdy ekran zostaje zablokowany lub komputer przechodzi w stan uśpienia",
+      "idle15Minutes": "Po 15 minutach bezczynności",
+      "idle1Hour": "Po 1 godzinie bezczynności"
+    },
+    "reauthentication": {
+      "sensitiveOnly": "Tylko przy operacjach poufnych",
+      "afterUpdate": "Po aktualizacjach i przy operacjach poufnych",
+      "everyLaunch": "Przy każdym uruchomieniu DeckPilot"
+    },
+    "purpose": {
+      "protection": "zmienić sposób ochrony konfiguracji",
+      "policy": "zmienić ustawienia bezpieczeństwa",
+      "deleteCopy": "usunąć niezaszyfrowaną kopię"
+    },
+    "unlockMethod": {
+      "title": "Metoda odblokowywania",
+      "systemKey": "Klucz systemowy · {{keyStore}}",
+      "systemKeyDescription": "Losowy klucz przechowywany w: <strong>{{keyStore}}</strong>, odblokowywany przy logowaniu. DeckPilot otwiera się bez hasła, także po ponownym uruchomieniu i aktualizacjach.",
+      "passwordDescription": "Klucz wyprowadzony z hasła DeckPilot (Argon2id). Hasło nie jest przechowywane; wprowadzasz je po każdym ponownym uruchomieniu komputera.",
+      "usePasswordEllipsis": "Użyj hasła…",
+      "useSystemKeyEllipsis": "Użyj klucza systemowego…",
+      "useSystemKeyTitle": "Przechowywać klucz w: {{keyStore}}?",
+      "useSystemKeyDescription": "DeckPilot utworzy nowy losowy klucz, zapisze go w: {{keyStore}} i ponownie zaszyfruje nim konfigurację. Hasło nie będzie już potrzebne. Jeśli zapisanie klucza się nie powiedzie, nic się nie zmieni.",
+      "useSystemKey": "Użyj klucza systemowego",
+      "systemKeyDone": "Klucz jest teraz przechowywany w: {{keyStore}}",
+      "protectionFailed": "Nie zmieniono sposobu ochrony"
+    },
+    "choosePassword": {
+      "description": "Konfiguracja zostanie ponownie zaszyfrowana kluczem wyprowadzonym z tego hasła. Będziesz je wprowadzać po każdym ponownym uruchomieniu komputera.",
+      "action": "Użyj tego hasła",
+      "done": "Konfiguracja jest teraz chroniona hasłem",
+      "failed": "Nie ustawiono hasła"
+    },
+    "policy": {
+      "title": "Blokowanie i uwierzytelnianie",
+      "unavailable": "Te opcje wymagają hasła DeckPilot lub uwierzytelniania systemowego, którego ten komputer nie oferuje przy kluczu systemowym.",
+      "saved": "Zapisano ustawienia bezpieczeństwa",
+      "notSaved": "Nie zapisano ustawień bezpieczeństwa",
+      "autoLock": "Blokuj automatycznie",
+      "autoLockDescription": "Po zablokowaniu Stream Deck wyświetla „Zablokowany” i nie wykonuje żadnych akcji.",
+      "noScreenLock": "Blokowanie razem z ekranem jest niedostępne: DeckPilot nie może wykryć blokady ekranu na tym komputerze.",
+      "reauthentication": "Wymagaj uwierzytelnienia",
+      "reauthenticationDescription": "Operacje poufne — eksport, zmiany szyfrowania, haseł i tych ustawień, usuwanie niezaszyfrowanej kopii — zawsze go wymagają. Przełączanie profili lub projektów, akcje urządzeń i przepływy pracy nigdy."
+    },
+    "lockNow": {
+      "label": "Zablokuj teraz",
+      "description": "Wstrzymuje akcje na urządzeniu Stream Deck do czasu ponownego odblokowania DeckPilot.",
+      "failed": "Nie zablokowano DeckPilot"
+    },
+    "systemAuthentication": {
+      "touchId": "Touch ID",
+      "title": "Uwierzytelnianie systemowe",
+      "touchIdDescription": "Touch ID (lub hasło logowania) odblokowuje DeckPilot po zablokowaniu i potwierdza operacje poufne. Sprawdza je macOS; DeckPilot nigdy nie widzi odcisku palca ani hasła.",
+      "description": "Hasło logowania odblokowuje DeckPilot po zablokowaniu i potwierdza operacje poufne. Sprawdza je system operacyjny.",
+      "available": "Dostępne"
+    },
+    "recovery": {
+      "title": "Kopia zapasowa i odzyskiwanie",
+      "systemKey": "Klucz przechowywany w: {{keyStore}} chroni konfigurację tylko na tym komputerze. Nie jest kopią zapasową: jeśli konto użytkownika, {{keyStore}} lub ten komputer zostaną utracone albo zresetowane, konfiguracji nie będzie można otworzyć.",
+      "password": "Zapomnianego hasła nie można odzyskać.",
+      "keepExport": "Jako kopię zapasową zachowaj <strong>zaszyfrowany eksport</strong> (Kopia zapasowa i przywracanie); ma własne hasło i można go zaimportować na dowolnym komputerze.",
+      "backupDir": "Kopie zapasowe przed uaktualnieniami"
+    },
+    "legacy": {
+      "title": "Pozostała niezaszyfrowana kopia starej konfiguracji",
+      "description": "Została zachowana podczas szyfrowania konfiguracji na wypadek problemów. Może ją odczytać każdy, kto ma dostęp do Twoich plików.",
+      "recoverable": "Usunięcie pliku nie gwarantuje, że jego zawartości nie da się odzyskać, zwłaszcza na dyskach SSD. Dokładne czyszczenie opisuje dokumentacja bezpieczeństwa.",
+      "delete": "Usuń niezaszyfrowaną kopię",
+      "confirmTitle": "Usunąć niezaszyfrowaną kopię?",
+      "confirmDescription": "Zaszyfrowana konfiguracja pozostanie bez zmian. Usunięcie pliku usuwa go z systemu plików; na dyskach SSD i w kopiach zapasowych jego zawartość może nadal dać się odzyskać.",
+      "deleted": "Usunięto niezaszyfrowaną kopię",
+      "notDeleted": "Nie usunięto niezaszyfrowanej kopii"
+    },
+    "changePassword": {
+      "title": "Zmień hasło",
+      "current": "Bieżące hasło",
+      "done": "Zmieniono hasło",
+      "failed": "Nie zmieniono hasła",
+      "next": "Sprawdź bieżące hasło i spróbuj ponownie"
+    }
+  }
+}

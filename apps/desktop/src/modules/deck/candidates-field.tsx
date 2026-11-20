@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { useTranslation } from "@/i18n"
 import type { ActionInstance, Workflow } from "@/lib/types"
 
 import {
@@ -40,27 +41,26 @@ export function CandidatesField({
   workflows: Pick<Workflow, "id" | "name">[]
   onChange: (text: string) => void
 }) {
+  const { t } = useTranslation()
   const lines = parseCandidates(value)
   const offered = actions.filter((a) => a.actionType !== RANDOM_TYPE)
-  const name = (target: string) => {
+  const exists = (target: string) => {
     const [kind, ref] = target.split(":")
-    const found =
-      kind === "action"
-        ? actions.find((a) => a.id === ref)?.name
-        : workflows.find((w) => w.id === ref)?.name
-    return found ?? "Missing"
+    return kind === "action"
+      ? actions.some((a) => a.id === ref)
+      : workflows.some((w) => w.id === ref)
   }
   const set = (next: CandidateLine[]) => {
     onChange(formatCandidates(next))
   }
   const options = (current?: string) => (
     <>
-      {current && name(current) === "Missing" && (
-        <SelectItem value={current}>Missing (deleted)</SelectItem>
+      {current && !exists(current) && (
+        <SelectItem value={current}>{t("actions:deck.missingDeleted")}</SelectItem>
       )}
       {offered.length > 0 && (
         <SelectGroup>
-          <SelectLabel>Actions</SelectLabel>
+          <SelectLabel>{t("actions:deck.groupActions")}</SelectLabel>
           {offered.map((a) => (
             <SelectItem key={a.id} value={`action:${a.id}`}>
               {a.name}
@@ -70,7 +70,7 @@ export function CandidatesField({
       )}
       {workflows.length > 0 && (
         <SelectGroup>
-          <SelectLabel>Workflows</SelectLabel>
+          <SelectLabel>{t("actions:deck.groupWorkflows")}</SelectLabel>
           {workflows.map((w) => (
             <SelectItem key={w.id} value={`workflow:${w.id}`}>
               {w.name}
@@ -83,13 +83,15 @@ export function CandidatesField({
   return (
     <div className="grid gap-2" id={id}>
       {lines.length === 0 && (
-        <p className="text-sm text-muted-foreground">Add what the key picks from.</p>
+        <p className="text-sm text-muted-foreground">{t("actions:deck.candidates.empty")}</p>
       )}
       <ol className="grid gap-2">
         {lines.map((line, index) => (
           <li key={index} className="flex flex-wrap items-center gap-2">
             {line.raw !== undefined ? (
-              <span className="text-sm text-destructive">Unreadable: {line.raw}</span>
+              <span className="text-sm text-destructive">
+                {t("actions:deck.unreadable", { line: line.raw })}
+              </span>
             ) : (
               <>
                 <Select
@@ -98,7 +100,10 @@ export function CandidatesField({
                     set(lines.map((l, i) => (i === index ? { ...l, target } : l)))
                   }}
                 >
-                  <SelectTrigger className="w-56" aria-label={`Candidate ${index + 1}`}>
+                  <SelectTrigger
+                    className="w-56"
+                    aria-label={t("actions:deck.candidates.candidate", { number: index + 1 })}
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>{options(line.target)}</SelectContent>
@@ -108,7 +113,7 @@ export function CandidatesField({
                   className="h-8 w-20"
                   min={1}
                   max={MAX_WEIGHT}
-                  aria-label={`Weight of candidate ${index + 1}`}
+                  aria-label={t("actions:deck.candidates.weight", { number: index + 1 })}
                   value={line.weight}
                   onChange={(e) => {
                     const weight = Math.round(Number(e.target.value))
@@ -122,7 +127,7 @@ export function CandidatesField({
             <Button
               variant="ghost"
               size="icon"
-              aria-label={`Remove candidate ${index + 1}`}
+              aria-label={t("actions:deck.candidates.remove", { number: index + 1 })}
               onClick={() => {
                 set(lines.filter((_, i) => i !== index))
               }}
@@ -138,14 +143,12 @@ export function CandidatesField({
           set([...lines, { target, weight: 1 }])
         }}
       >
-        <SelectTrigger className="w-56" aria-label="Add a candidate">
-          <SelectValue placeholder="Add an action or workflow" />
+        <SelectTrigger className="w-56" aria-label={t("actions:deck.candidates.add")}>
+          <SelectValue placeholder={t("actions:deck.candidates.addPlaceholder")} />
         </SelectTrigger>
         <SelectContent>{options()}</SelectContent>
       </Select>
-      <p className="text-xs text-muted-foreground">
-        A candidate with weight 3 is picked three times as often as one with weight 1.
-      </p>
+      <p className="text-xs text-muted-foreground">{t("actions:deck.candidates.hint")}</p>
     </div>
   )
 }

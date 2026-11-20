@@ -28,7 +28,7 @@ pub(crate) const ALL_METHODS: [HttpMethod; 6] = [
     HttpMethod::Delete,
 ];
 
-const KINDS: [PermissionKind; 9] = [
+const KINDS: [PermissionKind; 10] = [
     PermissionKind::Network,
     PermissionKind::Credentials,
     PermissionKind::Notifications,
@@ -38,6 +38,7 @@ const KINDS: [PermissionKind; 9] = [
     PermissionKind::OpenUrl,
     PermissionKind::Background,
     PermissionKind::Device,
+    PermissionKind::Dialogs,
 ];
 
 pub(crate) fn parse_kind(text: &str) -> Option<PermissionKind> {
@@ -151,6 +152,8 @@ pub enum GrantScope {
     },
     DeviceState,
     DeviceIcons,
+    /// Standard dialogs drawn by DeckPilot (plugin API 1.5).
+    Dialogs,
 }
 
 /// The consent tier of a grant (architecture section 5.2).
@@ -179,7 +182,8 @@ impl GrantScope {
             | Self::Profile { .. }
             | Self::Variable
             | Self::OpenUrl
-            | Self::Background { .. } => Tier::Medium,
+            | Self::Background { .. }
+            | Self::Dialogs => Tier::Medium,
         }
     }
 
@@ -420,6 +424,10 @@ impl GrantSet {
                     GrantScope::Background {
                         min_interval_seconds: *min_interval_seconds,
                     },
+                ),
+                Permission::Dialogs { .. } => set.insert(
+                    GrantKey::new(PermissionKind::Dialogs, ""),
+                    GrantScope::Dialogs,
                 ),
                 Permission::Device { state, icons, .. } => {
                     if *state == Some(true) {
@@ -775,6 +783,7 @@ mod tests {
             "credentials:token",
             "variables:git.*",
             "device:state",
+            "dialogs",
         ] {
             let key: GrantKey = text.parse().unwrap();
             assert_eq!(key.to_string(), text);
@@ -873,6 +882,34 @@ mod tests {
         assert_eq!(slot(true).tier(), Tier::High);
         assert_eq!(GrantScope::Notifications.tier(), Tier::Low);
         assert_eq!(GrantScope::Variable.tier(), Tier::Medium);
+        // Plugin dialogs (plugin API 1.5): medium, like opening a page.
+        assert_eq!(GrantScope::Dialogs.tier(), Tier::Medium);
+        assert_eq!(
+            serde_json::to_value(GrantScope::Dialogs).unwrap(),
+            serde_json::json!({"type": "dialogs"})
+        );
+        assert!(GrantScope::Dialogs.covers(&GrantScope::Dialogs));
+    }
+
+    #[test]
+    fn the_dialogs_permission_is_one_medium_grant() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/example-manifest.json")).unwrap();
+        value["engines"]["pluginApi"] = "^1.5".into();
+        value["permissions"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"kind": "dialogs",
+                "justification": "Asks which repository to open."}));
+        let manifest = Manifest::from_json(&value.to_string()).unwrap();
+        let set = GrantSet::from_manifest(&manifest);
+        let key: GrantKey = "dialogs".parse().unwrap();
+        let (_, scope) = set
+            .iter()
+            .find(|(k, _)| **k == key)
+            .expect("a dialogs grant");
+        assert_eq!(scope, &GrantScope::Dialogs);
+        assert_eq!(scope.tier(), Tier::Medium);
     }
 
     fn diff_fixture() -> (Vec<StoredGrant>, GrantSet) {

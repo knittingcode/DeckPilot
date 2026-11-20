@@ -1,3 +1,6 @@
+import { currentLanguage, i18n } from "@/i18n"
+import { formatList } from "@/i18n/format"
+
 import type { ActionType, ModuleInfo } from "./types"
 
 /** The module that provides an action type, enabled or not. */
@@ -16,12 +19,15 @@ export function creatableTypes(types: ActionType[]): ActionType[] {
 /** Whether the user can switch a module on or off now, and why not. */
 export interface ModuleToggle {
   allowed: boolean
-  /** Explains a disabled switch; `null` when switching is allowed. */
+  /** Explains a disabled switch, in the window's language; `null` when switching is allowed. */
   reason: string | null
 }
 
 function names(modules: ModuleInfo[], ids: string[]) {
-  return ids.map((id) => modules.find((m) => m.id === id)?.name ?? id).join(", ")
+  return formatList(
+    currentLanguage(),
+    ids.map((id) => modules.find((m) => m.id === id)?.name ?? id),
+  )
 }
 
 /** Mirrors the rules the backend enforces when a module is enabled or disabled. */
@@ -31,20 +37,29 @@ export function moduleToggle(module: ModuleInfo, modules: ModuleInfo[]): ModuleT
     if (dependents.length > 0) {
       return {
         allowed: false,
-        reason: `Required by ${names(
-          modules,
-          dependents.map((m) => m.id),
-        )}. Disable ${dependents.length === 1 ? "it" : "them"} first.`,
+        reason: i18n.t("settings:modules.toggle.requiredBy", {
+          count: dependents.length,
+          modules: names(
+            modules,
+            dependents.map((m) => m.id),
+          ),
+        }),
       }
     }
     return { allowed: true, reason: null }
   }
   if (!module.supported) {
-    return { allowed: false, reason: "Not available on this operating system." }
+    return { allowed: false, reason: i18n.t("settings:modules.toggle.unsupported") }
   }
   const missing = module.dependencies.filter((id) => !modules.some((m) => m.id === id))
   if (missing.length > 0) {
-    return { allowed: false, reason: `Requires ${missing.join(", ")}, which is not installed.` }
+    return {
+      allowed: false,
+      reason: i18n.t("settings:modules.toggle.notInstalled", {
+        count: missing.length,
+        modules: formatList(currentLanguage(), missing),
+      }),
+    }
   }
   const disabled = module.dependencies.filter(
     (id) => !modules.some((m) => m.id === id && m.enabled),
@@ -52,7 +67,10 @@ export function moduleToggle(module: ModuleInfo, modules: ModuleInfo[]): ModuleT
   if (disabled.length > 0) {
     return {
       allowed: false,
-      reason: `Requires ${names(modules, disabled)}. Enable ${disabled.length === 1 ? "it" : "them"} first.`,
+      reason: i18n.t("settings:modules.toggle.requires", {
+        count: disabled.length,
+        modules: names(modules, disabled),
+      }),
     }
   }
   return { allowed: true, reason: null }

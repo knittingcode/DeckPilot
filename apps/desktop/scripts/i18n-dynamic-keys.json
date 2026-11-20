@@ -1,0 +1,21 @@
+{
+  "description": "Translation keys the sources build at run time, so the i18n check cannot find them as literals (docs/i18n.md). One pattern per entry, `*` matches any characters, e.g. \"notifications:severity.*\". Prefer a literal map of keys in the source instead.",
+  "keys": [
+    "errors:locked",
+    "errors:confirmationRequired",
+    "errors:authenticationRequired",
+    "errors:notFound.*",
+    "errors:invalid.*",
+    "errors:storage.*",
+    "errors:registry.*",
+    "errors:engine.*",
+    "errors:module.*",
+    "errors:catalog.*",
+    "errors:profile.*",
+    "errors:projectContext.*",
+    "errors:agent.*",
+    "errors:pluginAction.*",
+    "editor:assets.categories.*",
+    "editor:assets.gradients.*"
+  ]
+}

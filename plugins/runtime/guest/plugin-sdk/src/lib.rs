@@ -86,7 +86,7 @@
 //! | --- | --- | --- |
 //! | [`SDK_VERSION`] | this crate's semver | breaking Rust API changes bump the major (the minor while 0.x) |
 //! | [`API_LEVEL`] | 1.0 | plugin API level (design §6.5) a plugin needs by default |
-//! | [`LATEST_API_LEVEL`] | 1.3 | highest plugin API level this SDK implements |
+//! | [`LATEST_API_LEVEL`] | 1.6 | highest plugin API level this SDK implements |
 //! | [`ABI_VERSION`] | 1 | guest ABI; checked at compile time |
 #![deny(unsafe_code)]
 
@@ -94,6 +94,7 @@ mod args;
 mod context;
 mod controls;
 mod definition;
+pub mod dialog;
 mod output;
 pub mod testing;
 
@@ -101,7 +102,7 @@ pub use args::{Args, FromArg};
 pub use context::{
     CapabilityError, CapabilityErrorKind, Context, MAX_LOG_LEN, MAX_RANDOM_BYTES, NotifyDelivery,
     Now, Request, Response, RunCause, RunContext, RunSummary, RunTrigger, SecretHandle, Settings,
-    StorageUsage,
+    StorageUsage, TranslateArg,
 };
 pub use controls::{Control, Controls, Input, MAX_INPUTS_PER_CONTROL};
 pub use definition::{Action, DefinitionError, Handler, Param, Plugin, StateHandler};
@@ -154,8 +155,20 @@ pub const API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 0 };
 /// The highest plugin API level this SDK implements: 1.1 adds
 /// [`Context::now`] and [`Context::random_bytes`], 1.2 key state
 /// ([`Action::state`]), 1.3 the controls an action declares
-/// ([`Action::controls`]).
-pub const LATEST_API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 3 };
+/// ([`Action::controls`]), 1.4 nothing for the guest (manifest
+/// dependencies), 1.5 standard dialogs ([`Context::dialog`]), 1.6 the
+/// app's language and the plugin's own translations ([`Context::locale`],
+/// [`Context::t`]; `locales` in the manifest).
+pub const LATEST_API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 6 };
+
+/// The plugin API level that introduced [`Context::locale`],
+/// [`Context::t`] and the manifest's `locales`: a plugin that uses them
+/// needs it.
+pub const LOCALIZATION_API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 6 };
+
+/// The plugin API level that introduced [`Context::dialog`]: a plugin that
+/// shows dialogs needs it (and the `dialogs` permission).
+pub const DIALOGS_API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 5 };
 
 /// The plugin API level that introduced [`Action::controls`]: a plugin
 /// declaring controls needs it.

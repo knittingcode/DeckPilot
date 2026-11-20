@@ -377,7 +377,7 @@ describe("the consent dialog", () => {
     )
     await user.click(screen.getByRole("radio", { name: "Allow" }))
     await user.click(screen.getByRole("button", { name: "Confirm" }))
-    expect(await screen.findByText("the plugin store refused")).toBeInTheDocument()
+    expect(await screen.findByRole("alert")).toHaveTextContent("the plugin store refused")
     expect(onClose).not.toHaveBeenCalled()
   })
 })

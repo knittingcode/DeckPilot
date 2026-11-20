@@ -20,11 +20,12 @@ use deckpilot_core::variables::{
 use deckpilot_core::work_session::WorkSessionSnapshot;
 use deckpilot_core::{
     ActionInstanceId, ActionResult, ActionStatus, ContextEffect, CycleDirection, ExecutionId,
-    ExecutionRecord, ExecutionSummary, LayoutId, LayoutStatus, ProfileId, Project, ProjectId,
-    WorkSessionId, WorkflowId, WorkflowReport,
+    ExecutionRecord, ExecutionSummary, LayoutId, LayoutStatus, PageId, ProfileId, Project,
+    ProjectId, WorkSessionId, WorkflowId, WorkflowReport,
 };
 use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceDescriptor, DeviceId};
 
+use crate::plugin_dialogs::check_answer_ids;
 use crate::plugins;
 use crate::work_session::{MAX_WORK_SESSION_LIST, WorkSessionSettings, WorkSessionSummary};
 
@@ -95,7 +96,94 @@ use crate::work_session::{MAX_WORK_SESSION_LIST, WorkSessionSettings, WorkSessio
 /// [`plugins::feature::PAGED_ANSWERS`]; an answer too large for a client
 /// that does not use them is shortened or refused with
 /// [`plugins::reason::ANSWER_TOO_LARGE`] ([`crate::plugin_answers`]).
-pub const PROTOCOL_VERSION: u32 = 11;
+///
+/// Version 12: plugin dialogs (capability `pluginDialogs`, plugin API 1.5,
+/// [`crate::plugin_dialogs`]). A client that renders them announces the
+/// feature in `subscribePluginEvents` (`features: ["pluginDialogs"]`);
+/// only such a connection receives `dialogOpened` and `dialogClosed` plugin
+/// events and may send `answerPluginDialog`. A client of protocol 11 or
+/// older never announces it, so it receives none of them, and a plugin
+/// that asks for a dialog while no such client is connected gets
+/// `unavailable`. Nothing older clients receive changes.
+///
+/// Version 13: the app's language (capability `locale`, plugin API 1.6,
+/// `docs/i18n.md`). The app sends its effective language with `setLocale`
+/// when it connects and whenever it changes; the agent then shows the
+/// plugins' manifest texts in it (`t:` keys resolved against each plugin's
+/// own verified locale files), draws the texts it produces itself on keys
+/// and in the tray in it, and gives it to plugins (`locale.get`,
+/// `locale.translate`). [`AgentStatus::locale`] reports it. A client of
+/// protocol 12 or older never sends it, and every connection keeps
+/// working in English; the client refuses `setLocale` before sending it to
+/// an older agent.
+///
+/// Version 14: simulated presses for the editor's interactive preview
+/// (capability `simulateInput`, [`crate::simulation`],
+/// `docs/editor-navigation-and-simulation.md`). `simulatePress` presses a
+/// control of a connected device (single, double or long) through the
+/// agent's own gesture engine and dispatch, on a lane separate from the
+/// device's physical input, after checking that the device shows the
+/// profile, layout and page the app shows; presses that may change
+/// something outside DeckPilot need `confirmed`. A client of protocol 13
+/// or older never sends it (the client refuses it locally, the agent
+/// refuses it from an older connection); nothing older clients receive
+/// changes. Action types may carry `editorNavigation` (plugin API 1.7), an
+/// optional field older clients ignore.
+///
+/// Version 15: restoring bundled first-party plugins (capability
+/// `restoreBundled`, plugin runtime feature
+/// [`plugins::feature::RESTORE_BUNDLED`]). `restoreBundledPlugin` installs
+/// again, from the application bundle and verified against the pins
+/// compiled into the agent, a bundled plugin the user uninstalled (its
+/// tombstone is cleared), or reinstalls one whose installed copy is
+/// broken; it answers the plugin's details. `listKnownPlugins` marks the
+/// uninstalled bundled plugins the agent can restore
+/// ([`plugins::KnownPlugin::restorable`], an optional field older clients
+/// ignore). A client of protocol 14 or older never sends it (the client
+/// refuses it locally, the agent refuses it from an older connection);
+/// nothing older clients send or receive changes.
+///
+/// Version 16: the editor's live preview (capability `livePreview`,
+/// [`crate::live_preview`], `docs/editor-navigation-and-simulation.md`).
+/// `beginLivePreview` opens a session on one device for one profile and
+/// layout, owned by the connection; `applyLivePreview` sends revisions of
+/// the unsaved working layout in page-level parts, which the device shows
+/// and runs without anything being saved (revisions only go forward);
+/// `navigateLivePreview` shows a page or layout on the device as the
+/// editor navigated, never by running a binding; `endLivePreview` closes
+/// it. The owner receives `livePreview` messages when the device's
+/// navigation changes by itself, and when the session ends. When the
+/// connection ends, the device shows the saved configuration again.
+/// `inspectMockDevice` (mock devices only, like `simulateInput`) reports a
+/// simulated device's frames and navigation for checks. `DeviceInfo`
+/// carries `pageId`, an optional field. A client of protocol 15 or older
+/// never sends the new requests (refused locally, and by the agent from
+/// such a connection) and receives no `livePreview` messages.
+pub const PROTOCOL_VERSION: u32 = 16;
+
+/// Longest locale tag `setLocale` accepts (`zh-Hant-TW` is 10).
+pub const MAX_LOCALE_TAG: usize = 16;
+
+/// Whether `tag` has the shape of a BCP 47 language tag of a language,
+/// optionally a script and a region (`pl`, `pl-PL`, `zh-Hant-TW`,
+/// `es-419`); `_` separators are accepted. Only the tag: never the
+/// system's other locale settings.
+pub fn is_locale_tag(tag: &str) -> bool {
+    if tag.is_empty() || tag.len() > MAX_LOCALE_TAG {
+        return false;
+    }
+    let mut parts = tag.split(['-', '_']);
+    let language_ok = parts
+        .next()
+        .is_some_and(|l| (2..=3).contains(&l.len()) && l.bytes().all(|b| b.is_ascii_alphabetic()));
+    language_ok
+        && parts.all(|part| {
+            let alpha = part.bytes().all(|b| b.is_ascii_alphabetic());
+            (alpha && matches!(part.len(), 2 | 4))
+                || (part.len() == 3 && part.bytes().all(|b| b.is_ascii_digit()))
+        })
+        && tag.split(['-', '_']).count() <= 3
+}
 
 /// Most references one `previewReferences` may ask about.
 pub const MAX_PREVIEW_ITEMS: usize = 200;
@@ -237,10 +325,27 @@ pub enum Capability {
     /// messages. Without it the app's previews show no live values.
     /// Protocol 11.
     KeyStates,
+    /// Plugin dialogs: `dialogOpened`/`dialogClosed` plugin events for a
+    /// connection that announced the feature, and `answerPluginDialog`.
+    /// Protocol 12.
+    PluginDialogs,
+    /// The app's language: `setLocale`, [`AgentStatus::locale`], plugin
+    /// texts in that language. Protocol 13.
+    Locale,
+    /// Simulated presses for the editor's interactive preview:
+    /// `simulatePress`. Protocol 14.
+    SimulateInput,
+    /// Restoring bundled first-party plugins: `restoreBundledPlugin`.
+    /// Protocol 15.
+    RestoreBundled,
+    /// The editor's live preview: `beginLivePreview`, `applyLivePreview`,
+    /// `navigateLivePreview`, `endLivePreview` and `livePreview` messages.
+    /// Protocol 16.
+    LivePreview,
 }
 
 impl Capability {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 16] = [
         Self::Workflows,
         Self::PrepareForUpdate,
         Self::ModuleNamespaces,
@@ -252,6 +357,11 @@ impl Capability {
         Self::VariableRegistry,
         Self::Plugins,
         Self::KeyStates,
+        Self::PluginDialogs,
+        Self::Locale,
+        Self::SimulateInput,
+        Self::RestoreBundled,
+        Self::LivePreview,
     ];
 
     /// The protocol that introduced the capability.
@@ -267,6 +377,11 @@ impl Capability {
             Self::VariableRegistry => 9,
             Self::Plugins => 10,
             Self::KeyStates => 11,
+            Self::PluginDialogs => 12,
+            Self::Locale => 13,
+            Self::SimulateInput => 14,
+            Self::RestoreBundled => 15,
+            Self::LivePreview => 16,
         }
     }
 
@@ -475,9 +590,16 @@ pub enum Request {
     /// with `migrations`, also [`plugins::PluginEvent::MigrationChanged`].
     /// Since protocol 10 (`migrations` is optional and omitted when false,
     /// so the request is the original one; an older agent ignores it).
+    /// `features` announces what this client renders: with
+    /// [`plugin_dialogs::FEATURE`](crate::plugin_dialogs::FEATURE) on a
+    /// protocol 12 connection, also plugin dialogs (optional and omitted
+    /// when empty; an older agent ignores it, and an agent ignores it on a
+    /// connection of an older protocol).
     SubscribePluginEvents {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         migrations: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        features: Vec<String>,
     },
     /// Whether plugins can be used here, and why not. Answered whatever
     /// the plugin runtime's state. Since protocol 10.
@@ -511,13 +633,20 @@ pub enum Request {
     /// Since protocol 10, feature [`plugins::feature::PAGED_ANSWERS`].
     /// With `navigation` (feature [`plugins::feature::NAVIGATION`]), the
     /// icon of one of its navigation entries instead; omitted when absent,
-    /// so the request is the original one.
+    /// so the request is the original one. With `asset`, a visual asset's
+    /// image file (plugin API 1.8).
     GetPluginIcon {
         plugin: String,
         #[serde(default)]
         offset: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         navigation: Option<plugins::NavigationIconRef>,
+        /// With `asset` (feature [`plugins::feature::VISUAL_ASSETS`]), the
+        /// file of one of its visual assets
+        /// ([`plugins::PluginVisualAsset::asset`]) instead; omitted when
+        /// absent, so the request is the original one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        asset: Option<String>,
     },
     /// The plugins the verified registry offers; `refresh` re-reads the
     /// registry first. Since protocol 10.
@@ -728,16 +857,113 @@ pub enum Request {
         plugin: String,
         setting: String,
     },
+    /// Answers a plugin dialog this connection received
+    /// ([`plugins::PluginEvent::DialogOpened`]). Only on a connection that
+    /// announced [`plugin_dialogs::FEATURE`](crate::plugin_dialogs::FEATURE);
+    /// `plugin` must be the dialog's plugin. The agent validates the
+    /// answer against the dialog and refuses one that does not fit
+    /// (`invalidRequest`; the dialog stays open); an answer to a dialog
+    /// that is no longer open is refused with `notFound`. Answers `ok`.
+    /// Since protocol 12.
+    AnswerPluginDialog {
+        dialog: String,
+        plugin: String,
+        answer: crate::plugin_dialogs::DialogAnswer,
+    },
+    /// The app's effective language as a BCP 47 tag (`en`, `pl`,
+    /// `pl-PL`): the agent shows plugin texts, the texts it draws on keys
+    /// and the tray in it, and tells plugins. Application-wide (the last
+    /// one sent applies); sent by the app when it connects and when the
+    /// language changes. Plugins whose texts changed are announced with
+    /// `changed` plugin events. Answers `ok`. Since protocol 13.
+    SetLocale {
+        locale: String,
+    },
+    /// Presses `control` of the connected `device` as the user would
+    /// (`kind`: single, double or long), through the agent's gesture
+    /// engine and dispatch, on a lane of its own; only while the device
+    /// shows `page` of `layout` in the active `profile`. A press that may
+    /// change something outside DeckPilot runs only with `confirmed`;
+    /// the settings that gate such actions still apply. Answers
+    /// [`Response::SimulatedPress`]. Since protocol 14
+    /// ([`crate::simulation`]).
+    SimulatePress {
+        device: DeviceId,
+        profile: ProfileId,
+        layout: LayoutId,
+        page: PageId,
+        control: ControlId,
+        kind: crate::simulation::PressKind,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        confirmed: bool,
+    },
+    /// Installs again, from the application bundle, the bundled
+    /// first-party `plugin` the user uninstalled (clearing their
+    /// tombstone), or reinstalls it over a broken installed copy, verified
+    /// against the pins compiled into the agent; answers
+    /// [`Response::Plugin`]. Refused for a plugin this agent does not
+    /// bundle or pin and for one that is installed and not broken.
+    /// Since protocol 15, feature [`plugins::feature::RESTORE_BUNDLED`].
+    RestoreBundledPlugin {
+        plugin: String,
+    },
+    /// Opens a live preview session on `device` for `layout` of the active
+    /// `profile`, owned by this connection (it replaces this connection's
+    /// previous session); its working layout starts as the saved one. With
+    /// `navigation`, the device is first shown there (the editor resumes);
+    /// without, it stays where it is. Answers
+    /// [`Response::LivePreviewStarted`]. Since protocol 16
+    /// ([`crate::live_preview`]).
+    BeginLivePreview {
+        device: DeviceId,
+        profile: ProfileId,
+        layout: LayoutId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        navigation: Option<crate::live_preview::EditorNavigation>,
+    },
+    /// One part of `revision` of the session's working layout; with
+    /// `last`, the revision is applied. Revisions only go forward. Answers
+    /// [`Response::LivePreviewApplied`]. Since protocol 16.
+    ApplyLivePreview {
+        session: u64,
+        revision: u64,
+        part: Box<crate::live_preview::LayoutPatch>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        last: bool,
+    },
+    /// Shows the device where the editor navigated; nothing runs. Answers
+    /// [`Response::LivePreviewNavigated`]. Since protocol 16.
+    NavigateLivePreview {
+        session: u64,
+        navigation: crate::live_preview::EditorNavigation,
+    },
+    /// Ends the session: the device shows the saved configuration again.
+    /// Answers `ok`. Since protocol 16.
+    EndLivePreview {
+        session: u64,
+    },
+    /// What a simulated device shows: its frames (hashed) and navigation.
+    /// Only accepted when the agent runs with mock devices. Answers
+    /// [`Response::MockDevice`]. Since protocol 16.
+    InspectMockDevice {
+        device: DeviceId,
+    },
 }
 
 impl Request {
     /// Checks constraints that the type system does not express.
+    #[allow(clippy::too_many_lines)] // One arm per bounded request.
     pub fn validate(&self) -> Result<(), String> {
         match self {
             Self::SetBrightness { percent } if *percent > 100 => {
                 Err(format!("brightness {percent} is outside 0-100"))
             }
-            Self::SimulateInput { device, .. } if device.serial.is_empty() => {
+            Self::SimulateInput { device, .. }
+            | Self::SimulatePress { device, .. }
+            | Self::BeginLivePreview { device, .. }
+            | Self::InspectMockDevice { device }
+                if device.serial.is_empty() =>
+            {
                 Err("device serial must not be empty".into())
             }
             Self::Unlock { key } | Self::UseSystemKey { key } if !key.is_well_formed() => {
@@ -750,6 +976,29 @@ impl Request {
                 limit: Some(limit), ..
             } if *limit == 0 || *limit > MAX_EXECUTION_LIST => {
                 Err(format!("limit must be between 1 and {MAX_EXECUTION_LIST}"))
+            }
+            Self::AnswerPluginDialog { dialog, plugin, .. } => check_answer_ids(dialog, plugin),
+            Self::BeginLivePreview {
+                navigation: Some(navigation),
+                ..
+            }
+            | Self::NavigateLivePreview { navigation, .. } => {
+                crate::live_preview::check_navigation(navigation)
+            }
+            Self::ApplyLivePreview { part, .. }
+                if part.pages.len() > crate::live_preview::MAX_PAGES
+                    || part
+                        .header
+                        .as_ref()
+                        .is_some_and(|h| h.order.len() > crate::live_preview::MAX_PAGES) =>
+            {
+                Err(format!(
+                    "a layout has at most {} pages",
+                    crate::live_preview::MAX_PAGES
+                ))
+            }
+            Self::SetLocale { locale } if !is_locale_tag(locale) => {
+                Err("locale must be a language tag such as `en`, `pl` or `pl-PL`".into())
             }
             Self::WatchKeyStates { actions, .. } if actions.len() > MAX_WATCHED_KEYS => Err(
                 format!("at most {MAX_WATCHED_KEYS} keys can be watched at once"),
@@ -770,6 +1019,7 @@ impl Request {
             | Self::DeclinePluginUpdate { plugin }
             | Self::RollbackPlugin { plugin }
             | Self::UninstallPlugin { plugin, .. }
+            | Self::RestoreBundledPlugin { plugin }
             | Self::GetPluginSettings { plugin }
             | Self::ListPluginCredentials { plugin } => plugins::check_text("plugin", plugin),
             Self::SetPluginSettings { .. }
@@ -911,6 +1161,11 @@ pub enum ServerMessage {
     /// on this connection. Since protocol 11.
     KeyStates {
         states: Vec<KeyStateEntry>,
+    },
+    /// The live preview session of this connection: the device navigated
+    /// by itself, or the session ended. Since protocol 16.
+    LivePreview {
+        event: crate::live_preview::LivePreviewEvent,
     },
 }
 
@@ -1089,6 +1344,33 @@ pub enum Response {
     /// migration as it stands after the decision. Since protocol 10.
     ModuleMigration {
         migration: Box<plugins::ModuleMigrationInfo>,
+    },
+    /// Answer to `simulatePress`. Since protocol 14.
+    SimulatedPress {
+        outcome: crate::simulation::SimulationOutcome,
+    },
+    /// Answer to `beginLivePreview`: the session and what the device shows
+    /// now. Since protocol 16.
+    LivePreviewStarted {
+        session: u64,
+        navigation: crate::live_preview::DeviceNavigation,
+    },
+    /// Answer to `applyLivePreview`: `applied` once the revision's last
+    /// part arrived and it is shown. Since protocol 16.
+    LivePreviewApplied {
+        session: u64,
+        revision: u64,
+        applied: bool,
+    },
+    /// Answer to `navigateLivePreview`: what the device shows now. Since
+    /// protocol 16.
+    LivePreviewNavigated {
+        session: u64,
+        navigation: crate::live_preview::DeviceNavigation,
+    },
+    /// Answer to `inspectMockDevice`. Since protocol 16.
+    MockDevice {
+        inspection: Box<crate::live_preview::MockDeviceInspection>,
     },
     Ok,
 }
@@ -1381,6 +1663,15 @@ impl Request {
             | Self::GrantPluginUserOrigin { .. }
             | Self::RevokePluginUserOrigin { .. } => 10,
             Self::WatchKeyStates { .. } => 11,
+            Self::AnswerPluginDialog { .. } => 12,
+            Self::SetLocale { .. } => 13,
+            Self::SimulatePress { .. } => 14,
+            Self::RestoreBundledPlugin { .. } => 15,
+            Self::BeginLivePreview { .. }
+            | Self::ApplyLivePreview { .. }
+            | Self::NavigateLivePreview { .. }
+            | Self::EndLivePreview { .. }
+            | Self::InspectMockDevice { .. } => 16,
             Self::RunWorkflow { .. } | Self::PrepareForUpdate => 2,
             Self::GetStatus
             | Self::ListDevices
@@ -1494,6 +1785,11 @@ pub struct DeviceInfo {
     /// older clients ignore it, so it needs no new protocol.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_layout: Option<LayoutId>,
+    /// The id of the page shown ([`DeviceInfo::page`] is its name). An
+    /// optional field: older clients ignore it and older agents leave it
+    /// out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_id: Option<PageId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1550,6 +1846,11 @@ pub struct AgentStatus {
     /// GitHub builds. Older apps ignore the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distribution: Option<DistributionRecord>,
+    /// The language the agent draws its own texts and plugin texts in, as
+    /// the app last set it (`setLocale`, protocol 13). `None` from older
+    /// agents and before any app set one: English. Older apps ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
 }
 
 /// A build's distribution record as it crosses the IPC boundary.
@@ -2182,7 +2483,7 @@ mod tests {
             serde_json::to_value(Capability::VariableRegistry).unwrap(),
             "variableRegistry"
         );
-        assert_eq!(PROTOCOL_VERSION, 11);
+        assert_eq!(PROTOCOL_VERSION, 16);
         let projects = deckpilot_core::ModuleId::new("projects").unwrap();
         let legacy = CatalogEntry {
             reference: VariableRef::System(SystemVariable::ProjectCurrentKey),
@@ -2435,7 +2736,11 @@ mod tests {
             request.validate().unwrap();
         }
         assert_eq!(
-            Request::SubscribePluginEvents { migrations: false }.since_protocol(),
+            Request::SubscribePluginEvents {
+                migrations: false,
+                features: Vec::new(),
+            }
+            .since_protocol(),
             10
         );
         let message = ServerMessage::PluginEvent {
@@ -2486,6 +2791,7 @@ mod tests {
                 plugin: "acme.x".into(),
                 offset: crate::plugins::MAX_ICON_BYTES as u64 + 1,
                 navigation: None,
+                asset: None,
             },
             Request::GetPluginIcon {
                 plugin: "acme.x".into(),
@@ -2494,6 +2800,7 @@ mod tests {
                     entry: "two words".into(),
                     theme: crate::plugins::NavigationIconTheme::Dark,
                 }),
+                asset: None,
             },
             Request::EnablePlugin {
                 plugin: "acme.x".into(),
@@ -2611,7 +2918,10 @@ mod tests {
     fn subscribing_to_migration_events_is_additive() {
         // The request an app before migration events sends, and what an
         // app that does not ask for them still sends, are the original.
-        let plain = Request::SubscribePluginEvents { migrations: false };
+        let plain = Request::SubscribePluginEvents {
+            migrations: false,
+            features: Vec::new(),
+        };
         assert_eq!(
             serde_json::to_value(&plain).unwrap(),
             serde_json::json!({"type": "subscribePluginEvents"})
@@ -2619,7 +2929,10 @@ mod tests {
         let parsed: Request =
             serde_json::from_value(serde_json::json!({"type": "subscribePluginEvents"})).unwrap();
         assert_eq!(parsed, plain);
-        let with = Request::SubscribePluginEvents { migrations: true };
+        let with = Request::SubscribePluginEvents {
+            migrations: true,
+            features: Vec::new(),
+        };
         assert_eq!(
             serde_json::to_value(&with).unwrap(),
             serde_json::json!({"type": "subscribePluginEvents", "migrations": true})
@@ -2632,18 +2945,340 @@ mod tests {
             plugin: "deckpilot.github".into(),
             phase: crate::plugins::MigrationPhase::AwaitingConsent,
         };
-        assert!(!event.delivered(false));
-        assert!(event.delivered(true));
+        assert!(!event.delivered(false, true));
+        assert!(event.delivered(true, false));
         let changed = crate::plugins::PluginEvent::Changed {
             plugin: "acme.x".into(),
             state: None,
         };
-        assert!(changed.delivered(false));
+        assert!(changed.delivered(false, false));
         assert_eq!(
             serde_json::to_value(&event).unwrap(),
             serde_json::json!({"type": "migrationChanged", "module": "github",
                 "plugin": "deckpilot.github", "phase": "awaitingConsent"})
         );
+    }
+
+    #[test]
+    fn plugin_dialogs_are_protocol_12_and_announced() {
+        use crate::plugin_dialogs::{AppCancelReason, DialogAnswer, DialogCloseReason, FEATURE};
+        assert_eq!(FEATURE, crate::plugins::feature::PLUGIN_DIALOGS);
+        assert!(!Capability::of_protocol(11).contains(&Capability::PluginDialogs));
+        assert!(Capability::of_protocol(12).contains(&Capability::PluginDialogs));
+        assert_eq!(
+            serde_json::to_value(Capability::PluginDialogs).unwrap(),
+            "pluginDialogs"
+        );
+
+        // The announcement is an optional addition to the protocol 10
+        // subscription: an agent of protocol 11 ignores it.
+        let announcing = Request::SubscribePluginEvents {
+            migrations: false,
+            features: vec![FEATURE.into()],
+        };
+        assert_eq!(
+            serde_json::to_value(&announcing).unwrap(),
+            serde_json::json!({"type": "subscribePluginEvents", "features": ["pluginDialogs"]})
+        );
+        assert_eq!(announcing.since_protocol(), 10);
+
+        let answer: Request = serde_json::from_value(serde_json::json!({
+            "type": "answerPluginDialog", "dialog": "9f2c41", "plugin": "acme.repo",
+            "answer": {"outcome": "cancelled"}
+        }))
+        .unwrap();
+        assert_eq!(answer.since_protocol(), 12);
+        assert_eq!(answer.name(), "answerPluginDialog");
+        assert!(answer.validate().is_ok());
+        assert!(matches!(
+            &answer,
+            Request::AnswerPluginDialog {
+                answer: DialogAnswer::Cancelled {
+                    reason: AppCancelReason::User
+                },
+                ..
+            }
+        ));
+        let bad = Request::AnswerPluginDialog {
+            dialog: "x/../y".into(),
+            plugin: "acme.repo".into(),
+            answer: DialogAnswer::Cancelled {
+                reason: AppCancelReason::User,
+            },
+        };
+        assert!(bad.validate().is_err());
+
+        // Dialog events reach only connections that announced the feature.
+        let closed = crate::plugins::PluginEvent::DialogClosed {
+            dialog: "9f2c41".into(),
+            plugin: "acme.repo".into(),
+            reason: DialogCloseReason::PluginStopped,
+        };
+        assert!(!closed.delivered(true, false));
+        assert!(closed.delivered(false, true));
+        assert_eq!(
+            serde_json::to_value(&closed).unwrap(),
+            serde_json::json!({"type": "dialogClosed", "dialog": "9f2c41",
+                "plugin": "acme.repo", "reason": "pluginStopped"})
+        );
+    }
+
+    #[test]
+    fn live_preview_is_protocol_16() {
+        use crate::live_preview::{EditorNavigation, LayoutPatch, LivePreviewEvent};
+        assert!(!Capability::of_protocol(15).contains(&Capability::LivePreview));
+        assert!(Capability::of_protocol(16).contains(&Capability::LivePreview));
+        assert_eq!(
+            serde_json::to_value(Capability::LivePreview).unwrap(),
+            "livePreview"
+        );
+        let device = DeviceId {
+            model: deckpilot_device::DeviceModelId::new("elgato.stream-deck-mk2"),
+            serial: "MOCK-1".into(),
+        };
+        let layout = LayoutId::new();
+        let requests = [
+            Request::BeginLivePreview {
+                device: device.clone(),
+                profile: ProfileId::new(),
+                layout,
+                navigation: None,
+            },
+            Request::ApplyLivePreview {
+                session: 1,
+                revision: 2,
+                part: Box::default(),
+                last: true,
+            },
+            Request::NavigateLivePreview {
+                session: 1,
+                navigation: EditorNavigation::LayoutBack,
+            },
+            Request::EndLivePreview { session: 1 },
+            Request::InspectMockDevice {
+                device: device.clone(),
+            },
+        ];
+        for request in &requests {
+            assert_eq!(request.since_protocol(), 16, "{}", request.name());
+            assert!(request.validate().is_ok(), "{}", request.name());
+            let json = serde_json::to_value(request).unwrap();
+            assert_eq!(&serde_json::from_value::<Request>(json).unwrap(), request);
+        }
+        let names: Vec<String> = requests.iter().map(Request::name).collect();
+        assert_eq!(
+            names,
+            [
+                "beginLivePreview",
+                "applyLivePreview",
+                "navigateLivePreview",
+                "endLivePreview",
+                "inspectMockDevice"
+            ]
+        );
+        // `navigation` and `last` are left out when absent.
+        let begin = serde_json::to_value(&requests[0]).unwrap();
+        assert!(begin.get("navigation").is_none());
+        let apply = serde_json::to_value(Request::ApplyLivePreview {
+            session: 1,
+            revision: 2,
+            part: Box::new(LayoutPatch::default()),
+            last: false,
+        })
+        .unwrap();
+        assert!(apply.get("last").is_none());
+        // Bounds.
+        let empty = Request::NavigateLivePreview {
+            session: 1,
+            navigation: EditorNavigation::Show {
+                layout,
+                stack: Vec::new(),
+            },
+        };
+        assert!(empty.validate().is_err());
+        let deep = Request::NavigateLivePreview {
+            session: 1,
+            navigation: EditorNavigation::Show {
+                layout,
+                stack: vec![PageId::new(); crate::live_preview::MAX_STACK + 1],
+            },
+        };
+        assert!(deep.validate().is_err());
+        let no_serial = Request::InspectMockDevice {
+            device: DeviceId {
+                serial: String::new(),
+                ..device
+            },
+        };
+        assert!(no_serial.validate().is_err());
+        let message = ServerMessage::LivePreview {
+            event: LivePreviewEvent::Ended {
+                session: 4,
+                reason: crate::live_preview::EndReason::Replaced,
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&message).unwrap(),
+            serde_json::json!({"type": "livePreview",
+                "event": {"type": "ended", "session": 4, "reason": "replaced"}})
+        );
+    }
+
+    #[test]
+    fn restoring_a_bundled_plugin_is_protocol_15() {
+        assert!(!Capability::of_protocol(14).contains(&Capability::RestoreBundled));
+        assert!(Capability::of_protocol(15).contains(&Capability::RestoreBundled));
+        assert_eq!(
+            serde_json::to_value(Capability::RestoreBundled).unwrap(),
+            "restoreBundled"
+        );
+        let wire = serde_json::json!({"type": "restoreBundledPlugin",
+            "plugin": "deckpilot.notifications"});
+        let request: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            request,
+            Request::RestoreBundledPlugin {
+                plugin: "deckpilot.notifications".into()
+            }
+        );
+        assert_eq!(serde_json::to_value(&request).unwrap(), wire);
+        assert_eq!(request.since_protocol(), 15);
+        assert_eq!(request.name(), "restoreBundledPlugin");
+        assert!(request.validate().is_ok());
+        let empty = Request::RestoreBundledPlugin {
+            plugin: String::new(),
+        };
+        assert!(empty.validate().is_err());
+        // `restorable` is left out when false, so known plugins of other
+        // agents read as before.
+        let known = plugins::KnownPlugin {
+            id: "deckpilot.notifications".into(),
+            name: "Notifications".into(),
+            publisher: "deckpilot".into(),
+            namespace: "plugins.deckpilot.notifications".into(),
+            last_version: "1.0.0".into(),
+            installed: false,
+            first_seen_at: 1,
+            last_seen_at: 2,
+            restorable: false,
+        };
+        let json = serde_json::to_value(&known).unwrap();
+        assert!(json.get("restorable").is_none());
+        let read: plugins::KnownPlugin = serde_json::from_value(json).unwrap();
+        assert!(!read.restorable);
+        let restorable = plugins::KnownPlugin {
+            restorable: true,
+            ..known
+        };
+        assert_eq!(
+            serde_json::to_value(&restorable).unwrap()["restorable"],
+            true
+        );
+    }
+
+    #[test]
+    fn simulated_presses_are_protocol_14() {
+        use crate::simulation::{PressKind, SimulationOutcome};
+        assert!(!Capability::of_protocol(13).contains(&Capability::SimulateInput));
+        assert!(Capability::of_protocol(14).contains(&Capability::SimulateInput));
+        assert_eq!(
+            serde_json::to_value(Capability::SimulateInput).unwrap(),
+            "simulateInput"
+        );
+        let device = serde_json::json!({"model": "elgato.stream-deck-mk2", "serial": "MOCK-1"});
+        let (profile, layout, page) = (ProfileId::new(), LayoutId::new(), PageId::new());
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "type": "simulatePress", "device": device, "profile": profile, "layout": layout,
+            "page": page, "control": {"kind": "key", "index": 3}, "kind": "double"
+        }))
+        .unwrap();
+        let Request::SimulatePress {
+            kind, confirmed, ..
+        } = &request
+        else {
+            panic!("{request:?}");
+        };
+        assert_eq!((*kind, *confirmed), (PressKind::Double, false));
+        assert_eq!(request.since_protocol(), 14);
+        assert_eq!(request.name(), "simulatePress");
+        assert!(request.validate().is_ok());
+        // `confirmed` is left out when false, so the request stays minimal.
+        assert!(
+            serde_json::to_value(&request)
+                .unwrap()
+                .get("confirmed")
+                .is_none()
+        );
+        let mut empty = serde_json::to_value(&request).unwrap();
+        empty["device"]["serial"] = "".into();
+        let empty: Request = serde_json::from_value(empty).unwrap();
+        assert!(empty.validate().is_err());
+        let answer = Response::SimulatedPress {
+            outcome: SimulationOutcome::Ran {
+                dispatched: vec![crate::simulation::SimulatedTrigger::Click],
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&answer).unwrap(),
+            serde_json::json!({"type": "simulatedPress",
+                "outcome": {"status": "ran", "dispatched": ["click"]}})
+        );
+        // The older mock-only injection is unchanged.
+        let inject: Request = serde_json::from_value(serde_json::json!({
+            "type": "simulateInput", "device": device,
+            "control": {"kind": "key", "index": 0}, "input": {"type": "press"}
+        }))
+        .unwrap();
+        assert_eq!(inject.since_protocol(), 1);
+    }
+
+    #[test]
+    fn the_locale_is_protocol_13_and_only_a_tag() {
+        assert!(!Capability::of_protocol(12).contains(&Capability::Locale));
+        assert!(Capability::of_protocol(13).contains(&Capability::Locale));
+        assert_eq!(serde_json::to_value(Capability::Locale).unwrap(), "locale");
+        let request: Request =
+            serde_json::from_value(serde_json::json!({"type": "setLocale", "locale": "pl-PL"}))
+                .unwrap();
+        assert_eq!(request.since_protocol(), 13);
+        assert_eq!(request.name(), "setLocale");
+        assert!(request.validate().is_ok());
+        for good in ["en", "pl", "pl-PL", "pl_PL", "zh-Hant-TW", "es-419"] {
+            assert!(is_locale_tag(good), "{good}");
+        }
+        for bad in [
+            "",
+            "p",
+            "polish",
+            "pl-",
+            "en-US-u-ca-x",
+            "pl PL",
+            "../en",
+            "pl.UTF-8",
+            "pl-PL-PL-PL",
+            "en-US-POSIX",
+        ] {
+            assert!(!is_locale_tag(bad), "{bad}");
+            assert!(
+                Request::SetLocale { locale: bad.into() }
+                    .validate()
+                    .is_err(),
+                "{bad}"
+            );
+        }
+        // An older agent's status has no locale; the field is optional.
+        let status: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/agent-0.5.0-2-status.json"))
+                .unwrap();
+        let status: AgentStatus = serde_json::from_value(status).unwrap();
+        assert_eq!(status.locale, None);
+        assert!(
+            serde_json::to_value(&status)
+                .unwrap()
+                .get("locale")
+                .is_none()
+        );
+        assert_eq!(crate::plugins::feature::LOCALE, "locale");
     }
 
     #[test]

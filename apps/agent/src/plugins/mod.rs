@@ -39,6 +39,8 @@ mod key_state;
 #[cfg(feature = "plugins")]
 mod lane;
 #[cfg(feature = "plugins")]
+mod locales;
+#[cfg(feature = "plugins")]
 mod migration;
 #[cfg(feature = "plugins")]
 mod origins;
@@ -273,6 +275,7 @@ pub(crate) fn is_plugin_request(request: &Request) -> bool {
             | Request::InstallPluginPlan { .. }
             | Request::PlanPluginRemoval { .. }
             | Request::RemovePlugin { .. }
+            | Request::RestoreBundledPlugin { .. }
     )
 }
 
@@ -327,6 +330,10 @@ pub(crate) fn features() -> Vec<String> {
         deckpilot_ipc::plugins::feature::PAGED_ANSWERS.to_owned(),
         deckpilot_ipc::plugins::feature::NAVIGATION.to_owned(),
         deckpilot_ipc::plugins::feature::DEPENDENCIES.to_owned(),
+        deckpilot_ipc::plugins::feature::PLUGIN_DIALOGS.to_owned(),
+        deckpilot_ipc::plugins::feature::LOCALE.to_owned(),
+        deckpilot_ipc::plugins::feature::RESTORE_BUNDLED.to_owned(),
+        deckpilot_ipc::plugins::feature::VISUAL_ASSETS.to_owned(),
     ]
 }
 
@@ -356,6 +363,7 @@ impl PluginRuntime {
         data_dir: &std::path::Path,
         events: &tokio::sync::broadcast::Sender<deckpilot_ipc::AgentEvent>,
         plugin_events: &tokio::sync::broadcast::Sender<deckpilot_ipc::plugins::PluginEvent>,
+        dialogs: &std::sync::Arc<crate::plugin_dialogs::PluginDialogs>,
         notifier: std::sync::Arc<dyn deckpilot_core::notify::Notifier>,
         changed: std::sync::Arc<dyn Fn() + Send + Sync>,
     ) -> Self {
@@ -369,6 +377,7 @@ impl PluginRuntime {
                         agent: events.clone(),
                         plugins: plugin_events.clone(),
                         notifier,
+                        dialogs: dialogs.clone(),
                     },
                     changed,
                 )
@@ -377,7 +386,7 @@ impl PluginRuntime {
         }
         #[cfg(not(feature = "plugins"))]
         {
-            let _ = (data_dir, events, plugin_events, notifier, changed);
+            let _ = (data_dir, events, plugin_events, dialogs, notifier, changed);
             Self { settings }
         }
     }
@@ -462,6 +471,47 @@ impl PluginRuntime {
             return worker.legacy_routing();
         }
         deckpilot_core::alias::LegacyRouting::default()
+    }
+
+    /// The visual assets of the enabled plugins keys may draw now
+    /// (`contributes.visualAssets`, checked and decoded by the worker).
+    /// Empty without the `plugins` feature, with plugins off and while
+    /// locked: keys referring to them draw their fallback.
+    pub(crate) fn visual_assets(
+        &self,
+    ) -> Vec<(deckpilot_core::AssetId, deckpilot_render::LibraryAsset)> {
+        #[cfg(feature = "plugins")]
+        if let Some(worker) = &self.worker {
+            return worker
+                .catalog()
+                .into_iter()
+                .flat_map(|plugin| plugin.visual_assets)
+                .collect();
+        }
+        Vec::new()
+    }
+
+    /// The app's language changed (protocol 13): plugin texts follow it.
+    pub(crate) fn set_locale(&self, locale: &str) {
+        #[cfg(feature = "plugins")]
+        if let Some(worker) = &self.worker {
+            worker.locale(locale);
+        }
+        #[cfg(not(feature = "plugins"))]
+        let _ = locale;
+    }
+
+    /// The name in the app's language of the plugin action of type
+    /// `action_type` when a key's `title` is one of its default names
+    /// (plugin API 1.6); `None` for a title the user wrote, a plain name,
+    /// and without plugins.
+    pub(crate) fn default_action_name(&self, action_type: &str, title: &str) -> Option<String> {
+        #[cfg(feature = "plugins")]
+        if let Some(worker) = &self.worker {
+            return worker.default_action_name(action_type, title);
+        }
+        let _ = (action_type, title);
+        None
     }
 
     /// Answers a plugin request (here or on the worker).

@@ -1,5 +1,6 @@
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
+import { useTranslation } from "@/i18n"
 import type { ProjectScope } from "@/lib/types"
 
 /**
@@ -15,12 +16,13 @@ export function ProjectScopeSetting({
   selectsProjects: boolean
   onChange: (scope: ProjectScope) => void
 }) {
+  const { t } = useTranslation()
   const application = scope === "application"
   return (
     <div className="grid gap-1.5 rounded-md border p-2.5">
       <div className="flex items-center gap-2">
         <Label htmlFor="workflow-project-scope" className="flex-1 text-xs">
-          May change the active project
+          {t("workflows:inspector.projectScope.label")}
         </Label>
         <Switch
           id="workflow-project-scope"
@@ -32,10 +34,10 @@ export function ProjectScopeSetting({
       </div>
       <p className="text-xs text-muted-foreground">
         {application
-          ? "When a run ends on another project, it becomes DeckPilot’s active project — unless the active project changed during the run."
+          ? t("workflows:inspector.projectScope.application")
           : selectsProjects
-            ? "Project selections stay in each run: they affect the nodes after them, never DeckPilot’s active project or other runs."
-            : "Runs use the active project of the moment they start."}
+            ? t("workflows:inspector.projectScope.execution")
+            : t("workflows:inspector.projectScope.atStart")}
       </p>
     </div>
   )

@@ -1,103 +1,57 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest"
 
-import { act, cleanup, render, screen } from "@testing-library/react"
-import userEvent from "@testing-library/user-event"
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { cleanup, render, screen } from "@testing-library/react"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { THEME_STORAGE_KEY, useTheme } from "@/lib/theme"
-import { THEME_EVENT, WINDOW_INSTANCE } from "@/lib/window-sync"
-import { installDomStubs } from "@/test/dom"
-import { emitBackend, eventModule, resetBackend } from "@/test/tauri"
+import { LEGACY_THEME_STORAGE_KEY, THEME } from "@/lib/theme"
 
 import { ThemeProvider } from "./theme-provider"
 
-vi.mock("@tauri-apps/api/event", async () => (await import("@/test/tauri")).eventModule)
-
-function Probe() {
-  const { preference, resolved, setPreference } = useTheme()
-  return (
-    <>
-      <p>
-        {preference}/{resolved}
-      </p>
-      <button
-        type="button"
-        onClick={() => {
-          setPreference("dark")
-        }}
-      >
-        Dark
-      </button>
-    </>
-  )
-}
-
-beforeAll(installDomStubs)
-beforeEach(() => {
-  localStorage.clear()
-  resetBackend()
-  eventModule.emit.mockClear()
-  document.documentElement.classList.remove("dark")
-})
 afterEach(() => {
   cleanup()
-  delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+  vi.unstubAllGlobals()
+  document.documentElement.className = ""
+  document.documentElement.style.colorScheme = ""
+  localStorage.clear()
 })
 
-describe("theme across windows", () => {
-  it("follows a choice another window stored", () => {
-    render(
-      <ThemeProvider>
-        <Probe />
-      </ThemeProvider>,
-    )
-    expect(screen.getByText("system/light")).toBeInTheDocument()
-    act(() => {
-      localStorage.setItem(THEME_STORAGE_KEY, "dark")
-      window.dispatchEvent(
-        new StorageEvent("storage", { key: THEME_STORAGE_KEY, newValue: "dark" }),
-      )
-    })
-    expect(screen.getByText("dark/dark")).toBeInTheDocument()
-    expect(document.documentElement).toHaveClass("dark")
-    // Other keys and invalid values change nothing.
-    act(() => {
-      window.dispatchEvent(new StorageEvent("storage", { key: "other", newValue: "light" }))
-      window.dispatchEvent(
-        new StorageEvent("storage", { key: THEME_STORAGE_KEY, newValue: "purple" }),
-      )
-    })
-    expect(screen.getByText("dark/dark")).toBeInTheDocument()
+describe("ThemeProvider (permanently dark)", () => {
+  let listeners: (() => void)[] = []
+  beforeEach(() => {
+    listeners = []
+    // An operating system in light mode, which then changes.
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      media: query,
+      matches: false,
+      addEventListener: (_: string, listener: () => void) => listeners.push(listener),
+      removeEventListener: () => undefined,
+    }))
   })
 
-  it("announces its own choice and follows other windows' announcements", async () => {
-    // Inside Tauri: the app event reaches every window.
-    Object.assign(window, { __TAURI_INTERNALS__: {} })
-    const user = userEvent.setup()
+  it("is dark from the first render, whatever the system appearance", () => {
     render(
       <ThemeProvider>
-        <Probe />
+        <p>content</p>
       </ThemeProvider>,
     )
-    await user.click(screen.getByRole("button", { name: "Dark" }))
-    expect(eventModule.emit).toHaveBeenCalledWith(THEME_EVENT, {
-      preference: "dark",
-      source: WINDOW_INSTANCE,
-    })
-    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark")
-    await act(async () => {
-      await Promise.resolve()
-    })
-    // Its own announcement is ignored; another window's is followed.
-    act(() => {
-      emitBackend(THEME_EVENT, { preference: "light", source: WINDOW_INSTANCE })
-    })
-    expect(screen.getByText("dark/dark")).toBeInTheDocument()
-    act(() => {
-      emitBackend(THEME_EVENT, { preference: "light", source: "settings-window" })
-    })
-    expect(screen.getByText("light/light")).toBeInTheDocument()
-    expect(document.documentElement).not.toHaveClass("dark")
+    expect(screen.getByText("content")).toBeInTheDocument()
+    expect(document.documentElement).toHaveClass("dark")
+    expect(document.documentElement.style.colorScheme).toBe("dark")
+    expect(THEME).toBe("dark")
+  })
+
+  it("never listens to the operating system's appearance", () => {
+    render(<ThemeProvider>x</ThemeProvider>)
+    expect(listeners).toHaveLength(0)
+    for (const listener of listeners) listener()
+    expect(document.documentElement).toHaveClass("dark")
+  })
+
+  it("ignores and removes the light/dark/system choice of earlier versions", () => {
+    localStorage.setItem(LEGACY_THEME_STORAGE_KEY, "light")
+    render(<ThemeProvider>x</ThemeProvider>)
+    expect(document.documentElement).toHaveClass("dark")
+    expect(localStorage.getItem(LEGACY_THEME_STORAGE_KEY)).toBeNull()
   })
 })

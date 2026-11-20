@@ -188,6 +188,21 @@ pub fn on_window_event<R: tauri::Runtime>(window: &tauri::Window<R>, event: &tau
         }
         tauri::WindowEvent::Destroyed => {
             let app = window.app_handle();
+            // Its plugin dialog host is gone with it: the agent cancels
+            // open plugin dialogs (`appClosed`) once no connection of this
+            // app announces them.
+            if window.label() == crate::windows::MAIN
+                && let Some(events) = app.try_state::<crate::commands::plugins::PluginEvents>()
+            {
+                events.set_dialogs_ready(false);
+            }
+            // The editor is gone with it: its live preview ends, and the
+            // device shows the saved configuration again.
+            if window.label() == crate::windows::MAIN
+                && let Some(live) = app.try_state::<crate::commands::live_preview::LivePreview>()
+            {
+                live.stop();
+            }
             let unlocked = app.state::<crate::state::AppState>().is_unlocked();
             crate::windows::closed(app, window.label(), unlocked);
             sync_dock(app, Some(window.label()));
@@ -196,10 +211,46 @@ pub fn on_window_event<R: tauri::Runtime>(window: &tauri::Window<R>, event: &tau
     }
 }
 
+/// The main window's page starts loading (a reload, as during
+/// development): the editor that began the live preview is gone, so it
+/// ends; the new page begins its own.
+pub fn on_page_load<R: tauri::Runtime>(
+    webview: &tauri::Webview<R>,
+    payload: &tauri::webview::PageLoadPayload<'_>,
+) {
+    use tauri::Manager;
+    if payload.event() == tauri::webview::PageLoadEvent::Started
+        && webview.label() == crate::windows::MAIN
+        && let Some(live) = webview
+            .app_handle()
+            .try_state::<crate::commands::live_preview::LivePreview>()
+    {
+        live.stop();
+    }
+}
+
 /// The app's run loop events: on macOS, opening the app from Finder,
 /// Spotlight or the Dock while it runs without a visible window (closed to
 /// the menu bar) shows it again, like the tray's *Open DeckPilot*.
 pub fn on_run_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: &tauri::RunEvent) {
+    // A quit the user asked for (⌘Q; `code` is set when the app exits by
+    // itself) over unsaved layout edits: the window asks first.
+    if let tauri::RunEvent::ExitRequested {
+        api, code: None, ..
+    } = event
+    {
+        use tauri::{Emitter, Manager};
+        if app
+            .try_state::<crate::commands::unsaved::UnsavedEdits>()
+            .is_some_and(|edits| edits.get())
+            && let Some(window) = app.get_webview_window(crate::windows::MAIN)
+        {
+            api.prevent_exit();
+            let _ = window.show();
+            let _ = window.set_focus();
+            let _ = window.emit(crate::commands::unsaved::QUIT_REQUESTED_EVENT, ());
+        }
+    }
     #[cfg(target_os = "macos")]
     if let tauri::RunEvent::Reopen {
         has_visible_windows: false,

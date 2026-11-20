@@ -1,19 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 
+import { ConfirmDialog } from "@/components/dialogs"
 import { Loading } from "@/components/page"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { i18n, useTranslation } from "@/i18n"
 import { useAppContext } from "@/lib/app-context"
 
 import {
@@ -23,6 +15,7 @@ import {
   type PluginErrorText,
 } from "./api"
 import { createTauriPluginClient } from "./client"
+import { errorSentence } from "./dialog-error"
 import {
   ExperimentalNotice,
   Notice,
@@ -65,7 +58,7 @@ import type {
   PluginRetention,
   RuntimeAvailability,
 } from "./types"
-import { DEPENDENCIES_FEATURE } from "./types"
+import { DEPENDENCIES_FEATURE, RESTORE_BUNDLED_FEATURE } from "./types"
 import { UpdatesView } from "./updates"
 
 type Tab = "discover" | "installed" | "updates"
@@ -73,7 +66,7 @@ type Tab = "discover" | "installed" | "updates"
 type Load =
   | { status: "loading" }
   | { status: "unavailable"; availability: RuntimeAvailability }
-  | { status: "error"; message: string; hint?: string; title: string }
+  | { status: "error"; error: unknown }
   | {
       status: "ready"
       availability: RuntimeAvailability
@@ -100,6 +93,13 @@ export interface MarketplaceActions {
   setGrant: (item: PluginDetails, key: string, granted: boolean) => void
   /** Uninstalls; `keep` keeps settings and/or credentials for a reinstall. */
   uninstall: (item: PluginDetails, keep?: PluginRetention) => void
+  /** The agent can restore DeckPilot's own plugins (feature `restoreBundled`). */
+  canRestore: boolean
+  /**
+   * Installs a removed bundled plugin again from DeckPilot's own copy, or
+   * (`reinstall`) replaces a broken bundled copy with it.
+   */
+  restore: (id: string, name: string, reinstall: boolean) => void
   rollback: (item: PluginDetails) => void
   invoke: (
     item: PluginDetails,
@@ -117,9 +117,7 @@ async function loadAll(client: PluginClient, refresh = false): Promise<Load> {
     runtime = await client.getRuntime()
   } catch (error) {
     const availability = availabilityOfError(error)
-    return availability
-      ? { status: "unavailable", availability }
-      : { status: "error", ...pluginErrorText(error) }
+    return availability ? { status: "unavailable", availability } : { status: "error", error }
   }
   const availability = availabilityOf(runtime)
   if (!runtime.available) return { status: "unavailable", availability }
@@ -129,7 +127,7 @@ async function loadAll(client: PluginClient, refresh = false): Promise<Load> {
     const snapshot = await loadSnapshot(client, runtime, refresh)
     return { status: "ready", availability, snapshot, migrations: await migrations }
   } catch (error) {
-    return { status: "error", ...pluginErrorText(error) }
+    return { status: "error", error }
   }
 }
 
@@ -159,6 +157,7 @@ function updateItems(changes: PermissionChanges): ReviewRequest["items"] {
  * why when the agent cannot answer plugin requests.
  */
 export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab } = {}) {
+  const { t } = useTranslation()
   const override = usePluginClientOverride()
   const [client] = useState<PluginClient>(() => override ?? createTauriPluginClient())
   const { agent } = useAppContext()
@@ -242,17 +241,17 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
     )
   }
   if (load.status === "error") {
+    // Read at render time, so the words follow the language on screen.
+    const failure = pluginErrorText(load.error)
     return (
       <>
         {header}
-        <Notice tone="destructive" title="Plugins could not be loaded">
-          <p>
-            {load.title}: {load.message}
-          </p>
-          {load.hint && <p>{load.hint}</p>}
+        <Notice tone="destructive" title={t("marketplace:loadFailed")}>
+          <p>{errorSentence(failure, false)}</p>
+          {failure.hint && <p>{failure.hint}</p>}
           <div>
             <Button variant="outline" size="sm" onClick={retry}>
-              Try again
+              {t("common:actions.tryAgain")}
             </Button>
           </div>
         </Notice>
@@ -266,6 +265,7 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
   // plugin at a time, as before.
   const plans = (snapshot.runtime.features ?? []).includes(DEPENDENCIES_FEATURE)
   const canRun = snapshot.runtime.executionSupported
+  const canRestore = (snapshot.runtime.features ?? []).includes(RESTORE_BUNDLED_FEATURE)
   const updates = updateCandidates(snapshot)
 
   /** Runs one request, then reads everything again. Rejections propagate. */
@@ -306,7 +306,11 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
         state: info.status === "granted" ? "granted" : "new",
       })),
       confirm: (consent) =>
-        run(id, () => client.enablePlugin(id, consent), `${item.summary.name} enabled`),
+        run(
+          id,
+          () => client.enablePlugin(id, consent),
+          i18n.t("marketplace:toast.enabled", { name: item.summary.name }),
+        ),
     })
   }
 
@@ -317,7 +321,10 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
       .installPlugin({ type: "file", path }, [])
       .then(async (details) => {
         toast.success(
-          `${details.summary.name} ${details.summary.version} installed from the package file`,
+          i18n.t("marketplace:toast.installedFromFile", {
+            name: details.summary.name,
+            version: details.summary.version,
+          }),
         )
         await reload()
         // Its permissions are known now that the agent verified it:
@@ -346,10 +353,14 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
         run(
           id,
           () => client.approveUpdate(id, consent),
-          `${item.summary.name} updated to ${version}`,
+          i18n.t("marketplace:toast.updated", { name: item.summary.name, version }),
         ),
       decline: () =>
-        run(id, () => client.declineUpdate(id), `Update of ${item.summary.name} declined`),
+        run(
+          id,
+          () => client.declineUpdate(id),
+          i18n.t("marketplace:toast.updateDeclined", { name: item.summary.name }),
+        ),
     })
   }
 
@@ -376,8 +387,11 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
               plugin.id,
               () => client.installPlan(confirmed, optional, consent, canRun),
               confirmed.steps.length > 1
-                ? `${plugin.name} installed with ${String(confirmed.steps.length - 1)} more`
-                : `${plugin.name} installed`,
+                ? i18n.t("marketplace:toast.installedWithMore", {
+                    name: plugin.name,
+                    count: confirmed.steps.length - 1,
+                  })
+                : i18n.t("marketplace:toast.installed", { name: plugin.name }),
             ),
         })
       })
@@ -401,7 +415,9 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
       run(
         id,
         () => client.removePlugin(id, uninstall, keep, withDependents, orphans),
-        uninstall ? `${name} uninstalled` : `${name} disabled`,
+        uninstall
+          ? i18n.t("marketplace:toast.uninstalled", { name })
+          : i18n.t("marketplace:toast.disabled", { name }),
       )
     client
       .planRemoval(id, uninstall)
@@ -446,7 +462,7 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
                 { type: "registry", plugin: plugin.id, version: version.version },
                 consent,
               ),
-            `${plugin.name} installed`,
+            i18n.t("marketplace:toast.installed", { name: plugin.name }),
           ),
       })
     },
@@ -472,7 +488,12 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
         .updatePlugin(id, candidate.version, [])
         .then(async (result) => {
           if (result.outcome.type === "applied") {
-            toast.success(`${item.summary.name} updated to ${result.outcome.version}`)
+            toast.success(
+              i18n.t("marketplace:toast.updated", {
+                name: item.summary.name,
+                version: result.outcome.version,
+              }),
+            )
           } else {
             // Staged until the user decides (approve or decline).
             reviewUpdate(item, result.outcome.version, result.outcome.changes)
@@ -493,7 +514,11 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
           reviewRemoval(item, false, undefined)
           return
         }
-        runReported(id, () => client.disablePlugin(id), `${item.summary.name} disabled`)
+        runReported(
+          id,
+          () => client.disablePlugin(id),
+          i18n.t("marketplace:toast.disabled", { name: item.summary.name }),
+        )
         return
       }
       reviewEnable(item)
@@ -503,7 +528,9 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
       runReported(
         id,
         () => (granted ? client.grantPermissions(id, [key]) : client.revokePermission(id, key)),
-        granted ? "Permission granted" : "Permission revoked",
+        granted
+          ? i18n.t("marketplace:toast.permissionGranted")
+          : i18n.t("marketplace:toast.permissionRevoked"),
       )
     },
     uninstall: (item, keep) => {
@@ -512,26 +539,64 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
         reviewRemoval(item, true, keep)
         return
       }
-      const kept = [keep?.settings && "settings", keep?.credentials && "credentials"].filter(
-        Boolean,
-      )
+      const name = item.summary.name
+      const kept =
+        keep?.settings && keep.credentials
+          ? i18n.t("marketplace:toast.uninstalledKeptBoth", { name })
+          : keep?.settings
+            ? i18n.t("marketplace:toast.uninstalledKeptSettings", { name })
+            : keep?.credentials
+              ? i18n.t("marketplace:toast.uninstalledKeptCredentials", { name })
+              : null
       runReported(
         id,
         () =>
           keep?.settings || keep?.credentials
             ? client.uninstallPlugin(id, keep)
             : client.uninstallPlugin(id),
-        kept.length > 0
-          ? `${item.summary.name} uninstalled; its ${kept.join(" and ")} are kept for a reinstall`
-          : `${item.summary.name} uninstalled`,
+        kept ?? i18n.t("marketplace:toast.uninstalled", { name }),
       )
+    },
+    canRestore,
+    restore: (id, name, reinstall) => {
+      setBusy(id)
+      client
+        .restoreBundledPlugin(id)
+        .then(async (details) => {
+          toast.success(
+            reinstall
+              ? i18n.t("marketplace:toast.reinstalled", { name: details.summary.name || name })
+              : i18n.t("marketplace:toast.restored", { name: details.summary.name || name }),
+          )
+          await reload()
+          // Permissions beyond what DeckPilot grants by itself wait for the
+          // user, as after any install.
+          if (
+            canRun &&
+            details.summary.state === "disabled" &&
+            details.permissions.some((p) => p.status !== "granted")
+          ) {
+            reviewEnable(details)
+          }
+        })
+        .catch((error: unknown) => {
+          toastError(pluginErrorText(error))
+        })
+        .finally(() => {
+          setBusy(null)
+        })
     },
     rollback: (item) => {
       const id = item.summary.id
       runReported(
         id,
         () => client.rollbackPlugin(id),
-        `${item.summary.name} rolled back to ${item.summary.previousVersion ?? "the previous version"}`,
+        item.summary.previousVersion
+          ? i18n.t("marketplace:toast.rolledBack", {
+              name: item.summary.name,
+              version: item.summary.previousVersion,
+            })
+          : i18n.t("marketplace:toast.rolledBackPrevious", { name: item.summary.name }),
       )
     },
     // Read again afterwards: a failure changes the plugin's health.
@@ -579,7 +644,7 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
           runReported(
             migration.module,
             () => client.retryModuleMigration(migration.module),
-            `${migration.moduleName}: trying again`,
+            i18n.t("marketplace:toast.migrationRetry", { module: migration.moduleName }),
           )
         }}
       />
@@ -601,10 +666,14 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
             setTab(value as Tab)
           }}
         >
-          <TabsList aria-label="Plugin marketplace">
-            <TabsTrigger value="discover">Discover</TabsTrigger>
-            <TabsTrigger value="installed">Installed {snapshot.installed.length}</TabsTrigger>
-            <TabsTrigger value="updates">Updates {updates.length}</TabsTrigger>
+          <TabsList aria-label={t("marketplace:tabs.label")}>
+            <TabsTrigger value="discover">{t("marketplace:tabs.discover")}</TabsTrigger>
+            <TabsTrigger value="installed">
+              {t("marketplace:tabs.installed", { number: snapshot.installed.length })}
+            </TabsTrigger>
+            <TabsTrigger value="updates">
+              {t("marketplace:tabs.updates", { number: updates.length })}
+            </TabsTrigger>
           </TabsList>
           <TabsContent value="discover" className="grid gap-4 pt-2">
             <DiscoverView snapshot={snapshot} updates={updates} actions={actions} />
@@ -651,8 +720,8 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
               consentFor.module,
               () => client.decideModuleMigration(consentFor.module, approve, decline),
               decline.length > 0
-                ? `${consentFor.moduleName} stays built-in`
-                : `${consentFor.moduleName}: consent saved`,
+                ? i18n.t("marketplace:toast.migrationDeclined", { module: consentFor.moduleName })
+                : i18n.t("marketplace:toast.migrationConsent", { module: consentFor.moduleName }),
             )
           }
           onClose={() => {
@@ -661,35 +730,22 @@ export function PluginsSettings({ initialTab = "discover" }: { initialTab?: Tab 
           }}
         />
       )}
-      <AlertDialog
+      <ConfirmDialog
         open={packageFile !== null}
         onOpenChange={(open) => {
           if (!open) setPackageFile(null)
         }}
+        destructive={false}
+        title={t("marketplace:package.title")}
+        description={t("marketplace:package.description")}
+        confirmLabel={t("marketplace:package.confirm")}
+        onConfirm={() => {
+          if (packageFile) installPackage(packageFile)
+          setPackageFile(null)
+        }}
       >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Install the plugin package?</AlertDialogTitle>
-            <AlertDialogDescription>
-              DeckPilot installs it only if its bytes are a version the verified registry pins.
-              Nothing is granted now: its permissions are shown for your consent before it can be
-              enabled.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <p className="font-mono text-xs break-all select-text">{packageFile}</p>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (packageFile) installPackage(packageFile)
-                setPackageFile(null)
-              }}
-            >
-              Install
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        <p className="font-mono text-xs break-all select-text">{packageFile}</p>
+      </ConfirmDialog>
     </>
   )
 }

@@ -3,27 +3,26 @@ import { Property, PropertyList, SettingsSection } from "@/components/settings-l
 import { useAsync } from "@/hooks/use-async"
 import { api } from "@/lib/api"
 import { osLabel } from "@/lib/format"
+import { useTranslation } from "@/i18n"
 
 export function AboutSettings() {
+  const { t } = useTranslation()
   const { state } = useAsync(() => Promise.all([api.getOverview(), api.launchInfo()]), "about")
   return (
-    <SettingsSection
-      title="DeckPilot"
-      description="Stream Deck management for macOS, Windows and Linux. Open source under the Apache License 2.0."
-    >
+    <SettingsSection title="DeckPilot" description={t("settings:about.description")}>
       {state.status === "loading" && <Loading />}
       {state.status === "error" && <ErrorNotice error={state.error} />}
       {state.status === "ready" && (
         <PropertyList className="border-t pt-3">
-          <Property label="Version">
+          <Property label={t("settings:about.version")}>
             {state.data[0].appVersion}
-            {state.data[0].development && " (development session)"}
+            {state.data[0].development && ` ${t("settings:about.development")}`}
           </Property>
-          <Property label="Previous version">
+          <Property label={t("settings:about.previousVersion")}>
             {state.data[1].launch?.previousVersion ?? "—"}
           </Property>
-          <Property label="Operating system">{osLabel(state.data[0].os)}</Property>
-          <Property label="Source code">github.com/knittingcode/deckpilot</Property>
+          <Property label={t("settings:about.os")}>{osLabel(state.data[0].os)}</Property>
+          <Property label={t("settings:about.source")}>github.com/knittingcode/deckpilot</Property>
         </PropertyList>
       )}
     </SettingsSection>

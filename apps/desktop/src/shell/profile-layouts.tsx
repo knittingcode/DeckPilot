@@ -21,6 +21,8 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useAsync } from "@/hooks/use-async"
+import { useTranslation } from "@/i18n"
+import { useFormat } from "@/i18n/format"
 import { api, errorMessage } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
 import { fitsModel, hasUnknownModel, modelLabel } from "@/lib/shared-layouts"
@@ -39,6 +41,7 @@ export function ProfileLayouts({
   profileId: string
   onOpenLayout?: (layout: SharedLayoutSummary) => void
 }) {
+  const { t } = useTranslation()
   const { revision, refresh } = useAppContext()
   const key = `${profileId}:${revision}`
   const entries = useAsync(() => api.profileLayouts(profileId), `profile-layouts:${key}`)
@@ -73,20 +76,26 @@ export function ProfileLayouts({
     const next = [...order]
     const target = index + by
     ;[next[index], next[target]] = [next[target] as string, next[index] as string]
-    void run(() => api.reorderProfileLayouts(profileId, next), "Order saved")
+    void run(
+      () => api.reorderProfileLayouts(profileId, next),
+      t("layouts:profileLayouts.toast.orderSaved"),
+    )
   }
 
   return (
     <SettingsSection
-      title="Layouts"
-      description="The layouts this profile uses, in its order. Each device shows the default layout of its model; Switch layout keys show the others. Other profiles may use the same layouts."
+      title={t("layouts:profileLayouts.title")}
+      description={t("layouts:profileLayouts.description")}
       actions={
         <AssignPicker
           layouts={available}
           loading={all.state.status === "loading"}
           disabled={busy}
           onAssign={(layout) => {
-            void run(() => api.assignLayout(profileId, layout.id), `${layout.name} assigned`)
+            void run(
+              () => api.assignLayout(profileId, layout.id),
+              t("layouts:profileLayouts.toast.assigned", { layout: layout.name }),
+            )
           }}
         />
       }
@@ -95,9 +104,9 @@ export function ProfileLayouts({
       {entries.state.status === "error" && <ErrorNotice error={entries.state.error} />}
       {entries.state.status === "ready" &&
         (list.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No layouts assigned to this profile.</p>
+          <p className="text-sm text-muted-foreground">{t("layouts:profileLayouts.empty")}</p>
         ) : (
-          <SettingsGroup role="list" aria-label="Layouts of the profile">
+          <SettingsGroup role="list" aria-label={t("layouts:profileLayouts.listLabel")}>
             {list.map((entry, index) => (
               <EntryRow
                 key={entry.layout.id}
@@ -112,13 +121,15 @@ export function ProfileLayouts({
                 onDefault={() => {
                   void run(
                     () => api.setDefaultLayout(profileId, entry.layout.id),
-                    `Default layout for ${modelLabel(entry.layout)} changed`,
+                    t("layouts:profileLayouts.toast.defaultChanged", {
+                      model: modelLabel(entry.layout),
+                    }),
                   )
                 }}
                 onRemove={() => {
                   void run(
                     () => api.unassignLayout(profileId, entry.layout.id),
-                    "Layout removed from the profile; the layout is kept",
+                    t("layouts:profileLayouts.toast.removed"),
                   )
                 }}
                 onOpen={
@@ -158,9 +169,13 @@ function EntryRow({
   onRemove: () => void
   onOpen?: () => void
 }) {
+  const { t } = useTranslation()
+  const format = useFormat()
   const { layout } = entry
   const model = modelLabel(layout)
-  const others = layout.profiles.filter((p) => p.profileId !== profileId)
+  const others = format.list(
+    layout.profiles.filter((p) => p.profileId !== profileId).map((p) => p.profileName),
+  )
   return (
     <div role="listitem" aria-label={layout.name}>
       <SettingsRow
@@ -172,15 +187,16 @@ function EntryRow({
               <LayoutDevice layout={layout} />
             </span>
             {entry.isDefault && (
-              <InlineStatus tone="positive" aria-label={`Default for ${model}`}>
-                Default for {model}
+              <InlineStatus
+                tone="positive"
+                aria-label={t("layouts:profileLayouts.defaultFor", { model })}
+              >
+                {t("layouts:profileLayouts.defaultFor", { model })}
               </InlineStatus>
             )}
             {others.length > 0 && (
-              <InlineStatus
-                title={`Edits apply to ${others.map((p) => p.profileName).join(", ")} too`}
-              >
-                Also in {others.map((p) => p.profileName).join(", ")}
+              <InlineStatus title={t("layouts:profileLayouts.editsApply", { profiles: others })}>
+                {t("layouts:profileLayouts.alsoIn", { profiles: others })}
               </InlineStatus>
             )}
             {!hasUnknownModel(layout) && <Compatibility layout={layout} />}
@@ -190,14 +206,14 @@ function EntryRow({
       >
         {!entry.isDefault && (
           <Button variant="ghost" size="xs" disabled={busy} onClick={onDefault}>
-            Make default for {model}
+            {t("layouts:profileLayouts.makeDefault", { model })}
           </Button>
         )}
         <span className="flex items-center gap-0.5">
           <Button
             variant="ghost"
             size="icon-xs"
-            aria-label={`Move ${layout.name} up`}
+            aria-label={t("layouts:profileLayouts.moveUp", { layout: layout.name })}
             disabled={busy || first}
             onClick={() => {
               onMove(-1)
@@ -208,7 +224,7 @@ function EntryRow({
           <Button
             variant="ghost"
             size="icon-xs"
-            aria-label={`Move ${layout.name} down`}
+            aria-label={t("layouts:profileLayouts.moveDown", { layout: layout.name })}
             disabled={busy || last}
             onClick={() => {
               onMove(1)
@@ -220,8 +236,8 @@ function EntryRow({
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label={`Open ${layout.name}`}
-              title="Open in the Device Editor"
+              aria-label={t("layouts:profileLayouts.open", { layout: layout.name })}
+              title={t("layouts:profileLayouts.openTitle")}
               disabled={hasUnknownModel(layout)}
               onClick={onOpen}
             >
@@ -233,15 +249,15 @@ function EntryRow({
               <Button
                 variant="ghost"
                 size="icon-xs"
-                aria-label={`Remove ${layout.name} from the profile`}
+                aria-label={t("layouts:profileLayouts.removeLabel", { layout: layout.name })}
                 disabled={busy}
               >
                 <X />
               </Button>
             }
-            title={`Remove “${layout.name}” from this profile?`}
-            description="The layout itself is kept, with its pages and keys, and stays available to other profiles and in Layouts."
-            confirmLabel="Remove"
+            title={t("layouts:profileLayouts.remove.title", { layout: layout.name })}
+            description={t("layouts:profileLayouts.remove.description")}
+            confirmLabel={t("layouts:profileLayouts.remove.confirm")}
             onConfirm={onRemove}
           />
         </span>
@@ -252,15 +268,21 @@ function EntryRow({
 
 /** How many other models the layout fits; the tooltip explains each model. */
 function Compatibility({ layout }: { layout: SharedLayoutSummary }) {
+  const { t } = useTranslation()
   const others = layout.compatibility.slice(1)
   const fits = others.filter((c) => fitsModel(c.fit)).length
   const misses = others.filter((c) => c.fit.type === "missing").length
   const lines = layout.compatibility.map((c) => `${c.modelName}: ${c.explanation}`)
   const label =
     others.length === 0
-      ? "Own model only"
-      : [fits > 0 && `fits ${fits}`, misses > 0 && `misses ${misses}`].filter(Boolean).join(", ") ||
-        "Other models unknown"
+      ? t("layouts:profileLayouts.compatibility.ownOnly")
+      : fits > 0 && misses > 0
+        ? t("layouts:profileLayouts.compatibility.fitsMisses", { fits, misses })
+        : fits > 0
+          ? t("layouts:profileLayouts.compatibility.fits", { fits })
+          : misses > 0
+            ? t("layouts:profileLayouts.compatibility.misses", { misses })
+            : t("layouts:profileLayouts.compatibility.unknown")
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -268,7 +290,7 @@ function Compatibility({ layout }: { layout: SharedLayoutSummary }) {
           tabIndex={0}
           role="note"
           tone={misses > 0 ? "neutral" : "positive"}
-          aria-label={`Compatibility: ${lines.join("; ")}`}
+          aria-label={t("layouts:profileLayouts.compatibility.label", { lines: lines.join("; ") })}
           className="rounded focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
           {label}
@@ -287,7 +309,8 @@ function Compatibility({ layout }: { layout: SharedLayoutSummary }) {
 
 /** Keys that cannot run in this profile, listed in the tooltip. */
 function Unavailable({ items }: { items: string[] }) {
-  const label = `${items.length} ${items.length === 1 ? "key" : "keys"} unavailable`
+  const { t } = useTranslation()
+  const label = t("layouts:profileLayouts.unavailable.label", { count: items.length })
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -295,14 +318,17 @@ function Unavailable({ items }: { items: string[] }) {
           tabIndex={0}
           role="note"
           tone="warning"
-          aria-label={`${label} in this profile: ${items.join("; ")}`}
+          aria-label={t("layouts:profileLayouts.unavailable.detail", {
+            count: items.length,
+            items: items.join("; "),
+          })}
           className="rounded focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
           {label}
         </InlineStatus>
       </TooltipTrigger>
       <TooltipContent>
-        <p className="mb-1 font-medium">Cannot run in this profile:</p>
+        <p className="mb-1 font-medium">{t("layouts:profileLayouts.unavailable.heading")}</p>
         <ul className="grid gap-0.5">
           {items.map((item) => (
             <li key={item}>{item}</li>
@@ -325,18 +351,22 @@ function AssignPicker({
   disabled: boolean
   onAssign: (layout: SharedLayoutSummary) => void
 }) {
-  const sorted = [...layouts].sort((a, b) => a.name.localeCompare(b.name))
+  const { t } = useTranslation()
+  const format = useFormat()
+  const sorted = [...layouts].sort((a, b) => format.compare(a.name, b.name))
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="outline" size="sm" disabled={disabled || loading}>
           <Plus />
-          Assign layout
+          {t("layouts:profileLayouts.assign.button")}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-72">
         <DropdownMenuLabel className="text-xs text-muted-foreground">
-          {sorted.length === 0 ? "Every layout is assigned" : "Layouts not in this profile"}
+          {sorted.length === 0
+            ? t("layouts:profileLayouts.assign.allAssigned")
+            : t("layouts:profileLayouts.assign.notInProfile")}
         </DropdownMenuLabel>
         {sorted.map((layout) => {
           const unknown = hasUnknownModel(layout)
@@ -354,8 +384,14 @@ function AssignPicker({
                 <span className="truncate">{layout.name}</span>
                 <span className="truncate text-xs text-muted-foreground">
                   {unknown
-                    ? `${layout.model}: unknown model, cannot be assigned`
-                    : `${modelLabel(layout)}${others.length > 0 ? ` · fits ${fits} of ${others.length} other models` : ""}`}
+                    ? t("layouts:profileLayouts.assign.unknownModel", { model: layout.model })
+                    : others.length > 0
+                      ? t("layouts:profileLayouts.assign.fitsOf", {
+                          model: modelLabel(layout),
+                          fits,
+                          count: others.length,
+                        })
+                      : modelLabel(layout)}
                 </span>
               </span>
             </DropdownMenuItem>

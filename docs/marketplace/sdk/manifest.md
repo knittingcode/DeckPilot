@@ -48,8 +48,18 @@ Validate while you write it: the examples' unit tests run the schema with
 | `assets` | no | `keyIcons` (≤ 64 PNGs by `[a-z][a-z0-9-]{0,47}` name), `screenshots` (≤ 8 PNGs), `readme` (`"README.md"`), `changelog` (`"CHANGELOG.md"`). Everything named here is packaged |
 | `permissions` | yes | Array, ≤ 16; may be empty. See [permissions.md](permissions.md) |
 | `dependencies` | no | Plugin API 1.4 (needs `"engines": { "pluginApi": "^1.4" }`): ≤ 16 plugins (`<publisher>.<name>`) or built-in modules (`projects`) the plugin needs, each `{ "id", "version" (a range as `engines.deckpilot`), "optional"?, "justification"? }`; never the plugin's own id. A dependency grants nothing. See [dependencies.md](../dependencies.md) |
+| `locales` | no | Plugin API 1.6 (needs `"engines": { "pluginApi": "^1.6" }`): ≤ 32 unique canonical tags (`en`, `pl`, `pl-PL`), each packaged as `locales/<tag>.json`, a JSON object of plain-text strings. With it, the texts the app shows may be `"t:<key>"` ([localization.md](localization.md)) |
+| `defaultLocale` | no | Plugin API 1.6: the language of the manifest's own texts, one of `locales`; `en` when absent. The last locale tried before `en` |
 | `supports` | no | `{ "device": { "requires"?, "uses"? } }` with `keys`, `keyDisplays`, `dials`, `touchStrip`, `brightness`. Accepted, not used by the agent in this version |
-| `contributes` | yes | `actions`, `variables`, `settings`, `credentials`, `errorCodes`; all optional |
+| `contributes` | yes | `actions`, `variables`, `settings`, `credentials`, `errorCodes`, `navigation`, `views`, `visualAssets`; all optional |
+
+Every text the app shows (`name`, `description`, `publisher.name`, action
+names, descriptions and categories, parameter, output, setting, credential
+and variable labels and descriptions, `errorCodes` messages, navigation
+labels, visual asset names and permission and dependency justifications) may name a key of the
+plugin's own translations as `"t:key.path"` in a manifest of plugin API 1.6
+with `locales` ([localization.md](localization.md)). Ids and keys are never
+translated; below 1.6 a `t:` text is plain text.
 
 ## `contributes.actions[]`
 
@@ -68,6 +78,52 @@ At most 64 actions (`MAX_ACTIONS`). Each:
 | `device` | no | `{ "requires": [...] }`. Accepted, not used: it never makes an action bindable to a dial or a touch strip (use `controls`) |
 | `requiresDependencies` | no | Plugin API 1.4: ids of declared `dependencies` (usually optional ones) the action needs; while one is missing or off, only this action is unavailable ([dependencies.md](../dependencies.md#1-the-manifest)) |
 | `controls` | no | Plugin API 1.3: the controls and inputs the action can be bound to; see [Controls](#controls). Without it: keys only |
+| `editorNavigation` | no | Plugin API 1.7: what running the action does to the page or layout a device shows, for the Device Editor's preview; see [Editor navigation](#editor-navigation) |
+| `title` | no | Plugin API 1.8: suggestions for the action's keys' titles; see [Titles](#titles) |
+
+### Titles
+
+`title` (plugin API 1.8; the manifest must declare `^1.8`, the validator
+refuses it below) says what the action suggests for the titles of its keys.
+It is **data only** and needs no permission: the title editor is always
+DeckPilot's own, the same for every key, and the user's own title and look
+always win ([key-text.md](../../key-text.md#title-precedence)).
+
+```json
+"title": { "default": "CPU", "dynamic": true, "position": "bottom", "supports": ["position", "color"] }
+```
+
+| Field | Rule |
+| --- | --- |
+| `default` | 1–32 characters (a `t:` key with `locales`): the title a key shows while neither the key nor the action has a label and the action keeps its type's name |
+| `dynamic` | `true`: the action sets its title while it runs (its key state's `label`); a title the user wrote is kept over it |
+| `position` | `top`, `middle` or `bottom`: used while the key sets no position |
+| `supports` | The parts of the look the editor offers for the action's keys: `visibility`, `position`, `font`, `style`, `color`, `layout`, each at most once; absent: all. The others are shown disabled |
+
+### Editor navigation
+
+`editorNavigation` (plugin API 1.7; the manifest must declare `^1.7`, the
+validator refuses it below) tells the Device Editor's interactive preview
+what a key running the action does to the view, so that double-clicking
+the key in the editor follows it. It is **data only**: the editor moves its
+own view with DeckPilot's navigation code, and **the plugin is never
+called** for it. Nothing in it is executable, and a plugin can describe
+only its own actions.
+
+```json
+"editorNavigation": { "operation": "folder.open", "targetParameter": "page" }
+```
+
+| Field | Rule |
+| --- | --- |
+| `operation` | One of `folder.open`, `folder.back`, `page.next`, `page.previous`, `layout.switch`, `layout.back`; nothing else is accepted |
+| `targetParameter` | Required for `folder.open` (the parameter holds a page id) and `layout.switch` (a layout id), refused for the others; must name a `text` parameter of this action |
+| `pageParameter` | Only for `layout.switch`: a `text` parameter holding the page of that layout to show |
+
+The declaration describes the editor only: the action itself still has to
+do what it says when it runs. A key whose target parameter is empty, or
+not an id, does not navigate in the editor. See
+[editor-navigation-and-simulation.md](../../editor-navigation-and-simulation.md).
 
 ### Controls
 
@@ -215,12 +271,65 @@ SVG again every time it serves one; the app renders icons only through
 none to show. Entries are shown only for installed and enabled plugins and
 disappear when the plugin is uninstalled.
 
+## `contributes.visualAssets`
+
+Plugin API 1.8 (needs `"engines": { "pluginApi": "^1.8" }`): icons and
+backgrounds for DeckPilot's shared Icon and Background Libraries. Data
+only: no plugin code runs to list or draw them, and the plugin cannot
+replace or extend the pickers.
+
+```json
+"visualAssets": {
+  "icons": [
+    { "id": "sunny", "name": "t:assets.sunny", "asset": "assets/icons/sunny.png", "keywords": ["sun"] }
+  ],
+  "backgrounds": [
+    { "id": "sky", "name": "Sky", "type": "image", "asset": "assets/backgrounds/sky.jpg" },
+    { "id": "dusk", "name": "Dusk", "type": "gradient", "colors": ["#ff8800", "#220044"], "angle": 135 }
+  ]
+}
+```
+
+| Field | Rule |
+| --- | --- |
+| `icons` | ≤ 128 (`MAX_VISUAL_ICONS`) |
+| `backgrounds` | ≤ 32 (`MAX_VISUAL_BACKGROUNDS`) |
+| `…[].id` | `[a-z][a-z0-9]*(-[a-z0-9]+)*`, 1-48 characters, unique across icons and backgrounds. DeckPilot names the asset `<plugin id>.<id>` (`acme.weather.sunny`), which is what a key stores; it never collides with another plugin's or DeckPilot's own (`deckpilot.<name>`) |
+| `…[].name` | 1-48 characters, may be `t:<key>` ([localization.md](localization.md)); shown in the app's language with the usual fallback |
+| `icons[].asset` | A PNG under `assets/`: at most 256 KiB and 512×512 pixels |
+| `icons[].keywords` | Optional, ≤ 16 search words of 1-32 characters (not translated) |
+| `backgrounds[].type` | `image` or `gradient` |
+| `backgrounds[].asset` | `image` only, required: a PNG or JPEG (`.png`, `.jpg`, `.jpeg`) under `assets/`: at most 1 MiB and 1024×1024 pixels |
+| `backgrounds[].colors` | `gradient` only, required: 2-4 `#rrggbb` colours, evenly spaced |
+| `backgrounds[].angle` | `gradient` only: 0-359 degrees as in CSS (0 to the top, 90 to the right); default 180 |
+
+Paths follow the package path rules (no absolute path, scheme, `..` or
+backslash). The files are named by the manifest, so they are in the
+package's integrity record and the registry's pins like every other file;
+the package is refused when it is built or installed if a file is missing,
+of another format than its extension (checked by content), too large, or
+larger than its pixel limit (read from the header, nothing decoded). The
+agent reads a file only from the active version's install directory,
+compares its sha256 with the integrity record every time, and decodes it
+with limits; a changed file is left out (and the plugin's integrity check
+marks it broken as for any other file).
+
+Keys draw a plugin's assets only while the plugin is enabled. Installing a
+plugin never changes a key; a key keeps its reference through disable,
+update, uninstall and reinstall, draws the device's default background and
+no icon of its own while the asset is not there, and draws it again once
+the plugin is back. The app reads the list from `PluginSummary.visualAssets`
+and the files with `getPluginIcon` and `asset` (runtime feature
+`visualAssets`). Images are drawn covering the key (cropped, aspect ratio
+kept) and gradients rasterised by DeckPilot's renderer, never by CSS;
+nothing is animated.
+
 ## Compatibility: `engines` and `platforms`
 
 | Field | Rule | Checked |
 | --- | --- | --- |
 | `engines.deckpilot` | One comparator or a lower and an upper bound separated by one space: `>=`, `>`, `<=`, `<`, `=` (or none, meaning `=`) followed by `MAJOR.MINOR.PATCH` without leading zeros or pre-release, e.g. `">=0.5.0 <1.0.0"`; ≤ 64 characters; must be satisfiable (`VersionRange`). Matching uses semver precedence **including DeckPilot pre-releases**: `0.6.0-alpha.3` satisfies `>=0.5.0 <1.0.0`, and `0.8.0-beta.1` does not satisfy `>=0.8.0` | By the registry client before install (`incompatible`) and by the agent (`HostEnvironment.app_version` = the agent's version) |
-| `engines.pluginApi` | `^MAJOR.MINOR`: same major, at least this minor (`ApiRequirement`). The agent provides **1.4** (`PLUGIN_API` in `apps/agent/src/plugins/service.rs`), so `^1.0` to `^1.4` install; declare `^1.1` only when the plugin cannot work without the time or random bytes, and `^1.2` only when it is useless without key state ([errors-and-versions.md](errors-and-versions.md#versions)). A manifest with `controls`, `navigation` or `views` must declare `^1.3` (the validator refuses a lower level); agents up to 1.2 refuse such a manifest anyway, as they do not know the fields. DeckPilot 0.8.0 is the first release whose agent provides 1.3 (0.6.0 and 0.7.0 provide 1.2), so a plugin declaring `^1.3` should also declare `engines.deckpilot` `">=0.8.0"`. A view's `context`, `dependencies` and `requiresDependencies` need `^1.4`; the first release whose agent provides 1.4 is the one after 0.8.1 | Same |
+| `engines.pluginApi` | `^MAJOR.MINOR`: same major, at least this minor (`ApiRequirement`). The agent provides **1.8** (`PLUGIN_API` in `apps/agent/src/plugins/service.rs`), so `^1.0` to `^1.8` install; declare `^1.1` only when the plugin cannot work without the time or random bytes, and `^1.2` only when it is useless without key state ([errors-and-versions.md](errors-and-versions.md#versions)). A manifest with `controls`, `navigation` or `views` must declare `^1.3` (the validator refuses a lower level); agents up to 1.2 refuse such a manifest anyway, as they do not know the fields. DeckPilot 0.8.0 is the first release whose agent provides 1.3 (0.6.0 and 0.7.0 provide 1.2), so a plugin declaring `^1.3` should also declare `engines.deckpilot` `">=0.8.0"`. A view's `context`, `dependencies` and `requiresDependencies` need `^1.4`; the first release whose agent provides 1.4 is the one after 0.8.1. The `dialogs` permission needs `^1.5` (the validator refuses it below; [dialogs.md](dialogs.md)); the agent of the release after 0.9.0 is the first to provide 1.5. `locales` and `defaultLocale` need `^1.6` ([localization.md](localization.md)), also the first provided by the agent of the release after 0.9.0. An action's `editorNavigation` needs `^1.7` ([Editor navigation](#editor-navigation)), likewise first provided by the agent of the release after 0.9.0. An action's `title` needs `^1.8` ([Titles](#titles)), likewise first provided by the agent of the release after 0.9.0 | Same |
 | `engines.sdk` | Informational semver of the SDK used (`deckpilot_plugin_sdk::SDK_VERSION`, 0.1.0) | `testing::manifest_mismatches` only |
 | `platforms` | Omitted means macOS, Windows and Linux | Same; a mismatch is `Incompatibility::Platform` |
 

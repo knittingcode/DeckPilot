@@ -40,7 +40,7 @@ const BACKGROUND: Color = Color([10, 60, 30]);
 
 fn appearance() -> KeyAppearance {
     KeyAppearance {
-        background: Some(BACKGROUND),
+        background: Some(BACKGROUND.into()),
         ..KeyAppearance::default()
     }
 }

@@ -1,11 +1,14 @@
 import { useState } from "react"
 import { toast } from "sonner"
 
+import { i18n } from "@/i18n"
+import { DEFAULT_AUTO_EXIT, RESERVED_BACK, withoutSystemBack } from "@/lib/folder-back"
 import {
   addPage,
   controlLabel,
   deletePage,
   page as findPage,
+  pageParents,
   renamePage,
   setAutoReturn,
 } from "@/lib/layout-model"
@@ -35,14 +38,17 @@ import {
   type Selection,
 } from "./editing"
 
+/** The folder `id` is in; `undefined` at the top level. */
+function parentOf(layout: DeviceLayout, id: string): string | undefined {
+  return pageParents(layout).get(id)
+}
+
 /** Where the editor is in a layout: kept by the shell while it is not on screen. */
 export interface EditorPlace {
   pageId: string
   trail: string[]
   selection: Selection
 }
-
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`
 
 /**
  * State of the layout editor: the draft with its undo history, the open
@@ -87,10 +93,19 @@ export function useLayoutEditing(
   const [deleting, setDeleting] = useState<string | null>(null)
 
   const draft = state.present
-  // Undo can remove the open page; fall back to the home page then.
-  const currentPage = findPage(draft, openPage) ?? findPage(draft, draft.homePage) ?? draft.pages[0]
+  // Undo or Revert can remove the open page: the nearest page it was
+  // reached through that is still there (the folder it was in), else the
+  // home page; as the device does (docs/editor-navigation-and-simulation.md).
+  const currentPage =
+    findPage(draft, openPage) ??
+    [...trail].reverse().flatMap((id) => findPage(draft, id) ?? [])[0] ??
+    findPage(draft, draft.homePage) ??
+    draft.pages[0]
   const pageId = currentPage?.id ?? draft.homePage
   const selected = selectedInOrder(model, selection)
+  // What edits of the selection change: never the folder's system Back,
+  // which is the agent's (it stays selectable, for the inspector).
+  const editable = withoutSystemBack(model, draft, pageId, selected)
 
   const change = (layout: DeviceLayout, group?: string) => {
     setState((s) => commit(s, layout, group ?? null))
@@ -103,10 +118,10 @@ export function useLayoutEditing(
   }
 
   const copy = () => {
-    const copied = copyControls(model, draft, pageId, selected)
+    const copied = copyControls(model, draft, pageId, editable)
     if (!copied) return
     setClipboard(copied)
-    toast.success(`Copied ${plural(copied.entries.length, "control")}`)
+    toast.success(i18n.t("editor:editing.copied", { count: copied.entries.length }))
   }
 
   const commands = {
@@ -118,7 +133,16 @@ export function useLayoutEditing(
      */
     restyle: (look: KeyLookChange, group?: string) => {
       setState((s) =>
-        commit(s, applyAppearance(s.present, pageId, selected, look).layout, group ?? null),
+        commit(
+          s,
+          applyAppearance(
+            s.present,
+            pageId,
+            withoutSystemBack(model, s.present, pageId, selected),
+            look,
+          ).layout,
+          group ?? null,
+        ),
       )
     },
     select: (control: ControlId, mode: SelectMode) => {
@@ -149,13 +173,13 @@ export function useLayoutEditing(
     },
     copy,
     cut: () => {
-      if (selected.length === 0) return
+      if (editable.length === 0) return
       copy()
-      change(clearControls(draft, pageId, selected))
+      change(clearControls(draft, pageId, editable))
     },
     paste: () => {
-      if (!clipboard || selected.length === 0) return
-      const result = pasteControls(model, draft, pageId, clipboard, selected)
+      if (!clipboard || editable.length === 0) return
+      const result = pasteControls(model, draft, pageId, clipboard, editable)
       change(result.layout)
       if (result.controls.length > 0) {
         setSelection({
@@ -165,22 +189,22 @@ export function useLayoutEditing(
         })
       }
       if (result.skipped > 0) {
-        toast.warning(`${plural(result.skipped, "binding")} could not be pasted here`, {
-          description: "The control does not support that event, or the target page is missing.",
+        toast.warning(i18n.t("editor:editing.notPasted", { count: result.skipped }), {
+          description: i18n.t("editor:editing.notPastedDetail"),
         })
       }
     },
     duplicate: () => {
-      const result = duplicateControls(model, draft, pageId, selected)
+      const result = duplicateControls(model, draft, pageId, editable)
       if (result.controls.length === 0) {
-        toast.warning("No free control to duplicate onto")
+        toast.warning(i18n.t("editor:editing.noFreeControl"))
         return
       }
       change(result.layout)
       commands.selectAll(result.controls)
     },
     clear: () => {
-      if (selected.length > 0) change(clearControls(draft, pageId, selected))
+      if (editable.length > 0) change(clearControls(draft, pageId, editable))
     },
     assign: (target: BindingTarget) => {
       change(
@@ -188,7 +212,7 @@ export function useLayoutEditing(
           model,
           draft,
           pageId,
-          selected,
+          editable,
           target,
           accepts && ((control, trigger) => accepts(control, target, trigger)),
         ),
@@ -201,8 +225,8 @@ export function useLayoutEditing(
     newFolder: (control: ControlId) => {
       const next = createFolder(model, draft, pageId, control, crypto.randomUUID())
       if (!next) {
-        toast.error(`${controlLabel(control)} already does something`, {
-          description: "Create the folder on an empty control, or clear this one first.",
+        toast.error(i18n.t("editor:editing.folderTaken", { control: controlLabel(control) }), {
+          description: i18n.t("editor:editing.folderTakenDetail"),
         })
         return
       }
@@ -228,7 +252,7 @@ export function useLayoutEditing(
           : undefined,
       )
       if (!next) {
-        toast.error(`${controlLabel(over)} cannot take these bindings`)
+        toast.error(i18n.t("editor:editing.dropRefused", { control: controlLabel(over) }))
         return
       }
       change(next)
@@ -236,6 +260,18 @@ export function useLayoutEditing(
     },
     openPage: (id: string) => {
       showPage(id, [])
+    },
+    /** Shows `id` as reached through `through` (a breadcrumb). */
+    openAt: (id: string, through: string[]) => {
+      if (findPage(draft, id))
+        showPage(
+          id,
+          through.filter((p) => p !== id && findPage(draft, p)),
+        )
+    },
+    /** Shows `id` as opened from the page shown (a folder key). */
+    enter: (id: string) => {
+      if (findPage(draft, id) && id !== pageId) showPage(id, [...trail, pageId])
     },
     openFolder: (control: ControlId) => {
       const folder = folderOf(draft, pageId, control)
@@ -246,16 +282,47 @@ export function useLayoutEditing(
       if (previous && findPage(draft, previous)) showPage(previous, trail.slice(0, -1))
       else showPage(parentPage(draft, pageId), [])
     },
-    addPage: (name: string) => {
+    /**
+     * Adds a page and shows it: in `folder` (a page id), else in the folder
+     * the open page is in (the top level for a top-level page).
+     */
+    addPage: (name: string, folder?: string | null) => {
       const id = crypto.randomUUID()
-      change(addPage(draft, id, name))
+      const parent =
+        folder === undefined
+          ? pageId === draft.homePage
+            ? undefined
+            : parentOf(draft, pageId)
+          : folder
+      const added = addPage(draft, id, name)
+      change(
+        parent && findPage(draft, parent)
+          ? {
+              ...added,
+              // A page inside a folder is a folder page: protected Back,
+              // Auto Exit off (as `createFolder`).
+              pages: added.pages.map((p) =>
+                p.id === id
+                  ? {
+                      ...p,
+                      parent,
+                      back: { ...RESERVED_BACK },
+                      autoExit: { ...DEFAULT_AUTO_EXIT },
+                    }
+                  : p,
+              ),
+            }
+          : added,
+      )
       showPage(id, [])
     },
-    renamePage: (name: string) => {
-      change(renamePage(draft, pageId, name), `page-name:${pageId}`)
+    /** The one rename of a page (the breadcrumb and the page navigator use it). */
+    renamePage: (name: string, id: string = pageId) => {
+      if (!findPage(draft, id)) return
+      change(renamePage(draft, id, name), `page-name:${id}`)
     },
-    setAutoReturn: (on: boolean) => {
-      change(setAutoReturn(draft, pageId, on))
+    setAutoReturn: (on: boolean, id: string = pageId) => {
+      change(setAutoReturn(draft, id, on))
     },
     /**
      * Replaces the draft and its history with a layout stored by a page
@@ -267,8 +334,8 @@ export function useLayoutEditing(
       showPage(page && findPage(layout, page) ? page : layout.homePage, [])
     },
     /** Asks before deleting the open page; see `confirmDeletePage`. */
-    deletePage: () => {
-      if (pageId !== draft.homePage) setDeleting(pageId)
+    deletePage: (id: string = pageId) => {
+      if (id !== draft.homePage && findPage(draft, id)) setDeleting(id)
     },
     cancelDeletePage: () => {
       setDeleting(null)
@@ -291,9 +358,15 @@ export function useLayoutEditing(
     draft,
     baseline,
     pageId,
-    trail: trail.filter((id) => findPage(draft, id)),
+    // Up to the page shown, when the page opened is gone (see `currentPage`).
+    trail: (findPage(draft, openPage)
+      ? trail
+      : trail.slice(0, Math.max(0, trail.indexOf(pageId)))
+    ).filter((id) => findPage(draft, id)),
     selection,
     selected,
+    /** The selection without the folder's system Back: what edits change. */
+    editable,
     clipboard,
     /** The page whose deletion waits for confirmation, if any. */
     deleting: deleting && findPage(draft, deleting) ? deleting : null,

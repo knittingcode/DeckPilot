@@ -52,6 +52,7 @@ import { toastFailure } from "@/lib/failure"
 import { useSnapshot } from "@/hooks/use-status"
 import { EXECUTION_STATE_LABEL, ExecutionStore } from "@/lib/executions"
 import { useTitlebar } from "@/hooks/use-titlebar"
+import { type TranslationKey, useTranslation } from "@/i18n"
 import { useActionModules, useAppContext } from "@/lib/app-context"
 import { pluginActionUnavailable } from "@/lib/plugin-actions"
 import { ActionIcon } from "@/components/action-icon"
@@ -88,10 +89,10 @@ import {
 } from "@/lib/workflow-model"
 import { runBlockedReason } from "@/workflow-builder/run-model"
 
-const CONDITIONS = [
-  { value: "always", label: "Always" },
-  { value: "previousSucceeded", label: "If the previous step succeeded" },
-  { value: "previousFailed", label: "If the previous step failed" },
+const CONDITIONS: { value: string; label: TranslationKey }[] = [
+  { value: "always", label: "workflows:steps.condition.always" },
+  { value: "previousSucceeded", label: "workflows:steps.condition.previousSucceeded" },
+  { value: "previousFailed", label: "workflows:steps.condition.previousFailed" },
 ]
 
 function conditionValue(condition: StepCondition | undefined): string {
@@ -128,10 +129,14 @@ export function StepEditor({
   onChanged: (id?: string) => void
   embedded?: boolean
 }) {
+  const { t } = useTranslation()
   const { profiles, agent, refresh } = useAppContext()
   const [workflow, setWorkflow] = useState<Workflow>(initial)
   const [addAction, setAddAction] = useState("")
-  const [errors, setErrors] = useState<string[]>([])
+  const [backendErrors, setBackendErrors] = useState<string[]>([])
+  // The workflow as it was saved when the local checks refused it: its
+  // messages are made while rendering, so they follow a change of the language.
+  const [refused, setRefused] = useState<Workflow | null>(null)
   // The delay action "Add delay" created, until the reloaded profile has it.
   const [created, setCreated] = useState<ActionInstance[]>([])
   const executions = useExecutions()
@@ -180,12 +185,12 @@ export function StepEditor({
         : [
             {
               id: "workflows.run",
-              label: "Run workflow",
+              label: t("workflows:steps.run"),
               icon: Play,
               placement: "primary",
               disabled: !canRun || running || starting,
               busy: running || starting,
-              hint: runBlocked ?? `Run “${initial.name}”`,
+              hint: runBlocked ?? t("workflows:steps.runNamed", { name: initial.name }),
               onSelect: run,
             },
           ],
@@ -205,7 +210,7 @@ export function StepEditor({
       const id = action.id
       setWorkflow((w) => ({ ...w, steps: [...w.steps, delayStep(id)] }))
     } catch (e) {
-      toastFailure("The delay was not added", e)
+      toastFailure(t("workflows:steps.toast.delayFailed"), e)
     }
   }
   const sensors = useSensors(
@@ -222,41 +227,44 @@ export function StepEditor({
 
   const save = async () => {
     const local = validateWorkflow(workflow, actionIds)
-    setErrors(local)
+    setRefused(local.length > 0 ? workflow : null)
+    setBackendErrors([])
     if (local.length > 0) return
     try {
       const saved = await api.saveWorkflow(profileId, workflow)
-      toastSaved("Workflow saved", saved.agentReload)
+      toastSaved(t("workflows:steps.toast.saved"), saved.agentReload)
       onChanged(saved.id)
     } catch (e) {
-      setErrors(errorMessage(e).split("\n"))
+      setBackendErrors(errorMessage(e).split("\n"))
     }
   }
 
+  const errors = refused ? validateWorkflow(refused, actionIds) : backendErrors
+
   return (
     <Panel
-      title={isNew ? "New workflow" : initial.name}
-      description="Steps run in order in the agent. Each step uses an action from this profile."
+      title={isNew ? t("workflows:page.new") : initial.name}
+      description={t("workflows:steps.description")}
     >
       {errors.length > 0 && <ErrorNotice error={errors.join(" ")} />}
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="grid gap-2">
-          <Label htmlFor="workflow-name">Name</Label>
+          <Label htmlFor="workflow-name">{t("workflows:steps.name")}</Label>
           <Input
             id="workflow-name"
             value={workflow.name}
-            placeholder="Start Work"
+            placeholder={t("workflows:steps.namePlaceholder")}
             onChange={(e) => {
               setWorkflow({ ...workflow, name: e.target.value })
             }}
           />
         </div>
         <div className="grid gap-2">
-          <Label htmlFor="workflow-description">Description</Label>
+          <Label htmlFor="workflow-description">{t("workflows:steps.descriptionLabel")}</Label>
           <Input
             id="workflow-description"
             value={workflow.description ?? ""}
-            placeholder="Optional"
+            placeholder={t("workflows:steps.optional")}
             onChange={(e) => {
               setWorkflow({ ...workflow, description: e.target.value })
             }}
@@ -265,9 +273,9 @@ export function StepEditor({
       </div>
 
       <div className="grid gap-2">
-        <Label id="workflow-steps-label">Steps</Label>
+        <Label id="workflow-steps-label">{t("workflows:steps.steps")}</Label>
         {workflow.steps.length === 0 && (
-          <p className="text-sm text-muted-foreground">Add actions below.</p>
+          <p className="text-sm text-muted-foreground">{t("workflows:steps.empty")}</p>
         )}
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
           <SortableContext items={ids} strategy={verticalListSortingStrategy}>
@@ -298,8 +306,8 @@ export function StepEditor({
         </DndContext>
         <div className="flex flex-wrap items-center gap-2">
           <Select value={addAction} onValueChange={setAddAction}>
-            <SelectTrigger className="w-72" aria-label="Action to add">
-              <SelectValue placeholder="Choose an action" />
+            <SelectTrigger className="w-72" aria-label={t("workflows:steps.actionToAdd")}>
+              <SelectValue placeholder={t("workflows:steps.chooseAction")} />
             </SelectTrigger>
             <SelectContent>
               {actions.map((action) => {
@@ -313,7 +321,10 @@ export function StepEditor({
                     title={why ?? undefined}
                   >
                     {action.name}
-                    {!usable && (why ? ` (unavailable: ${why})` : " (unavailable)")}
+                    {!usable &&
+                      (why
+                        ? t("workflows:steps.unavailableWhy", { reason: why })
+                        : t("workflows:steps.unavailableMark"))}
                   </SelectItem>
                 )
               })}
@@ -327,11 +338,11 @@ export function StepEditor({
               setAddAction("")
             }}
           >
-            <Plus /> Add step
+            <Plus /> {t("workflows:steps.addStep")}
           </Button>
           {delayType && (
             <Button variant="outline" onClick={() => void addDelay()}>
-              <Timer /> Add delay
+              <Timer /> {t("workflows:steps.addDelay")}
             </Button>
           )}
         </div>
@@ -339,16 +350,16 @@ export function StepEditor({
 
       <div className="flex flex-wrap gap-2">
         <Button onClick={() => void save()} disabled={!dirty && !isNew}>
-          <Save /> Save
+          <Save /> {t("workflows:steps.save")}
         </Button>
         {embedded && !isNew && (
           <Button
             variant="outline"
             disabled={!canRun || running || starting}
-            title={runBlocked ?? `Run “${initial.name}”`}
+            title={runBlocked ?? t("workflows:steps.runNamed", { name: initial.name })}
             onClick={run}
           >
-            <Play /> Run
+            <Play /> {t("workflows:steps.runShort")}
           </Button>
         )}
         {!isNew && !embedded && (
@@ -357,35 +368,39 @@ export function StepEditor({
               variant="outline"
               onClick={() => {
                 api
-                  .duplicateWorkflow(profileId, workflow.id, `${initial.name} (copy)`)
+                  .duplicateWorkflow(
+                    profileId,
+                    workflow.id,
+                    t("workflows:steps.copyName", { name: initial.name }),
+                  )
                   .then((copy) => {
-                    toast.success("Workflow duplicated")
+                    toast.success(t("workflows:steps.toast.duplicated"))
                     onChanged(copy.id)
                   })
                   .catch((e: unknown) => {
-                    toastFailure("The workflow was not duplicated", e)
+                    toastFailure(t("workflows:steps.toast.duplicateFailed"), e)
                   })
               }}
             >
-              <Copy /> Duplicate
+              <Copy /> {t("workflows:steps.duplicate")}
             </Button>
             <ConfirmDialog
               trigger={
                 <Button variant="ghost" disabled={usages.length > 0}>
-                  <Trash2 /> Delete
+                  <Trash2 /> {t("common:actions.delete")}
                 </Button>
               }
-              title={`Delete “${initial.name}”?`}
-              description="The workflow is removed from this profile."
+              title={t("workflows:steps.deleteTitle", { name: initial.name })}
+              description={t("workflows:steps.deleteDescription")}
               onConfirm={() => {
                 api
                   .deleteWorkflow(profileId, workflow.id)
                   .then(() => {
-                    toast.success("Workflow deleted")
+                    toast.success(t("workflows:steps.toast.deleted"))
                     onChanged()
                   })
                   .catch((e: unknown) => {
-                    toastFailure("The workflow was not deleted", e)
+                    toastFailure(t("workflows:steps.toast.deleteFailed"), e)
                   })
               }}
             />
@@ -396,7 +411,7 @@ export function StepEditor({
       {lastRun && (
         <div className="grid gap-1 rounded-md bg-muted p-3 text-xs" role="status">
           <p className="font-medium">
-            Last run: {EXECUTION_STATE_LABEL[lastRun.state]}
+            {t("workflows:steps.lastRun", { state: t(EXECUTION_STATE_LABEL[lastRun.state]) })}
             {lastRun.state === "running" && ` (${lastRun.completedNodes}/${lastRun.totalNodes})`}
             {lastRun.message ? ` — ${lastRun.message}` : ""}
           </p>
@@ -412,7 +427,7 @@ export function StepEditor({
       )}
       {!isNew && !embedded && usages.length > 0 && (
         <div className="grid gap-1">
-          <h3 className="text-sm font-medium">Used in</h3>
+          <h3 className="text-sm font-medium">{t("workflows:steps.usedIn")}</h3>
           <UsageList usages={usages} />
         </div>
       )}
@@ -444,6 +459,7 @@ function SortableStep({
   onMove: (to: number) => void
   onRemove: () => void
 }) {
+  const { t } = useTranslation()
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id,
   })
@@ -470,7 +486,7 @@ function SortableStep({
         <button
           type="button"
           className="cursor-grab rounded p-1 text-muted-foreground hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-          aria-label={`Drag step ${index + 1}`}
+          aria-label={t("workflows:steps.drag", { number: index + 1 })}
           {...attributes}
           {...listeners}
         >
@@ -494,8 +510,11 @@ function SortableStep({
                 onChange({ action: value, overrides: {} })
               }}
             >
-              <SelectTrigger className="w-64" aria-label={`Action of step ${index + 1}`}>
-                <SelectValue placeholder="Missing action" />
+              <SelectTrigger
+                className="w-64"
+                aria-label={t("workflows:steps.actionOf", { number: index + 1 })}
+              >
+                <SelectValue placeholder={t("workflows:steps.missingAction")} />
               </SelectTrigger>
               <SelectContent>
                 {actions.map((a) => (
@@ -511,7 +530,7 @@ function SortableStep({
         <Button
           variant="ghost"
           size="icon"
-          aria-label="Move up"
+          aria-label={t("workflows:steps.moveUp")}
           disabled={index === 0}
           onClick={() => {
             onMove(index - 1)
@@ -522,7 +541,7 @@ function SortableStep({
         <Button
           variant="ghost"
           size="icon"
-          aria-label="Move down"
+          aria-label={t("workflows:steps.moveDown")}
           disabled={index === count - 1}
           onClick={() => {
             onMove(index + 1)
@@ -533,7 +552,7 @@ function SortableStep({
         <Button
           variant="ghost"
           size="icon"
-          aria-label={`Remove step ${index + 1}`}
+          aria-label={t("workflows:steps.remove", { number: index + 1 })}
           onClick={onRemove}
         >
           <X />
@@ -541,8 +560,7 @@ function SortableStep({
       </div>
       {unavailable && (
         <p className="text-xs text-destructive" role="note">
-          Unavailable: {unavailable}. The step stays in the workflow and runs again once the plugin
-          can.
+          {t("workflows:steps.unavailableStep", { reason: unavailable })}
         </p>
       )}
       {!delay && (
@@ -553,20 +571,23 @@ function SortableStep({
               onChange({ condition: parseCondition(value) })
             }}
           >
-            <SelectTrigger aria-label={`Condition of step ${index + 1}`} className="w-full">
+            <SelectTrigger
+              aria-label={t("workflows:steps.conditionOf", { number: index + 1 })}
+              className="w-full"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               {CONDITIONS.filter((c) => conditionAllowed(parseCondition(c.value), index)).map(
                 (c) => (
                   <SelectItem key={c.value} value={c.value}>
-                    {c.label}
+                    {t(c.label)}
                   </SelectItem>
                 ),
               )}
               {view.profile.projects.map((project) => (
                 <SelectItem key={project.id} value={`project:${project.id}`}>
-                  While {project.key} is active
+                  {t("workflows:steps.condition.whileProject", { project: project.key })}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -577,12 +598,15 @@ function SortableStep({
               onChange({ onFailure: value as WorkflowStep["onFailure"] })
             }}
           >
-            <SelectTrigger aria-label={`On failure of step ${index + 1}`} className="w-full">
+            <SelectTrigger
+              aria-label={t("workflows:steps.onFailureOf", { number: index + 1 })}
+              className="w-full"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="stop">On failure: stop the workflow</SelectItem>
-              <SelectItem value="continue">On failure: continue</SelectItem>
+              <SelectItem value="stop">{t("workflows:steps.onFailure.stop")}</SelectItem>
+              <SelectItem value="continue">{t("workflows:steps.onFailure.continue")}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -597,7 +621,9 @@ function SortableStep({
               setShowParameters(!showParameters)
             }}
           >
-            {showParameters ? "Hide parameters" : "Override parameters for this step"}
+            {showParameters
+              ? t("workflows:steps.hideParameters")
+              : t("workflows:steps.showParameters")}
           </Button>
           {showParameters &&
             action &&
@@ -620,7 +646,7 @@ function SortableStep({
                         })
                       }}
                     />
-                    Override “{spec.label}”
+                    {t("workflows:steps.override", { parameter: spec.label })}
                   </label>
                   {override !== undefined && (
                     <ParameterField
@@ -653,11 +679,12 @@ function DelayField({
 }) {
   // The typed text, so that the field can be cleared to type a new number;
   // the step takes it once it is a number.
+  const { t } = useTranslation()
   const [text, setText] = useState(String(ms))
   return (
     <label className="flex items-center gap-2 text-sm">
       <Timer className="size-4" aria-hidden />
-      <span>Delay</span>
+      <span>{t("workflows:steps.delay")}</span>
       <Input
         type="number"
         inputMode="numeric"
@@ -665,7 +692,7 @@ function DelayField({
         min={MIN_DELAY_MS}
         max={MAX_DELAY_MS}
         step={50}
-        aria-label={`Delay of step ${index + 1} in milliseconds`}
+        aria-label={t("workflows:steps.delayOf", { number: index + 1 })}
         value={text}
         onChange={(e) => {
           setText(e.target.value)
@@ -676,7 +703,7 @@ function DelayField({
           setText(String(ms))
         }}
       />
-      <span className="text-muted-foreground">ms</span>
+      <span className="text-muted-foreground">{t("workflows:steps.ms")}</span>
     </label>
   )
 }

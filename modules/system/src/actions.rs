@@ -66,6 +66,8 @@ fn definition(
     node: NodeSpec,
 ) -> ActionType {
     ActionType {
+        editor_navigation: None,
+        title: None,
         id: id(id_value),
         name: name.into(),
         description: description.into(),

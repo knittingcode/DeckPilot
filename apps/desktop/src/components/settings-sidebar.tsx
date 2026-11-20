@@ -14,6 +14,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
+import { useTranslation } from "@/i18n"
 import { useAppContext } from "@/lib/app-context"
 import { groupedSettings, searchSettings, settingsPages } from "@/settings/registry"
 
@@ -24,13 +25,14 @@ import { groupedSettings, searchSettings, settingsPages } from "@/settings/regis
  * window's toolbar and rail lead out of it.
  */
 export function SettingsSidebar({ current }: { current: string }) {
+  const { t } = useTranslation()
   const { modules, updates, openSettings } = useAppContext()
   const [query, setQuery] = useState("")
   const groups = groupedSettings(searchSettings(settingsPages(modules), query))
   return (
     <Sidebar
       collapsible="none"
-      aria-label="Settings"
+      aria-label={t("settings:title")}
       className="h-full shrink-0 border-r border-sidebar-border"
     >
       {/* The titlebar names the view ("Settings / …"); the sidebar starts with its search. */}
@@ -42,8 +44,8 @@ export function SettingsSidebar({ current }: { current: string }) {
           />
           <SidebarInput
             type="search"
-            placeholder="Search settings"
-            aria-label="Search settings"
+            placeholder={t("settings:search.placeholder")}
+            aria-label={t("settings:search.placeholder")}
             className="h-7 pl-7 text-caption"
             value={query}
             onChange={(e) => {
@@ -55,7 +57,7 @@ export function SettingsSidebar({ current }: { current: string }) {
       <SidebarContent className="gap-0 pb-2">
         {groups.length === 0 && (
           <p role="status" className="px-4 py-2 text-caption text-muted-foreground">
-            No settings found
+            {t("settings:search.empty")}
           </p>
         )}
         {groups.map((group) => (
@@ -80,7 +82,7 @@ export function SettingsSidebar({ current }: { current: string }) {
                     </SidebarMenuButton>
                     {page.id === "updates" && updates?.available && (
                       <SidebarMenuBadge className="top-1 h-5 text-xs text-muted-foreground">
-                        New
+                        {t("settings:newBadge")}
                       </SidebarMenuBadge>
                     )}
                   </SidebarMenuItem>

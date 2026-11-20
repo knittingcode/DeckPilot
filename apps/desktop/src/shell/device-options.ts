@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n"
 import type { DeviceId, DeviceInfo, DeviceModel } from "@/lib/types"
 
 /** A choice of the toolbar's device selector. */
@@ -33,8 +34,8 @@ export function deviceOptions(models: DeviceModel[], devices: DeviceInfo[]): Dev
       model,
       label: device.descriptor?.displayName ?? device.modelName,
       detail: available
-        ? `Connected · ${device.id.serial}`
-        : `Connected · ${device.id.serial} · not in the device catalog`,
+        ? i18n.t("navigation:device.optionConnected", { serial: device.id.serial })
+        : i18n.t("navigation:device.optionNotInCatalog", { serial: device.id.serial }),
       connected: true,
       device: { model, serial: device.id.serial },
       available,
@@ -46,7 +47,7 @@ export function deviceOptions(models: DeviceModel[], devices: DeviceInfo[]): Dev
       key: `model:${m.id}`,
       model: m.id,
       label: m.name,
-      detail: "Not connected",
+      detail: i18n.t("navigation:device.optionNotConnected"),
       connected: false,
       device: null,
       available: true,

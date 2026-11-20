@@ -225,6 +225,8 @@ fn request_definition() -> ActionType {
         ),
     ]);
     ActionType {
+        editor_navigation: None,
+        title: None,
         id: id(REQUEST),
         name: "HTTP request".into(),
         description: "Sends an HTTP request and reports the status, headers and body (JSON or \
@@ -294,6 +296,8 @@ fn health_definition() -> ActionType {
     ];
     parameters.extend(credential_parameters());
     ActionType {
+        editor_navigation: None,
+        title: None,
         id: id(HEALTH_CHECK),
         name: "Health check".into(),
         description: "Requests a URL with GET and checks its status and, optionally, its body."

@@ -1,13 +1,5 @@
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
+import { DestructiveDialog } from "@/components/dialogs"
+import { useTranslation } from "@/i18n"
 
 import { deletionNotes, type PageDeletion } from "./editing"
 
@@ -25,33 +17,25 @@ export function DeletePageDialog({
   onCancel: () => void
   onConfirm: () => void
 }) {
+  const { t } = useTranslation()
   return (
-    <AlertDialog
+    <DestructiveDialog
       open={deletion !== null}
       onOpenChange={(open) => {
+        // Also called after a confirmation; clearing the request again is harmless.
         if (!open) onCancel()
       }}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete “{deletion?.name || "Untitled"}”?</AlertDialogTitle>
-          <AlertDialogDescription asChild>
-            <div className="grid gap-1">
-              {deletion && deletionNotes(deletion).map((note) => <p key={note}>{note}</p>)}
-              <p>You can undo this until the layout is saved.</p>
-            </div>
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            className="bg-destructive text-white hover:bg-destructive/90"
-            onClick={onConfirm}
-          >
-            Delete page
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+      title={t("editor:deletePage.title", {
+        page: deletion?.name || t("editor:pageNav.untitled"),
+      })}
+      description={
+        <span className="grid gap-1">
+          {deletion && deletionNotes(deletion).map((note) => <span key={note}>{note}</span>)}
+          <span>{t("editor:deletePage.undoable")}</span>
+        </span>
+      }
+      confirmLabel={t("editor:pageSettings.delete")}
+      onConfirm={onConfirm}
+    />
   )
 }

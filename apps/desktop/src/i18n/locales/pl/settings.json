@@ -1,0 +1,565 @@
+{
+  "title": "Ustawienia",
+  "newBadge": "Nowość",
+  "search": {
+    "placeholder": "Szukaj w ustawieniach",
+    "empty": "Nie znaleziono ustawień"
+  },
+  "categories": {
+    "general": "Ogólne",
+    "hardware": "Sprzęt",
+    "security": "Bezpieczeństwo i dane",
+    "extensions": "Rozszerzenia",
+    "advanced": "Zaawansowane"
+  },
+  "pages": {
+    "language": {
+      "title": "Język",
+      "description": "Język DeckPilot na tym komputerze"
+    },
+    "profiles": {
+      "title": "Profile",
+      "description": "Profile i profil aktywny na urządzeniu"
+    },
+    "updates": {
+      "title": "Aktualizacje",
+      "description": "Podpisane aktualizacje z GitHub Releases"
+    },
+    "variables": {
+      "title": "Zmienne",
+      "description": "Wszystkie wartości, które akcje, przepływy pracy i klawisze mogą odczytać za pomocą {{syntax}}"
+    },
+    "devices": {
+      "title": "Urządzenia",
+      "description": "Podłączone urządzenia Stream Deck, obsługiwane modele, jasność i czas gestów"
+    },
+    "agent": {
+      "title": "Agent w tle",
+      "description": "Proces, który obsługuje urządzenia i wykonuje akcje"
+    },
+    "security": {
+      "title": "Bezpieczeństwo",
+      "description": "Szyfrowanie, odblokowywanie i automatyczne blokowanie"
+    },
+    "backup": {
+      "title": "Kopia zapasowa i przywracanie",
+      "description": "Szyfrowany eksport i import konfiguracji"
+    },
+    "storage": {
+      "title": "Przechowywanie",
+      "description": "Gdzie i jak przechowywana jest konfiguracja"
+    },
+    "modules": {
+      "title": "Moduły",
+      "description": "Funkcje DeckPilot, które można włączyć lub wyłączyć"
+    },
+    "permissions": {
+      "title": "Uprawnienia",
+      "description": "Do czego każdy moduł ma dostęp"
+    },
+    "diagnostics": {
+      "title": "Dzienniki i diagnostyka",
+      "description": "Dzienniki i szczegóły techniczne do rozwiązywania problemów"
+    },
+    "about": {
+      "title": "Informacje",
+      "description": "Wersja, licencja i system"
+    },
+    "devDialogs": {
+      "title": "Przegląd okien dialogowych",
+      "description": "Tylko w trybie deweloperskim: każdy szablon okna dialogowego we wszystkich stanach"
+    },
+    "plugins": {
+      "title": "Wtyczki",
+      "description": "Eksperymentalne: zainstalowane wtyczki, ich uprawnienia, ustawienia i aktualizacje"
+    },
+    "module": {
+      "description": "Ustawienia modułu {{module}}"
+    }
+  },
+  "language": {
+    "sectionTitle": "Język",
+    "sectionDescription": "Dotyczy wszystkich okien i profili na tym komputerze, od razu.",
+    "system": "Domyślny systemowy (zalecane)",
+    "systemHint": "Ustawienie domyślne systemowe stosuje kolejność języków z systemu operacyjnego. Jeśli żaden z nich nie jest dostępny, DeckPilot wyświetla się po angielsku."
+  },
+  "shared": {
+    "close": "Zamknij",
+    "done": "Gotowe",
+    "save": "Zapisz",
+    "revert": "Przywróć",
+    "copy": "Kopiuj",
+    "refresh": "Odśwież",
+    "none": "Brak",
+    "somethingWentWrong": "Coś poszło nie tak"
+  },
+  "page": {
+    "profile": "Profil",
+    "activeOnDevice": "Aktywny na urządzeniu",
+    "notActiveOnDevice": "Nieaktywny na urządzeniu"
+  },
+  "window": {
+    "notRegistered": "to okno nie jest zarejestrowane jako {{id}}",
+    "loadFailed": "Nie udało się wczytać tego okna",
+    "loadFailedNext": "Zamknij je i spróbuj ponownie",
+    "unknown": "nieznane okno {{id}}"
+  },
+  "usage": {
+    "none": "Nieużywane w żadnym przepływie pracy ani układzie.",
+    "workflowStep": "Przepływ pracy „{{workflow}}”, krok {{step}}",
+    "layoutControl": "Układ „{{layout}}”, strona „{{page}}”, {{control}}"
+  },
+  "incompatible": {
+    "note": "Nie jest uruchamiane z tego elementu sterującego: {{reason}} Pozostaje przypisane, ale nie jest uruchamiane."
+  },
+  "about": {
+    "description": "Zarządzanie urządzeniami Stream Deck w systemach macOS, Windows i Linux. Oprogramowanie open source na licencji Apache License 2.0.",
+    "version": "Wersja",
+    "development": "(sesja deweloperska)",
+    "previousVersion": "Poprzednia wersja",
+    "os": "System operacyjny",
+    "source": "Kod źródłowy"
+  },
+  "agent": {
+    "refresh": "Odśwież stan",
+    "statusUnreadable": "Nie udało się odczytać stanu agenta",
+    "statusUnreadableNext": "Spróbuj ponownie; jeśli agent nie odpowiada, uruchom go ponownie",
+    "status": "Stan",
+    "description": "Agent odpowiada za komunikację z urządzeniami i wykonywanie akcji oraz działa dalej po zamknięciu tego okna.",
+    "process": "Proces",
+    "processValue": "PID {{pid}}, uruchomiony {{time}}",
+    "backend": "Obsługa urządzeń",
+    "stopLabel": "Zatrzymaj agenta",
+    "stopDescription": "Zatrzymanie agenta wygasza podłączone urządzenia do czasu jego ponownego uruchomienia.",
+    "notStopped": "Nie zatrzymano agenta",
+    "stop": "Zatrzymaj agenta",
+    "startup": "Uruchamianie",
+    "autostart": "Uruchamiaj agenta po zalogowaniu",
+    "autostartUnavailable": "Niedostępne na tym komputerze.",
+    "autostartNeedsAgent": "Uruchom agenta, aby to zmienić.",
+    "autostartNotOn": "Nie włączono uruchamiania agenta po zalogowaniu",
+    "autostartNotOff": "Nie wyłączono uruchamiania agenta po zalogowaniu"
+  },
+  "diagnostics": {
+    "logsTitle": "Dzienniki",
+    "logsDescription": "Agent zapisuje dziennik zdarzeń urządzeń, uruchomień akcji i błędów. Dzienniki pozostają na tym komputerze.",
+    "agentLog": "Dziennik agenta",
+    "logWindowFailed": "Nie otwarto okna dziennika",
+    "showLog": "Pokaż dziennik…",
+    "title": "Diagnostyka",
+    "description": "Dołącz te szczegóły, zgłaszając problem. Zawierają ścieżki na tym komputerze, ale nie zawartość konfiguracji.",
+    "copied": "Skopiowano dane diagnostyczne",
+    "notCopied": "Nie skopiowano danych diagnostycznych",
+    "copyByHand": "Zaznacz raport i skopiuj go ręcznie",
+    "reportInEnglish": "Raport jest zawsze po angielsku, aby każdy, kto pomaga Ci rozwiązać problem, mógł go przeczytać."
+  },
+  "moduleSettings": {
+    "saved": "Zapisano ustawienia modułu {{module}}",
+    "notSaved": "Nie zapisano ustawień modułu {{module}}"
+  },
+  "permissions": {
+    "intro": "Każdy moduł deklaruje, do czego może mieć dostęp. Wyłączony moduł nie ma żadnego dostępu. Aby wycofać uprawnienie, wyłącz moduł w sekcji <page>Moduły</page>.",
+    "unused": "Żaden moduł nie używa tego uprawnienia.",
+    "granted": "Przyznane",
+    "disabled": "Wyłączony"
+  },
+  "storage": {
+    "title": "Baza danych konfiguracji",
+    "description": "Profile, projekty, akcje, przepływy pracy i układy są przechowywane wyłącznie na tym komputerze, w zaszyfrowanej bazie danych SQLite. Sposób jej odblokowywania ustawisz w sekcji <page>Bezpieczeństwo</page>.",
+    "location": "Lokalizacja",
+    "encryption": "Szyfrowanie",
+    "agentData": "Dane agenta",
+    "contents": "Zawartość",
+    "contentsValue": "{{profiles}}, {{bindings}} tego komputera",
+    "profiles_one": "{{count}} profil",
+    "profiles_few": "{{count}} profile",
+    "profiles_many": "{{count}} profili",
+    "profiles_other": "{{count}} profilu",
+    "bindings_one": "{{count}} powiązanie zasobu",
+    "bindings_few": "{{count}} powiązania zasobów",
+    "bindings_many": "{{count}} powiązań zasobów",
+    "bindings_other": "{{count}} powiązania zasobu"
+  },
+  "migrationNotes": {
+    "title": "Uwagi dotyczące uaktualnienia danych",
+    "description": "Uaktualnienie bazy danych zmieniło poniższe zapisane dane. Przejrzyj elementy, których to dotyczy.",
+    "deletedProfile": "usunięty profil",
+    "profile": "Profil {{profile}}"
+  },
+  "modules": {
+    "filter": {
+      "all": "Wszystkie",
+      "enabled": "Włączone",
+      "disabled": "Wyłączone",
+      "unavailable": "Niedostępne"
+    },
+    "toast": {
+      "enabled": "Włączono moduł {{module}}",
+      "disabled": "Wyłączono moduł {{module}}",
+      "notEnabled": "Nie włączono modułu {{module}}",
+      "notDisabled": "Nie wyłączono modułu {{module}}"
+    },
+    "intro": "Wyłączenie modułu ukrywa jego strony i typy akcji. Akcje, przepływy pracy i układy, które go używają, są zachowywane i oznaczane jako niedostępne do czasu ponownego włączenia modułu. Wszystkie moduły są wbudowane w DeckPilot; instalowanie modułów z innych źródeł nie jest obsługiwane.",
+    "search": "Szukaj modułów",
+    "show": "Pokaż moduły",
+    "emptyTitle": "Nie znaleziono modułów",
+    "emptySearch": "Żaden moduł nie pasuje do wyszukiwania.",
+    "emptyFilter": "Żaden moduł nie jest w tym stanie.",
+    "builtIn": "Wbudowany",
+    "unsupported": "Niedostępny w tym systemie",
+    "actionTypeCount_one": "{{count}} typ akcji",
+    "actionTypeCount_few": "{{count}} typy akcji",
+    "actionTypeCount_many": "{{count}} typów akcji",
+    "actionTypeCount_other": "{{count}} typu akcji",
+    "pageCount_one": "strona {{pages}}",
+    "pageCount_few": "strony {{pages}}",
+    "pageCount_many": "strony {{pages}}",
+    "pageCount_other": "strony {{pages}}",
+    "allPlatforms": "wszystkie platformy",
+    "enable": "Włącz {{module}}",
+    "disable": "Wyłącz {{module}}",
+    "details": "Szczegóły",
+    "hideDetails": "Ukryj szczegóły",
+    "actionTypes": "Typy akcji",
+    "requires": "Wymaga",
+    "requiredBy": "Wymagany przez",
+    "identifier": "Identyfikator",
+    "noOtherModules": "Brak innych modułów",
+    "state": {
+      "notInstalled": "niezainstalowany",
+      "enabled": "włączony",
+      "disabled": "wyłączony"
+    },
+    "toggle": {
+      "requiredBy_one": "Wymagany przez moduł {{modules}}. Najpierw go wyłącz.",
+      "requiredBy_few": "Wymagany przez moduły {{modules}}. Najpierw je wyłącz.",
+      "requiredBy_many": "Wymagany przez moduły {{modules}}. Najpierw je wyłącz.",
+      "requiredBy_other": "Wymagany przez moduły {{modules}}. Najpierw je wyłącz.",
+      "unsupported": "Niedostępny w tym systemie operacyjnym.",
+      "notInstalled_one": "Wymaga modułu {{modules}}, który nie jest zainstalowany.",
+      "notInstalled_few": "Wymaga modułów {{modules}}, które nie są zainstalowane.",
+      "notInstalled_many": "Wymaga modułów {{modules}}, które nie są zainstalowane.",
+      "notInstalled_other": "Wymaga modułów {{modules}}, które nie są zainstalowane.",
+      "requires_one": "Wymaga modułu {{modules}}. Najpierw go włącz.",
+      "requires_few": "Wymaga modułów {{modules}}. Najpierw je włącz.",
+      "requires_many": "Wymaga modułów {{modules}}. Najpierw je włącz.",
+      "requires_other": "Wymaga modułów {{modules}}. Najpierw je włącz."
+    }
+  },
+  "backup": {
+    "windowFailed": "Nie otwarto okna",
+    "intro": "Przenieś profile, projekty, akcje, przepływy pracy, układy oraz ustawienia modułów i aplikacji na inny komputer w zaszyfrowanym pliku — i zachowaj go jako kopię zapasową. Ścieżki i inne ustawienia tego komputera, klucze ani hasła nie są dołączane.",
+    "export": "Eksport",
+    "exportDescription": "Zapisuje konfigurację w zaszyfrowanym pliku chronionym wybranym przez Ciebie hasłem.",
+    "exportEllipsis": "Eksportuj…",
+    "import": "Importuj",
+    "importDescription": "Odczytuje zaszyfrowany eksport; przed zastosowaniem czegokolwiek przejrzysz zmiany.",
+    "importEllipsis": "Importuj…"
+  },
+  "updates": {
+    "mode": {
+      "notifyOnly": "Powiadom mnie",
+      "notifyOnlyDescription": "Pokaż, że dostępna jest aktualizacja.",
+      "downloadAndAsk": "Pobierz, a potem zapytaj",
+      "downloadAndAskDescription": "Pobierz w tle i zainstaluj po potwierdzeniu.",
+      "installWhenIdle": "Instaluj podczas bezczynności",
+      "installWhenIdleDescription": "Instaluj automatycznie po dziesięciu minutach bez użycia urządzeń. Niezalecane, dopóki aktualizacje nie zostaną przetestowane w Twoim systemie."
+    },
+    "channel": {
+      "stable": "Stabilne",
+      "stableDescription": "Tylko wersje stabilne.",
+      "prerelease": "Wersje przedpremierowe",
+      "prereleaseDescription": "Także wersje alfa, beta i kandydujące do wydania, które mogą mieć niedokończone funkcje lub błędy. Gdy pojawi się nowsza wersja stabilna, przechodzisz na nią; powrót do kanału Stabilne nigdy nie instaluje starszej wersji."
+    },
+    "checkInternet": "Sprawdź połączenie z internetem i spróbuj ponownie",
+    "checkFailed": "Nie udało się sprawdzić dostępności aktualizacji",
+    "check": "Sprawdź dostępność aktualizacji",
+    "notAvailable": "Aktualizacje nie są dostępne w tej wersji",
+    "preferencesNotSaved": "Nie zapisano ustawień aktualizacji",
+    "checking": "Sprawdzanie dostępności aktualizacji…",
+    "lastChecked": "Ostatnio sprawdzono {{time}}",
+    "notChecked": "Jeszcze nie sprawdzono",
+    "introSelfUpdate": "Aktualizacje pochodzą z GitHub Releases i są instalowane tylko wtedy, gdy ich podpis jest prawidłowy. Konfiguracja nigdy nie jest wysyłana.",
+    "introExternal": "{{deliveredBy}}. W tej instalacji DeckPilot nie pobiera ani nie instaluje aktualizacji samodzielnie. Konfiguracja nigdy nie jest wysyłana.",
+    "introNeverUploaded": "Konfiguracja nigdy nie jest wysyłana.",
+    "versionAvailable": "Dostępna jest wersja {{version}}",
+    "upToDate": "DeckPilot jest aktualny.",
+    "versionValue": "Wersja {{version}}",
+    "usePackageManager": "Zaktualizuj za pomocą menedżera pakietów.",
+    "released": "Wydano {{date}}",
+    "notDownloaded": "Nie pobrano aktualizacji",
+    "download": "Pobierz",
+    "notInstalled": "Nie zainstalowano aktualizacji",
+    "installAndRestart": "Zainstaluj i uruchom ponownie",
+    "downloadProgress": "Postęp pobierania",
+    "downloading": "Pobieranie…",
+    "installExplanation": "Instalacja zatrzymuje agenta w tle po zakończeniu bieżącego zadania, zwalnia urządzenia, instaluje aktualizację i uruchamia ponownie DeckPilot z nowym agentem.",
+    "readyInstallExplanation": "Pobrano i zweryfikowano. Instalacja zatrzymuje agenta w tle po zakończeniu bieżącego zadania, zwalnia urządzenia, instaluje aktualizację i uruchamia ponownie DeckPilot z nowym agentem.",
+    "preferences": "Preferencje",
+    "modeLabel": "Gdy dostępna jest aktualizacja",
+    "channelLabel": "Kanał aktualizacji",
+    "automatic": "Sprawdzaj automatycznie",
+    "automaticDescription": "Gdy DeckPilot jest otwarty.",
+    "interval": "Sprawdzaj co",
+    "hours_one": "{{count}} godzinę",
+    "hours_few": "{{count}} godziny",
+    "hours_many": "{{count}} godzin",
+    "hours_other": "{{count}} godziny",
+    "days_one": "{{count}} dzień",
+    "days_few": "{{count}} dni",
+    "days_many": "{{count}} dni",
+    "days_other": "{{count}} dnia",
+    "installation": "Ta instalacja",
+    "releaseChannel": "Kanał wydań",
+    "installedFrom": "Źródło instalacji",
+    "override": {
+      "badge": "Nadpisanie deweloperskie",
+      "title": "Symulowana instalacja",
+      "description": "Ta wersja debugowania zachowuje się tak, jakby źródłem instalacji było: {{channel}} (ustawione przez {{variable}}). Wersje wydań ignorują to nadpisanie."
+    },
+    "restartAfterExternal": "Po zainstalowaniu aktualizacji zamknij i ponownie otwórz DeckPilot. Jeśli agent w tle nadal działa w poprzedniej wersji, DeckPilot zaproponuje jego ponowne uruchomienie.",
+    "packageManager": "Zaktualizuj DeckPilot za pomocą menedżera pakietów:",
+    "command": "Polecenie aktualizacji",
+    "commandCopied": "Skopiowano polecenie",
+    "commandNotCopied": "Nie skopiowano polecenia",
+    "copyByHand": "Zaznacz je i skopiuj ręcznie",
+    "details": "Szczegóły: {{detail}}",
+    "releaseChannelName": {
+      "stable": "Stabilny",
+      "beta": "Beta (wersja przedpremierowa)",
+      "alpha": "Alfa (wersja przedpremierowa)"
+    },
+    "distribution": {
+      "channel": {
+        "github": "GitHub Releases",
+        "homebrew": "Homebrew",
+        "winget": "WinGet",
+        "apt": "Repozytorium APT",
+        "flathub": "Flathub",
+        "macAppStore": "Mac App Store",
+        "microsoftStore": "Microsoft Store"
+      },
+      "by": {
+        "github": "GitHub Releases",
+        "homebrew": "Homebrew",
+        "winget": "WinGet",
+        "apt": "APT",
+        "flathub": "Flathub",
+        "macAppStore": "Mac App Store",
+        "microsoftStore": "Microsoft Store"
+      },
+      "format": {
+        "app": ".dmg / .app",
+        "msi": "MSI",
+        "nsis": "Instalator NSIS",
+        "deb": ".deb",
+        "rpm": ".rpm",
+        "appimage": "AppImage",
+        "flatpak": "Flatpak",
+        "masPkg": "Pakiet App Store",
+        "msix": "MSIX",
+        "another": "inny"
+      },
+      "provider": {
+        "githubRelease": "DeckPilot instaluje aktualizacje z GitHub Releases",
+        "externalPackageManager": "Twój menedżer pakietów",
+        "storeManaged": "Sklep",
+        "none": "Niedostępne w tej wersji"
+      },
+      "storeDelivers": "Dostarcza {{provider}}",
+      "packageManagerOf": "Twój menedżer pakietów ({{provider}})",
+      "deliveredBy": "Aktualizacje dostarcza {{provider}}",
+      "installedWithFormat": "{{channel}} ({{format}})",
+      "selfBuilt": "Wersja deweloperska lub zbudowana samodzielnie (bez klucza aktualizacji)",
+      "developmentBuild": "Wersja deweloperska",
+      "explanation": {
+        "noKey": "Wersje deweloperskie i zbudowane samodzielnie nie mają klucza podpisywania aktualizacji. Oficjalne wydania sprawdzają dostępność aktualizacji automatycznie.",
+        "unknownFormat": "DeckPilot nie może ustalić, z jakiego pakietu zainstalowano tę kopię (na przykład wersję deweloperską uruchomioną z folderu kompilacji), więc nie aktualizuje się sam. Zainstaluj oficjalne wydanie, aby otrzymywać aktualizacje.",
+        "formatMismatch": "Ta wersja została zbudowana jako pakiet {{compiled}}, ale jest zainstalowana jako {{bundled}}, więc nie aktualizuje się sama: aktualizacja mogłaby zastąpić ją niewłaściwym pakietem. Zainstaluj DeckPilot ponownie z tego samego źródła.",
+        "notUpdatable": "Aktualizacje z GitHub nie mogą instalować pakietów {{format}} na tej platformie, więc ta kopia nie aktualizuje się sama. Zainstaluj DeckPilot ze strony wydań, aby otrzymywać aktualizacje.",
+        "other": "Aktualizacje nie są dostępne w tej wersji: {{reason}}."
+      }
+    },
+    "error": {
+      "failed": "Aktualizacja nie powiodła się",
+      "problem": "Problem z aktualizacją",
+      "untrustedUrl": "Odrzucono aktualizację: nieoczekiwany adres pobierania",
+      "signature": "Odrzucono aktualizację: podpis jest nieprawidłowy",
+      "otherFormat": "Odrzucono aktualizację: inny format pakietu",
+      "incomplete": "Ostatnia aktualizacja nie została ukończona",
+      "agentNotRunning": "Zaktualizowano, ale agent w tle nie działa"
+    }
+  },
+  "updateWindow": {
+    "ready": "Pobrano i zweryfikowano. Instalacja uruchamia ponownie DeckPilot i jego agenta w tle.",
+    "installing": "Instalowanie…",
+    "statusUnreadable": "Nie udało się odczytać stanu aktualizacji",
+    "checkNow": "Sprawdź teraz",
+    "checkingShort": "Sprawdzanie…",
+    "titleVersion": "DeckPilot {{version}}",
+    "title": "Aktualizacja DeckPilot",
+    "installed": "Zainstalowana: {{version}}",
+    "installedNoUpdates": "Zainstalowana: {{version}}. Aktualizacje nie są dostępne w tej wersji.",
+    "installedFrom": "Zainstalowana: {{version}}, źródło: {{channel}}",
+    "versionNotice": "Dostępna jest wersja {{version}}; zaktualizuj za pomocą menedżera pakietów.",
+    "sizeUnknown": "Nieznany rozmiar",
+    "signature": "Aktualizacje są instalowane tylko wtedy, gdy ich podpis jest prawidłowy. Konfiguracja pozostaje zaszyfrowana i nigdy nie jest wysyłana."
+  },
+  "logs": {
+    "unreadable": "Nie udało się odczytać dziennika agenta",
+    "unreadableNext": "Agent mógł jeszcze nie zapisać dziennika; uruchom go i spróbuj ponownie",
+    "title": "Dziennik agenta w tle",
+    "empty": "Brak dziennika w {{directory}}.",
+    "truncated_one": "Wyświetlany jest ostatni {{count}} wiersz.",
+    "truncated_few": "Wyświetlane są ostatnie {{count}} wiersze.",
+    "truncated_many": "Wyświetlanych jest ostatnich {{count}} wierszy.",
+    "truncated_other": "Wyświetlane jest ostatnie {{count}} wiersza.",
+    "lines": "Wiersze dziennika"
+  },
+  "workflowSummary": {
+    "status": {
+      "succeeded": "Powodzenie",
+      "failed": "Niepowodzenie",
+      "skipped": "Pominięto"
+    },
+    "removedAction": "Usunięta akcja",
+    "title": "Podsumowanie przepływu pracy",
+    "finishedWithProblems": "Zakończono z problemami",
+    "finished": "Zakończono",
+    "stepCount_one": "{{count}} krok",
+    "stepCount_few": "{{count}} kroki",
+    "stepCount_many": "{{count}} kroków",
+    "stepCount_other": "{{count}} kroku",
+    "none": "Od uruchomienia agenta nie wykonano żadnego przepływu pracy.",
+    "activeProject": "Aktywny projekt",
+    "failedSteps": "Nieudane kroki",
+    "allSteps": "Wszystkie kroki",
+    "steps": "Kroki"
+  },
+  "portability": {
+    "fileType": "Konfiguracja DeckPilot",
+    "profilesUnreadable": "Nie udało się wczytać profili",
+    "closeAndRetry": "Zamknij okno i spróbuj ponownie",
+    "count": {
+      "profiles_one": "{{count}} profil",
+      "profiles_few": "{{count}} profile",
+      "profiles_many": "{{count}} profili",
+      "profiles_other": "{{count}} profilu",
+      "moduleSettings_one": "{{count}} ustawienie modułu",
+      "moduleSettings_few": "{{count}} ustawienia modułów",
+      "moduleSettings_many": "{{count}} ustawień modułów",
+      "moduleSettings_other": "{{count}} ustawienia modułu",
+      "actions_one": "{{count}} akcja",
+      "actions_few": "{{count}} akcje",
+      "actions_many": "{{count}} akcji",
+      "actions_other": "{{count}} akcji",
+      "workflows_one": "{{count}} przepływ pracy",
+      "workflows_few": "{{count}} przepływy pracy",
+      "workflows_many": "{{count}} przepływów pracy",
+      "workflows_other": "{{count}} przepływu pracy",
+      "projects_one": "{{count}} projekt",
+      "projects_few": "{{count}} projekty",
+      "projects_many": "{{count}} projektów",
+      "projects_other": "{{count}} projektu",
+      "layouts_one": "{{count}} układ",
+      "layouts_few": "{{count}} układy",
+      "layouts_many": "{{count}} układów",
+      "layouts_other": "{{count}} układu",
+      "values_one": "{{count}} wartość",
+      "values_few": "{{count}} wartości",
+      "values_many": "{{count}} wartości",
+      "values_other": "{{count}} wartości",
+      "globalValues_one": "{{count}} wartość globalna",
+      "globalValues_few": "{{count}} wartości globalne",
+      "globalValues_many": "{{count}} wartości globalnych",
+      "globalValues_other": "{{count}} wartości globalnej"
+    },
+    "export": {
+      "title": "Eksportuj konfigurację",
+      "purpose": "wyeksportować konfigurację",
+      "failed": "Nie wyeksportowano konfiguracji",
+      "doneTitle": "Wyeksportowano konfigurację",
+      "doneDescription": "{{profiles}} i {{modules}}, zaszyfrowane hasłem eksportu.",
+      "keepFile": "Zachowaj plik i jego hasło; do importu potrzebne są oba. Ten plik jest kopią zapasową — klucz tego komputera nią nie jest.",
+      "description": "Plik jest szyfrowany własnym hasłem, niezależnie od tego, jak DeckPilot jest chroniony na tym komputerze.",
+      "action": "Wybierz plik i eksportuj",
+      "encrypting": "Szyfrowanie…",
+      "noProfiles": "Nie ma jeszcze żadnych profili.",
+      "includeModules": "Dołącz ustawienia modułów",
+      "includeSettings": "Dołącz ustawienia aplikacji (aktualizacje)",
+      "excluded": "Ścieżki i inne ustawienia tego komputera, klucze, hasła i ustawienia bezpieczeństwa nigdy nie są dołączane."
+    },
+    "import": {
+      "title": "Importuj konfigurację",
+      "chooseDescription": "Wybierz eksport DeckPilot (.deckpilot). Nic nie zostanie zmienione, dopóki nie przejrzysz jego zawartości.",
+      "chooseFailed": "Nie udało się wybrać pliku",
+      "chooseFile": "Wybierz plik…",
+      "openFailed": "Nie udało się otworzyć pliku",
+      "openFailedNext": "Sprawdź hasło eksportu i czy plik jest eksportem DeckPilot",
+      "showContents": "Pokaż zawartość",
+      "decrypting": "Odszyfrowywanie…",
+      "password": "Hasło eksportu",
+      "nothingYet": "Nic nie zostało jeszcze zmienione: najpierw zobaczysz zawartość pliku.",
+      "resolution": {
+        "keepBoth": "Importuj jako kopię",
+        "replace": "Zastąp profil lokalny",
+        "skip": "Pomiń"
+      },
+      "reviewTitle": "Przejrzyj import",
+      "reviewDescription": "Wyeksportowano z DeckPilot {{version}} {{date}}. Zaimportowane przepływy pracy nie są uruchamiane, a zaimportowane profile nie są aktywowane.",
+      "failed": "Niczego nie zaimportowano",
+      "importing": "Importowanie…",
+      "mode": "Sposób importu",
+      "merge": "Dodaj do mojej konfiguracji",
+      "replace": "Zastąp moje profile",
+      "removedTitle": "Te profile lokalne zostaną usunięte",
+      "removedDescription": "{{profiles}}. Zasoby skonfigurowane na tym komputerze zostaną zachowane.",
+      "alreadyHere": "Już istnieje jako „{{name}}”",
+      "resolutionLabel": "Co zrobić z profilem {{profile}}",
+      "sameName": "Inny profil lokalny ma tę samą nazwę; oba zostaną zachowane.",
+      "applyModules": "Zastosuj ustawienia modułów",
+      "incompatible": "niezgodny",
+      "applySettings": "Zastosuj ustawienia aplikacji ({{content}})",
+      "settingsUpdates": "aktualizacje",
+      "settingsGlobalValues": "globalne wartości zmiennych współdzielonych",
+      "unknownTypesTitle": "Niektóre akcje wymagają modułów, których ten DeckPilot nie ma",
+      "unknownTypesDescription": "{{types}}. Zostaną zaimportowane i oznaczone jako niedostępne.",
+      "missingTitle": "Zasoby do skonfigurowania na tym komputerze",
+      "missingDescription": "{{resources}}. Możesz je przypisać po imporcie."
+    },
+    "variables": {
+      "title": "Zmienne współdzielone",
+      "new": "Nowe: {{names}}.",
+      "existing": "Już istnieją, pozostaną bez zmian: {{names}}.",
+      "values": "{{values}} dla profili i projektów. Wartości poufne nigdy nie są eksportowane.",
+      "valuesWithGlobal": "{{values}} dla profili i projektów, {{global}} z ustawieniami aplikacji. Wartości poufne nigdy nie są eksportowane.",
+      "incompatibleTitle": "Niektóre zmienne współdzielone mają tutaj inny typ",
+      "incompatibleDescription": "{{names}}. Ich wartości nie zostaną zaimportowane; tutejsze zmienne pozostaną bez zmian."
+    },
+    "done": {
+      "imported_one": "Zaimportowano {{count}} profil",
+      "imported_few": "Zaimportowano {{count}} profile",
+      "imported_many": "Zaimportowano {{count}} profili",
+      "imported_other": "Zaimportowano {{count}} profilu",
+      "replaced_one": "zastąpiono {{count}}",
+      "replaced_few": "zastąpiono {{count}}",
+      "replaced_many": "zastąpiono {{count}}",
+      "replaced_other": "zastąpiono {{count}}",
+      "skipped_one": "pominięto {{count}}",
+      "skipped_few": "pominięto {{count}}",
+      "skipped_many": "pominięto {{count}}",
+      "skipped_other": "pominięto {{count}}",
+      "title": "Import zakończony",
+      "description": "{{outcome}}.",
+      "mapResources": "Przypisz zasoby teraz",
+      "renamed": "Zaimportowano jako kopie: {{profiles}}.",
+      "settings": "Zastosowano ustawienia aplikacji: {{settings}}.",
+      "variablesCreated": "Zmienne współdzielone: utworzono {{names}}, ustawiono {{values}}.",
+      "variables": "Zmienne współdzielone: ustawiono {{values}}.",
+      "skippedValues": "Niezaimportowane wartości zmiennych współdzielonych",
+      "skippedValuesList": "Niezaimportowane wartości",
+      "setUp": "Skonfiguruj te zasoby na tym komputerze",
+      "usedBy": "— używane przez: {{profiles}}"
+    }
+  }
+}

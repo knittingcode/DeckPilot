@@ -348,7 +348,7 @@ pub async fn plugin_icon(
     client: &mut AgentClient,
     plugin: &str,
 ) -> Result<Option<String>, ClientError> {
-    read_icon(client, plugin, None).await
+    read_icon(client, plugin, None, None).await
 }
 
 /// The icon of `plugin`'s navigation entry `entry` for `theme` as a
@@ -367,18 +367,40 @@ pub async fn navigation_icon(
         entry: entry.to_owned(),
         theme,
     };
-    read_icon(client, plugin, Some(navigation)).await
+    read_icon(client, plugin, Some(navigation), None).await
+}
+
+/// The file of `plugin`'s visual asset `asset` (its id in the plugin) as a
+/// `data:` URL (`image/png` or `image/jpeg`), read in chunks, checked by
+/// the agent against the package's integrity record; `None` when the
+/// agent has none to show (no such asset, a gradient, a missing, oversized
+/// or modified file). Only for an agent that lists
+/// [`plugins::feature::VISUAL_ASSETS`]: an older one would answer with the
+/// plugin's own icon.
+pub async fn visual_asset_file(
+    client: &mut AgentClient,
+    plugin: &str,
+    asset: &str,
+) -> Result<Option<String>, ClientError> {
+    read_icon(client, plugin, None, Some(asset.to_owned())).await
 }
 
 async fn read_icon(
     client: &mut AgentClient,
     plugin: &str,
     navigation: Option<plugins::NavigationIconRef>,
+    asset: Option<String>,
 ) -> Result<Option<String>, ClientError> {
     let broken = || ClientError::Protocol(format!("the chunks of {plugin}'s icon do not add up"));
-    let media_ok = |media: &str| match navigation {
-        None => media == "image/png",
-        Some(_) => plugins::NAVIGATION_ICON_MEDIA_TYPES.contains(&media),
+    let media_ok = |media: &str| match (&navigation, &asset) {
+        (_, Some(_)) => plugins::VISUAL_ASSET_MEDIA_TYPES.contains(&media),
+        (None, None) => media == "image/png",
+        (Some(_), None) => plugins::NAVIGATION_ICON_MEDIA_TYPES.contains(&media),
+    };
+    let max_bytes = if asset.is_some() {
+        plugins::MAX_VISUAL_ASSET_FILE_BYTES
+    } else {
+        MAX_ICON_BYTES
     };
     'attempt: for _ in 0..ATTEMPTS {
         let mut offset = 0;
@@ -389,6 +411,7 @@ async fn read_icon(
                 plugin: plugin.to_owned(),
                 offset,
                 navigation: navigation.clone(),
+                asset: asset.clone(),
             };
             let Response::PluginIcon { icon, .. } = client.request(request).await? else {
                 return Err(unexpected("getPluginIcon"));
@@ -398,7 +421,7 @@ async fn read_icon(
             };
             if !media_ok(&chunk.media_type)
                 || chunk.offset != offset
-                || chunk.size > MAX_ICON_BYTES as u64
+                || chunk.size > max_bytes as u64
             {
                 return Err(broken());
             }
@@ -416,7 +439,7 @@ async fn read_icon(
                 Some(_) => {}
             }
             data.push_str(&chunk.data);
-            if data.len() > (MAX_ICON_BYTES / 3 + 1) * 4 {
+            if data.len() > (max_bytes / 3 + 1) * 4 {
                 return Err(broken());
             }
             match chunk.next {
@@ -486,6 +509,7 @@ mod tests {
             health: None,
             navigation: Vec::new(),
             installed_for: None,
+            visual_assets: Vec::new(),
         }
     }
 
@@ -748,6 +772,7 @@ mod tests {
                 plugin: "acme.x".into(),
                 offset: 0,
                 navigation: None,
+                asset: None,
             },
         ] {
             assert_eq!(request.since_protocol(), 10);

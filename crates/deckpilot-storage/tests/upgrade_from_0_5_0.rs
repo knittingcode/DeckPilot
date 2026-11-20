@@ -81,7 +81,7 @@ fn the_fixture_is_a_schema_5_database() {
     let store = open(&copy);
     let history = store.migration_history().unwrap();
     let upgrade = history.last().unwrap();
-    assert_eq!((upgrade.from_version, upgrade.to_version), (5, 10));
+    assert_eq!((upgrade.from_version, upgrade.to_version), (5, 13));
     assert_eq!(upgrade.result, "ok");
 }
 
@@ -89,7 +89,7 @@ fn the_fixture_is_a_schema_5_database() {
 fn upgrading_keeps_every_kind_of_data() {
     let copy = copy();
     let store = open(&copy);
-    assert_eq!(store.schema_version().unwrap(), 10);
+    assert_eq!(store.schema_version().unwrap(), 13);
     assert_eq!(
         store.schema_version().unwrap(),
         SqliteStore::supported_schema_version()
@@ -274,7 +274,7 @@ fn a_newer_schema_is_refused_and_left_alone() {
     assert!(
         matches!(
             refused,
-            Err(StorageError::UnsupportedSchema { found, supported: 10 })
+            Err(StorageError::UnsupportedSchema { found, supported: 13 })
                 if found == newer()
         ),
         "{refused:?}"
@@ -327,7 +327,7 @@ fn a_newer_schema_is_refused_before_the_journal_mode_is_touched() {
     assert!(
         matches!(
             refused,
-            Err(StorageError::UnsupportedSchema { found, supported: 10 })
+            Err(StorageError::UnsupportedSchema { found, supported: 13 })
                 if found == newer()
         ),
         "{refused:?}"

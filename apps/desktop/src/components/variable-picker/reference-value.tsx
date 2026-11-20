@@ -1,6 +1,7 @@
 import { Braces } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { useTranslation } from "@/i18n"
 import type { ParameterKind } from "@/lib/types"
 import { formatReference } from "@/lib/variables"
 
@@ -29,6 +30,7 @@ export function ReferenceValueField({
   onReference: (reference: string) => void
   onFixedValue: () => void
 }) {
+  const { t } = useTranslation()
   return (
     <div className="grid gap-1">
       <div
@@ -37,18 +39,22 @@ export function ReferenceValueField({
         className="flex min-w-0 items-center gap-2 rounded-md border px-2 py-1"
       >
         <Braces className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-        <code id={id} className="min-w-0 flex-1 truncate text-sm" aria-label="Reference">
+        <code
+          id={id}
+          className="min-w-0 flex-1 truncate text-sm"
+          aria-label={t("editor:variables.reference")}
+        >
           {formatReference(reference)}
         </code>
         <VariablePicker
           kind={kind}
           fieldLabel={fieldLabel}
-          label={`Choose another variable for ${fieldLabel}`}
+          label={t("editor:variables.chooseAnother", { field: fieldLabel })}
           className="size-7"
           onPick={onReference}
         />
         <Button type="button" variant="ghost" size="sm" className="h-7" onClick={onFixedValue}>
-          Use a fixed value
+          {t("editor:variables.useFixed")}
         </Button>
       </div>
       <ReferenceDiagnostics references={[reference]} kind={kind} />

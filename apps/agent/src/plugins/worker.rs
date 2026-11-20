@@ -44,6 +44,8 @@ pub(crate) struct Events {
     pub agent: broadcast::Sender<AgentEvent>,
     pub plugins: broadcast::Sender<PluginEvent>,
     pub notifier: Arc<dyn deckpilot_core::notify::Notifier>,
+    /// Plugin dialogs and the app connections that show them.
+    pub dialogs: Arc<crate::plugin_dialogs::PluginDialogs>,
 }
 
 /// Why an engine invocation produced no outcome: a stable code for the
@@ -87,6 +89,8 @@ pub(super) enum Message {
         abort: AbortSignal,
         reply: mpsc::SyncSender<StateReply>,
     },
+    /// The app's language (protocol 13).
+    Locale(String),
     /// A lane ended by itself (crash loop, weak sandbox, panic).
     LaneEnded {
         plugin: String,
@@ -193,6 +197,8 @@ struct State {
     /// The agent's built-in modules as last sent, for every opening of
     /// the store.
     builtins: Vec<deckpilot_plugin_store::deps::BuiltinModule>,
+    /// The app's language as last sent, for every opening of the store.
+    locale: Option<String>,
 }
 
 impl State {
@@ -221,6 +227,9 @@ impl State {
             Ok(mut service) => {
                 info!("plugin store opened");
                 service.set_builtins(self.builtins.clone());
+                if let Some(locale) = &self.locale {
+                    service.set_locale(locale);
+                }
                 self.service = Some(service);
                 self.problem = None;
             }
@@ -346,6 +355,12 @@ impl State {
                     }));
                 }
             }
+            Message::Locale(locale) => {
+                if let Some(service) = &mut self.service {
+                    service.set_locale(&locale);
+                }
+                self.locale = Some(locale);
+            }
             Message::LaneEnded { plugin, lane, why } => {
                 if let Some(service) = &mut self.service {
                     service.lane_ended(&plugin, lane, why);
@@ -412,6 +427,7 @@ impl PluginWorker {
             routing: routing.clone(),
             migrated: false,
             builtins: Vec::new(),
+            locale: None,
             values: values.clone(),
             settings,
             data_dir: data_dir.to_path_buf(),
@@ -460,6 +476,20 @@ impl PluginWorker {
     /// The routing of migrated modules, as last published.
     pub fn legacy_routing(&self) -> LegacyRouting {
         self.routing.lock().map(|r| r.clone()).unwrap_or_default()
+    }
+
+    /// Hands the worker the app's language (protocol 13).
+    pub fn locale(&self, locale: &str) {
+        let _ = self.tx.send(Message::Locale(locale.to_owned()));
+    }
+
+    /// The name in the app's language of a plugin action when `title` is
+    /// one of its default names (from the catalog as last published).
+    pub fn default_action_name(&self, action_type: &str, title: &str) -> Option<String> {
+        let catalog = self.catalog.lock().ok()?;
+        catalog
+            .iter()
+            .find_map(|plugin| plugin.default_name(action_type, title))
     }
 
     /// Hands the worker the agent's built-in modules.

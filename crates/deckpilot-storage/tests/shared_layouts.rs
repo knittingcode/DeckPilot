@@ -76,7 +76,7 @@ fn work() -> (Profile, DeviceLayout) {
     let home = main.home_page;
     main.page_mut(home).unwrap().bindings[0].appearance = Some(KeyAppearance {
         icon: Some(IconRef {
-            id: image.id,
+            id: image.id.into(),
             fit: IconFit::Fit,
         }),
         ..KeyAppearance::default()
@@ -440,7 +440,10 @@ mod from_0_8_1 {
         let (dir, key) = copy();
         let path = dir.0.join("deckpilot.db");
         let store = SqliteStore::open(&path, &key).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 10);
+        assert_eq!(
+            store.schema_version().unwrap(),
+            SqliteStore::supported_schema_version()
+        );
         let upgrade = store.migration_history().unwrap().pop().unwrap();
         assert_eq!(
             (
@@ -448,7 +451,7 @@ mod from_0_8_1 {
                 upgrade.to_version,
                 upgrade.result.as_str()
             ),
-            (9, 10, "ok")
+            (9, SqliteStore::supported_schema_version(), "ok")
         );
         let mut layouts = 0;
         let mut bindings = 0;
@@ -506,7 +509,10 @@ mod from_0_8_1 {
         assert_ne!(original, Vec::<u8>::new());
         let store = SqliteStore::open(&path, &key).unwrap();
         assert!(store.shared_layout(extra.id).unwrap().is_none());
-        assert_eq!(store.schema_version().unwrap(), 10);
+        assert_eq!(
+            store.schema_version().unwrap(),
+            SqliteStore::supported_schema_version()
+        );
     }
 
     /// The schema version of a database, read without upgrading it.
@@ -524,11 +530,14 @@ mod from_0_8_1 {
     #[test]
     fn an_older_build_refuses_the_upgraded_database() {
         // A 0.8.1 build supports schema 9: it refuses schema 10 before
-        // writing anything (the same check this build applies to 11).
+        // writing anything (the same check this build applies to 12).
         let (dir, key) = copy();
         let path = dir.0.join("deckpilot.db");
         drop(SqliteStore::open(&path, &key).unwrap());
-        assert_eq!(rusqlite_version(&path, &key), 10);
+        assert_eq!(
+            rusqlite_version(&path, &key),
+            SqliteStore::supported_schema_version()
+        );
     }
 }
 

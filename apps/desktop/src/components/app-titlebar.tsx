@@ -15,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { useTitlebarState } from "@/hooks/use-titlebar"
+import { useTranslation } from "@/i18n"
 import { type WindowChrome, windowDragHandlers } from "@/hooks/use-window-chrome"
 import {
   type TitlebarAction,
@@ -67,6 +68,7 @@ export function AppTitlebar({
   /** What the view on screen works on (`lib/toolbar-context.ts`), for styling and tests. */
   context?: string
 }) {
+  const { t } = useTranslation()
   const config = useTitlebarState(store)
   // The latest callbacks, also when only they changed.
   const select = (action: TitlebarAction) => {
@@ -76,8 +78,8 @@ export function AppTitlebar({
     <header
       data-slot="titlebar"
       data-context={context}
-      aria-label="Toolbar"
-      className="relative flex h-(--titlebar-height) shrink-0 items-stretch border-b bg-background select-none"
+      aria-label={t("navigation:toolbar.label")}
+      className="relative flex h-(--titlebar-height) shrink-0 items-stretch border-b bg-sidebar select-none"
       style={{ "--titlebar-controls-inset": `${chrome.controlsInset}px` } as React.CSSProperties}
       {...windowDragHandlers(chrome)}
     >
@@ -90,7 +92,15 @@ export function AppTitlebar({
       <div
         aria-hidden
         data-slot="titlebar-controls-inset"
-        className="w-(--titlebar-controls-inset) shrink-0"
+        className={cn(
+          "shrink-0",
+          // The traffic lights, then the gap; the content's own padding is
+          // part of the gap, so it starts exactly --titlebar-controls-gap
+          // after the buttons. Nothing when there are no overlay controls.
+          chrome.controlsInset > 0
+            ? "w-[calc(var(--titlebar-controls-inset)+var(--titlebar-controls-gap)-var(--titlebar-padding-x))]"
+            : "w-0",
+        )}
       />
       {leading && (
         <div
@@ -139,13 +149,14 @@ export function AppTitlebar({
  * space goes to the page's actions.
  */
 function Heading({ config, fallbackTitle }: { config: TitlebarConfig; fallbackTitle: string }) {
+  const { t } = useTranslation()
   const title = config.title ?? fallbackTitle
   const crumbs = config.breadcrumbs ?? []
   return (
     <div data-slot="titlebar-heading" className="flex min-w-0 flex-1 items-center gap-1.5">
       {crumbs.length > 0 && (
         <ol
-          aria-label="Location"
+          aria-label={t("navigation:toolbar.location")}
           className={cn(
             "shrink-0 items-center gap-1.5 text-sm leading-5",
             // Without a title the location is the heading: always shown.
@@ -204,12 +215,13 @@ function Actions({
   actions: TitlebarAction[] | undefined
   select: (action: TitlebarAction) => void
 }) {
+  const { t } = useTranslation()
   const { primary, secondary, overflow } = arrangeActions(actions)
   if (primary.length + secondary.length + overflow.length === 0) return null
   return (
     <div
       role="toolbar"
-      aria-label="Page actions"
+      aria-label={t("navigation:toolbar.pageActions")}
       className="flex shrink-0 items-center gap-(--titlebar-gap)"
     >
       {secondary.map((action) => (
@@ -231,8 +243,8 @@ function Actions({
               variant="ghost"
               size="icon"
               className={cn(CONTROL_ICON, overflow.length === 0 && "@2xl:hidden")}
-              aria-label="More actions"
-              title="More actions"
+              aria-label={t("navigation:toolbar.moreActions")}
+              title={t("navigation:toolbar.moreActions")}
             >
               <Ellipsis />
             </Button>
@@ -366,11 +378,12 @@ function MenuAction({
 }
 
 function ProgressLine({ progress }: { progress: boolean | number }) {
+  const { t } = useTranslation()
   const percent = typeof progress === "number" ? Math.max(0, Math.min(100, progress)) : null
   return (
     <div
       role="progressbar"
-      aria-label="Progress"
+      aria-label={t("navigation:toolbar.progress")}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={percent ?? undefined}

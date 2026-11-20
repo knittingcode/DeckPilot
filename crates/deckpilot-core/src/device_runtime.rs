@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
@@ -17,13 +18,32 @@ use deckpilot_device::{
 };
 
 use crate::gesture::{BoundGestures, Gesture, GestureTimings};
+use crate::i18n::SystemText;
 use crate::stateful::StatefulBinding;
 use crate::{
     ActionInstanceId, ActionParameters, ActionRegistry, ActionResult, ActiveProjectContext,
     BindingTarget, ControlBinding, CycleDirection, DeviceLayout, Engine, EngineError, FaceStyle,
-    KeyFace, LayoutId, MachineConfig, PageId, PageLabel, Profile, ProfileId, Project, ProjectId,
-    Trigger, WorkflowId, WorkflowReport, render_label, render_page_label,
+    FolderExit, FolderTimers, KeyFace, LayoutId, MachineConfig, PageId, PageLabel, Profile,
+    ProfileId, Project, ProjectId, Trigger, WorkflowId, WorkflowReport, render_label,
+    render_page_label,
 };
+
+/// The clock Auto Exit countdowns ([`crate::FolderTimers`]) are measured
+/// with: [`Instant::now`], replaced in tests ([`Runtime::set_clock`]).
+#[derive(Clone)]
+struct Clock(Arc<dyn Fn() -> Instant + Send + Sync>);
+
+impl Default for Clock {
+    fn default() -> Self {
+        Self(Arc::new(Instant::now))
+    }
+}
+
+impl std::fmt::Debug for Clock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Clock")
+    }
+}
 
 /// The error code of an action that changes a device's page and was run
 /// without a device, e.g. with "Run" in the app.
@@ -221,6 +241,14 @@ pub struct Runtime {
     histories: BTreeMap<(ProfileId, DeviceId), crate::LayoutHistory>,
     /// [`Runtime::device_layouts`] changed since it was last taken.
     device_layouts_changed: bool,
+    /// The folders each device is in and their Auto Exit countdowns: in
+    /// memory only, never saved.
+    folders: FolderTimers,
+    /// The editor's unsaved working layout a device shows and runs
+    /// instead of the saved one, while a live preview session lasts
+    /// (`working.rs`): in memory only, never saved.
+    working: BTreeMap<DeviceId, working::WorkingLayout>,
+    clock: Clock,
 }
 
 /// Most pages kept in [`Runtime::remembered_pages`]: profiles times
@@ -244,7 +272,88 @@ impl Runtime {
             device_layouts: BTreeMap::new(),
             histories: BTreeMap::new(),
             device_layouts_changed: false,
+            folders: FolderTimers::default(),
+            working: BTreeMap::new(),
+            clock: Clock::default(),
         }
+    }
+
+    /// Measures Auto Exit countdowns with `clock` instead of
+    /// [`Instant::now`] (tests).
+    pub fn set_clock(&mut self, clock: impl Fn() -> Instant + Send + Sync + 'static) {
+        self.clock = Clock(Arc::new(clock));
+    }
+
+    /// The folders devices are in and their Auto Exit countdowns.
+    pub fn folder_timers(&self) -> &FolderTimers {
+        &self.folders
+    }
+
+    /// When the next Auto Exit is due.
+    pub fn next_folder_exit(&self) -> Option<Instant> {
+        self.folders.next_due()
+    }
+
+    /// The Auto Exits due at `now`, to pass to [`Runtime::exit_folder`].
+    pub fn due_folder_exits(&self, now: Instant) -> Vec<FolderExit> {
+        self.folders.due(now)
+    }
+
+    /// Leaves the folder of a due Auto Exit: the device shows the folder's
+    /// parent, exactly as Back from the folder page goes (one folder
+    /// level; folders opened inside it close with it). Nothing happens,
+    /// and `None` is returned, when the device left the folder or entered
+    /// it again since (`exit`'s entry is no longer the current one), is
+    /// disconnected, or shows another layout.
+    pub fn exit_folder(&mut self, exit: &FolderExit) -> Option<RuntimeOutcome> {
+        if !self.devices.is_connected(&exit.device) || !self.folders.is_current(exit) {
+            return None;
+        }
+        let layout = self.layout_of(&exit.device)?;
+        if layout.id != exit.layout {
+            return None;
+        }
+        let path = page_path(layout, Some(exit.page))?;
+        let stack = self.navigation.entry(exit.device.clone()).or_default();
+        match stack.iter().rposition(|page| *page == exit.page) {
+            Some(index) => stack.truncate(index + 1),
+            None => *stack = path,
+        }
+        let page = self.go_back(&exit.device)?;
+        self.follow_folders(&exit.device, false);
+        Some(RuntimeOutcome::Navigated {
+            device: exit.device.clone(),
+            page,
+        })
+    }
+
+    /// Follows the folders `device` shows ([`FolderTimers`]): entering one
+    /// starts its countdown, unless `quiet`.
+    fn follow_folders(&mut self, device: &DeviceId, quiet: bool) {
+        let now = (self.clock.0)();
+        let mut folders = std::mem::take(&mut self.folders);
+        let shown = self
+            .layout_of(device)
+            .zip(self.current_page(device))
+            .filter(|(layout, page)| layout.page(*page).is_some());
+        folders.follow(device, shown, now, quiet);
+        self.folders = folders;
+    }
+
+    /// The protected system Back of the page `device` shows, if it has one
+    /// ([`DeviceLayout::system_back`]).
+    pub fn system_back(&self, device: &DeviceId) -> Option<ControlId> {
+        let model = self.catalog.get(&device.model)?;
+        self.layout_of(device)?
+            .system_back(self.current_page(device)?, &model.capabilities)
+    }
+
+    /// The folder `control` opens when it is a folder control
+    /// ([`crate::folder_control`]) of the page `device` shows: a raw press
+    /// opens it at once, and nothing else stored on the key ever runs.
+    pub fn folder_control(&self, device: &DeviceId, control: ControlId) -> Option<PageId> {
+        self.layout_of(device)?
+            .folder_control(self.current_page(device)?, control)
     }
 
     /// The top-level page each device shows, or showed last, per profile,
@@ -283,7 +392,9 @@ impl Runtime {
     /// The top-level page of the page on top of `stack`, in the layout
     /// for `model`; `None` for the home page, which needs no remembering.
     fn top_level_shown(&self, device: &DeviceId, stack: &[PageId]) -> Option<PageId> {
-        let layout = self.layout_of(device)?;
+        // Saved pages only: a page that exists only in an unsaved working
+        // layout is never remembered.
+        let layout = self.saved_layout_of(device)?;
         let page = *stack.last()?;
         layout.page(page)?;
         Some(layout.top_level_of(page)).filter(|top| *top != layout.home_page)
@@ -334,6 +445,12 @@ impl Runtime {
         device: &DeviceId,
         control: ControlId,
     ) -> Option<(BoundGestures, GestureTimings)> {
+        if self.system_back(device) == Some(control)
+            || self.folder_control(device, control).is_some()
+        {
+            // The reserved Back and folder keys react to the press at once.
+            return None;
+        }
         let layout = self.layout_of(device)?;
         let page = layout.page(self.current_page(device)?)?;
         let bound = page.bound_gestures(control);
@@ -351,6 +468,18 @@ impl Runtime {
         control: ControlId,
         gesture: Gesture,
     ) -> Result<RuntimeOutcome, EngineError> {
+        self.dispatch_gesture_as(device, control, gesture, crate::RunOrigin::Gesture)
+    }
+
+    /// [`Runtime::dispatch_gesture`], with the binding run as started by
+    /// `origin`.
+    pub fn dispatch_gesture_as(
+        &mut self,
+        device: &DeviceId,
+        control: ControlId,
+        gesture: Gesture,
+        origin: crate::RunOrigin,
+    ) -> Result<RuntimeOutcome, EngineError> {
         let ignored = |reason: &str| {
             Ok(RuntimeOutcome::Ignored {
                 reason: reason.into(),
@@ -361,6 +490,12 @@ impl Runtime {
         }
         if self.session.is_none() {
             return ignored("no active profile");
+        }
+        if self.system_back(device) == Some(control) {
+            return ignored("the folder's Back key reacts to a press");
+        }
+        if self.folder_control(device, control).is_some() {
+            return ignored("a folder key reacts to a press");
         }
         let target = self
             .layout_of(device)
@@ -376,7 +511,7 @@ impl Runtime {
             Some(BindingTarget::Stateful(binding)) => {
                 Ok(RuntimeOutcome::StatefulRequested { binding, gesture })
             }
-            Some(target) => self.dispatch(device, target, crate::RunOrigin::Gesture),
+            Some(target) => self.dispatch(device, target, origin),
         }
     }
 
@@ -388,6 +523,11 @@ impl Runtime {
         device: &DeviceId,
         control: ControlId,
     ) -> Option<&StatefulBinding> {
+        if self.system_back(device) == Some(control)
+            || self.folder_control(device, control).is_some()
+        {
+            return None;
+        }
         let layout = self.layout_of(device)?;
         let page = layout.page(self.current_page(device)?)?;
         page.bindings
@@ -458,9 +598,12 @@ impl Runtime {
             profile,
         });
         self.prune_layouts();
+        // Another profile (or none, when locked): every countdown ends.
+        self.folders.clear();
         let connected: Vec<DeviceId> = self.devices.connected().cloned().collect();
         for device in connected {
             self.reset_navigation(&device);
+            self.follow_folders(&device, true);
         }
     }
 
@@ -491,8 +634,12 @@ impl Runtime {
                 None => stack.is_empty(),
             };
             if !valid {
-                self.reset_navigation(&device);
+                // The nearest page that is still there, else the start.
+                self.repair_navigation(&device);
             }
+            // A device still in its folder keeps its countdown (cancelled
+            // if Auto Exit was switched off); a reload enters nothing.
+            self.follow_folders(&device, true);
         }
     }
 
@@ -609,7 +756,18 @@ impl Runtime {
     /// the device's model; otherwise the profile's layout for the model.
     /// Resolution: device → profile → that profile's layout → page →
     /// binding.
+    ///
+    /// While a live preview session gives the device a working layout for
+    /// that layout ([`Runtime::set_working_layout`]), the working layout:
+    /// what it shows and what its keys run.
     pub fn layout_of(&self, device: &DeviceId) -> Option<&DeviceLayout> {
+        let saved = self.saved_layout_of(device)?;
+        Some(self.working_for(device, saved.id).unwrap_or(saved))
+    }
+
+    /// The saved layout `device` shows, whatever a live preview shows on
+    /// it.
+    pub fn saved_layout_of(&self, device: &DeviceId) -> Option<&DeviceLayout> {
         let profile = self.profile()?;
         self.device_layouts
             .get(&(profile.id, device.clone()))
@@ -655,6 +813,7 @@ impl Runtime {
             if self.layout_of(&device).map(|l| l.id) != layout {
                 self.reset_navigation(&device);
             }
+            self.follow_folders(&device, true);
         }
     }
 
@@ -876,7 +1035,7 @@ impl Runtime {
             return;
         };
         let profile_id = profile.id;
-        let Some(layout) = profile.layout(target) else {
+        let Some(layout) = self.layout_by_id(device, target) else {
             *result = ActionResult::error(
                 LAYOUT_UNAVAILABLE,
                 format!("the layout is not assigned to the profile {}", profile.name),
@@ -945,7 +1104,13 @@ impl Runtime {
             "there is no previous layout".clone_into(&mut result.message);
             return;
         };
-        let Some(layout) = profile.layout(entry.layout) else {
+        let Some(layout) = self
+            .working
+            .get(device)
+            .filter(|w| w.profile == profile.id && w.layout.id == entry.layout)
+            .map(|w| &w.layout)
+            .or_else(|| profile.layout(entry.layout))
+        else {
             return;
         };
         let name = layout.name.clone();
@@ -981,13 +1146,16 @@ impl Runtime {
             .filter(|control| model.capabilities.has_display(*control))
             .collect();
 
-        let notice = |text: &str| {
+        let notice = |text: Result<&str, SystemText>| {
             controls
                 .iter()
                 .enumerate()
                 .map(|(index, control)| {
                     let face = if index == 0 {
-                        KeyFace::new(FaceStyle::Notice, text)
+                        match text {
+                            Ok(text) => KeyFace::new(FaceStyle::Notice, text),
+                            Err(system) => KeyFace::system(FaceStyle::Notice, system),
+                        }
                     } else {
                         KeyFace::empty()
                     };
@@ -997,13 +1165,13 @@ impl Runtime {
         };
 
         let Some(profile) = self.profile() else {
-            return notice(self.placeholder.as_deref().unwrap_or("No profile"));
+            return notice(self.placeholder.as_deref().ok_or(SystemText::NoProfile));
         };
         let (Some(layout), Some(page)) = (self.layout_of(device), self.current_page(device)) else {
-            return notice("No layout");
+            return notice(Err(SystemText::NoLayout));
         };
         let Some(page) = layout.page(page) else {
-            return notice("No layout");
+            return notice(Err(SystemText::NoLayout));
         };
         let mut faces = page_faces(
             self.engine.registry(),
@@ -1015,8 +1183,12 @@ impl Runtime {
             Some(&model.capabilities),
         );
         // *Back to previous layout* with nowhere to go back to.
+        let system_back = self.system_back(device);
         if self.layout_history(device).is_empty() {
-            for (control, face) in &mut faces {
+            for (control, face) in faces
+                .iter_mut()
+                .filter(|(control, _)| Some(*control) != system_back)
+            {
                 let back = shown_binding(page, *control)
                     .and_then(|binding| binding.target.action_id())
                     .and_then(|action| profile.action(action))
@@ -1028,7 +1200,8 @@ impl Runtime {
                     == Some(crate::LayoutNavigation::Back);
                 if back && face.style != FaceStyle::Notice {
                     face.style = FaceStyle::Notice;
-                    face.detail = Some(NO_PREVIOUS_LAYOUT.into());
+                    *face = std::mem::replace(face, KeyFace::empty())
+                        .with_system_detail(SystemText::NoPreviousLayout);
                 }
             }
         }
@@ -1110,6 +1283,8 @@ impl Runtime {
             .controls()
             .into_iter()
             .filter(|control| model.capabilities.has_display(*control))
+            // The reserved Back key shows Back, whatever is bound to it.
+            .filter(|control| layout.system_back(page.id, &model.capabilities) != Some(*control))
             .filter_map(|control| shown_binding(page, control).map(|binding| (control, binding)))
             // A binding that cannot run its action shows as unavailable,
             // without live state.
@@ -1129,6 +1304,17 @@ impl Runtime {
     }
 
     pub fn handle_event(&mut self, event: &DeviceEvent) -> Result<RuntimeOutcome, EngineError> {
+        self.handle_event_as(event, crate::RunOrigin::Key)
+    }
+
+    /// [`Runtime::handle_event`], with an input's binding run as started
+    /// by `origin` (a simulated press runs as
+    /// [`crate::RunOrigin::Simulated`]).
+    pub fn handle_event_as(
+        &mut self,
+        event: &DeviceEvent,
+        origin: crate::RunOrigin,
+    ) -> Result<RuntimeOutcome, EngineError> {
         let ignored = |reason: &str| {
             Ok(RuntimeOutcome::Ignored {
                 reason: reason.into(),
@@ -1138,11 +1324,15 @@ impl Runtime {
             DeviceEvent::Connected { device } => {
                 self.devices.apply(event);
                 match self.parked.remove(device) {
-                    Some(stack) if self.pages_exist(device, &stack) => {
+                    Some(stack) => {
                         self.navigation.insert(device.clone(), stack);
+                        self.repair_navigation(device);
                     }
-                    _ => self.reset_navigation(device),
+                    None => self.reset_navigation(device),
                 }
+                // A device that comes back starts no countdown: only
+                // entering a folder does.
+                self.follow_folders(device, true);
                 Ok(RuntimeOutcome::DeviceConnected {
                     device: device.clone(),
                 })
@@ -1152,6 +1342,7 @@ impl Runtime {
                 if let Some(stack) = self.navigation.remove(device) {
                     self.parked.insert(device.clone(), stack);
                 }
+                self.folders.forget(device);
                 Ok(RuntimeOutcome::DeviceDisconnected {
                     device: device.clone(),
                 })
@@ -1172,6 +1363,9 @@ impl Runtime {
                 }
                 if self.session.is_none() {
                     return ignored("no active profile");
+                }
+                if let Some(outcome) = self.core_control(device, *control, *input, origin) {
+                    return outcome;
                 }
                 // A binding whose action cannot run from this control is
                 // refused, not run.
@@ -1213,10 +1407,45 @@ impl Runtime {
                 }
                 match target {
                     None => ignored("control is not bound"),
-                    Some(target) => self.dispatch(device, target, crate::RunOrigin::Key),
+                    Some(target) => self.dispatch(device, target, origin),
                 }
             }
         }
+    }
+
+    /// The input of a control DeckPilot owns on the page `device` shows,
+    /// whatever is bound to it; `None` for every other control.
+    ///
+    /// - The folder's reserved Back key goes back on the press (a layout
+    ///   that binds it is refused when saved).
+    /// - A folder key ([`crate::folder_control`]) opens its folder on the
+    ///   press; what else is stored on it (recovered, or not yet migrated)
+    ///   never runs.
+    fn core_control(
+        &mut self,
+        device: &DeviceId,
+        control: ControlId,
+        input: deckpilot_device::ControlInput,
+        origin: crate::RunOrigin,
+    ) -> Option<Result<RuntimeOutcome, EngineError>> {
+        let (target, refusal) = if self.system_back(device) == Some(control) {
+            (
+                BindingTarget::Back,
+                "the folder's Back key reacts to a press",
+            )
+        } else {
+            let folder = self.folder_control(device, control)?;
+            (
+                BindingTarget::OpenPage { page: folder },
+                "a folder key reacts to a press",
+            )
+        };
+        Some(match input {
+            deckpilot_device::ControlInput::Press => self.dispatch(device, target, origin),
+            _ => Ok(RuntimeOutcome::Ignored {
+                reason: refusal.into(),
+            }),
+        })
     }
 
     fn dispatch(
@@ -1241,6 +1470,7 @@ impl Runtime {
         {
             self.go_back(device);
         }
+        self.follow_folders(device, false);
         Ok(outcome)
     }
 
@@ -1258,7 +1488,9 @@ impl Runtime {
         target: BindingTarget,
         origin: crate::RunOrigin,
     ) -> Result<RuntimeOutcome, EngineError> {
-        self.dispatch_target(device, target, origin)
+        let outcome = self.dispatch_target(device, target, origin);
+        self.follow_folders(device, false);
+        outcome
     }
 
     fn dispatch_target(
@@ -1356,6 +1588,13 @@ pub fn page_faces(
             .collect();
     };
     let automatic_back = layout.automatic_back(page.id, controls);
+    // The folder's reserved Back key shows Back, whatever is bound to it.
+    let system_back = match capabilities {
+        Some(capabilities) => layout.system_back(page.id, capabilities),
+        None => (layout.back_position(page.id) == Some(crate::BackPosition::Reserved))
+            .then(|| crate::editor_navigation::reserved_back_among(controls))
+            .flatten(),
+    };
     let (index, count) = layout.page_position(page.id).unwrap_or((0, 1));
     let label = PageLabel {
         number: index + 1,
@@ -1365,33 +1604,87 @@ pub fn page_faces(
     controls
         .iter()
         .map(|control| {
-            let binding = shown_binding(page, *control);
-            let mut face = binding.map_or_else(
-                || {
-                    if automatic_back == Some(*control) {
-                        KeyFace::new(FaceStyle::Back, "Back").with_symbol(Some(symbols::BACK))
-                    } else {
-                        KeyFace::empty()
-                    }
-                },
-                |binding| {
-                    let incompatible = capabilities.is_some_and(|capabilities| {
-                        crate::binding_incompatibility(binding, capabilities, registry, profile)
-                            .is_some()
-                    });
-                    if incompatible {
-                        unavailable_face(binding, profile, project)
-                    } else {
-                        face_for(registry, binding, layout, profile, project)
-                    }
-                    .with_appearance(binding.appearance.as_ref())
-                },
-            );
+            let binding = shown_binding(page, *control).filter(|_| system_back != Some(*control));
+            let mut face = if system_back == Some(*control) {
+                system_back_face()
+            } else {
+                binding.map_or_else(
+                    || {
+                        if automatic_back == Some(*control) {
+                            KeyFace::system(FaceStyle::Back, SystemText::Back)
+                                .with_symbol(Some(symbols::BACK))
+                        } else {
+                            KeyFace::empty()
+                        }
+                    },
+                    |binding| {
+                        let incompatible = capabilities.is_some_and(|capabilities| {
+                            crate::binding_incompatibility(binding, capabilities, registry, profile)
+                                .is_some()
+                        });
+                        if incompatible {
+                            unavailable_face(binding, profile, project)
+                        } else {
+                            face_for(registry, binding, layout, profile, project)
+                        }
+                        .with_appearance(binding.appearance.as_ref())
+                        .with_title_suggestions(title_suggestions(registry, binding, profile))
+                        .with_user_title(user_titled(binding, profile))
+                    },
+                )
+            };
             face.title = render_page_label(&face.title, label);
             face.detail = face.detail.map(|detail| render_page_label(&detail, label));
             (*control, face)
         })
         .collect()
+}
+
+/// A plugin's suggested title for `instance`, while the action keeps its
+/// type's name (a name the user changed wins).
+fn suggested_title<'a>(
+    registry: &'a ActionRegistry,
+    instance: &crate::ActionInstance,
+) -> Option<&'a str> {
+    registry
+        .definition(&instance.action_type)
+        .filter(|definition| definition.name == instance.name)
+        .and_then(|definition| definition.title.as_ref())
+        .and_then(|title| title.default.as_deref())
+}
+
+/// Whether the user titled a key that runs a plugin's action (the key's or
+/// the action's label): that title is kept over the plugin's dynamic title
+/// (`docs/key-text.md`, "Title precedence").
+fn user_titled(binding: &ControlBinding, profile: &Profile) -> bool {
+    let BindingTarget::Action { action, .. } = &binding.target else {
+        return false;
+    };
+    profile.action(*action).is_some_and(|instance| {
+        (binding.label.is_some() || instance.label.is_some())
+            && crate::ModuleId::owner_of(&instance.action_type)
+                .is_some_and(|owner| owner.is_plugin())
+    })
+}
+
+/// The title suggestions of the action type a binding runs (a plugin's,
+/// plugin API 1.8), if it has any.
+fn title_suggestions<'a>(
+    registry: &'a ActionRegistry,
+    binding: &ControlBinding,
+    profile: &Profile,
+) -> Option<&'a crate::ActionTitle> {
+    let BindingTarget::Action { action, .. } = &binding.target else {
+        return None;
+    };
+    let instance = profile.action(*action)?;
+    registry.definition(&instance.action_type)?.title.as_ref()
+}
+
+/// The face of a folder's protected Back key: its own icon only, no title
+/// (the app names it "Back" for assistive technology).
+pub fn system_back_face() -> KeyFace {
+    KeyFace::new(FaceStyle::Back, String::new()).with_symbol(Some(symbols::FOLDER_BACK))
 }
 
 /// The binding a control's face shows: its press binding, else its
@@ -1415,10 +1708,11 @@ fn unavailable_face(
     profile: &Profile,
     project: Option<&Project>,
 ) -> KeyFace {
-    let template = binding
+    let instance = binding
         .target
         .action_id()
-        .and_then(|action| profile.action(action))
+        .and_then(|action| profile.action(action));
+    let template = instance
         .map(|instance| {
             binding
                 .label
@@ -1428,11 +1722,32 @@ fn unavailable_face(
                 .to_owned()
         })
         .unwrap_or_default();
-    KeyFace::new(
+    let face = KeyFace::new(
         FaceStyle::Notice,
         render_label(&template, &profile.name, project),
     )
-    .with_detail("Unavailable")
+    .with_system_detail(SystemText::Unavailable);
+    match instance {
+        Some(instance) if binding.label.is_none() && instance.label.is_none() => {
+            face.with_action_name(instance.action_type.to_string())
+        }
+        _ => face,
+    }
+}
+
+/// The title of a key that opens `page`: a folder's name when `page` is a
+/// folder, its one title (schema 13, `normalize_folder_labels`); else the
+/// key's own title, else the page's name.
+fn open_page_title(
+    layout: &DeviceLayout,
+    binding: &ControlBinding,
+    page: PageId,
+) -> Option<String> {
+    let name = || layout.page(page).map(|p| p.name.clone());
+    if layout.page_parents().contains_key(&page) {
+        return name().or_else(|| binding.label.clone());
+    }
+    binding.label.clone().or_else(name)
 }
 
 fn face_for(
@@ -1445,7 +1760,7 @@ fn face_for(
     match &binding.target {
         BindingTarget::Action { action, overrides } => {
             let Some(instance) = profile.action(*action) else {
-                return KeyFace::new(FaceStyle::Notice, "Missing");
+                return KeyFace::system(FaceStyle::Notice, SystemText::Missing);
             };
             let parameters = instance.parameters.overlay(overrides);
             // *Switch layout* without a label of its own is titled with
@@ -1460,10 +1775,27 @@ fn face_for(
                 .as_deref()
                 .or(instance.label.as_deref())
                 .or_else(|| target.flatten().map(|layout| layout.name.as_str()))
+                .or_else(|| suggested_title(registry, instance))
                 .unwrap_or(&instance.name);
             let label = render_label(template, &profile.name, project);
+            // The instance's name, which it took from its type: a default
+            // the agent may show in another language ([`crate::i18n`]).
+            let default_name = binding.label.is_none()
+                && instance.label.is_none()
+                && target.flatten().is_none()
+                && suggested_title(registry, instance).is_none();
+            let named = |face: KeyFace| {
+                if default_name {
+                    face.with_action_name(instance.action_type.to_string())
+                } else {
+                    face
+                }
+            };
             if target == Some(None) {
-                return KeyFace::new(FaceStyle::Notice, label).with_detail("Not in this profile");
+                return named(
+                    KeyFace::new(FaceStyle::Notice, label)
+                        .with_system_detail(SystemText::NotInThisProfile),
+                );
             }
             // The action's own icon, else its type's.
             let symbol = instance.icon.clone().or_else(|| {
@@ -1472,17 +1804,20 @@ fn face_for(
                     .and_then(|definition| definition.node.icon.clone())
             });
             // The owning module may add context such as the active project.
-            registry
-                .decorate_face(
-                    &instance.action_type,
-                    KeyFace::new(FaceStyle::Action, label.clone()).with_symbol(symbol),
-                    &parameters,
-                    template,
-                    project,
-                )
-                .unwrap_or_else(|| {
-                    KeyFace::new(FaceStyle::Notice, label).with_detail("Unavailable")
-                })
+            named(
+                registry
+                    .decorate_face(
+                        &instance.action_type,
+                        KeyFace::new(FaceStyle::Action, label.clone()).with_symbol(symbol),
+                        &parameters,
+                        template,
+                        project,
+                    )
+                    .unwrap_or_else(|| {
+                        KeyFace::new(FaceStyle::Notice, label)
+                            .with_system_detail(SystemText::Unavailable)
+                    }),
+            )
         }
         BindingTarget::Workflow { workflow } => match profile.workflow(*workflow) {
             Some(definition) => KeyFace::new(
@@ -1495,26 +1830,26 @@ fn face_for(
             )
             .with_symbol(Some(symbols::WORKFLOW)),
             // A layout shared with a profile that has the workflow.
-            None => KeyFace::new(
-                FaceStyle::Notice,
-                binding.label.clone().unwrap_or_else(|| "Workflow".into()),
-            )
-            .with_detail("Not in this profile"),
+            None => match &binding.label {
+                Some(label) => KeyFace::new(FaceStyle::Notice, label.clone()),
+                None => KeyFace::system(FaceStyle::Notice, SystemText::Workflow),
+            }
+            .with_system_detail(SystemText::NotInThisProfile),
         },
-        BindingTarget::OpenPage { page } => KeyFace::new(
-            FaceStyle::Folder,
-            binding
-                .label
-                .clone()
-                .or_else(|| layout.page(*page).map(|p| p.name.clone()))
-                .unwrap_or_else(|| "Folder".into()),
-        )
-        .with_symbol(Some(symbols::FOLDER)),
-        BindingTarget::Back => KeyFace::new(
-            FaceStyle::Back,
-            binding.label.clone().unwrap_or_else(|| "Back".into()),
-        )
-        .with_symbol(Some(symbols::BACK)),
+        BindingTarget::OpenPage { page } => open_page_title(layout, binding, *page)
+            .map_or_else(
+                || KeyFace::system(FaceStyle::Folder, SystemText::Folder),
+                |title| KeyFace::new(FaceStyle::Folder, title),
+            )
+            .with_symbol(Some(symbols::FOLDER)),
+        BindingTarget::Back => binding
+            .label
+            .clone()
+            .map_or_else(
+                || KeyFace::system(FaceStyle::Back, SystemText::Back),
+                |title| KeyFace::new(FaceStyle::Back, title),
+            )
+            .with_symbol(Some(symbols::BACK)),
         // The machine's own face (its state) is the agent's; this is the
         // face without it, e.g. in the layout designer's preview.
         BindingTarget::Stateful(stateful) => KeyFace::new(
@@ -1536,18 +1871,34 @@ fn face_for(
 pub mod symbols {
     pub const FOLDER: &str = "folder";
     pub const BACK: &str = "arrow-left";
+    /// The folder's protected Back key: not a font icon but the vector
+    /// `crates/deckpilot-render/assets/icons/folder-back.svg`, drawn
+    /// centred and without a title (the renderer and the app read it).
+    pub const FOLDER_BACK: &str = "folder-back";
     pub const WORKFLOW: &str = "list-ordered";
     pub const WORK_SESSION: &str = "timer";
 }
 
+mod working;
+pub use working::{EditorTarget, NavigationError, NavigationState};
+
 #[cfg(test)]
 mod compat_tests;
+
+#[cfg(test)]
+mod working_tests;
 
 #[cfg(test)]
 mod deck_tests;
 
 #[cfg(test)]
 mod layout_tests;
+
+#[cfg(test)]
+mod folder_tests;
+
+#[cfg(test)]
+mod title_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1978,11 +2329,73 @@ mod tests {
         assert_eq!(runtime.current_page(&device()), Some(home));
     }
 
+    /// The editor's preview learns what a key does to its view without
+    /// running it, the automatic Back key included.
+    #[test]
+    fn control_navigation_names_folders_back_and_the_automatic_back() {
+        use crate::{ControlNavigation, NavigationOperation, control_navigation};
+        let mut f = fixture();
+        let layout = &mut f.profile.layouts[0];
+        let home = layout.home_page;
+        let folder = layout.pages[1].id;
+        let mut sub = LayoutPage::new("Sub");
+        sub.parent = Some(folder);
+        let sub_id = sub.id;
+        layout.pages.push(sub);
+        layout
+            .page_mut(home)
+            .unwrap()
+            .bindings
+            .push(ControlBinding::new(
+                ControlId::Key { index: 3 },
+                Trigger::Press,
+                BindingTarget::OpenPage { page: sub_id },
+            ));
+        let layout = f.profile.layouts[0].clone();
+        let registry = registry();
+        let controls: Vec<ControlId> = (0..6).map(|index| ControlId::Key { index }).collect();
+        let at = |page, index| {
+            control_navigation(
+                &registry,
+                &layout,
+                page,
+                &f.profile,
+                ControlId::Key { index },
+                &controls,
+            )
+        };
+        assert_eq!(
+            at(home, 3),
+            Some(ControlNavigation {
+                operation: NavigationOperation::FolderOpen,
+                page: Some(sub_id),
+                layout: None,
+                automatic: false,
+                system: false,
+            })
+        );
+        // The folder's own Back key (key 1).
+        let back = at(folder, 1).unwrap();
+        assert_eq!(back.operation, NavigationOperation::FolderBack);
+        assert!(!back.automatic);
+        // The first free key of a folder page without a way back.
+        let automatic = at(sub_id, 0).unwrap();
+        assert_eq!(automatic.operation, NavigationOperation::FolderBack);
+        assert!(automatic.automatic);
+        assert_eq!(
+            serde_json::to_value(&automatic).unwrap(),
+            serde_json::json!({"operation": "folder.back", "automatic": true})
+        );
+        assert_eq!(at(sub_id, 1), None);
+        // An action key without declared navigation does not navigate.
+        assert_eq!(at(home, 0), None);
+    }
+
     #[test]
     fn faces_carry_the_binding_appearance() {
         let mut f = fixture();
         let look = crate::KeyAppearance {
-            background: Some(crate::Color([10, 20, 30])),
+            background: Some(crate::Color([10, 20, 30]).into()),
             ..crate::KeyAppearance::default()
         };
         f.profile.layouts[0].pages[0].bindings[1].appearance = Some(look.clone());
@@ -2258,7 +2671,15 @@ mod tests {
         let mut f = fixture();
         let shop = f.profile.projects[0].id;
         let layout = &mut f.profile.layouts[0];
-        let folder = layout.pages[1].id;
+        // A page inside the folder: a key of Home that opens it is an
+        // ordinary page key with gestures, not a folder key (those open on
+        // the press only, `crate::folder_control`).
+        let inside = LayoutPage {
+            parent: Some(layout.pages[1].id),
+            ..LayoutPage::new("Inside")
+        };
+        let folder = inside.id;
+        layout.pages.push(inside);
         let home = layout.home_page;
         let page = layout.page_mut(home).unwrap();
         let key = ControlId::Key { index: 3 };
@@ -2346,7 +2767,7 @@ mod tests {
                 .parameters,
             saved
         );
-        let folder = f.profile.layouts[0].pages[1].id;
+        let folder = f.profile.layouts[0].pages.last().unwrap().id;
         assert_eq!(
             runtime
                 .dispatch_gesture(&device(), key, Gesture::LongPress)

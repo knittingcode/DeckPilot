@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { type StatusStores, useSnapshot } from "@/hooks/use-status"
+import { i18n, useTranslation } from "@/i18n"
 import { formatTimestamp } from "@/lib/format"
 import {
   type Operation,
@@ -47,6 +48,7 @@ const SEGMENT =
  * module.
  */
 export function AppStatusBar({ stores }: { stores: StatusStores }) {
+  const { t } = useTranslation()
   const items = useSnapshot(stores.items)
   const operations = useSnapshot(stores.operations)
 
@@ -72,7 +74,7 @@ export function AppStatusBar({ stores }: { stores: StatusStores }) {
   return (
     <footer
       data-slot="statusbar"
-      aria-label="Status bar"
+      aria-label={t("navigation:statusBar.label")}
       className="@container flex h-(--statusbar-size) shrink-0 items-stretch border-t bg-sidebar text-xs select-none"
     >
       <div className="flex min-w-0 items-stretch">
@@ -157,12 +159,13 @@ function StatusSegment({ item }: { item: StatusItem }) {
 }
 
 function Overflow({ items }: { items: StatusItem[] }) {
+  const { t } = useTranslation()
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label="More status"
+          aria-label={t("navigation:statusBar.more")}
           // Visible while any item is hidden: medium ones below @3xl, wide ones below @5xl.
           className={cn(
             SEGMENT,
@@ -208,14 +211,24 @@ function MiniProgress({ percent }: { percent: number }) {
   )
 }
 
+/** The operation's state in one line (the window's language; its title is the caller's). */
 function operationText(operation: Operation) {
-  if (operation.status === "failed") return `${operation.title} failed`
-  if (operation.status === "succeeded") return `${operation.title} finished`
-  if (operation.status === "cancelled") return `${operation.title} cancelled`
-  if (operation.total !== undefined && operation.completed !== undefined) {
-    return `${operation.title} (${operation.completed}/${operation.total})`
+  const { title } = operation
+  if (operation.status === "failed") return i18n.t("notifications:operations.failed", { title })
+  if (operation.status === "succeeded") {
+    return i18n.t("notifications:operations.succeeded", { title })
   }
-  return operation.title
+  if (operation.status === "cancelled") {
+    return i18n.t("notifications:operations.cancelled", { title })
+  }
+  if (operation.total !== undefined && operation.completed !== undefined) {
+    return i18n.t("notifications:operations.counted", {
+      title,
+      completed: operation.completed,
+      total: operation.total,
+    })
+  }
+  return title
 }
 
 function OperationIcon({ operation }: { operation: Operation }) {
@@ -228,6 +241,7 @@ function OperationIcon({ operation }: { operation: Operation }) {
 
 /** The primary operation inline; all of them in a popover. */
 function Operations({ operations }: { operations: Operation[] }) {
+  const { t } = useTranslation()
   const ordered = OperationStore.ordered(operations)
   const primary = ordered[0]
   if (!primary) return null
@@ -238,7 +252,14 @@ function Operations({ operations }: { operations: Operation[] }) {
         <button
           type="button"
           className={cn(SEGMENT, "max-w-96")}
-          aria-label={`Background activity: ${operationText(primary)}${others > 0 ? `, ${others} more` : ""}`}
+          aria-label={
+            others > 0
+              ? t("notifications:operations.summaryWithMore", {
+                  operation: operationText(primary),
+                  count: others,
+                })
+              : t("notifications:operations.summary", { operation: operationText(primary) })
+          }
         >
           <OperationIcon operation={primary} />
           <span className="truncate">{operationText(primary)}</span>
@@ -250,9 +271,9 @@ function Operations({ operations }: { operations: Operation[] }) {
       </PopoverTrigger>
       <PopoverContent side="top" sideOffset={6} collisionPadding={8} className="w-96 p-0 text-sm">
         <h2 className="border-b px-3 py-2 text-xs font-medium text-muted-foreground uppercase">
-          Background activity
+          {t("notifications:operations.title")}
         </h2>
-        <ul className="grid max-h-72 gap-px overflow-y-auto">
+        <ul className="relative grid max-h-72 gap-px overflow-y-auto">
           {ordered.map((operation) => (
             <li key={operation.id} className="grid gap-1 px-3 py-2">
               <div className="flex items-center gap-2 [&_svg]:size-3.5">
@@ -260,7 +281,7 @@ function Operations({ operations }: { operations: Operation[] }) {
                 <span className="flex-1 truncate">{operation.title}</span>
                 {operation.cancel && operation.status === "running" && (
                   <Button variant="ghost" size="sm" className="h-6 px-2" onClick={operation.cancel}>
-                    Cancel
+                    {t("common:actions.cancel")}
                   </Button>
                 )}
               </div>
@@ -270,8 +291,12 @@ function Operations({ operations }: { operations: Operation[] }) {
               <p className="text-xs text-muted-foreground">
                 {operation.error ??
                   (operation.status === "running"
-                    ? `Started ${formatTimestamp(Math.floor(operation.startedAt / 1000))}`
-                    : `Finished ${formatTimestamp(Math.floor((operation.finishedAt ?? 0) / 1000))}`)}
+                    ? t("notifications:operations.startedAt", {
+                        time: formatTimestamp(Math.floor(operation.startedAt / 1000)),
+                      })
+                    : t("notifications:operations.finishedAt", {
+                        time: formatTimestamp(Math.floor((operation.finishedAt ?? 0) / 1000)),
+                      }))}
               </p>
             </li>
           ))}

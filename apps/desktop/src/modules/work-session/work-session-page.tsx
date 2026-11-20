@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { SettingsSection } from "@/components/settings-layout"
 import { useAsync } from "@/hooks/use-async"
 import { useEditingProfile } from "@/hooks/use-profile"
+import { Trans, useTranslation } from "@/i18n"
 import { api } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
 import type { WorkSessionSettings, WorkSessionSnapshot } from "@/lib/types"
@@ -24,10 +25,11 @@ import { useWorkSession } from "./use-work-session"
  * that (D11).
  */
 export function WorkSessionPage() {
+  const { t } = useTranslation()
   return (
     <Page
-      title="Work Session"
-      description="Time worked, started and finished from a key on the device"
+      title={t("workspace:workSession.page.title")}
+      description={t("workspace:workSession.page.description")}
       profileScoped
     >
       <WorkSession />
@@ -36,15 +38,15 @@ export function WorkSessionPage() {
 }
 
 function WorkSession() {
+  const { t } = useTranslation()
   const { view, replace } = useWorkSession()
   if (view.status === "loading") return <Loading />
   if (view.status === "unsupported") {
     return (
       <Alert>
-        <AlertTitle>Work sessions need a newer agent</AlertTitle>
+        <AlertTitle>{t("workspace:workSession.page.unsupportedTitle")}</AlertTitle>
         <AlertDescription>
-          The running agent does not support work sessions. Restart the agent in Settings › Agent so
-          the one installed with this app runs.
+          {t("workspace:workSession.page.unsupportedDescription")}
         </AlertDescription>
       </Alert>
     )
@@ -76,6 +78,7 @@ function Workspace({
   onSnapshot: (snapshot: WorkSessionSnapshot) => void
   reloadKey: string
 }) {
+  const { t } = useTranslation()
   const { state: profile } = useEditingProfile()
   const settings = useAsync(() => api.getWorkSessionSettings(profileId), profileId)
   const [saved, setSaved] = useState<WorkSessionSettings | null>(null)
@@ -84,7 +87,9 @@ function Workspace({
   const projects = profile.status === "ready" ? profile.data.profile.projects : []
   const projectName = (id: string) => {
     const project = projects.find((p) => p.id === id)
-    return project ? `${project.key} · ${project.name}` : "Project of another profile"
+    return project
+      ? t("workspace:projects.option", { key: project.key, project: project.name })
+      : t("workspace:workSession.page.otherProject")
   }
   return (
     <div className="mx-auto grid w-full max-w-3xl gap-8">
@@ -112,24 +117,23 @@ function Workspace({
 
 /** How a key gets the work session; the assignment itself is the gesture editor's. */
 function AssignCard() {
+  const { t } = useTranslation()
   const { navigate } = useAppContext()
   return (
     <SettingsSection
-      title="Work Session key"
-      description="Any key can control the work session; no action is created for it."
+      title={t("workspace:workSession.page.key.title")}
+      description={t("workspace:workSession.page.key.description")}
     >
       <div className="grid gap-3 text-sm">
         <ol className="grid list-decimal gap-1 pl-5">
-          <li>Open the Layout Designer and select a key.</li>
+          <li>{t("workspace:workSession.page.key.step1")}</li>
           <li>
-            In its gestures, choose <span className="font-medium">Changes with state</span> and then{" "}
-            <span className="font-medium">Work Session</span>.
+            <Trans
+              i18nKey="workspace:workSession.page.key.step2"
+              components={{ em: <span className="font-medium" /> }}
+            />
           </li>
-          <li>
-            The key then shows the state and the elapsed time. Click it to start; when working,
-            click it to run the end check, or hold it if no verification workflow is set; click it
-            again when it shows Finish Work.
-          </li>
+          <li>{t("workspace:workSession.page.key.step3")}</li>
         </ol>
         <div>
           <Button
@@ -140,7 +144,7 @@ function AssignCard() {
             }}
           >
             <Keyboard aria-hidden />
-            Open Layout Designer
+            {t("workspace:workSession.page.key.open")}
           </Button>
         </div>
       </div>

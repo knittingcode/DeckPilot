@@ -1,0 +1,110 @@
+# DeckPilot's icon library: the Icon Library's categories, in the order it
+# shows them, each with its icons (Lucide names, all in icons.txt). An icon
+# may be in several categories. Category names are translated by the app
+# (editor:assets.categories.<name>).
+
+[media]
+play pause square skip-forward skip-back fast-forward rewind repeat repeat-1
+shuffle volume volume-1 volume-2 volume-x music music-2 music-4 mic mic-off
+headphones radio speaker disc-3 list-music audio-lines audio-waveform podcast
+cast airplay circle-play circle-pause circle-stop step-forward step-back
+
+[video]
+video video-off camera camera-off film clapperboard tv monitor-play aperture
+focus scan-face webcam projector image images image-plus circle-dot
+
+[streaming]
+radio-tower signal antenna satellite-dish users-round message-circle heart
+thumbs-up thumbs-down gift trophy party-popper sparkles star smile laugh flame
+zap crown award medal
+
+[communication]
+mail mail-open inbox send message-square message-square-text messages-square
+message-circle-more phone phone-call phone-off at-sign bell bell-ring bell-off
+megaphone reply forward share share-2 contact voicemail
+
+[devices]
+monitor laptop smartphone tablet keyboard mouse gamepad-2 joystick printer
+hard-drive cpu memory-stick usb bluetooth wifi wifi-off battery
+battery-charging battery-full battery-low plug plug-zap power power-off server
+database router watch tv-minimal
+
+[development]
+code code-xml terminal square-terminal braces brackets bug bug-off git-branch
+git-commit git-merge git-pull-request git-fork git-compare file-code file-json
+binary variable regex webhook package package-2 container box blocks puzzle
+cog wrench hammer test-tube flask-conical rocket workflow
+
+[files]
+book-open layers network file file-text file-plus file-minus file-check file-x
+file-search file-image file-video file-audio file-archive folder folder-open
+folder-plus folder-minus folder-up folder-down folder-kanban folder-git-2
+folder-search folder-cog archive save save-all clipboard clipboard-list
+clipboard-check copy scissors paperclip download upload cloud-download
+cloud-upload trash-2
+
+[editing]
+pencil pen-tool pen-line eraser highlighter type bold italic underline
+strikethrough align-left align-center align-right align-justify list
+list-ordered list-checks list-todo undo-2 redo-2 rotate-ccw rotate-cw crop
+paint-bucket palette pipette brush wand-sparkles text-cursor-input quote
+heading table
+
+[navigation]
+house arrow-up arrow-down arrow-left arrow-right arrow-up-right
+arrow-down-left arrow-big-up arrow-big-down arrow-big-left arrow-big-right
+chevron-up chevron-down chevron-left chevron-right chevrons-up chevrons-down
+chevrons-left chevrons-right corner-up-left corner-down-right undo redo move
+expand shrink maximize minimize log-in log-out external-link link link-2
+unlink compass map map-pin navigation locate signpost menu ellipsis grid-2x2
+layout-grid layout-dashboard panel-left app-window
+
+[system]
+settings settings-2 sliders-horizontal toggle-left toggle-right gauge activity
+refresh-cw refresh-ccw rotate-cw-square loader hourglass search zoom-in
+zoom-out filter eye eye-off info circle-help circle-alert triangle-alert
+octagon-alert circle-check circle-x check x plus minus ban bolt sun-moon
+contrast
+
+[security]
+lock lock-open key key-round shield shield-check shield-alert shield-off
+fingerprint scan-line user-lock badge-check id-card siren
+
+[time]
+clock clock-1 clock-3 alarm-clock alarm-clock-off timer timer-off timer-reset
+calendar calendar-days calendar-check calendar-plus calendar-clock history
+hourglass coffee bed moon sunrise sunset
+
+[weather]
+sun moon cloud cloud-sun cloud-moon cloud-rain cloud-drizzle cloud-snow
+cloud-lightning cloud-fog cloudy snowflake wind tornado umbrella thermometer
+thermometer-sun thermometer-snowflake droplet droplets rainbow sun-dim haze
+waves leaf
+
+[people]
+user user-plus user-minus user-check user-x users user-round user-cog
+contact-round baby person-standing accessibility hand hand-metal handshake
+heart-handshake brain eye ear footprints
+
+[business]
+briefcase building building-2 store shopping-cart shopping-bag credit-card
+wallet banknote coins piggy-bank receipt chart-line chart-bar chart-pie
+chart-area trending-up trending-down presentation kanban ticket tag tags
+percent calculator scale landmark
+
+[home]
+lamp lamp-desk lightbulb lightbulb-off fan heater air-vent refrigerator
+microwave washing-machine sofa armchair door-open door-closed blinds tv bath
+shower-head plug utensils cooking-pot alarm-smoke
+
+[travel]
+car bus train-front plane ship bike fuel parking-meter map-pinned globe earth
+mountain tent trees palmtree luggage hotel
+
+[shapes]
+circle square triangle diamond hexagon octagon pentagon star heart shapes
+circle-dashed square-dashed spline infinity hash asterisk at-sign
+
+[gaming]
+gamepad dice-5 dices swords sword shield-half crosshair target ghost skull
+trophy flag castle puzzle joystick

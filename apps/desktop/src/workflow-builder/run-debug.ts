@@ -3,18 +3,22 @@
 // Only data the app already receives is used: node reports of the run and
 // the live events this window saw.
 
+import { type TranslationKey, i18n } from "@/i18n"
 import { type LiveExecution, type RetryWait, executionDuration } from "@/lib/executions"
 import type { NodeReport, NodeStatus, StepError } from "@/lib/types"
 
+import { translatedLabels } from "./variable-reference"
+
 export type RowStatus = NodeStatus | "running"
 
-export const STATUS_LABEL: Record<RowStatus, string> = {
-  running: "running",
-  succeeded: "succeeded",
-  failed: "failed",
-  skipped: "skipped",
-  cancelled: "cancelled",
-}
+/** A node's state in lower case ("succeeded"), in the window's language. */
+export const STATUS_LABEL = translatedLabels<RowStatus>({
+  running: "workflows:run.status.running",
+  succeeded: "workflows:run.status.succeeded",
+  failed: "workflows:run.status.failed",
+  skipped: "workflows:run.status.skipped",
+  cancelled: "workflows:run.status.cancelled",
+})
 
 export interface TimelineRow {
   node: string
@@ -170,14 +174,14 @@ export function retryHistory(run: LiveExecution, node: string): RetryHistory {
   }
 }
 
-const ERROR_TEXT: Record<string, string> = {
-  "action.failed": "The action reported a failure.",
-  timeout: "The node took longer than its timeout.",
-  cancelled: "The run was cancelled while the node ran.",
-  mapping: "An input could not be resolved from earlier outputs.",
-  "parallel-context": "A context-changing action cannot run in a parallel branch.",
-  "loop.failed": "A run of the looped workflow failed.",
-  unavailable: "The action or its module is not available.",
+const ERROR_TEXT: Record<string, TranslationKey> = {
+  "action.failed": "workflows:run.error.actionFailed",
+  timeout: "workflows:run.error.timeout",
+  cancelled: "workflows:run.error.cancelled",
+  mapping: "workflows:run.error.mapping",
+  "parallel-context": "workflows:run.error.parallelContext",
+  "loop.failed": "workflows:run.error.loopFailed",
+  unavailable: "workflows:run.error.unavailable",
 }
 
 export interface Failure {
@@ -192,10 +196,10 @@ export interface Failure {
 
 export function describeFailure(error: StepError): { explanation: string; hint: string } {
   return {
-    explanation: ERROR_TEXT[error.code] ?? "The node failed.",
+    explanation: i18n.t(ERROR_TEXT[error.code] ?? "workflows:run.error.other"),
     hint: error.retryable
-      ? "Transient: running it again, or a retry policy, may help."
-      : "Not transient: running it again will not help without a change.",
+      ? i18n.t("workflows:run.error.transient")
+      : i18n.t("workflows:run.error.permanent"),
   }
 }
 

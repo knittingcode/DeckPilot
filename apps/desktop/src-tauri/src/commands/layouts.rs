@@ -59,8 +59,9 @@ pub async fn save_layout(
     let mut layout = layout;
     super::trim_in_place(&mut layout.name);
     if layout.name.is_empty() {
-        return Err(CommandError::Invalid(
-            "layout name must not be empty".into(),
+        return Err(CommandError::invalid(
+            "layoutNameEmpty",
+            "layout name must not be empty",
         ));
     }
     for binding in layout.pages.iter_mut().flat_map(|page| &mut page.bindings) {
@@ -77,14 +78,26 @@ pub async fn save_layout(
             .appearance
             .take()
             .and_then(deckpilot_core::KeyAppearance::normalized);
+        if let Some(appearance) = &binding.appearance {
+            appearance.check().map_err(CommandError::Invalid)?;
+        }
     }
+    // Folder pages without a Back setting (moved into a folder, or from
+    // before the reserved Back key) get one as migration 11 gives it: the
+    // reserved key when it is free or only goes back, else where it was.
+    if let Some(model) = state.catalog.get(&layout.model) {
+        layout.assign_folder_backs(&model.capabilities);
+    }
+    tidy_folder_controls(&mut layout);
+    // A folder key shows its folder's name: no title of its own is stored
+    // (one that differs is kept as recovered, as migration 13 keeps it).
+    layout.normalize_folder_labels();
     let registry = state.actions();
     modify_profile_and_reload(&state, profile_id, |profile| {
         let stored = profile.layouts.iter().find(|l| l.id == layout.id);
         let (issues, kept) = check_for_save(&layout, stored, &state.catalog, &registry, profile);
         if !issues.is_empty() {
-            let messages: Vec<String> = issues.iter().map(ToString::to_string).collect();
-            return Err(CommandError::Invalid(messages.join("\n")));
+            return Err(refusal(&issues));
         }
         match profile
             .layouts
@@ -105,6 +118,70 @@ pub async fn save_layout(
         })
     })
     .await
+}
+
+/// What saving drops without asking: gesture timings of folder keys
+/// (they react to the press only, `deckpilot_core::folder_control`) and
+/// recovered bindings of pages that are gone.
+fn tidy_folder_controls(layout: &mut DeviceLayout) {
+    let folder_keys: Vec<(PageId, Vec<ControlId>)> = layout
+        .pages
+        .iter()
+        .map(|page| {
+            let keys = layout.folder_controls(page.id);
+            (
+                page.id,
+                keys.into_iter().map(|(control, _)| control).collect(),
+            )
+        })
+        .collect();
+    for (page, keys) in folder_keys {
+        if let Some(page) = layout.page_mut(page) {
+            page.gestures.retain(|g| !keys.contains(&g.control));
+        }
+    }
+    layout.prune_recovered();
+}
+
+/// The refusal of a save with `issues`: every message, with the stable
+/// code of the first folder-key refusal (`invalid.folderControl.*`, which
+/// the editor translates) when there is one, else the generic `invalid`.
+fn refusal(issues: &[LayoutIssue]) -> CommandError {
+    let message = issues
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let Some((reason, issue)) = issues
+        .iter()
+        .find_map(|issue| issue.folder_control_reason().map(|reason| (reason, issue)))
+    else {
+        return CommandError::Invalid(message);
+    };
+    // Folder keys are keys: the key's number as the editor shows it.
+    let (key, folder) = match issue {
+        LayoutIssue::FolderControlBindings {
+            control, folder, ..
+        }
+        | LayoutIssue::FolderControlTrigger {
+            control, folder, ..
+        }
+        | LayoutIssue::FolderControlReplaced {
+            control, folder, ..
+        } => (
+            match control {
+                ControlId::Key { index } => u32::from(*index) + 1,
+                _ => 0,
+            },
+            folder.clone(),
+        ),
+        _ => (0, String::new()),
+    };
+    CommandError::invalid_with(
+        reason,
+        message,
+        [("key", key.into()), ("folder", folder.into())],
+    )
 }
 
 /// A saved layout, with the bindings it keeps that cannot run their
@@ -138,6 +215,9 @@ fn check_for_save(
     profile: &deckpilot_core::Profile,
 ) -> (Vec<LayoutIssue>, Vec<LayoutIssue>) {
     let mut issues = layout.validate(catalog, profile);
+    // Folder keys stay folder keys; recovered bindings are only kept,
+    // moved or discarded (`deckpilot_core::folder_control`).
+    issues.extend(layout.folder_control_edits(stored));
     issues.extend(layout.check_overrides(registry, profile));
     let (refused, kept) = layout.compatibility_for_save(stored, catalog, registry, profile);
     issues.extend(refused);
@@ -176,10 +256,15 @@ pub fn delete_layout(
         .map(|user| format!("“{}”", user.profile_name))
         .collect();
     if !others.is_empty() {
-        return Err(CommandError::Invalid(format!(
-            "the layout is also used by {}; delete it in Layouts, or remove it from this profile",
-            others.join(", ")
-        )));
+        let profiles = others.join(", ");
+        return Err(CommandError::invalid_with(
+            "layoutUsedElsewhere",
+            format!(
+                "the layout is also used by {profiles}; delete it in Layouts, or remove it from \
+                 this profile"
+            ),
+            [("profiles", profiles.into())],
+        ));
     }
     store.delete_shared_layout(layout_id, &[profile_id])?;
     crate::agent::notify_reload(&state.paths);
@@ -213,6 +298,49 @@ pub struct ControlFace {
     /// from it (`docs/device-controls.md`); left out when they all can.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     incompatible: Vec<IncompatibleReason>,
+    /// With `render`: how the title comes out on the device
+    /// (`docs/key-text.md`), measured at the device's own key size. Left
+    /// out for controls without a display or a title.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<TextLayoutReport>,
+    /// What pressing the control does to the view, for the editor's
+    /// interactive preview (`docs/editor-navigation-and-simulation.md`):
+    /// open a folder, go back (also the automatic Back key, which is not a
+    /// binding: `automatic`), turn the page, switch the layout. Read from
+    /// the binding and the action type's `editorNavigation`; nothing runs.
+    /// Left out for controls that do not navigate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    navigation: Option<deckpilot_core::ControlNavigation>,
+}
+
+/// How a key's title comes out on the device ([`deckpilot_render::TextReport`]).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextLayoutReport {
+    mode: deckpilot_core::TextMode,
+    /// All of the title is shown (a scrolling title shows it in turn).
+    fits: bool,
+    /// Drawn cut: with `…`, clipped, or with lines left out.
+    truncated: bool,
+    /// The size it is drawn at in points (pixels on a 72 px key), to a
+    /// tenth.
+    font_size: f32,
+    lines: usize,
+    /// It scrolls on the device (a marquee title wider than the key).
+    needs_scroll: bool,
+}
+
+impl From<deckpilot_render::TextReport> for TextLayoutReport {
+    fn from(report: deckpilot_render::TextReport) -> Self {
+        Self {
+            mode: report.mode,
+            fits: report.fits,
+            truncated: report.truncated,
+            font_size: (report.font_points * 10.0).round() / 10.0,
+            lines: report.lines,
+            needs_scroll: report.needs_scroll,
+        }
+    }
 }
 
 /// One binding of a control that cannot run its action from it.
@@ -316,13 +444,96 @@ fn with_live_state(
     stale
 }
 
+/// The faces of a (possibly unsaved) layout page, with live states, and
+/// the model and profile they were made for.
+struct PageFaces {
+    faces: Vec<(ControlId, KeyFace)>,
+    capabilities: deckpilot_device::DeviceCapabilities,
+    /// The model's colours for keys that set none, drawn as on the device.
+    look: deckpilot_device::DefaultAppearance,
+    profile: deckpilot_core::Profile,
+    incompatible: Vec<deckpilot_core::IncompatibleBinding>,
+    /// What each control that navigates does to the view.
+    navigation: Vec<(ControlId, deckpilot_core::ControlNavigation)>,
+}
+
+fn page_preview(
+    state: &AppState,
+    profile_id: ProfileId,
+    layout: &DeviceLayout,
+    page_id: PageId,
+    project_id: Option<ProjectId>,
+    live: Option<&LivePreview>,
+) -> CommandResult<PageFaces> {
+    let store = state.store()?;
+    let profile = load_profile(&store, profile_id)?;
+    let model = state
+        .catalog
+        .get(&layout.model)
+        .ok_or(CommandError::NotFound("device model"))?;
+    let context =
+        ActiveProjectContext::restore(&profile, project_id.or(store.active_project(profile_id)?));
+    let project = context.project(&profile)?;
+    let controls = model.capabilities.controls();
+    let actions = state.actions();
+    let incompatible: Vec<deckpilot_core::IncompatibleBinding> = layout
+        .incompatible_bindings(&model.capabilities, &actions, &profile)
+        .into_iter()
+        .filter(|found| found.page == page_id)
+        .collect();
+    let faces = page_faces(
+        &actions,
+        layout,
+        page_id,
+        &profile,
+        project,
+        &controls,
+        Some(&model.capabilities),
+    )
+    .into_iter()
+    .map(|(control, face)| {
+        let face = match live {
+            Some(live) => {
+                let action = layout
+                    .page(page_id)
+                    .and_then(|page| deckpilot_core::device_runtime::shown_binding(page, control))
+                    .and_then(|binding| binding.target.action_id());
+                with_live_state(face, action, live)
+            }
+            None => face,
+        };
+        (control, face)
+    })
+    .collect();
+    let display = deckpilot_core::editor_navigation::display_controls(&model.capabilities);
+    let navigation = controls
+        .iter()
+        .filter_map(|control| {
+            deckpilot_core::control_navigation(
+                &actions, layout, page_id, &profile, *control, &display,
+            )
+            .map(|navigation| (*control, navigation))
+        })
+        .collect();
+    Ok(PageFaces {
+        navigation,
+        faces,
+        capabilities: model.capabilities.clone(),
+        look: model.effective_appearance(),
+        profile,
+        incompatible,
+    })
+}
+
 /// What every control of a (possibly unsaved) layout page shows for a given
 /// project (`None`: the profile's active project, as on the device),
 /// without a device and without running any action. With `render`, each
 /// face also comes as the image the device would show, drawn by the
 /// agent's renderer: at the device's own size, or with `key_pixels` at the
-/// size the app shows it ([`preview_size`]). With `live`, keys show the
-/// live states the agent reported for them (`watch_key_states`).
+/// size the app shows it ([`preview_size`]), and with how its title comes
+/// out on the device (`text`). With `live`, keys show the live states the
+/// agent reported for them (`watch_key_states`). A scrolling title is drawn
+/// still, cut with `…`; [`preview_marquee`] has its frames.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // Tauri passes each argument by name.
 pub fn preview_layout(
@@ -335,69 +546,150 @@ pub fn preview_layout(
     live: Option<LivePreview>,
     key_pixels: Option<u32>,
 ) -> CommandResult<Vec<ControlFace>> {
-    let store = state.store()?;
-    let profile = load_profile(&store, profile_id)?;
-    let model = state
-        .catalog
-        .get(&layout.model)
-        .ok_or(CommandError::NotFound("device model"))?;
-    let context =
-        ActiveProjectContext::restore(&profile, project_id.or(store.active_project(profile_id)?));
-    let project = context.project(&profile)?;
-    let controls = model.capabilities.controls();
-    let actions = state.actions();
-    let icons = render
-        .unwrap_or(false)
-        .then(|| deckpilot_render::Icons::from_profile(&profile));
-    let incompatible: Vec<deckpilot_core::IncompatibleBinding> = layout
-        .incompatible_bindings(&model.capabilities, &actions, &profile)
-        .into_iter()
-        .filter(|found| found.page == page_id)
-        .collect();
-    Ok(page_faces(
-        &actions,
+    let preview = page_preview(
+        &state,
+        profile_id,
         &layout,
         page_id,
-        &profile,
-        project,
-        &controls,
-        Some(&model.capabilities),
-    )
-    .into_iter()
-    .map(|(control, face)| {
-        let face = match &live {
-            Some(live) => {
-                let action = layout
-                    .page(page_id)
-                    .and_then(|page| deckpilot_core::device_runtime::shown_binding(page, control))
-                    .and_then(|binding| binding.target.action_id());
-                with_live_state(face, action, live)
+        project_id,
+        live.as_ref(),
+    )?;
+    let capabilities = &preview.capabilities;
+    let icons = render
+        .unwrap_or(false)
+        .then(|| state.visual_assets.icons(&preview.profile));
+    Ok(preview
+        .faces
+        .into_iter()
+        .map(|(control, face)| {
+            let native = image_size(capabilities, control);
+            let drawn = icons.as_ref().zip(native).and_then(|(icons, native)| {
+                let (width, height) = preview_size(capabilities, native, key_pixels);
+                let frame =
+                    deckpilot_render::render_for(&face, width, height, icons, &preview.look);
+                let png = deckpilot_render::frame_png(&frame)?;
+                // Measured at the device's own size: what the device shows.
+                let text = deckpilot_render::text_report(&face, native.0, native.1, icons);
+                Some((deckpilot_core::IconData::new(png).data_url(), text))
+            });
+            let (image, text) = drawn.map_or((None, None), |(image, text)| (Some(image), text));
+            ControlFace {
+                control,
+                face,
+                image,
+                incompatible: preview
+                    .incompatible
+                    .iter()
+                    .filter(|found| found.control == control)
+                    .map(|found| IncompatibleReason {
+                        trigger: found.trigger,
+                        message: found.reason.to_string(),
+                        reason: found.reason.clone(),
+                    })
+                    .collect(),
+                text: text.map(TextLayoutReport::from),
+                navigation: preview
+                    .navigation
+                    .iter()
+                    .find(|(c, _)| *c == control)
+                    .map(|(_, navigation)| navigation.clone()),
             }
-            None => face,
-        };
-        let image = icons.as_ref().and_then(|icons| {
-            let native = image_size(&model.capabilities, control)?;
-            let (width, height) = preview_size(&model.capabilities, native, key_pixels);
-            let frame = deckpilot_render::render_with(&face, width, height, icons);
-            let png = deckpilot_render::frame_png(&frame)?;
-            Some(deckpilot_core::IconData::new(png).data_url())
-        });
-        ControlFace {
-            control,
-            face,
-            image,
-            incompatible: incompatible
-                .iter()
-                .filter(|found| found.control == control)
-                .map(|found| IncompatibleReason {
-                    trigger: found.trigger,
-                    message: found.reason.to_string(),
-                    reason: found.reason.clone(),
-                })
-                .collect(),
-        }
-    })
-    .collect())
+        })
+        .collect())
+}
+
+/// Most frames of a scrolling preview.
+const MARQUEE_PREVIEW_FRAMES: usize = 400;
+
+/// One frame of a scrolling title's preview.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarqueeFrame {
+    /// PNG `data:` URL.
+    image: String,
+    /// How long it is shown, in milliseconds.
+    duration_ms: u32,
+}
+
+/// The frames of one cycle of a scrolling title, as the device shows them.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarqueePreview {
+    frames: Vec<MarqueeFrame>,
+    cycle_ms: u32,
+}
+
+/// One cycle of the scrolling title of `control` (`docs/key-text.md`): the
+/// frames the device shows, timed as there (at most
+/// [`deckpilot_render::MARQUEE_FPS`] a second, the pauses as one frame
+/// each), drawn at the size the app shows the key at ([`preview_size`]).
+/// `None` when its title does not scroll. The app plays them unless the
+/// system asks for reduced motion.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri passes each argument by name.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "key sizes and offsets are a few hundred pixels"
+)]
+pub fn preview_marquee(
+    state: State<'_, AppState>,
+    profile_id: ProfileId,
+    layout: DeviceLayout,
+    page_id: PageId,
+    control: ControlId,
+    project_id: Option<ProjectId>,
+    live: Option<LivePreview>,
+    key_pixels: Option<u32>,
+) -> CommandResult<Option<MarqueePreview>> {
+    let preview = page_preview(
+        &state,
+        profile_id,
+        &layout,
+        page_id,
+        project_id,
+        live.as_ref(),
+    )?;
+    let Some((_, face)) = preview.faces.iter().find(|(c, _)| *c == control) else {
+        return Ok(None);
+    };
+    let Some(native) = image_size(&preview.capabilities, control) else {
+        return Ok(None);
+    };
+    let icons = state.visual_assets.icons(&preview.profile);
+    // Timed at the device's size, where its speed is set.
+    let Some(marquee) = deckpilot_render::marquee(face, native.0, native.1, &icons) else {
+        return Ok(None);
+    };
+    let (width, height) = preview_size(&preview.capabilities, native, key_pixels);
+    let scale = width as f32 / native.0.max(1) as f32;
+    let millis =
+        |duration: std::time::Duration| u32::try_from(duration.as_millis()).unwrap_or(u32::MAX);
+    let frames = deckpilot_render::marquee_timeline(&marquee, deckpilot_render::MARQUEE_FPS)
+        .into_iter()
+        .take(MARQUEE_PREVIEW_FRAMES)
+        .map(|(offset, duration)| {
+            let frame = deckpilot_render::render_scrolled(
+                face,
+                width,
+                height,
+                &icons,
+                &preview.look,
+                offset as f32 * scale,
+            );
+            let png = deckpilot_render::frame_png(&frame).ok_or(CommandError::invalid(
+                "keyImageEncoding",
+                "the key image could not be encoded",
+            ))?;
+            Ok(MarqueeFrame {
+                image: deckpilot_core::IconData::new(png).data_url(),
+                duration_ms: millis(duration),
+            })
+        })
+        .collect::<CommandResult<Vec<_>>>()?;
+    Ok(Some(MarqueePreview {
+        frames,
+        cycle_ms: millis(marquee.cycle()),
+    }))
 }
 
 /// One page of a layout's page tree.
@@ -414,6 +706,9 @@ pub struct PageNode {
     depth: usize,
     /// The key the runtime adds as Back because the page has none.
     automatic_back: Option<ControlId>,
+    /// The folder's protected system Back key (its reserved key), if it
+    /// has one ([`deckpilot_core::folder`]).
+    system_back: Option<ControlId>,
 }
 
 #[derive(Debug, Serialize)]
@@ -429,6 +724,10 @@ pub struct PageTree {
 /// layouts that do not store them, and its warnings.
 #[tauri::command]
 pub fn page_tree(state: State<'_, AppState>, layout: DeviceLayout) -> PageTree {
+    let capabilities = state
+        .catalog
+        .get(&layout.model)
+        .map(|model| model.capabilities.clone());
     let controls: Vec<ControlId> = state
         .catalog
         .get(&layout.model)
@@ -453,6 +752,9 @@ pub fn page_tree(state: State<'_, AppState>, layout: DeviceLayout) -> PageTree {
                 stored: page.parent.is_some() || layout.explicit_tree,
                 depth: layout.ancestors(page.id).len(),
                 automatic_back: layout.automatic_back(page.id, &controls),
+                system_back: capabilities
+                    .as_ref()
+                    .and_then(|capabilities| layout.system_back(page.id, capabilities)),
             })
             .collect(),
         warnings: layout.warnings().iter().map(ToString::to_string).collect(),
@@ -662,6 +964,123 @@ mod tests {
             check_for_save(&keys, None, &catalog, &registry, &profile),
             (Vec::new(), Vec::new())
         );
+    }
+
+    /// Work: Main's home key 1 opens the folder Tools; key 2 runs Log.
+    fn with_folder() -> (Profile, deckpilot_core::ActionRegistry, PageId) {
+        let (mut profile, registry) = stored();
+        let log = profile.actions[0].id;
+        let mut layout = DeviceLayout::new("Main", models::stream_deck_mk2().id);
+        let home = layout.home_page;
+        let tools = deckpilot_core::LayoutPage::folder("Tools", home);
+        let tools_id = tools.id;
+        layout.pages.push(tools);
+        layout.pages[0].bindings = vec![
+            ControlBinding::new(
+                ControlId::Key { index: 1 },
+                Trigger::Press,
+                BindingTarget::OpenPage { page: tools_id },
+            ),
+            ControlBinding::new(
+                ControlId::Key { index: 2 },
+                Trigger::Press,
+                BindingTarget::action(log),
+            ),
+        ];
+        layout.explicit_tree = true;
+        profile.layouts = vec![layout];
+        (profile, registry, tools_id)
+    }
+
+    fn code_of(refused: &[LayoutIssue]) -> (String, serde_json::Value) {
+        let error = serde_json::to_value(refusal(refused)).unwrap();
+        (
+            error["code"].as_str().unwrap().to_owned(),
+            error["params"].clone(),
+        )
+    }
+
+    #[test]
+    fn folder_keys_refuse_other_bindings_with_stable_codes() {
+        let (profile, registry, tools) = with_folder();
+        let catalog = ModelCatalog::builtin();
+        let saved = &profile.layouts[0];
+        let log = profile.actions[0].id;
+        let check = |edited: &DeviceLayout| {
+            check_for_save(edited, Some(saved), &catalog, &registry, &profile).0
+        };
+        assert_eq!(check(saved), []);
+        // A gesture added to the folder key (as a malformed or outdated
+        // client would send it).
+        let mut gesture = saved.clone();
+        gesture.pages[0].bindings.push(ControlBinding::new(
+            ControlId::Key { index: 1 },
+            Trigger::LongPress,
+            BindingTarget::action(log),
+        ));
+        let refused = check(&gesture);
+        let (code, params) = code_of(&refused);
+        assert_eq!(code, "invalid.folderControl.extraBinding");
+        assert_eq!(params["key"], 2);
+        assert_eq!(params["folder"], "Tools");
+        // Its open moved to another trigger.
+        let mut trigger = saved.clone();
+        trigger.pages[0].bindings[0].trigger = Trigger::DoubleClick;
+        assert_eq!(code_of(&check(&trigger)).0, "invalid.folderControl.trigger");
+        // Replaced by an action.
+        let mut replaced = saved.clone();
+        replaced.pages[0].bindings[0].target = BindingTarget::action(log);
+        assert_eq!(
+            code_of(&check(&replaced)).0,
+            "invalid.folderControl.replaced"
+        );
+        // Recovered bindings a client made up.
+        let mut injected = saved.clone();
+        injected.recovered.push(deckpilot_core::RecoveredBindings {
+            page: injected.home_page,
+            control: ControlId::Key { index: 1 },
+            folder: tools,
+            bindings: Vec::new(),
+            gestures: None,
+            reason: deckpilot_core::RecoveryReason::FolderControl,
+        });
+        assert_eq!(
+            code_of(&check(&injected)).0,
+            "invalid.folderControl.recovered"
+        );
+        // Clearing the key is allowed.
+        let mut cleared = saved.clone();
+        cleared.pages[0].bindings.remove(0);
+        assert_eq!(check(&cleared), []);
+        // Other refusals keep the generic code.
+        assert_eq!(
+            code_of(&[LayoutIssue::MissingHomePage]).0,
+            "invalid".to_owned()
+        );
+    }
+
+    #[test]
+    fn saving_drops_the_timings_of_folder_keys_and_orphaned_recovered_bindings() {
+        let (profile, _, tools) = with_folder();
+        let mut layout = profile.layouts[0].clone();
+        layout.pages[0]
+            .gestures
+            .push(deckpilot_core::gesture::KeyGestureSettings {
+                control: ControlId::Key { index: 1 },
+                double_click_ms: Some(400),
+                long_press_ms: None,
+            });
+        layout.recovered.push(deckpilot_core::RecoveredBindings {
+            page: PageId::new(),
+            control: ControlId::Key { index: 1 },
+            folder: tools,
+            bindings: Vec::new(),
+            gestures: None,
+            reason: deckpilot_core::RecoveryReason::FolderControl,
+        });
+        tidy_folder_controls(&mut layout);
+        assert_eq!(layout.pages[0].gestures, []);
+        assert_eq!(layout.recovered, []);
     }
 
     #[test]

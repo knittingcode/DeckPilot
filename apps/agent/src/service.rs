@@ -35,8 +35,11 @@ use crate::render;
 
 mod deck;
 mod executions;
+mod folders;
 mod gestures;
+mod live_preview;
 mod security;
+mod simulate;
 mod stateful;
 mod states;
 mod switch;
@@ -160,6 +163,16 @@ pub(crate) enum Command {
         actions: Vec<ActionInstanceId>,
         reply: Option<oneshot::Sender<Response>>,
     },
+    /// A live preview request of the connection `viewer` (protocol 16).
+    LivePreview {
+        viewer: u64,
+        request: Request,
+        reply: oneshot::Sender<Result<Response, IpcError>>,
+    },
+    /// The connection `viewer` closed: its live preview sessions end.
+    LivePreviewClosed {
+        viewer: u64,
+    },
     /// The installed plugins or their availability changed: their modules
     /// are registered again.
     PluginsChanged,
@@ -204,6 +217,13 @@ pub struct AgentHandle {
     plugin_events: broadcast::Sender<deckpilot_ipc::plugins::PluginEvent>,
     /// Watched key states that changed (protocol 11, `watchKeyStates`).
     key_states: broadcast::Sender<Vec<deckpilot_ipc::KeyStateEntry>>,
+    /// Live preview messages, with the connection they are for (protocol
+    /// 16).
+    pub(crate) live_preview:
+        broadcast::Sender<(u64, deckpilot_ipc::live_preview::LivePreviewEvent)>,
+    /// Open plugin dialogs and the app connections that show them
+    /// (protocol 12).
+    pub(crate) plugin_dialogs: Arc<crate::plugin_dialogs::PluginDialogs>,
     pub(crate) desktop_clients: Arc<AtomicUsize>,
     work_session: watch::Receiver<deckpilot_core::work_session::WorkSessionSnapshot>,
 }
@@ -260,12 +280,72 @@ impl AgentHandle {
         });
     }
 
+    /// A live preview request (protocol 16) of the connection `viewer`,
+    /// which owns the sessions it begins.
+    pub async fn live_preview(&self, viewer: u64, request: Request) -> Result<Response, IpcError> {
+        let (reply, response) = oneshot::channel();
+        self.commands
+            .send(Command::LivePreview {
+                viewer,
+                request,
+                reply,
+            })
+            .map_err(|_| IpcError::new(ErrorCode::Failed, "agent is shutting down"))?;
+        response
+            .await
+            .map_err(|_| IpcError::new(ErrorCode::Failed, "agent is shutting down"))?
+    }
+
+    /// The connection `viewer` closed: its live preview sessions end and
+    /// their devices show the saved configuration again.
+    pub fn live_preview_closed(&self, viewer: u64) {
+        let _ = self.commands.send(Command::LivePreviewClosed { viewer });
+    }
+
+    pub fn subscribe_live_preview(
+        &self,
+    ) -> broadcast::Receiver<(u64, deckpilot_ipc::live_preview::LivePreviewEvent)> {
+        self.live_preview.subscribe()
+    }
+
     pub fn subscribe_key_states(&self) -> broadcast::Receiver<Vec<deckpilot_ipc::KeyStateEntry>> {
         self.key_states.subscribe()
     }
 
     pub fn subscribe_plugins(&self) -> broadcast::Receiver<deckpilot_ipc::plugins::PluginEvent> {
         self.plugin_events.subscribe()
+    }
+
+    /// Opens plugin dialog `id` for `plugin` as an executor would, with
+    /// an answer check that accepts a plain confirmation only; `false` when
+    /// no app shows plugin dialogs or the plugin has one open. The answer
+    /// arrives on the returned receiver as the plugin's result JSON
+    /// (`None` for a cancellation). Tests only.
+    #[cfg(feature = "test-hooks")]
+    pub fn open_plugin_dialog(
+        &self,
+        id: &str,
+        plugin: &str,
+        spec: deckpilot_ipc::plugin_dialogs::DialogSpec,
+    ) -> Option<std::sync::mpsc::Receiver<Option<serde_json::Value>>> {
+        use crate::plugin_dialogs::Outcome;
+        let check: crate::plugin_dialogs::AnswerCheck =
+            Box::new(|values, selected| match (values, selected) {
+                (None, None) => Ok(serde_json::json!({"outcome": "confirmed"})),
+                _ => Err("the answer does not fit the dialog".into()),
+            });
+        let outcome = self
+            .plugin_dialogs
+            .open(id.to_owned(), plugin, "Test plugin", spec, check)
+            .ok()?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(match outcome.recv() {
+                Ok(Outcome::Confirmed(value)) => Some(value),
+                _ => None,
+            });
+        });
+        Some(rx)
     }
 
     /// The work session as last published; changes on every transition.
@@ -337,6 +417,13 @@ struct DeviceSession {
     id: u64,
     io: DeviceIo,
     rendered: BTreeMap<ControlId, KeyFace>,
+    /// Draws the keys whose title scrolls (`marquee.rs`); dropped, and so
+    /// stopped, with the session.
+    animator: Option<crate::marquee::Animator>,
+    /// The keys it animates, and the icons they were drawn with (see
+    /// `Agent::icons_version`).
+    scrolling: Vec<crate::marquee::ScrollingKey>,
+    scrolling_icons: u64,
     /// The model has adjustable brightness ([`Capability::Brightness`]);
     /// brightness is only sent to such devices.
     brightness: bool,
@@ -414,6 +501,11 @@ pub struct Agent {
     frames: render::FrameCache,
     /// Decoded icons of the active profile.
     icons: render::Icons,
+    /// Counts icon reloads, so scrolling keys are drawn again with new
+    /// icons.
+    icons_version: u64,
+    /// The clock scrolling keys are timed by.
+    marquee_clock: crate::marquee::MarqueeClock,
     /// Shared variables, read by runs and previews.
     variables: Arc<variables::VariableStore>,
     /// The active project of each profile, for actions that ask.
@@ -427,9 +519,15 @@ pub struct Agent {
     /// Plugins (answered only with the `plugins` feature, and not after
     /// `--disable-plugins`).
     plugins: crate::plugins::PluginRuntime,
+    /// The app's language as it last said (`setLocale`, protocol 13): the
+    /// texts the agent draws on keys and in the tray, and plugin texts,
+    /// are in it. `None`: English.
+    locale: Option<String>,
     /// Detached actions (plugin actions from keys and `runAction`) running
     /// on their own threads.
     detached: Arc<AtomicUsize>,
+    /// The editor's live preview sessions (protocol 16).
+    live_previews: live_preview::LivePreviews,
     handle: AgentHandle,
     commands: mpsc::UnboundedReceiver<Command>,
     signals_tx: mpsc::UnboundedSender<DeviceSignal>,
@@ -495,6 +593,8 @@ impl Agent {
             events,
             plugin_events: broadcast::channel(256).0,
             key_states: broadcast::channel(64).0,
+            live_preview: broadcast::channel(256).0,
+            plugin_dialogs: Arc::default(),
             desktop_clients: Arc::new(AtomicUsize::new(0)),
             work_session,
         };
@@ -542,13 +642,17 @@ impl Agent {
             stateful: stateful::StatefulKeys::default(),
             frames: render::FrameCache::new(FRAME_CACHE),
             icons: render::Icons::default(),
+            icons_version: 0,
+            marquee_clock: crate::marquee::monotonic_clock(),
             variables,
             active_projects: Arc::default(),
             context_watch: variables::ContextWatch::default(),
             work,
             session_faces: work_session_faces::WorkSessionFaces::default(),
             plugins: crate::plugins::PluginRuntime::default(),
+            locale: None,
             detached: Arc::default(),
+            live_previews: live_preview::LivePreviews::default(),
             handle,
             commands,
             signals_tx,
@@ -560,6 +664,14 @@ impl Agent {
 
     pub fn handle(&self) -> AgentHandle {
         self.handle.clone()
+    }
+
+    /// Times scrolling keys by `clock` instead of the system's monotonic
+    /// clock (before [`Agent::run`]; tests).
+    #[must_use]
+    pub fn with_marquee_clock(mut self, clock: crate::marquee::MarqueeClock) -> Self {
+        self.marquee_clock = clock;
+        self
     }
 
     /// Sets up plugins (before [`Agent::run`]). Without the `plugins`
@@ -574,6 +686,7 @@ impl Agent {
             &self.options.paths.data_dir,
             &self.handle.events,
             &self.handle.plugin_events,
+            &self.handle.plugin_dialogs,
             Arc::new(crate::notifications::AgentNotifier {
                 events: self.handle.events.clone(),
                 desktop_clients: self.handle.desktop_clients.clone(),
@@ -618,6 +731,11 @@ impl Agent {
                 || tokio::time::Instant::now() + Duration::from_secs(3600),
                 tokio::time::Instant::from_std,
             );
+            // Sleeps until the next folder's Auto Exit, if a countdown runs.
+            let folder_due = self.next_folder_exit().map_or_else(
+                || tokio::time::Instant::now() + Duration::from_secs(3600),
+                tokio::time::Instant::from_std,
+            );
             // Sleeps until the elapsed time on a shown work session key
             // changes, if any.
             let face_due = self.next_work_session_face_due().map_or_else(
@@ -652,6 +770,10 @@ impl Agent {
                     self.on_gesture_deadline();
                     Flow::Continue
                 }
+                () = tokio::time::sleep_until(folder_due) => {
+                    self.on_folder_exit_due();
+                    Flow::Continue
+                }
                 () = tokio::time::sleep_until(face_due) => {
                     self.on_work_session_face_due();
                     Flow::Continue
@@ -662,6 +784,7 @@ impl Agent {
                 return Ok(());
             }
             self.observe_lifecycle();
+            self.sync_live_previews();
         }
     }
 
@@ -737,6 +860,18 @@ impl Agent {
                 if let Some(reply) = reply {
                     let _ = reply.send(response);
                 }
+                Flow::Continue
+            }
+            Command::LivePreview {
+                viewer,
+                request,
+                reply,
+            } => {
+                let _ = reply.send(self.live_preview(viewer, request));
+                Flow::Continue
+            }
+            Command::LivePreviewClosed { viewer } => {
+                self.live_preview_closed(viewer);
                 Flow::Continue
             }
             Command::PluginsChanged => {
@@ -912,6 +1047,16 @@ impl Agent {
                 ErrorCode::InvalidRequest,
                 "key states are watched per connection",
             )),
+            Request::SetLocale { locale } => {
+                self.set_locale(locale);
+                Ok(Response::Ok)
+            }
+            // Per connection too: only one that announced plugin dialogs
+            // may answer (`server.rs`).
+            Request::AnswerPluginDialog { .. } => Err(IpcError::new(
+                ErrorCode::InvalidRequest,
+                "plugin dialogs are answered per connection",
+            )),
             other => self.handle_change(other),
         }
     }
@@ -1005,6 +1150,35 @@ impl Agent {
                 self.simulate_input(&device, control, input)?;
                 Ok(Response::Ok)
             }
+            Request::InspectMockDevice { device } => self.inspect_mock_device(&device),
+            // Per connection: the session belongs to it (`server.rs`).
+            Request::BeginLivePreview { .. }
+            | Request::ApplyLivePreview { .. }
+            | Request::NavigateLivePreview { .. }
+            | Request::EndLivePreview { .. } => Err(IpcError::new(
+                ErrorCode::InvalidRequest,
+                "live previews belong to a connection",
+            )),
+            Request::SimulatePress {
+                device,
+                profile,
+                layout,
+                page,
+                control,
+                kind,
+                confirmed,
+            } => {
+                let outcome = self.simulate_press(&simulate::PressRequest {
+                    device,
+                    profile,
+                    layout,
+                    page,
+                    control,
+                    kind,
+                    confirmed,
+                });
+                Ok(Response::SimulatedPress { outcome })
+            }
             Request::GetStatus
             | Request::ListDevices
             | Request::ListProfiles
@@ -1016,6 +1190,8 @@ impl Agent {
             | Request::Subscribe
             | Request::SubscribePluginEvents { .. }
             | Request::WatchKeyStates { .. }
+            | Request::AnswerPluginDialog { .. }
+            | Request::SetLocale { .. }
             | Request::Shutdown
             | Request::PrepareForUpdate
             | Request::GetWorkSession
@@ -1058,7 +1234,8 @@ impl Agent {
             | Request::PlanPluginInstall { .. }
             | Request::InstallPluginPlan { .. }
             | Request::PlanPluginRemoval { .. }
-            | Request::RemovePlugin { .. } => {
+            | Request::RemovePlugin { .. }
+            | Request::RestoreBundledPlugin { .. } => {
                 unreachable!("plugin requests are handled by handle_command")
             }
             Request::Unlock { .. }
@@ -1363,11 +1540,16 @@ impl Agent {
     /// Decodes the active profile's icons (with limits) after it changed.
     /// Rendered frames are dropped, as an icon may have changed.
     fn reload_icons(&mut self) {
+        // The profile's images and the enabled plugins' visual assets: a
+        // key whose asset is not here draws its fallback, and draws the
+        // asset again once its plugin is back (its reference is kept).
         self.icons = self
             .runtime
             .profile()
             .map(render::Icons::from_profile)
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .with_library(self.plugins.visual_assets());
+        self.icons_version += 1;
         self.frames.clear();
     }
 
@@ -1645,10 +1827,24 @@ impl Agent {
             }
         };
         self.open_failures.remove(&device);
+        let animator = match crate::marquee::Animator::spawn(
+            &device.serial,
+            io.animation_sink(),
+            self.marquee_clock.clone(),
+        ) {
+            Ok(animator) => Some(animator),
+            Err(error) => {
+                warn!(%device, %error, "cannot start the thread of scrolling keys; titles stand still");
+                None
+            }
+        };
         let session = DeviceSession {
             id: self.next_session,
             io,
             rendered: BTreeMap::new(),
+            animator,
+            scrolling: Vec::new(),
+            scrolling_icons: 0,
             brightness: self
                 .runtime
                 .catalog()
@@ -1668,7 +1864,9 @@ impl Agent {
     }
 
     fn disconnect(&mut self, device: &DeviceId) {
-        if let Some(session) = self.sessions.remove(device) {
+        if let Some(mut session) = self.sessions.remove(device) {
+            // Scrolling stops first, so no frame follows the close.
+            session.animator = None;
             session.io.close(Vec::new(), CLOSE_TIMEOUT);
         }
         self.forget_gestures(device);
@@ -1684,37 +1882,68 @@ impl Agent {
 
     /// Sends images for every control whose face changed (or all, if
     /// `force`). Faces include live states; images come from the frame
-    /// cache, so only new faces are drawn.
+    /// cache, so only new faces are drawn. Keys whose title scrolls
+    /// (`marquee.rs`) are left to the device's animator, which gets the
+    /// new list whenever it changes; a key that stops scrolling gets its
+    /// still image.
     fn render(&mut self, device: &DeviceId, force: bool) {
         let mut faces = self.runtime.faces(device);
         if self.sessions.contains_key(device) {
             self.decorate_faces(device, &mut faces, std::time::Instant::now());
         }
+        self.localize_faces(&mut faces);
         let Some(model) = self.runtime.catalog().get(&device.model) else {
             return;
         };
         let capabilities = model.capabilities.clone();
+        let look = model.effective_appearance();
         let Some(session) = self.sessions.get_mut(device) else {
             return;
         };
+        let animating = session.animator.is_some();
+        let mut scrolling = Vec::new();
         let mut updates = Vec::new();
         for (control, face) in faces {
-            if !force && session.rendered.get(&control) == Some(&face) {
-                continue;
-            }
             let size = match control {
                 ControlId::Key { .. } => capabilities.keys.and_then(|k| k.image),
                 ControlId::TouchZone { .. } => capabilities.touch.as_ref().and_then(|t| t.image),
                 ControlId::Encoder { .. } => None,
             };
             let Some(spec) = size else { continue };
+            if animating && scrolls(&face, spec.width, spec.height, &self.icons) {
+                scrolling.push(crate::marquee::ScrollingKey {
+                    control,
+                    face: face.clone(),
+                    width: spec.width,
+                    height: spec.height,
+                    look,
+                });
+                states::record_face(device, control, &face);
+                session.rendered.insert(control, face);
+                continue;
+            }
+            let was_scrolling = session.scrolling.iter().any(|key| key.control == control);
+            if !force && !was_scrolling && session.rendered.get(&control) == Some(&face) {
+                continue;
+            }
             let frame = (!face.is_empty()).then(|| {
                 self.frames
-                    .frame(&face, spec.width, spec.height, &self.icons)
+                    .frame(&face, spec.width, spec.height, &self.icons, &look)
             });
             updates.push((control, frame));
             states::record_face(device, control, &face);
             session.rendered.insert(control, face);
+        }
+        if force || scrolling != session.scrolling || session.scrolling_icons != self.icons_version
+        {
+            // A new epoch before the still images: a frame of the old list
+            // still on its way does not draw over them.
+            let epoch = session.io.next_epoch();
+            if let Some(animator) = &session.animator {
+                animator.set(scrolling.clone(), self.icons.clone(), epoch);
+            }
+            session.scrolling = scrolling;
+            session.scrolling_icons = self.icons_version;
         }
         session.io.set_images(updates);
     }
@@ -1758,7 +1987,8 @@ impl Agent {
             .into_iter()
             .map(|status| {
                 let model = self.runtime.catalog().get(&status.device.model);
-                let page = self.runtime.current_page(&status.device).and_then(|page| {
+                let page_id = self.runtime.current_page(&status.device);
+                let page = page_id.and_then(|page| {
                     self.runtime
                         .layout_of(&status.device)
                         .and_then(|layout| layout.page(page))
@@ -1775,6 +2005,7 @@ impl Agent {
                     page,
                     source: self.options.backend.source(&status.device).into(),
                     previous_layout: self.runtime.layout_history(&status.device).last().copied(),
+                    page_id,
                     id: status.device,
                 }
             })
@@ -1807,6 +2038,37 @@ impl Agent {
                 u32::try_from(self.executions.running_count()).unwrap_or(u32::MAX),
             ),
             distribution: Some(DistributionRecord::current()),
+            locale: self.locale.clone(),
+        }
+    }
+
+    /// The app's language (`setLocale`): plugin texts follow it, and only
+    /// the keys whose texts DeckPilot or a plugin's translations produce
+    /// are drawn again (titles the user wrote stay as they are); the tray
+    /// follows with the next status.
+    fn set_locale(&mut self, locale: String) {
+        if self.locale.as_deref() == Some(locale.as_str()) {
+            return;
+        }
+        info!(%locale, "the app's language changed");
+        self.plugins.set_locale(&locale);
+        self.locale = Some(locale);
+        // Plugin key states are asked again, in the new language.
+        self.states.invalidate();
+        self.render_all();
+        self.publish();
+    }
+
+    /// Puts the texts of `faces` that come from a catalog (DeckPilot's own,
+    /// or an action's default name, a plugin's in its translations) into
+    /// the app's language. Every other text stays.
+    fn localize_faces(&self, faces: &mut [(ControlId, KeyFace)]) {
+        let language =
+            deckpilot_core::i18n::Language::from_tag(self.locale.as_deref().unwrap_or("en"));
+        let names =
+            |action_type: &str, title: &str| self.plugins.default_action_name(action_type, title);
+        for (_, face) in faces.iter_mut().filter(|(_, f)| f.has_translated_text()) {
+            face.localize(language, &names);
         }
     }
 
@@ -1815,6 +2077,15 @@ impl Agent {
             status: Box::new(self.status()),
         });
     }
+}
+
+/// Whether the title of `face` scrolls at `width` x `height`: a marquee
+/// title wider than the key (cheap for every other face).
+fn scrolls(face: &KeyFace, width: u32, height: u32, icons: &render::Icons) -> bool {
+    face.appearance
+        .as_ref()
+        .is_some_and(|look| look.text().mode == deckpilot_core::TextMode::Marquee)
+        && deckpilot_render::marquee(face, width, height, icons).is_some()
 }
 
 fn unix_now() -> u64 {

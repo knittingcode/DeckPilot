@@ -33,6 +33,9 @@ led to it; where the code differs, the code and the tests win.
   protocol and requests, and hardware support.
 - [Data model](data-model.md): entities, identifiers, the database schema
   and its migrations.
+- [Key text](key-text.md): how key titles are wrapped, fitted and scrolled
+  (text modes), the layout report, the agent's marquee scheduler and its
+  cost.
 - [Action architecture](action-architecture.md): action types, instances
   and shared variables. *Design record, implemented in 0.6.0.*
 - [Integration modules](integration-modules.md): the System, Workspace,

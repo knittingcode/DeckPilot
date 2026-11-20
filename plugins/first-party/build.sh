@@ -5,8 +5,9 @@
 #
 #   plugins/first-party/build.sh --out DIR [--test-fixtures] [--target-dir DIR]
 #
-# Writes DIR/bundled/<id>/manifest.json, plugin.wasm, LICENSE and the icons
-# the manifest names, and DIR/bundled/pins.json: for every plugin its id,
+# Writes DIR/bundled/<id>/manifest.json, plugin.wasm, LICENSE, the icons
+# and the locale files (locales/<tag>.json) the manifest names, and
+# DIR/bundled/pins.json: for every plugin its id,
 # version, class and the size and sha256 of every file. The release build
 # compiles the agent with DECKPILOT_BUNDLED_PINS=DIR/bundled/pins.json and
 # ships DIR/bundled as a Tauri resource (tauri.plugins.conf.json); the
@@ -129,6 +130,14 @@ for entry in ${entries[@]+"${entries[@]}"}; do
     mkdir -p "$target/assets"
     cp "$dir/$icon" "$target/$icon"
   done < <(jq -r '.icons // {} | .[]' "$manifest")
+  # Plugin API 1.6: the translations the manifest declares, pinned below
+  # like every other file (docs/marketplace/sdk/localization.md).
+  while IFS= read -r tag; do
+    [[ "$tag" =~ ^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?$ ]] \
+      || fail "$manifest: locale $tag is not a canonical tag"
+    mkdir -p "$target/locales"
+    cp "$dir/locales/$tag.json" "$target/locales/$tag.json"
+  done < <(jq -r '.locales // [] | .[]' "$manifest")
 
   files='{}'
   while IFS= read -r file; do

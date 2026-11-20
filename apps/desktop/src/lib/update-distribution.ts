@@ -2,6 +2,7 @@
 // only (docs/distribution/README.md, section 9): which controls exist, how
 // the channel and provider are named, and how update errors read.
 
+import { type TranslationKey, i18n } from "@/i18n"
 import type {
   DistributionChannel,
   PackageFormat,
@@ -10,66 +11,69 @@ import type {
   UpdateState,
 } from "@/lib/types"
 
-/** Where a build was installed from, as the user knows it. */
-export const CHANNEL_LABELS: Record<DistributionChannel, string> = {
-  github: "GitHub Releases",
-  homebrew: "Homebrew",
-  winget: "WinGet",
-  apt: "APT repository",
-  flathub: "Flathub",
-  mac_app_store: "Mac App Store",
-  microsoft_store: "Microsoft Store",
+/** Where a build was installed from, as the user knows it (keys of `settings.json`). */
+export const CHANNEL_LABELS: Record<DistributionChannel, TranslationKey> = {
+  github: "settings:updates.distribution.channel.github",
+  homebrew: "settings:updates.distribution.channel.homebrew",
+  winget: "settings:updates.distribution.channel.winget",
+  apt: "settings:updates.distribution.channel.apt",
+  flathub: "settings:updates.distribution.channel.flathub",
+  mac_app_store: "settings:updates.distribution.channel.macAppStore",
+  microsoft_store: "settings:updates.distribution.channel.microsoftStore",
 }
 
 /** Who delivers updates, in "Updates are delivered by …". */
-const DELIVERED_BY: Record<DistributionChannel, string> = {
-  github: "GitHub Releases",
-  homebrew: "Homebrew",
-  winget: "WinGet",
-  apt: "APT",
-  flathub: "Flathub",
-  mac_app_store: "the Mac App Store",
-  microsoft_store: "the Microsoft Store",
+const DELIVERED_BY: Record<DistributionChannel, TranslationKey> = {
+  github: "settings:updates.distribution.by.github",
+  homebrew: "settings:updates.distribution.by.homebrew",
+  winget: "settings:updates.distribution.by.winget",
+  apt: "settings:updates.distribution.by.apt",
+  flathub: "settings:updates.distribution.by.flathub",
+  mac_app_store: "settings:updates.distribution.by.macAppStore",
+  microsoft_store: "settings:updates.distribution.by.microsoftStore",
 }
 
-export const FORMAT_LABELS: Record<PackageFormat, string> = {
-  app: ".dmg / .app",
-  msi: "MSI",
-  nsis: "NSIS installer",
-  deb: ".deb",
-  rpm: ".rpm",
-  appimage: "AppImage",
-  flatpak: "Flatpak",
-  mas_pkg: "App Store package",
-  msix: "MSIX",
+export const FORMAT_LABELS: Record<PackageFormat, TranslationKey> = {
+  app: "settings:updates.distribution.format.app",
+  msi: "settings:updates.distribution.format.msi",
+  nsis: "settings:updates.distribution.format.nsis",
+  deb: "settings:updates.distribution.format.deb",
+  rpm: "settings:updates.distribution.format.rpm",
+  appimage: "settings:updates.distribution.format.appimage",
+  flatpak: "settings:updates.distribution.format.flatpak",
+  mas_pkg: "settings:updates.distribution.format.masPkg",
+  msix: "settings:updates.distribution.format.msix",
 }
 
-export const RELEASE_CHANNEL_LABELS: Record<ReleaseChannel, string> = {
-  stable: "Stable",
-  beta: "Beta (pre-release)",
-  alpha: "Alpha (pre-release)",
+export const RELEASE_CHANNEL_LABELS: Record<ReleaseChannel, TranslationKey> = {
+  stable: "settings:updates.releaseChannelName.stable",
+  beta: "settings:updates.releaseChannelName.beta",
+  alpha: "settings:updates.releaseChannelName.alpha",
 }
 
-export const PROVIDER_LABELS: Record<UpdateProviderKind, string> = {
-  github_release: "DeckPilot installs updates from GitHub Releases",
-  external_package_manager: "Your package manager",
-  store_managed: "The store",
-  none: "Not available in this build",
+export const PROVIDER_LABELS: Record<UpdateProviderKind, TranslationKey> = {
+  github_release: "settings:updates.distribution.provider.githubRelease",
+  external_package_manager: "settings:updates.distribution.provider.externalPackageManager",
+  store_managed: "settings:updates.distribution.provider.storeManaged",
+  none: "settings:updates.distribution.provider.none",
 }
 
 /** Today's text for a build without a key; reasons are matched on the backend's wording. */
 const NO_KEY = "no update key is compiled into this build"
 
-/** The "Installed from" line. */
+/** The "Installed from" line, in the window's language. */
 export function installedFrom(state: UpdateState): string {
   if (state.updateProvider === "none" && state.distributionChannel === "github") {
     if (state.notConfiguredReason === NO_KEY)
-      return "Development or self-built version (no update key)"
-    if (!state.packageFormat) return "Development build"
+      return i18n.t("settings:updates.distribution.selfBuilt")
+    if (!state.packageFormat) return i18n.t("settings:updates.distribution.developmentBuild")
   }
-  const channel = CHANNEL_LABELS[state.distributionChannel]
+  const channel = i18n.t(CHANNEL_LABELS[state.distributionChannel])
   return state.distributionChannel === "github" && state.packageFormat
-    ? `${channel} (${FORMAT_LABELS[state.packageFormat]})`
+    ? i18n.t("settings:updates.distribution.installedWithFormat", {
+        channel,
+        format: i18n.t(FORMAT_LABELS[state.packageFormat]),
+      })
     : channel
 }
 
@@ -79,17 +83,19 @@ export function providerLabel(state: UpdateState): string {
     state.updateProvider === "external_package_manager" ||
     state.updateProvider === "store_managed"
   ) {
-    const by = state.managedBy ?? state.distributionChannel
+    const provider = i18n.t(DELIVERED_BY[state.managedBy ?? state.distributionChannel])
     return state.updateProvider === "store_managed"
-      ? `Delivered by ${DELIVERED_BY[by]}`
-      : `Your package manager (${DELIVERED_BY[by]})`
+      ? i18n.t("settings:updates.distribution.storeDelivers", { provider })
+      : i18n.t("settings:updates.distribution.packageManagerOf", { provider })
   }
-  return PROVIDER_LABELS[state.updateProvider]
+  return i18n.t(PROVIDER_LABELS[state.updateProvider])
 }
 
 /** "Updates are delivered by …", for package-manager and store builds. */
 export function deliveredBy(state: UpdateState): string {
-  return `Updates are delivered by ${DELIVERED_BY[state.managedBy ?? state.distributionChannel]}`
+  return i18n.t("settings:updates.distribution.deliveredBy", {
+    provider: i18n.t(DELIVERED_BY[state.managedBy ?? state.distributionChannel]),
+  })
 }
 
 /** The controls a build supports; everything else is not rendered. */
@@ -155,44 +161,52 @@ export function updateControls(state: UpdateState): UpdateControls {
   }
 }
 
-/** Why a build has no updates, worded for the user. */
+/** Why a build has no updates, worded for the user in the window's language. */
 export function notConfiguredExplanation(reason: string | null): string {
   if (!reason || reason === NO_KEY) {
-    return "Development and self-built versions have no update signing key. Official releases check for updates automatically."
+    return i18n.t("settings:updates.distribution.explanation.noKey")
   }
   if (reason === "the package format of this build is unknown") {
-    return "DeckPilot cannot tell which package this copy was installed from (for example a development build run from its build folder), so it does not update itself. Install an official release to get updates."
+    return i18n.t("settings:updates.distribution.explanation.unknownFormat")
   }
   const mismatch = /^the compiled package format (\S+) differs from the bundled (\S+)$/.exec(reason)
   if (mismatch) {
     const [, compiled, bundled] = mismatch
-    return `This build was made as a ${formatName(compiled)} package but is installed as ${formatName(bundled)}, so it does not update itself: an update could replace it with the wrong package. Reinstall DeckPilot from where you got it.`
+    return i18n.t("settings:updates.distribution.explanation.formatMismatch", {
+      compiled: formatName(compiled),
+      bundled: formatName(bundled),
+    })
   }
   const notUpdatable = /^GitHub updates do not install (\S+) packages on this platform$/.exec(
     reason,
   )
   if (notUpdatable) {
-    return `GitHub updates cannot install ${formatName(notUpdatable[1])} packages on this platform, so this copy does not update itself. Install DeckPilot from the releases page to get updates.`
+    return i18n.t("settings:updates.distribution.explanation.notUpdatable", {
+      format: formatName(notUpdatable[1]),
+    })
   }
-  return `Updates are not available in this build: ${reason}.`
+  // The backend's reason is shown as it is (docs/i18n.md, fallback rules).
+  return i18n.t("settings:updates.distribution.explanation.other", { reason })
 }
 
 function formatName(name: string | undefined): string {
-  return name && name in FORMAT_LABELS ? FORMAT_LABELS[name as PackageFormat] : (name ?? "another")
+  if (name && name in FORMAT_LABELS) return i18n.t(FORMAT_LABELS[name as PackageFormat])
+  return name ?? i18n.t("settings:updates.distribution.format.another")
 }
 
 export interface DescribedUpdateError {
+  /** In the window's language. */
   title: string
-  /** What happened and what to do, as a sentence. */
+  /** What happened and what to do, as a sentence: the backend's text, as it is. */
   message: string
   /** The technical detail the backend appended, if any. */
   detail: string | null
 }
 
-const STAGES: Record<string, string> = {
-  check: "Checking for updates failed",
-  download: "The update was not downloaded",
-  installation: "The update was not installed",
+const STAGES: Record<string, TranslationKey> = {
+  check: "settings:updates.checkFailed",
+  download: "settings:updates.notDownloaded",
+  installation: "settings:updates.notInstalled",
 }
 
 /**
@@ -203,19 +217,21 @@ const STAGES: Record<string, string> = {
 export function describeUpdateError(error: string): DescribedUpdateError {
   const failed = /^update (check|download|installation) failed: ([\s\S]*)$/.exec(error)
   const [body, detail] = failed ? splitDetail(failed[2] ?? "") : [error, null]
-  let title = failed ? (STAGES[failed[1] ?? ""] ?? "The update failed") : "Update problem"
+  let title: TranslationKey = failed
+    ? (STAGES[failed[1] ?? ""] ?? "settings:updates.error.failed")
+    : "settings:updates.error.problem"
   if (body.includes("outside DeckPilot's releases")) {
-    title = "Update refused: unexpected download address"
+    title = "settings:updates.error.untrustedUrl"
   } else if (body.includes("signature")) {
-    title = "Update refused: the signature did not verify"
+    title = "settings:updates.error.signature"
   } else if (body.includes("not a package of the format")) {
-    title = "Update refused: different package format"
+    title = "settings:updates.error.otherFormat"
   } else if (/^the update from .* did not complete/.test(body)) {
-    title = "The last update did not complete"
+    title = "settings:updates.error.incomplete"
   } else if (/^version .* was installed, but its agent is not running/.test(body)) {
-    title = "Updated, but the background agent is not running"
+    title = "settings:updates.error.agentNotRunning"
   }
-  return { title, message: sentence(body), detail }
+  return { title: i18n.t(title), message: sentence(body), detail }
 }
 
 /** Splits a trailing, balanced " (detail)" off `text`. */

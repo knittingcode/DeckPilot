@@ -156,7 +156,8 @@ describe("app titlebar", () => {
     expect(Array.from(inset.parentElement?.children ?? []).indexOf(inset)).toBe(0)
     expect(inset).toBeEmptyDOMElement()
     expect(inset).toHaveAttribute("aria-hidden", "true")
-    expect(inset.className).toBe("w-(--titlebar-controls-inset) shrink-0")
+    // No overlay controls in this shell (Windows, Linux, fullscreen): no room.
+    expect(inset).toHaveClass("w-0")
   })
 
   it("shows no heading for a page without a title, only its location", () => {
@@ -206,15 +207,20 @@ describe("app titlebar", () => {
       return screen.getByRole("banner", { name: "Toolbar" })
     }
     // macOS: room for the traffic lights, then the selectors.
-    let bar = toolbar(68, <button type="button">Device</button>)
-    expect(bar.style.getPropertyValue("--titlebar-controls-inset")).toBe("68px")
+    let bar = toolbar(76, <button type="button">Device</button>)
+    expect(bar.style.getPropertyValue("--titlebar-controls-inset")).toBe("76px")
+    // The traffic lights' right edge, then the gap (which includes the
+    // content's own padding), so nothing comes closer than the gap.
+    expect(bar.children[0]).toHaveClass(
+      "w-[calc(var(--titlebar-controls-inset)+var(--titlebar-controls-gap)-var(--titlebar-padding-x))]",
+    )
     expect(bar.children[1]).toHaveAttribute("data-slot", "titlebar-leading")
     expect(bar.children[1]).toHaveClass("pl-(--titlebar-padding-x)")
     cleanup()
     // macOS without selectors: the heading follows the room directly, with
     // the same padding the selectors had; nothing shifts the traffic lights.
-    bar = toolbar(68)
-    expect(bar.style.getPropertyValue("--titlebar-controls-inset")).toBe("68px")
+    bar = toolbar(76)
+    expect(bar.style.getPropertyValue("--titlebar-controls-inset")).toBe("76px")
     expect(bar.querySelector("[data-slot=titlebar-leading]")).toBeNull()
     expect(bar.children[1]).toContainElement(
       within(bar).getByRole("heading", { name: "Marketplace" }),
@@ -224,6 +230,7 @@ describe("app titlebar", () => {
     // Windows and Linux: no room at all (the system draws its own titlebar).
     bar = toolbar(0)
     expect(bar.style.getPropertyValue("--titlebar-controls-inset")).toBe("0px")
+    expect(bar.children[0]).toHaveClass("w-0")
     expect(bar).toHaveAttribute("data-context", "none")
     expect(bar.children[1]).toHaveClass("px-(--titlebar-padding-x)")
   })

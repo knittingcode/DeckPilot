@@ -1,0 +1,261 @@
+{
+  "library": {
+    "description": "Actions you configured, ready for workflows and keys",
+    "new": "New action",
+    "search": "Search",
+    "listTitle": "Actions",
+    "searchPlaceholder": "Search actions",
+    "filterCategory": "Filter by category",
+    "allCategories": "All categories",
+    "otherCategory": "Other",
+    "empty": "No actions yet",
+    "emptyPlugin": "No actions of {{plugin}} yet",
+    "emptyHint": "Actions you create appear here, ready for workflows and device keys.",
+    "noMatches": "No actions match.",
+    "moduleDisabled": "Its module is disabled",
+    "unavailable": "Unavailable",
+    "usedTimes_one": "Used {{count}} time",
+    "usedTimes_other": "Used {{count}} times",
+    "step1": "Step 1 of 2: choose what the action does",
+    "step2": "Step 2 of 2: name it and set its parameters",
+    "first": {
+      "title": "Create your first action",
+      "body": "An action is one thing DeckPilot does, such as running a command or opening a URL. Choose a type from your modules, give it a name and set its parameters. Then put it on a device key or into a workflow.",
+      "create": "Create action"
+    },
+    "noSelection": {
+      "title": "No action selected",
+      "body": "Choose an action on the left, or create a new one."
+    }
+  },
+  "deck": {
+    "missingDeleted": "Missing (deleted)",
+    "groupActions": "Actions",
+    "groupWorkflows": "Workflows",
+    "groupWorkflowsMulti": "Workflows and Multi Actions",
+    "unreadable": "Unreadable: {{line}}",
+    "states": {
+      "runs": "Runs in state {{number}}",
+      "titlePlaceholder": "Title",
+      "title": "Title of state {{number}}",
+      "glyph": "Glyph of state {{number}}",
+      "noGlyph": "No glyph",
+      "moveUp": "Move state {{number}} up",
+      "moveDown": "Move state {{number}} down",
+      "remove": "Remove state {{number}}",
+      "add": "Add a state",
+      "hint_one": "Each press runs the current state and, when that run succeeds, moves to the next one; after the last it starts again. {{min}} to {{count}} state.",
+      "hint_other": "Each press runs the current state and, when that run succeeds, moves to the next one; after the last it starts again. {{min}} to {{count}} states.",
+      "addAtLeastTwo": "Add at least two."
+    },
+    "profile": {
+      "none": "No profile",
+      "deleted": "Deleted profile",
+      "missing": "This profile no longer exists. Choose another one, or the key will fail."
+    },
+    "candidates": {
+      "empty": "Add what the key picks from.",
+      "candidate": "Candidate {{number}}",
+      "weight": "Weight of candidate {{number}}",
+      "remove": "Remove candidate {{number}}",
+      "add": "Add a candidate",
+      "addPlaceholder": "Add an action or workflow",
+      "hint": "A candidate with weight 3 is picked three times as often as one with weight 1."
+    },
+    "glyph": {
+      "check": "check",
+      "cross": "cross",
+      "play": "play",
+      "pause": "pause",
+      "stop": "stop",
+      "timer": "timer",
+      "bell": "bell",
+      "up": "up",
+      "down": "down",
+      "dot": "dot",
+      "circle": "circle",
+      "square": "square",
+      "diamond": "diamond",
+      "triangle": "triangle",
+      "star": "star",
+      "heart": "heart"
+    }
+  },
+  "editor": {
+    "toast": {
+      "saved": "Action saved",
+      "created": "Action created",
+      "duplicated": "Action duplicated",
+      "deleted": "Action deleted"
+    },
+    "failure": {
+      "notSaved": "The action was not saved",
+      "notCreated": "The action was not created",
+      "notDuplicated": "“{{name}}” was not duplicated",
+      "didNotRun": "“{{name}}” did not run",
+      "checkAgent": "Check that the agent is running"
+    },
+    "copyName": "{{name}} (copy)",
+    "unavailable": {
+      "title": "Unavailable",
+      "pluginKept": "{{reason}}. The action is kept; it can be edited and run again once the plugin can run (Settings › Plugins).",
+      "pluginNew": "{{reason}}. Choose another action type.",
+      "moduleDisabled": "The {{module}} module is disabled. Enable it in Settings to edit or run this action; it is kept until then.",
+      "noModule": "No installed module provides “{{type}}”. The action is kept but cannot run."
+    },
+    "unknownModule": "Unknown module",
+    "theModule": "the module",
+    "legacy": "Deprecated type: {{module}} moved to the plugin {{plugin}}, which runs it as <target>{{target}}</target>. Your action keeps working; new actions use the plugin's type.",
+    "changeType": "Change type",
+    "module": "Module",
+    "chooseModule": "Choose a module",
+    "actionType": "Action type",
+    "chooseType": "Choose a type",
+    "chooseModuleFirst": "Choose a module first",
+    "typeRequired": "Choose an action type.",
+    "name": "Name",
+    "namePlaceholder": "Open Terminal",
+    "nameRequired": "Enter a name.",
+    "icon": "Icon",
+    "keyLabel": "Key label",
+    "keyLabelPlaceholder": "Defaults to the name",
+    "projectPlaceholders": "Use {{key}} or {{name}} to show the active project on the key.",
+    "description": "Description",
+    "optional": "Optional",
+    "modifies": {
+      "title": "This action changes things",
+      "body": "Running it changes state on this computer or elsewhere (for example a command, a request or containers). Some modules only allow that after it is turned on in their settings on each computer."
+    },
+    "parameterRequired": "{{label}} is required.",
+    "save": "Save",
+    "create": "Create action",
+    "duplicate": "Duplicate",
+    "run": "Run",
+    "runHint": "Runs in the agent for the active profile",
+    "usedIn": "Used in",
+    "deleteHint": "To delete the action, choose for each reference whether it uses another action or is unbound."
+  },
+  "references": {
+    "notUsed": "Not used in any workflow or layout.",
+    "label": "References",
+    "openLabel": "Open {{reference}}",
+    "open": "Open",
+    "replaceWith": "Replace with “{{name}}”",
+    "unbind": "Unbind",
+    "failure": {
+      "notReplaced": "The references were not replaced",
+      "notUnbound": "The references were not unbound",
+      "notDeleted": "The action was not deleted",
+      "changesKept": "The changes made before were kept; close this dialog to see the current references",
+      "nothingChanged": "Nothing was changed"
+    },
+    "clearedSettings_one": "Parameter overrides and mappings were removed from {{count}} step or node: the replacement is another action type.",
+    "clearedSettings_other": "Parameter overrides and mappings were removed from {{count}} steps or nodes: the replacement is another action type.",
+    "delete": {
+      "title": "Delete “{{name}}”?",
+      "unused": "The action is removed from this profile. This cannot be undone.",
+      "used_one": "The action is used in {{count}} place. Choose for each whether it uses another action instead or is unbound; then the action is deleted. This cannot be undone.",
+      "used_other": "The action is used in {{count}} places. Choose for each whether it uses another action instead or is unbound; then the action is deleted. This cannot be undone.",
+      "applyAndDelete": "Apply and delete",
+      "deleting": "Deleting…"
+    },
+    "all": "All references",
+    "forAll": "For all references",
+    "chooseForAll": "Choose for all",
+    "toChange": "References to change",
+    "openInEditorLabel": "Open in workflow editor: {{reference}}",
+    "openInEditor": "Open in workflow editor",
+    "changeFor": "Change for {{reference}}",
+    "choose": "Choose",
+    "unbindHint": "Unbind leaves the key empty or removes the step from its workflow. A graph node cannot be unbound: replace it, or open the workflow editor and remove it there.",
+    "undecided_one": "{{count}} reference needs a choice.",
+    "undecided_other": "{{count}} references need a choice.",
+    "triggers": "Triggers",
+    "triggersHint": "Triggers follow their workflow: they run whatever the workflow runs after the change."
+  },
+  "typeChooser": {
+    "none": {
+      "title": "No action types available",
+      "body": "Action types come from modules. Enable a module to create actions.",
+      "openSettings": "Open module settings"
+    },
+    "label": "Action types",
+    "search": "Search action types",
+    "noMatches": "No types match.",
+    "plugin": "plugin",
+    "unavailable": "Unavailable: {{reason}}"
+  },
+  "parameters": {
+    "useVariable": "Use a variable for {{label}}",
+    "unsupported": "Unsupported parameter type.",
+    "project": {
+      "none": "This profile has no projects yet. Add one on the Projects page.",
+      "choose": "Choose a project",
+      "current": "Current project (default)",
+      "notInProfile": "The saved project is not part of this profile. Choose one of its projects."
+    },
+    "resource": {
+      "source": "Resource source",
+      "projectRole": "Role of active project",
+      "fixed": "Fixed resource key"
+    }
+  },
+  "fields": {
+    "item": "Item",
+    "name": "Name",
+    "value": "Value",
+    "numbered": "{{label}} {{number}}",
+    "moveUp": "Move {{label}} {{number}} up",
+    "moveDown": "Move {{label}} {{number}} down",
+    "remove": "Remove {{label}} {{number}}",
+    "add": "Add {{label}}",
+    "list": {
+      "none": "No {{label}}s.",
+      "label": "{{label}}s",
+      "emptyLeftOut": "Empty {{label}}s are left out.",
+      "tooLong_one": "{{label}}s can have at most {{count}} character.",
+      "tooLong_other": "{{label}}s can have at most {{count}} characters.",
+      "tooMany_one": "At most {{count}} {{label}}.",
+      "tooMany_other": "At most {{count}} {{label}}s.",
+      "passedAs": "Passed as:"
+    },
+    "pairs": {
+      "secret": "{{name}} holds a secret and cannot be saved here. Use a stored credential instead.",
+      "duplicate": "{{name}} appears more than once."
+    },
+    "code": {
+      "invalidJson": "Not valid JSON: {{problem}}",
+      "validJson": "Valid JSON",
+      "format": "Format"
+    },
+    "credential": {
+      "choose": "Choose a credential",
+      "none": "No credential",
+      "notHere": "{{name}} (not on this computer)",
+      "noneStored": "No credentials are stored on this computer. Add them in Settings › HTTP.",
+      "missing": "“{{name}}” is not stored on this computer; requests fail until it is added in Settings › HTTP."
+    }
+  },
+  "execution": {
+    "failedTitle": "Workflow “{{workflow}}” failed",
+    "interruptedTitle": "Workflow “{{workflow}}” was interrupted",
+    "openToSee": "Open the workflow to see which step failed.",
+    "operation": "Workflow “{{workflow}}”",
+    "failed": "The workflow failed",
+    "interrupted": "The workflow was interrupted"
+  },
+  "requireProfile": {
+    "title": "No profile yet",
+    "body": "Profiles hold your actions, workflows, projects and layouts.",
+    "create": "Create a profile"
+  },
+  "referenceSite": {
+    "binding": "Layout “{{layout}}”, page “{{page}}”, {{control}}",
+    "bindingTrigger": "Layout “{{layout}}”, page “{{page}}”, {{control}} ({{trigger}})",
+    "step": "Workflow “{{workflow}}”, step {{step}}",
+    "node": "Workflow “{{workflow}}”, node “{{node}}”",
+    "trigger": "Workflow “{{workflow}}” starts by trigger: {{trigger}}",
+    "triggerPaused": "Workflow “{{workflow}}” starts by trigger: {{trigger}} (paused)",
+    "aTrigger": "a trigger"
+  }
+}
