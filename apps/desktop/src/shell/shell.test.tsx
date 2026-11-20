@@ -135,9 +135,11 @@ function gearOf(toolbar: HTMLElement) {
 async function renderShell() {
   const user = userEvent.setup()
   render(<App />)
-  const toolbar = await screen.findByRole("banner", { name: "Toolbar" })
+  // The whole app renders and loads its data first: on a loaded CI runner
+  // that takes longer than the default 1 s of findBy* (seen: 1.2 s).
+  const toolbar = await screen.findByRole("banner", { name: "Toolbar" }, { timeout: 10_000 })
   // The device editor is the default view.
-  await screen.findByRole("group", { name: /controls$/ })
+  await screen.findByRole("group", { name: /controls$/ }, { timeout: 10_000 })
   return { user, toolbar }
 }
 
