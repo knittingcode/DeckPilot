@@ -18,11 +18,11 @@ use crate::identity::{
     RESERVED_PUBLISHERS, is_camel_key, is_local_id, is_publisher_id, is_variable_segment,
 };
 use crate::model::{
-    Action, ActionControls, ControlKind, Credential, CredentialScheme, Effect, HttpMethod,
-    MAX_INPUTS_PER_KIND, MAX_NAVIGATION_ENTRIES, MAX_NAVIGATION_ID, MAX_NAVIGATION_LABEL,
-    MAX_VIEWS, Manifest, NAVIGATION_API, Node, Parameter, ParameterKind, ParameterValue,
-    Permission, PermissionKind, ProfileScope, Setting, UserOriginSlot, VIEW_CONTEXT_API,
-    VariableScope,
+    Action, ActionControls, ControlKind, Credential, CredentialScheme, DIALOGS_API, Effect,
+    HttpMethod, MAX_INPUTS_PER_KIND, MAX_NAVIGATION_ENTRIES, MAX_NAVIGATION_ID,
+    MAX_NAVIGATION_LABEL, MAX_VIEWS, Manifest, NAVIGATION_API, Node, Parameter, ParameterKind,
+    ParameterValue, Permission, PermissionKind, ProfileScope, Setting, UserOriginSlot,
+    VIEW_CONTEXT_API, VariableScope,
 };
 use crate::{MANIFEST_VERSION, path_rules};
 
@@ -362,6 +362,11 @@ pub(crate) fn check(manifest: &Manifest) -> Checker {
     navigation(&mut c, manifest);
     api_level_features(&mut c, manifest);
     view_context_api_level(&mut c, manifest);
+    dialogs_api_level(&mut c, manifest);
+    editor_navigation(&mut c, manifest);
+    action_titles(&mut c, manifest);
+    visual_assets(&mut c, manifest);
+    localization(&mut c, manifest);
     variables(&mut c, manifest);
     settings(&mut c, manifest);
     credentials(&mut c, manifest);
@@ -687,7 +692,7 @@ fn permissions(c: &mut Checker, m: &Manifest) {
                 routing: Some(routing),
                 ..
             } => notification_routing(c, &format!("{path}.routing"), routing, m),
-            Permission::Notifications { routing: None, .. } => {}
+            Permission::Notifications { routing: None, .. } | Permission::Dialogs { .. } => {}
         }
     }
 }
@@ -1334,6 +1339,427 @@ fn view_context_api_level(c: &mut Checker, m: &Manifest) {
                     "needs plugin API {VIEW_CONTEXT_API}: set engines.pluginApi to \
                      `^{VIEW_CONTEXT_API}` (it is `{required}`)"
                 ),
+            );
+        }
+    }
+}
+
+/// The `dialogs` permission came with plugin API 1.5: a manifest asking
+/// for it must require 1.5 (agents up to 1.4 refuse the kind anyway).
+fn dialogs_api_level(c: &mut Checker, m: &Manifest) {
+    let required = m.engines.plugin_api;
+    if required.minimum >= DIALOGS_API {
+        return;
+    }
+    for (index, permission) in m.permissions.iter().enumerate() {
+        if permission.kind() == PermissionKind::Dialogs {
+            c.error(
+                format!("permissions[{index}]"),
+                IssueCode::Conflict,
+                format!(
+                    "needs plugin API {DIALOGS_API}: set engines.pluginApi to \
+                     `^{DIALOGS_API}` (it is `{required}`)"
+                ),
+            );
+        }
+    }
+}
+
+/// `visualAssets` came with plugin API 1.8 (a manifest using it must
+/// require 1.8): ids unique across icons and backgrounds, names of 1–48
+/// characters, files under `assets/` of the right format, a gradient's two
+/// to four `#rrggbb` colours and an angle below 360, nothing that does not
+/// belong to the background's type.
+#[expect(
+    clippy::too_many_lines,
+    reason = "icons, then backgrounds, read top to bottom"
+)]
+fn visual_assets(c: &mut Checker, m: &Manifest) {
+    use crate::visual::{
+        GRADIENT_COLORS, MAX_VISUAL_ASSET_ID, MAX_VISUAL_ASSET_NAME, MAX_VISUAL_BACKGROUNDS,
+        MAX_VISUAL_ICONS, VISUAL_ASSETS_API, VisualBackgroundKind, VisualFormat, is_hex_color,
+    };
+    let Some(assets) = &m.contributes.visual_assets else {
+        return;
+    };
+    let path = "contributes.visualAssets";
+    let required = m.engines.plugin_api;
+    if required.minimum < VISUAL_ASSETS_API {
+        c.error(
+            path,
+            IssueCode::Conflict,
+            format!(
+                "needs plugin API {VISUAL_ASSETS_API}: set engines.pluginApi to \
+                 `^{VISUAL_ASSETS_API}` (it is `{required}`)"
+            ),
+        );
+        return;
+    }
+    let asset_id = |c: &mut Checker, at: &str, id: &str| {
+        if !crate::identity::is_local_id(id, MAX_VISUAL_ASSET_ID) {
+            c.error(
+                at,
+                IssueCode::InvalidId,
+                format!(
+                    "`{id}` must be 1-{MAX_VISUAL_ASSET_ID} lowercase letters and digits, \
+                     starting with a letter, with single hyphens"
+                ),
+            );
+        }
+    };
+    let file = |c: &mut Checker, at: &str, value: &str, png_only: bool| {
+        if let Err(message) = path_rules::check_relative(value) {
+            c.error(at, IssueCode::InvalidPath, format!("`{value}` {message}"));
+            return;
+        }
+        let format = VisualFormat::of_path(value);
+        let fits = match format {
+            Some(VisualFormat::Png) => true,
+            Some(VisualFormat::Jpeg) => !png_only,
+            None => false,
+        };
+        if !value.starts_with("assets/") || !fits {
+            let kinds = if png_only { ".png" } else { ".png or .jpg" };
+            c.error(
+                at,
+                IssueCode::InvalidPath,
+                format!("`{value}` must be a {kinds} file under assets/"),
+            );
+        }
+    };
+    c.count(
+        &format!("{path}.icons"),
+        assets.icons().len(),
+        0,
+        MAX_VISUAL_ICONS,
+    );
+    for (index, icon) in assets.icons().iter().enumerate() {
+        let at = format!("{path}.icons[{index}]");
+        asset_id(c, &format!("{at}.id"), &icon.id);
+        c.text(&format!("{at}.name"), &icon.name, 1, MAX_VISUAL_ASSET_NAME);
+        file(c, &format!("{at}.asset"), &icon.asset, true);
+        for (k, word) in icon.keywords.iter().flatten().enumerate() {
+            c.text(&format!("{at}.keywords[{k}]"), word, 1, 32);
+        }
+        if let Some(words) = &icon.keywords {
+            c.count(&format!("{at}.keywords"), words.len(), 0, 16);
+        }
+    }
+    c.count(
+        &format!("{path}.backgrounds"),
+        assets.backgrounds().len(),
+        0,
+        MAX_VISUAL_BACKGROUNDS,
+    );
+    for (index, background) in assets.backgrounds().iter().enumerate() {
+        let at = format!("{path}.backgrounds[{index}]");
+        asset_id(c, &format!("{at}.id"), &background.id);
+        c.text(
+            &format!("{at}.name"),
+            &background.name,
+            1,
+            MAX_VISUAL_ASSET_NAME,
+        );
+        let misplaced = |c: &mut Checker, field: &str, kind: &str| {
+            c.error(
+                format!("{at}.{field}"),
+                IssueCode::Conflict,
+                format!("a {kind} background has no `{field}`"),
+            );
+        };
+        match background.kind {
+            VisualBackgroundKind::Image => {
+                match &background.asset {
+                    Some(asset) => file(c, &format!("{at}.asset"), asset, false),
+                    None => c.error(
+                        format!("{at}.asset"),
+                        IssueCode::Conflict,
+                        "an image background names its file in `asset`",
+                    ),
+                }
+                if background.colors.is_some() {
+                    misplaced(c, "colors", "image");
+                }
+                if background.angle.is_some() {
+                    misplaced(c, "angle", "image");
+                }
+            }
+            VisualBackgroundKind::Gradient => {
+                if background.asset.is_some() {
+                    misplaced(c, "asset", "gradient");
+                }
+                let colors = background.colors.as_deref().unwrap_or_default();
+                c.count(
+                    &format!("{at}.colors"),
+                    colors.len(),
+                    GRADIENT_COLORS.0,
+                    GRADIENT_COLORS.1,
+                );
+                for (k, color) in colors.iter().enumerate() {
+                    if !is_hex_color(color) {
+                        c.error(
+                            format!("{at}.colors[{k}]"),
+                            IssueCode::InvalidValue,
+                            format!("`{color}` is not a colour; use #rrggbb"),
+                        );
+                    }
+                }
+                if background.angle.is_some_and(|angle| angle >= 360) {
+                    c.error(
+                        format!("{at}.angle"),
+                        IssueCode::Range,
+                        "an angle is 0 to 359 degrees",
+                    );
+                }
+            }
+        }
+    }
+    c.unique(
+        path,
+        assets
+            .icons()
+            .iter()
+            .map(|icon| &icon.id)
+            .chain(assets.backgrounds().iter().map(|b| &b.id)),
+    );
+}
+
+/// `title` came with plugin API 1.8: a manifest using it must require 1.8.
+/// The suggested title is 1–[`MAX_TITLE_DEFAULT`] characters, the position
+/// one of [`TITLE_POSITIONS`], `supports` names each of [`TITLE_FEATURES`]
+/// at most once.
+fn action_titles(c: &mut Checker, m: &Manifest) {
+    use crate::model::{MAX_TITLE_DEFAULT, TITLE_API, TITLE_FEATURES, TITLE_POSITIONS};
+    let required = m.engines.plugin_api;
+    for (index, action) in m.contributes.actions().iter().enumerate() {
+        let Some(title) = &action.title else {
+            continue;
+        };
+        let path = format!("contributes.actions[{index}].title");
+        if required.minimum < TITLE_API {
+            c.error(
+                &path,
+                IssueCode::Conflict,
+                format!(
+                    "needs plugin API {TITLE_API}: set engines.pluginApi to `^{TITLE_API}` \
+                     (it is `{required}`)"
+                ),
+            );
+            continue;
+        }
+        if let Some(text) = &title.default {
+            let length = text.chars().count();
+            if text.trim().is_empty() || length > MAX_TITLE_DEFAULT {
+                c.error(
+                    format!("{path}.default"),
+                    IssueCode::InvalidValue,
+                    format!("a suggested title has 1 to {MAX_TITLE_DEFAULT} characters"),
+                );
+            }
+        }
+        if let Some(position) = &title.position
+            && !TITLE_POSITIONS.contains(&position.as_str())
+        {
+            c.error(
+                format!("{path}.position"),
+                IssueCode::InvalidValue,
+                format!(
+                    "`{position}` is not a title position: use one of {}",
+                    TITLE_POSITIONS.join(", ")
+                ),
+            );
+        }
+        for (j, feature) in title.supports.iter().flatten().enumerate() {
+            let at = format!("{path}.supports[{j}]");
+            if !TITLE_FEATURES.contains(&feature.as_str()) {
+                c.error(
+                    &at,
+                    IssueCode::InvalidValue,
+                    format!(
+                        "`{feature}` is not a part of a title's look: use one of {}",
+                        TITLE_FEATURES.join(", ")
+                    ),
+                );
+            } else if title
+                .supports
+                .iter()
+                .flatten()
+                .take(j)
+                .any(|f| f == feature)
+            {
+                c.error(
+                    &at,
+                    IssueCode::Duplicate,
+                    format!("`{feature}` is named twice"),
+                );
+            }
+        }
+    }
+}
+
+/// `editorNavigation` came with plugin API 1.7: a manifest using it must
+/// require 1.7 (older agents refuse the field anyway). The operation must
+/// be one of [`EDITOR_NAVIGATION_OPERATIONS`]; `folder.open` and
+/// `layout.switch` name the action's own text parameter that holds the
+/// target, the others name none; only `layout.switch` may also name a
+/// `pageParameter`.
+fn editor_navigation(c: &mut Checker, m: &Manifest) {
+    use crate::model::{EDITOR_NAVIGATION_API, EDITOR_NAVIGATION_OPERATIONS, ParameterKind};
+    let required = m.engines.plugin_api;
+    for (index, action) in m.contributes.actions().iter().enumerate() {
+        let Some(navigation) = &action.editor_navigation else {
+            continue;
+        };
+        let path = format!("contributes.actions[{index}].editorNavigation");
+        if required.minimum < EDITOR_NAVIGATION_API {
+            c.error(
+                &path,
+                IssueCode::Conflict,
+                format!(
+                    "needs plugin API {EDITOR_NAVIGATION_API}: set engines.pluginApi to \
+                     `^{EDITOR_NAVIGATION_API}` (it is `{required}`)"
+                ),
+            );
+            continue;
+        }
+        let Some((_, takes_target)) = EDITOR_NAVIGATION_OPERATIONS
+            .iter()
+            .find(|(name, _)| *name == navigation.operation)
+        else {
+            let names: Vec<&str> = EDITOR_NAVIGATION_OPERATIONS
+                .iter()
+                .map(|(n, _)| *n)
+                .collect();
+            c.error(
+                format!("{path}.operation"),
+                IssueCode::InvalidValue,
+                format!(
+                    "`{}` is not a navigation operation: use one of {}",
+                    navigation.operation,
+                    names.join(", ")
+                ),
+            );
+            continue;
+        };
+        let text_parameter = |c: &mut Checker, field: &str, key: &str| match action
+            .parameters
+            .iter()
+            .find(|p| p.key == key)
+        {
+            Some(p) if matches!(p.kind, ParameterKind::Text { .. }) => {}
+            Some(_) => c.error(
+                format!("{path}.{field}"),
+                IssueCode::InvalidValue,
+                format!("`{key}` must be a text parameter of the action"),
+            ),
+            None => c.error(
+                format!("{path}.{field}"),
+                IssueCode::UnknownReference,
+                format!("`{key}` is not a parameter of the action"),
+            ),
+        };
+        match (&navigation.target_parameter, *takes_target) {
+            (Some(key), true) => text_parameter(c, "targetParameter", key),
+            (None, true) => c.error(
+                format!("{path}.targetParameter"),
+                IssueCode::Conflict,
+                format!(
+                    "`{}` needs the parameter that holds its target",
+                    navigation.operation
+                ),
+            ),
+            (Some(_), false) => c.error(
+                format!("{path}.targetParameter"),
+                IssueCode::Conflict,
+                format!("`{}` takes no target", navigation.operation),
+            ),
+            (None, false) => {}
+        }
+        if let Some(key) = &navigation.page_parameter {
+            if navigation.operation == "layout.switch" {
+                text_parameter(c, "pageParameter", key);
+            } else {
+                c.error(
+                    format!("{path}.pageParameter"),
+                    IssueCode::Conflict,
+                    "only `layout.switch` takes a pageParameter",
+                );
+            }
+        }
+    }
+}
+
+/// Localization came with plugin API 1.6 (`locale.rs`): `locales` and
+/// `defaultLocale` need `^1.6`, the tags are canonical and name the
+/// package's `locales/<tag>.json`, the default locale is one of them, and
+/// every `t:` text names a valid key of a manifest that declares locales.
+/// Below 1.6 a text starting with `t:` is plain text.
+fn localization(c: &mut Checker, m: &Manifest) {
+    use crate::locale::{LOCALIZATION_API, LocaleTag, MAX_LOCALES, is_key};
+    let required = m.engines.plugin_api;
+    if !m.reads_translation_keys() {
+        for (field, present) in [
+            ("locales", m.locales.is_some()),
+            ("defaultLocale", m.default_locale.is_some()),
+        ] {
+            if present {
+                c.error(
+                    field,
+                    IssueCode::Conflict,
+                    format!(
+                        "needs plugin API {LOCALIZATION_API}: set engines.pluginApi to \
+                         `^{LOCALIZATION_API}` (it is `{required}`)"
+                    ),
+                );
+            }
+        }
+        return;
+    }
+    if let Some(tag) = &m.default_locale
+        && let Err(e) = LocaleTag::parse_canonical(tag)
+    {
+        c.error("defaultLocale", IssueCode::InvalidValue, e.to_string());
+    }
+    if let Some(locales) = &m.locales {
+        c.count("locales", locales.len(), 1, MAX_LOCALES);
+        for (index, tag) in locales.iter().enumerate() {
+            if let Err(e) = LocaleTag::parse_canonical(tag) {
+                c.error(
+                    format!("locales[{index}]"),
+                    IssueCode::InvalidValue,
+                    e.to_string(),
+                );
+            }
+        }
+        c.unique("locales", locales);
+        let default = m.default_locale();
+        if !locales.iter().any(|tag| tag == default) {
+            c.error(
+                if m.default_locale.is_some() {
+                    "defaultLocale"
+                } else {
+                    "locales"
+                },
+                IssueCode::UnknownReference,
+                format!(
+                    "the default locale `{default}` must be one of `locales` (set defaultLocale \
+                     to the language of the manifest's own texts)"
+                ),
+            );
+        }
+    }
+    for (path, key) in m.translation_keys() {
+        if !is_key(&key) {
+            c.error(
+                path,
+                IssueCode::InvalidValue,
+                crate::locale::LocaleError::InvalidKey(key).to_string(),
+            );
+        } else if m.locales.is_none() {
+            c.error(
+                path,
+                IssueCode::UnknownReference,
+                format!("`t:{key}` names a translation, but the manifest declares no `locales`"),
             );
         }
     }

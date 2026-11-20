@@ -1037,6 +1037,114 @@ fn a_bundled_plugin_is_seeded_with_derived_low_tier_grants_only() {
     ));
 }
 
+/// The user's Restore of a bundled plugin they uninstalled clears the
+/// tombstone and installs it again; a failed install writes the tombstone
+/// back, and an installed plugin is never restored over.
+#[test]
+fn a_restore_clears_the_tombstone_only_when_the_install_succeeds() {
+    let env = Env::new();
+    let mut manager = env.open();
+    let first_party = deckpilot_plugin_manifest::PluginId::parse("deckpilot.github-prs").unwrap();
+    let package = bundled_package(first_party.as_str(), "1.0.0", &with_notifications());
+    let declared = grants_of(&package);
+    let low: Vec<GrantKey> = declared
+        .iter()
+        .filter(|(_, scope)| scope.tier() == Tier::Low)
+        .map(|(key, _)| key.clone())
+        .collect();
+    let consent = Consent::of(low.clone(), "bundled:0.9.0");
+    manager
+        .install(&package, &InstallSource::Bundled, &consent)
+        .unwrap();
+    let refused = manager.restore_by_user(&package, &consent);
+    assert!(
+        matches!(refused, Err(StoreError::AlreadyInstalled { .. })),
+        "{refused:?}"
+    );
+    manager
+        .uninstall_by_user(&first_party, deckpilot_plugin_store::Retention::default())
+        .unwrap();
+    assert!(matches!(
+        manager.install(&package, &InstallSource::Bundled, &consent),
+        Err(StoreError::Tombstoned { .. })
+    ));
+
+    // A consent seeding may not give fails the install: the user's
+    // decision stands.
+    let broad = Consent::all(&declared, "bundled:0.9.0");
+    assert!(matches!(
+        manager.restore_by_user(&package, &broad),
+        Err(StoreError::BundledGrant { .. })
+    ));
+    assert!(manager.store().plugin(&first_party).unwrap().is_none());
+    assert_eq!(
+        manager
+            .store()
+            .tombstone(&first_party)
+            .unwrap()
+            .map(|t| t.decision),
+        Some(deckpilot_plugin_store::TombstoneDecision::Uninstalled)
+    );
+
+    let record = manager.restore_by_user(&package, &consent).unwrap();
+    assert_eq!(record.source, InstallSource::Bundled);
+    assert_eq!(record.state, PluginState::Disabled);
+    assert!(manager.store().tombstone(&first_party).unwrap().is_none());
+    assert_eq!(
+        manager.store().grants(&first_party).unwrap().len(),
+        low.len()
+    );
+    assert_eq!(manager.store().journal().unwrap(), Vec::new());
+}
+
+/// A broken bundled copy is replaced; the plugin keeps its grants and
+/// revocations, and a plugin that is not broken is never reinstalled.
+#[test]
+fn a_broken_bundled_copy_is_reinstalled_with_its_grants() {
+    let env = Env::new();
+    let mut manager = env.open();
+    let first_party = deckpilot_plugin_manifest::PluginId::parse("deckpilot.github-prs").unwrap();
+    let package = bundled_package(first_party.as_str(), "1.0.0", &with_notifications());
+    let declared = grants_of(&package);
+    let (low, other): (Vec<_>, Vec<_>) = declared
+        .iter()
+        .map(|(key, scope)| (key.clone(), scope.tier()))
+        .partition(|(_, tier)| *tier == Tier::Low);
+    let low: Vec<GrantKey> = low.into_iter().map(|(key, _)| key).collect();
+    let consent = Consent::of(low.clone(), "bundled:0.9.0");
+    manager
+        .install(&package, &InstallSource::Bundled, &consent)
+        .unwrap();
+    let granted = other[0].0.clone();
+    manager
+        .grant(&first_party, &Consent::of([granted.clone()], "user"))
+        .unwrap();
+    manager.revoke(&first_party, &low[0], "user").unwrap();
+    assert!(matches!(
+        manager.reinstall_bundled_by_user(&package, &consent),
+        Err(StoreError::IllegalTransition { .. })
+    ));
+    manager.mark_broken(&first_party, "a file changed").unwrap();
+
+    let record = manager
+        .reinstall_bundled_by_user(&package, &consent)
+        .unwrap();
+    assert_eq!(record.state, PluginState::Disabled);
+    assert_eq!(record.source, InstallSource::Bundled);
+    assert!(manager.store().tombstone(&first_party).unwrap().is_none());
+    let grants = manager.store().grants(&first_party).unwrap();
+    let status = |key: &GrantKey| grants.iter().find(|g| &g.key == key).map(|g| g.status);
+    assert_eq!(status(&granted), Some(GrantStatus::Granted));
+    assert_eq!(status(&low[0]), Some(GrantStatus::Revoked));
+    let audit = manager.store().audit(&first_party).unwrap();
+    assert!(
+        audit
+            .iter()
+            .any(|a| a.op == "reinstall" && a.decision == "ok")
+    );
+    assert_eq!(manager.store().journal().unwrap(), Vec::new());
+}
+
 /// A module migration derives grants of the low and medium tier (what the
 /// built-in used), never of the high tier, and never over a stored
 /// decision.

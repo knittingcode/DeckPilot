@@ -29,6 +29,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 pub use deckpilot_plugin_abi::capability::RunContext;
 use deckpilot_plugin_abi::capability::{Header, HttpAuth, LogLevel, NotifySeverity};
+use deckpilot_plugin_abi::dialog::DialogRequest;
 use deckpilot_plugin_abi::{CallErrorCode, CapabilityRequest, HttpMethod, NetworkErrorKind};
 use serde_json::Value;
 use url::Url;
@@ -115,6 +116,9 @@ pub enum DenyReason {
     /// The operation is not available while a key's state is read: a
     /// state call only reads (plugin API 1.2).
     NotInStateCall,
+    /// A dialog was asked for in a run the user did not start directly
+    /// (`dialog.open`, plugin API 1.5; the gate of `url.open`).
+    DialogNotUserInitiated,
 }
 
 impl DenyReason {
@@ -162,6 +166,10 @@ impl fmt::Display for DenyReason {
                 f.write_str("credential may not be sent in this scheme")
             }
             Self::NotInStateCall => f.write_str("not available while a key's state is read"),
+            Self::DialogNotUserInitiated => f.write_str(
+                "dialogs open only in an action the user started (a key, a gesture or the app), \
+                 not in one a schedule, an event or the agent's start ran",
+            ),
             Self::NotUserInitiated => f.write_str(
                 "pages open only in an action the user started (a key, a gesture or the app), \
                  not in one a schedule, an event or the agent's start ran",
@@ -271,6 +279,22 @@ pub enum Allowed {
     RandomBytes {
         length: usize,
     },
+    /// Shows a dialog the plugin was granted (`dialogs`, plugin API 1.5):
+    /// `request` passed every bound of [`DialogRequest::validate`], and the
+    /// run was started by the user. The executor shows it titled with the
+    /// plugin's own name, at most one per plugin at a time, and checks the
+    /// answer against `request` before the plugin sees it.
+    DialogOpen {
+        request: DialogRequest,
+    },
+    /// The app's language (plugin API 1.6). Always allowed.
+    LocaleGet,
+    /// One of the plugin's own translation keys (plugin API 1.6): the
+    /// executor resolves it against the locale files of the plugin the
+    /// session belongs to, and nothing else. Always allowed.
+    LocaleTranslate {
+        request: deckpilot_plugin_abi::locale::Translate,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -308,6 +332,7 @@ enum RateClass {
     OpenUrlWindow,
     Time,
     RandomBytes,
+    Dialog,
 }
 
 #[derive(Debug)]
@@ -389,6 +414,11 @@ impl Broker {
         });
     }
 
+    /// Revokes showing dialogs. Effective on the next call.
+    pub fn revoke_dialogs(&self, plugin: &PluginId) {
+        self.update(plugin, |g| g.dialogs = false);
+    }
+
     pub fn revoke_notifications(&self, plugin: &PluginId) {
         self.update(plugin, |g| g.notifications = false);
     }
@@ -452,6 +482,7 @@ impl Broker {
             RateClass::OpenUrlWindow => self.inner.limits.open_url_window,
             RateClass::Time => self.inner.limits.time,
             RateClass::RandomBytes => self.inner.limits.random_bytes,
+            RateClass::Dialog => self.inner.limits.dialog,
         };
         let now = self.inner.clock.now();
         let mut buckets = self.inner.buckets.lock().unwrap_or_else(|e| e.into_inner());
@@ -693,6 +724,15 @@ impl Session {
                 (d, None)
             }
             CapabilityRequest::SettingsGet(_) => (Decision::Allow(Allowed::SettingsGet), None),
+            // Plugin API 1.6: the app's language and the plugin's own
+            // translations, always allowed (the executor resolves only the
+            // plugin's own keys, and the host counts the calls of an
+            // invocation).
+            CapabilityRequest::LocaleGet(_) => (Decision::Allow(Allowed::LocaleGet), None),
+            CapabilityRequest::LocaleTranslate(t) => (
+                Decision::Allow(Allowed::LocaleTranslate { request: t.clone() }),
+                None,
+            ),
             // Plugin API 1.1: always allowed while the plugin has grants,
             // rate limited. Neither reaches anything of the user's.
             CapabilityRequest::TimeNow(_) => {
@@ -758,6 +798,23 @@ impl Session {
                     })
                 };
                 (d, Some(origin))
+            }
+            // Plugin dialogs (plugin API 1.5): granted, only in runs the
+            // user started (checked before the rate limit, like
+            // `url.open`, so a refused call uses none), 6 per minute.
+            CapabilityRequest::DialogOpen(request) => {
+                let d = if !grants.dialogs {
+                    Decision::Deny(DenyReason::NotGranted)
+                } else if !context.is_some_and(RunContext::is_user_initiated) {
+                    Decision::Deny(DenyReason::DialogNotUserInitiated)
+                } else if !b.take(&self.plugin, RateClass::Dialog) {
+                    Decision::Deny(DenyReason::RateLimited)
+                } else {
+                    Decision::Allow(Allowed::DialogOpen {
+                        request: request.clone(),
+                    })
+                };
+                (d, None)
             }
             // Own variables (design §5.2): always granted, rate limited.
             CapabilityRequest::VariablesPublish(_) | CapabilityRequest::VariablesClear(_) => {

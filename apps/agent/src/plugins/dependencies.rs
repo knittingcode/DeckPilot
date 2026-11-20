@@ -26,6 +26,11 @@ use super::{PluginService, convert, error, host_environment, plugin_id, store_er
 
 /// Most plugins the registry walk of one plan reads.
 const MAX_LOADED: usize = 64;
+/// What the user does about a removed bundled plugin a plan needs: the
+/// Restore of `restoreBundledPlugin` (protocol 15), which the app shows
+/// under the installed plugins.
+const RESTORE_HINT: &str = "restore it first with Restore under “Removed DeckPilot plugins” in \
+     Settings › Plugins › Installed, then try again";
 
 /// The verified packages of the last plan, for the install that follows
 /// its confirmation (so they are not downloaded twice).
@@ -424,7 +429,7 @@ impl PluginService {
         {
             return dependency_error(format!(
                 "{e}: {id} is part of DeckPilot and is not installed (it was removed); \
-                 restore it in Settings › Plugins first"
+                 {RESTORE_HINT}"
             ));
         }
         let code = match e {
@@ -840,7 +845,7 @@ impl PluginService {
                 }
                 StepAction::InstallBundled { .. } => {
                     return Err(dependency_error(format!(
-                        "{id} is part of DeckPilot; restore it in Settings › Plugins first"
+                        "{id} is part of DeckPilot and is not installed; {RESTORE_HINT}"
                     )));
                 }
                 StepAction::Keep { .. } | StepAction::Builtin { .. } => {}

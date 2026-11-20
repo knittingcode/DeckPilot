@@ -173,7 +173,7 @@ impl Agent {
                     key,
                     index,
                     *workflow,
-                    ExecutionTrigger::Device,
+                    super::gestures::workflow_trigger(origin),
                     advance_on_failure,
                 );
                 self.after_change();

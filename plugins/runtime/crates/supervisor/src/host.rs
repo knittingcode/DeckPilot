@@ -63,16 +63,38 @@ pub trait CapabilityExecutor {
 pub struct CallInterrupt {
     abort: Option<AbortSignal>,
     deadline: Instant,
+    /// Set when the host's channel closed (it exited or crashed).
+    exited: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl CallInterrupt {
     pub fn new(abort: Option<AbortSignal>, deadline: Instant) -> Self {
-        Self { abort, deadline }
+        Self {
+            abort,
+            deadline,
+            exited: None,
+        }
+    }
+
+    /// The same interrupt, also raised when the host's channel closes
+    /// (`exited` is set by the reader of its channel).
+    #[must_use]
+    pub fn with_host_exit(mut self, exited: Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.exited = Some(exited);
+        self
     }
 
     /// Whether the call should stop now.
     pub fn is_raised(&self) -> bool {
-        self.is_aborted() || Instant::now() >= self.deadline
+        self.is_aborted() || self.host_exited() || Instant::now() >= self.deadline
+    }
+
+    /// Whether the plugin's host exited (or crashed) while the call ran: no
+    /// answer can reach the guest any more.
+    pub fn host_exited(&self) -> bool {
+        self.exited
+            .as_ref()
+            .is_some_and(|e| e.load(std::sync::atomic::Ordering::SeqCst))
     }
 
     /// Whether the invocation was aborted (cancelled), as opposed to past
@@ -338,6 +360,8 @@ pub struct PluginHost {
     child: HostProcess,
     stdin: Option<BufWriter<HostStdin>>,
     rx: Receiver<Result<ToSupervisor, String>>,
+    /// Set by the channel's reader when it ends (the host exited).
+    exited: Arc<std::sync::atomic::AtomicBool>,
     session: Session,
     sandbox: SandboxReport,
     descriptor: Option<PluginDescriptor>,
@@ -369,10 +393,20 @@ impl PluginHost {
         let stdin = child.stdin.take().map(BufWriter::new);
         let stdout = child.stdout.take();
         let (tx, rx) = mpsc::channel();
+        let exited = Arc::new(std::sync::atomic::AtomicBool::new(false));
         if let Some(stdout) = stdout {
+            let exited = exited.clone();
             std::thread::Builder::new()
                 .name("plugin-host-reader".into())
                 .spawn(move || {
+                    // Whatever ends the loop, the channel is gone.
+                    struct Gone(Arc<std::sync::atomic::AtomicBool>);
+                    impl Drop for Gone {
+                        fn drop(&mut self) {
+                            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
+                    }
+                    let _gone = Gone(exited);
                     let mut r = BufReader::new(stdout);
                     loop {
                         match read_frame::<_, ToSupervisor>(&mut r, MAX_FRAME_TO_SUPERVISOR) {
@@ -395,6 +429,7 @@ impl PluginHost {
             child,
             stdin,
             rx,
+            exited,
             session,
             sandbox: SandboxReport {
                 mechanism: String::new(),
@@ -666,7 +701,8 @@ impl PluginHost {
                     if call_id > u64::from(most_calls) {
                         return Err(self.protocol("too many capability calls".into()));
                     }
-                    let interrupt = CallInterrupt::new(abort.cloned(), deadline);
+                    let interrupt = CallInterrupt::new(abort.cloned(), deadline)
+                        .with_host_exit(self.exited.clone());
                     // An aborted invocation gets no more capabilities: no
                     // request, publish or notification after the abort.
                     let result = if interrupt.is_aborted() {

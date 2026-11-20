@@ -13,15 +13,19 @@ use std::time::{Duration, Instant};
 use deckpilot_core::{BindingTarget, ControlBinding, DeviceLayout, LayoutPage, Profile, Trigger};
 use deckpilot_device::mock::MockBackend;
 use deckpilot_device::{
-    CombinedBackend, ConnectionState, ControlId, ControlInput, DeviceBackend, DeviceCapabilities,
-    DeviceError, DeviceHandle, DeviceId, DeviceModel, DeviceModelId, DiscoveredDevice, EncoderSpec,
-    Frame, HardwareSupport, ImageFormat, ImageSpec, ImageTransform, KeyGrid, KeyStateTracker,
-    ModelVerification, Platform, PlatformVerification, VerificationLevel, models,
+    Color, CombinedBackend, ConnectionState, ControlId, ControlInput, DefaultAppearance,
+    DeviceBackend, DeviceCapabilities, DeviceError, DeviceHandle, DeviceId, DeviceModel,
+    DeviceModelId, DiscoveredDevice, EncoderSpec, Frame, HardwareSupport, ImageFormat, ImageSpec,
+    ImageTransform, KeyBackground, KeyGrid, KeyStateTracker, ModelVerification, Platform,
+    PlatformVerification, VerificationLevel, models,
 };
 use deckpilot_ipc::{AgentStatus, Request};
 use support::{TIMEOUT, TempDir, TestAgent};
 
 const MODEL: &str = "acme.pad.p4";
+
+/// The Acme model's display behind its (transparent by default) keys.
+const ACME_DISPLAY: Color = Color([16, 32, 64]);
 
 /// Four 32 x 32 px keys (2 x 2) and one dial; no adjustable brightness.
 fn acme_model() -> DeviceModel {
@@ -56,18 +60,26 @@ fn acme_model() -> DeviceModel {
             Some("2026-11-13"),
             "claimed by the test driver",
         )]),
+        default_appearance: Some(DefaultAppearance {
+            key_background: KeyBackground::Transparent,
+            text_color: Color([255, 224, 0]),
+            display_background: ACME_DISPLAY,
+        }),
     }
 }
 
 /// The vendor's native reports: `[0x01, key bitmask]` or `[0x02, dial, delta]`.
 type Report = Vec<u8>;
 
+/// A frame's size and its top-left pixel.
+type Written = ((u32, u32), Option<[u8; 3]>);
+
 #[derive(Default)]
 struct Bus {
     attached: Vec<String>,
     reports: BTreeMap<String, VecDeque<Report>>,
-    /// Size of the last frame written per key.
-    frames: BTreeMap<String, BTreeMap<ControlId, (u32, u32)>>,
+    /// Size and top-left pixel of the last frame written per key.
+    frames: BTreeMap<String, BTreeMap<ControlId, Written>>,
     brightness_calls: usize,
 }
 
@@ -96,7 +108,7 @@ impl AcmeDriver {
             .push_back(report);
     }
 
-    fn frames(&self, serial: &str) -> BTreeMap<ControlId, (u32, u32)> {
+    fn frames(&self, serial: &str) -> BTreeMap<ControlId, Written> {
         self.bus
             .lock()
             .unwrap()
@@ -151,7 +163,7 @@ struct AcmeHandle {
     bus: Arc<Mutex<Bus>>,
     id: DeviceId,
     keys: KeyStateTracker,
-    pending: Vec<(ControlId, (u32, u32))>,
+    pending: Vec<(ControlId, Written)>,
 }
 
 impl AcmeHandle {
@@ -202,8 +214,10 @@ impl DeviceHandle for AcmeHandle {
     }
 
     fn set_image(&mut self, control: ControlId, frame: &Frame) -> Result<(), DeviceError> {
-        self.pending
-            .push((control, (frame.width(), frame.height())));
+        self.pending.push((
+            control,
+            ((frame.width(), frame.height()), frame.pixel(0, 0)),
+        ));
         Ok(())
     }
 
@@ -333,9 +347,12 @@ async fn a_driver_registered_only_in_a_test_drives_a_layout() {
         assert!(Instant::now() < deadline, "no frame for key 3");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    // A key without a background of its own is transparent by the model's
+    // defaults: it shows the model's display background, not the Stream
+    // Deck's black.
     assert_eq!(
         acme.frames("ACME-1")[&ControlId::Key { index: 3 }],
-        (32, 32)
+        ((32, 32), Some(ACME_DISPLAY.rgb()))
     );
 
     // Native dial and key reports become generic events that drive the layout.

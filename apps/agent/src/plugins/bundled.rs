@@ -301,6 +301,164 @@ pub(super) fn refresh(
     }
 }
 
+/// What `restoreBundledPlugin` did with a bundled plugin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Restored {
+    /// The user had uninstalled it: installed again from the bundle.
+    Restored(Restart),
+    /// Its installed copy was broken: replaced by the bundle's.
+    Reinstalled(Restart),
+}
+
+/// The state a restored or reinstalled plugin is left in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Restart {
+    /// Enabled: every permission it declares is granted.
+    Enabled,
+    /// Disabled until the user consents to these permissions.
+    AwaitingConsent(Vec<GrantKey>),
+    /// Disabled, with the reason (the user disabled it, or plugins cannot
+    /// run on this platform, or enabling failed).
+    Disabled(String),
+}
+
+/// Why `restoreBundledPlugin` was refused. Nothing was changed.
+#[derive(Debug)]
+pub(super) enum RestoreRefusal {
+    /// DeckPilot does not bundle the plugin.
+    NotBundled(String),
+    /// A bundled plugin this agent's application bundle has no pin of.
+    NotPinned(String),
+    /// Installed and not broken: nothing to restore.
+    Installed(String),
+    /// Not something a restore applies to (a copy from another source, a
+    /// migration plugin the migration engine has not installed).
+    InvalidState(String),
+    /// The bundle's files do not match the pins compiled into the agent
+    /// (or the bundle is not trusted).
+    Verification(String),
+    /// The plugin store refused or failed.
+    Store(deckpilot_plugin_store::StoreError),
+}
+
+/// Whether `id` is a bundled plugin that is not installed and that
+/// [`restore`] would install again: pinned by this agent, and removed by
+/// the user (its tombstone) or, for a `default`-class plugin, missing
+/// otherwise. A `migration`-class plugin never installed is the migration
+/// engine's.
+pub(super) fn restorable(manager: &PluginManager, bundle: &Bundle, id: &PluginId) -> bool {
+    let Some(pin) = bundle.pins.get(id) else {
+        return false;
+    };
+    if !matches!(manager.store().plugin(id), Ok(None)) {
+        return false;
+    }
+    match manager.store().tombstone(id) {
+        Ok(Some(_)) => true,
+        Ok(None) => pin.class == BundleClass::Default,
+        Err(_) => false,
+    }
+}
+
+/// The user's restore of the bundled plugin `id` (`restoreBundledPlugin`,
+/// Settings › Plugins): a plugin they uninstalled is installed again from
+/// the application bundle, its tombstone cleared; a broken installed copy
+/// is replaced by the bundle's, with the plugin's earlier permission
+/// decisions. Either way the files are verified against the pins compiled
+/// into this agent first (and the bundle's code seal, as for seeding), so a
+/// mismatch changes nothing; grants follow the seeding rules (low-tier
+/// permissions only). Settings and credentials kept at the uninstall, and
+/// those of a broken copy, stay the plugin's. Other plugins are never
+/// touched.
+pub(super) fn restore(
+    manager: &mut PluginManager,
+    bundle: &Bundle,
+    id: &PluginId,
+) -> Result<Restored, RestoreRefusal> {
+    if !deckpilot_plugin_bundled::is_bundled_id(id, &bundle.pins) {
+        return Err(RestoreRefusal::NotBundled(format!(
+            "{id} is not a plugin bundled with DeckPilot; install it from the marketplace"
+        )));
+    }
+    let Some(pin) = bundle.pins.get(id) else {
+        return Err(RestoreRefusal::NotPinned(format!(
+            "{id} is bundled with DeckPilot, but this agent's application bundle has no \
+             pinned copy of it"
+        )));
+    };
+    let record = manager.store().plugin(id).map_err(RestoreRefusal::Store)?;
+    let tombstone = manager
+        .store()
+        .tombstone(id)
+        .map_err(RestoreRefusal::Store)?;
+    match &record {
+        Some(record) if record.state != deckpilot_plugin_store::PluginState::Broken => {
+            return Err(RestoreRefusal::Installed(format!(
+                "{id} is installed ({}) and not broken; nothing to restore",
+                record.state
+            )));
+        }
+        Some(record) if record.source != InstallSource::Bundled => {
+            return Err(RestoreRefusal::InvalidState(format!(
+                "{id} was installed from {}; only a bundled copy is reinstalled from the bundle",
+                record.source.as_str()
+            )));
+        }
+        None if tombstone.is_none() && pin.class != BundleClass::Default => {
+            return Err(RestoreRefusal::InvalidState(format!(
+                "{id} is installed by its module migration, not by a restore; retry the \
+                 migration in Settings › Plugins"
+            )));
+        }
+        _ => {}
+    }
+    let package = verified(bundle, pin).map_err(RestoreRefusal::Verification)?;
+    let (low, other) = split_by_tier(package.manifest());
+    let consent = Consent::of(low, decided_by());
+    if record.is_some() {
+        manager
+            .reinstall_bundled_by_user(&package, &consent)
+            .map_err(RestoreRefusal::Store)?;
+        Ok(Restored::Reinstalled(restart(manager, id)))
+    } else {
+        manager
+            .restore_by_user(&package, &consent)
+            .map_err(RestoreRefusal::Store)?;
+        let restart = if other.is_empty() {
+            restart(manager, id)
+        } else {
+            Restart::AwaitingConsent(other)
+        };
+        Ok(Restored::Restored(restart))
+    }
+}
+
+/// Enables the restored plugin `id` when everything it declares is
+/// granted, it is not turned off by the user and plugins can run here.
+fn restart(manager: &mut PluginManager, id: &PluginId) -> Restart {
+    let Ok(Some(record)) = manager.store().plugin(id) else {
+        return Restart::Disabled("the restored plugin is not installed".into());
+    };
+    let Some(active) = record.active() else {
+        return Restart::Disabled("the restored plugin has no active version".into());
+    };
+    let granted = manager.store().grants(id).unwrap_or_default();
+    let missing = deckpilot_plugin_store::missing_grants(&granted, &active.grants());
+    if !missing.is_empty() {
+        return Restart::AwaitingConsent(missing);
+    }
+    if let Ok(Some(tombstone)) = manager.store().tombstone(id) {
+        return Restart::Disabled(format!("{} by the user", tombstone.decision));
+    }
+    if !super::execution_supported() {
+        return Restart::Disabled("plugins cannot run on this platform".into());
+    }
+    match manager.enable(id) {
+        Ok(()) => Restart::Enabled,
+        Err(e) => Restart::Disabled(format!("restored, but not enabled: {e}")),
+    }
+}
+
 /// At every load of `record`: a bundled copy must be a version this agent
 /// pins, and its installed files (in `dir`) must still match the pins. A
 /// mismatch marks the plugin broken. A version this agent does not pin (an

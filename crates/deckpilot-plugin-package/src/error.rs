@@ -89,6 +89,20 @@ pub enum PackageError {
     /// 1.3; `deckpilot_plugin_manifest::check_icon`).
     #[error("the navigation icon `{path}` {error}")]
     NavigationIcon { path: String, error: IconError },
+    /// A `contributes.visualAssets` file (plugin API 1.8;
+    /// `deckpilot_plugin_manifest::check_visual_asset`).
+    #[error("the visual asset `{path}` {error}")]
+    VisualAsset {
+        path: String,
+        error: deckpilot_plugin_manifest::VisualAssetError,
+    },
+    /// A locale file (`locales/<tag>.json`, plugin API 1.6) that is not a
+    /// valid translation file (`deckpilot_plugin_manifest::locale`).
+    #[error("the locale file `{path}` is refused: {error}")]
+    Locale {
+        path: String,
+        error: deckpilot_plugin_manifest::locale::LocaleError,
+    },
     #[error("{0} already exists; refusing to overwrite it")]
     TargetExists(String),
     #[error("{path}: {message}")]

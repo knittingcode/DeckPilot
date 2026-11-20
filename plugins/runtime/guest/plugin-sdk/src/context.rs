@@ -10,8 +10,11 @@ use deckpilot_plugin_abi::capability::{
 pub use deckpilot_plugin_abi::capability::{
     NotifyDelivery, RunCause, RunContext, RunSummary, RunTrigger, StorageUsage,
 };
+use deckpilot_plugin_abi::dialog::{DialogRequest, DialogResult};
 use deckpilot_plugin_abi::limits::MAX_HOST_CALLS_PER_INVOCATION;
 pub use deckpilot_plugin_abi::limits::MAX_RANDOM_BYTES;
+pub use deckpilot_plugin_abi::locale::TranslateArg;
+use deckpilot_plugin_abi::locale::{LocaleReply, Translate, Translation};
 use deckpilot_plugin_abi::{
     CallError, CallErrorCode, CallResult, CapabilityRequest, HttpMethod, NetworkErrorKind,
 };
@@ -365,6 +368,139 @@ impl<'a> Context<'a> {
         self.call("url.open", &CapabilityRequest::OpenUrl(OpenUrl { url }))
             .map(drop)
             .map_err(|e| e.with_target(target))
+    }
+
+    /// Shows a standard dialog and waits for the user's answer (op
+    /// `dialog.open`, plugin API 1.5): a confirmation, an alert, a form or
+    /// a selection, described as data ([`Dialog`](crate::dialog::Dialog))
+    /// and drawn by DeckPilot with its own components, titled with the
+    /// plugin's name. Needs the `dialogs` permission (`engines.pluginApi`
+    /// `^1.5`) and a run the user started (a key, a gesture, the app or a
+    /// workflow the user started); otherwise the call is denied
+    /// ([`CapabilityErrorKind::NotPermitted`]). At most one dialog per
+    /// plugin is open and 6 are shown a minute
+    /// ([`CapabilityErrorKind::Throttled`]); without a DeckPilot window
+    /// that shows plugin dialogs the call is
+    /// [`CapabilityErrorKind::Unavailable`], and a host before 1.5 answers
+    /// [`CapabilityErrorKind::Unsupported`]: fall back, for example to a
+    /// notification. The call blocks the invocation until the dialog is
+    /// answered, times out (`timeoutSeconds`, never past the action's own
+    /// time limit) or the plugin is stopped. The values are checked by
+    /// the agent against the request before the plugin receives them. A
+    /// request that breaks a bound is refused here without a host call
+    /// ([`CapabilityErrorKind::BadRequest`]).
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::dialog::{Dialog, DialogResultExt, Field};
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    ///
+    /// let mut host = MockHost::allow_all(); // confirms with the defaults
+    /// let mut ctx = host.context();
+    /// let answer = ctx
+    ///     .dialog(Dialog::form(
+    ///         "Configure repository",
+    ///         [Field::text("repository", "Repository path").default_value("~/code/shop")],
+    ///     ))
+    ///     .unwrap();
+    /// assert_eq!(answer.text("repository").as_deref(), Some("~/code/shop"));
+    /// ```
+    pub fn dialog(
+        &mut self,
+        dialog: impl Into<DialogRequest>,
+    ) -> Result<DialogResult, CapabilityError> {
+        let request: DialogRequest = dialog.into();
+        if let Err(problem) = request.validate() {
+            return Err(CapabilityError {
+                op: "dialog.open",
+                kind: CapabilityErrorKind::BadRequest,
+                detail: format!("the dialog's {problem} is invalid"),
+                target: None,
+                network: None,
+            });
+        }
+        let v = self.call("dialog.open", &CapabilityRequest::DialogOpen(request))?;
+        serde_json::from_value(v).map_err(|_| malformed("dialog.open", "a dialog result"))
+    }
+
+    /// The language the app shows, as a BCP 47 tag such as `en`, `pl` or
+    /// `pl-PL` (op `locale.get`, plugin API 1.6). Needs no permission and
+    /// says nothing else about the system. Read it during each invocation
+    /// (it can change between two); after a change the agent asks for the
+    /// state of the plugin's keys again, so key texts follow. An agent
+    /// older than 1.6 refuses it ([`CapabilityErrorKind::Unsupported`]).
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    ///
+    /// let mut host = MockHost::localized("pl-PL", &[]);
+    /// let mut ctx = host.context();
+    /// assert_eq!(ctx.locale().unwrap(), "pl-PL");
+    /// ```
+    pub fn locale(&mut self) -> Result<String, CapabilityError> {
+        let v = self.call("locale.get", &CapabilityRequest::LocaleGet(NoArgs {}))?;
+        serde_json::from_value::<LocaleReply>(v)
+            .map(|reply| reply.locale)
+            .map_err(|_| malformed("locale.get", "a locale"))
+    }
+
+    /// One of the plugin's own translations in the app's language (op
+    /// `locale.translate`, plugin API 1.6): `key` of the package's
+    /// `locales/<tag>.json`, with `{{name}}` placeholders filled from
+    /// `params` (texts of at most 256 characters, or numbers); `count`
+    /// also picks the plural form of the language (`_one`, `_few`,
+    /// `_many`, `_other`). The agent tries the app's tag (`pl-PL`), its
+    /// language (`pl`), the manifest's `defaultLocale`, then `en`; a key
+    /// none of them has comes back as a label made from its last segment.
+    /// Only the plugin's own keys: there is no way to name another
+    /// plugin's or DeckPilot's. The result is plain text. A malformed key
+    /// or parameter is refused here without a host call.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    ///
+    /// let mut host = MockHost::localized("pl", &[
+    ///     ("repos.count_one", "{{count}} repozytorium"),
+    ///     ("repos.count_few", "{{count}} repozytoria"),
+    ///     ("repos.count_many", "{{count}} repozytoriów"),
+    /// ]);
+    /// let mut ctx = host.context();
+    /// assert_eq!(ctx.t("repos.count", &[("count", 3)]).unwrap(), "3 repozytoria");
+    /// assert_eq!(ctx.t("repos.count", &[("count", 5)]).unwrap(), "5 repozytoriów");
+    /// assert_eq!(ctx.text("settings.apiToken").unwrap(), "Api token"); // missing
+    /// ```
+    pub fn t<V: Into<TranslateArg> + Clone>(
+        &mut self,
+        key: &str,
+        params: &[(&str, V)],
+    ) -> Result<String, CapabilityError> {
+        let request = Translate {
+            key: key.to_owned(),
+            params: params
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), value.clone().into()))
+                .collect(),
+        };
+        if let Err(problem) = request.validate() {
+            return Err(CapabilityError {
+                op: "locale.translate",
+                kind: CapabilityErrorKind::BadRequest,
+                detail: format!("the translation's {} is invalid", problem.0),
+                target: None,
+                network: None,
+            });
+        }
+        let v = self.call(
+            "locale.translate",
+            &CapabilityRequest::LocaleTranslate(request),
+        )?;
+        serde_json::from_value::<Translation>(v)
+            .map(|t| t.text)
+            .map_err(|_| malformed("locale.translate", "a translation"))
+    }
+
+    /// [`Context::t`] without parameters.
+    pub fn text(&mut self, key: &str) -> Result<String, CapabilityError> {
+        self.t::<&str>(key, &[])
     }
 
     /// Reads a value from the plugin's own storage (op `storage.get`,
@@ -1293,6 +1429,11 @@ impl fmt::Display for CapabilityError {
                          manifest.json; it applies once the user approves it. Only https URLs \
                          without userinfo are opened, never an IP address or a local name",
                     ),
+                    "dialog.open" => f.write_str(
+                        "Declare the `dialogs` permission in manifest.json (plugin API 1.5); \
+                         it applies once the user approves it. Dialogs open only in an action \
+                         the user started (a key, a gesture or the app)",
+                    ),
                     "notify" => f.write_str(
                         "Declare the `notifications` permission in manifest.json; it applies \
                          once the user approves it",
@@ -1580,6 +1721,92 @@ mod tests {
         assert_eq!(settings.get::<String>("count"), None);
         assert!(!settings.contains("missing"));
         assert_eq!(ctx.calls(), 5);
+    }
+
+    #[test]
+    fn dialogs_send_the_request_and_read_the_checked_answer() {
+        use crate::dialog::{CancelReason, Dialog, DialogResultExt, Field};
+        use crate::testing::MockHost;
+        let mut host = MockHost::new(|req| match req {
+            CapabilityRequest::DialogOpen(d) if d.title() == "Pick" => {
+                CallResult::Ok(serde_json::json!({"outcome": "confirmed", "selected": "b"}))
+            }
+            CapabilityRequest::DialogOpen(d) if d.title() == "Form" => {
+                CallResult::Ok(serde_json::json!({"outcome": "confirmed",
+                    "values": {"name": "x", "n": 3, "on": true, "list": ["a", "b"]}}))
+            }
+            CapabilityRequest::DialogOpen(d) if d.title() == "Later" => {
+                CallResult::Ok(serde_json::json!({"outcome": "cancelled", "reason": "timeout"}))
+            }
+            CapabilityRequest::DialogOpen(_) => {
+                CallResult::error(CallErrorCode::Unavailable, "no DeckPilot window is open")
+            }
+            _ => CallResult::error(CallErrorCode::NotPermitted, "not granted"),
+        });
+        let mut ctx = Context::new(&mut host);
+        let picked = ctx
+            .dialog(Dialog::selection("Pick", [("a", "A"), ("b", "B")]))
+            .unwrap();
+        assert_eq!(picked.selected(), Some("b"));
+        let form = ctx
+            .dialog(Dialog::form(
+                "Form",
+                [
+                    Field::text("name", "Name").required(),
+                    Field::integer("n", "N").range(Some(1), Some(5)),
+                    Field::boolean("on", "On"),
+                    Field::lines("list", "List"),
+                ],
+            ))
+            .unwrap();
+        assert_eq!(form.text("name").as_deref(), Some("x"));
+        assert_eq!(form.integer("n"), Some(3));
+        assert_eq!(form.flag("on"), Some(true));
+        assert_eq!(form.lines("list"), vec!["a", "b"]);
+        assert_eq!(form.cancel_reason(), None);
+        let later = ctx.dialog(Dialog::alert("Later")).unwrap();
+        assert_eq!(later.cancel_reason(), Some(CancelReason::Timeout));
+        let gone = ctx.dialog(Dialog::confirm("Sure?")).unwrap_err();
+        assert_eq!(gone.kind(), CapabilityErrorKind::Unavailable);
+        assert_eq!(gone.op(), "dialog.open");
+
+        // A bound is refused before any host call.
+        let calls = ctx.calls();
+        let long = ctx.dialog(Dialog::alert("t".repeat(81))).unwrap_err();
+        assert_eq!(long.kind(), CapabilityErrorKind::BadRequest);
+        assert!(long.to_string().contains("title"), "{long}");
+        assert_eq!(ctx.calls(), calls);
+        assert!(matches!(
+            &host.requests()[0],
+            CapabilityRequest::DialogOpen(d) if d.title() == "Pick"
+        ));
+
+        // A denial says how to declare the permission.
+        let mut denied =
+            MockHost::new(|_| CallResult::error(CallErrorCode::NotPermitted, "not granted"));
+        let e = denied
+            .context()
+            .dialog(Dialog::confirm("Sure?").destructive())
+            .unwrap_err();
+        assert!(e.is_denied());
+        assert!(e.to_string().contains("`dialogs` permission"), "{e}");
+
+        // `allow_all` confirms with the defaults.
+        let mut host = MockHost::allow_all();
+        let answer = host
+            .context()
+            .dialog(Dialog::form(
+                "Defaults",
+                [
+                    Field::choice("branch", "Branch", [("main", "main")]).default_value("main"),
+                    Field::boolean("pull", "Pull").default_value(false),
+                    Field::text("note", "Note"),
+                ],
+            ))
+            .unwrap();
+        assert_eq!(answer.text("branch").as_deref(), Some("main"));
+        assert_eq!(answer.flag("pull"), Some(false));
+        assert_eq!(answer.text("note"), None);
     }
 
     #[test]

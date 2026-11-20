@@ -73,6 +73,10 @@ struct KeyWatch {
     changes: Option<broadcast::Receiver<Vec<KeyStateEntry>>>,
 }
 
+/// The live preview messages of a connection that began a session
+/// (protocol 16): for every connection, only its own.
+type LiveEvents = Option<broadcast::Receiver<(u64, deckpilot_ipc::live_preview::LivePreviewEvent)>>;
+
 /// Counts subscribed desktop clients while alive.
 struct DesktopGuard(Arc<AtomicUsize>);
 
@@ -87,6 +91,24 @@ impl Drop for DesktopGuard {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::SeqCst);
     }
+}
+
+/// What a connection asked for with `subscribePluginEvents` beyond the
+/// plugin events themselves.
+#[derive(Default)]
+struct PluginSubscription {
+    /// Module migration events.
+    migrations: bool,
+    /// Plugin dialogs (announced, protocol 12).
+    dialogs: Option<DialogApp>,
+}
+
+/// A connection that announced plugin dialogs (protocol 12): it receives
+/// them and may answer. Dropped with the connection; the last one ends
+/// every open dialog `appClosed`.
+struct DialogApp {
+    events: Option<broadcast::Receiver<PluginEvent>>,
+    _guard: crate::plugin_dialogs::AppGuard,
 }
 
 /// Writes `message`; `false` when the connection is gone. A message larger
@@ -123,6 +145,26 @@ fn error(id: Option<u64>, code: ErrorCode, message: impl Into<String>) -> Server
     ServerMessage::Error {
         id,
         error: IpcError::new(code, message),
+    }
+}
+
+/// The next plugin event of a connection, and whether it is a dialog event
+/// (only for a connection that announced plugin dialogs).
+async fn next_plugin_event(
+    plugin_events: &mut Option<broadcast::Receiver<PluginEvent>>,
+    dialogs: &mut Option<DialogApp>,
+) -> (Result<PluginEvent, broadcast::error::RecvError>, bool) {
+    // Borrowed, not taken: the caller's `select!` may drop this future, and
+    // `recv` is cancel safe.
+    let dialog_events = dialogs.as_mut().and_then(|app| app.events.as_mut());
+    tokio::select! {
+        event = next_event(plugin_events) => (event, false),
+        event = async move {
+            match dialog_events {
+                Some(events) => events.recv().await,
+                None => std::future::pending().await,
+            }
+        } => (event, true),
     }
 }
 
@@ -179,6 +221,7 @@ async fn authenticate(
     None
 }
 
+#[allow(clippy::too_many_lines)] // One arm per kind of message a connection gets.
 async fn serve(
     stream: Stream,
     handle: AgentHandle,
@@ -195,14 +238,14 @@ async fn serve(
 
     let mut events: Option<broadcast::Receiver<AgentEvent>> = None;
     let mut plugin_events: Option<broadcast::Receiver<PluginEvent>> = None;
-    // Whether this connection asked for module migration events.
-    let mut migration_events = false;
+    let mut subscription = PluginSubscription::default();
     let mut desktop: Option<DesktopGuard> = None;
     let mut watch = KeyWatch {
         viewer: NEXT_VIEWER.fetch_add(1, Ordering::Relaxed),
         actions: BTreeSet::new(),
         changes: None,
     };
+    let mut live: LiveEvents = None;
     loop {
         tokio::select! {
             message = read_message::<_, serde_json::Value>(&mut reader) => {
@@ -213,9 +256,9 @@ async fn serve(
                             value,
                             &handle,
                             (client, protocol),
-                            (&mut events, &mut plugin_events, &mut migration_events),
+                            (&mut events, &mut plugin_events, &mut subscription),
                             &mut desktop,
-                            &mut watch,
+                            (&mut watch, &mut live),
                         )
                         .await
                     }
@@ -245,17 +288,19 @@ async fn serve(
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => break,
             },
-            // Only connections that asked for them (protocol 10), and
-            // migration events only to those that asked for these too.
-            event = next_event(&mut plugin_events) => match event {
+            // Only to connections that asked (protocol 10); migrations and
+            // dialogs (their own channel; a missed one times out) only to
+            // those that asked for them.
+            (event, dialog) = next_plugin_event(&mut plugin_events, &mut subscription.dialogs) => match event {
                 Ok(event) => {
-                    if event.delivered(migration_events)
+                    if event.delivered(subscription.migrations && !dialog, dialog)
                         && !send(&mut writer, &ServerMessage::PluginEvent { event }).await
                     {
                         break;
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) if dialog => subscription.dialogs = None,
                 Err(broadcast::error::RecvError::Closed) => plugin_events = None,
             },
             // Only the watched keys, only to the connection that watches.
@@ -274,6 +319,18 @@ async fn serve(
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => watch.changes = None,
             },
+            // Only this connection's sessions.
+            message = next_event(&mut live) => match message {
+                Ok((viewer, event)) => {
+                    if viewer == watch.viewer
+                        && !send(&mut writer, &ServerMessage::LivePreview { event }).await
+                    {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => live = None,
+            },
             _ = shutdown.changed() => {
                 // Deliver the final notifications before closing.
                 if let Some(events) = events.as_mut() {
@@ -291,19 +348,58 @@ async fn serve(
     if watch.changes.is_some() {
         handle.unwatch_key_states(watch.viewer);
     }
+    // Its live previews end with it: the devices show the saved
+    // configuration again.
+    if live.is_some() {
+        handle.live_preview_closed(watch.viewer);
+    }
 }
 
+/// Plugin dialogs (protocol 12): only a connection of that protocol that
+/// announces them receives them. Subscribed before it counts as an app, so
+/// no dialog opened for it is missed.
+fn announce_dialogs(
+    handle: &AgentHandle,
+    protocol: u32,
+    features: &[String],
+    dialogs: &mut Option<DialogApp>,
+) {
+    if protocol >= Capability::PluginDialogs.since_protocol()
+        && dialogs.is_none()
+        && features
+            .iter()
+            .any(|f| f == deckpilot_ipc::plugin_dialogs::FEATURE)
+    {
+        let events = handle.plugin_dialogs.subscribe();
+        *dialogs = Some(DialogApp {
+            events: Some(events),
+            _guard: handle.plugin_dialogs.app_connected(),
+        });
+    }
+}
+
+fn reply(id: u64, result: Result<Response, IpcError>) -> ServerMessage {
+    match result {
+        Ok(response) => ServerMessage::Response { id, response },
+        Err(error) => ServerMessage::Error {
+            id: Some(id),
+            error,
+        },
+    }
+}
+
+#[allow(clippy::too_many_lines)] // One block per request handled per connection.
 async fn handle_message(
     value: serde_json::Value,
     handle: &AgentHandle,
     (client, protocol): (ClientKind, u32),
-    (events, plugin_events, migration_events): (
+    (events, plugin_events, subscription): (
         &mut Option<broadcast::Receiver<AgentEvent>>,
         &mut Option<broadcast::Receiver<PluginEvent>>,
-        &mut bool,
+        &mut PluginSubscription,
     ),
     desktop: &mut Option<DesktopGuard>,
-    watch: &mut KeyWatch,
+    (watch, live): (&mut KeyWatch, &mut LiveEvents),
 ) -> ServerMessage {
     let id = value.get("id").and_then(serde_json::Value::as_u64);
     let message = match serde_json::from_value::<ClientMessage>(value) {
@@ -338,17 +434,35 @@ async fn handle_message(
             ),
         );
     }
-    if let Request::SubscribePluginEvents { migrations } = &request {
-        let migrations = *migrations;
+    if let Request::SubscribePluginEvents {
+        migrations,
+        features,
+    } = &request
+    {
         if plugin_events.is_none() {
             *plugin_events = Some(handle.subscribe_plugins());
         }
         // Asking once is enough; a later plain subscription keeps them.
-        *migration_events |= migrations;
+        subscription.migrations |= *migrations;
+        announce_dialogs(handle, protocol, features, &mut subscription.dialogs);
         return ServerMessage::Response {
             id,
             response: Response::Ok,
         };
+    }
+    if let Request::AnswerPluginDialog {
+        dialog,
+        plugin,
+        answer,
+    } = request
+    {
+        let answered = (handle.plugin_dialogs).answer(
+            subscription.dialogs.is_some(),
+            &dialog,
+            &plugin,
+            answer,
+        );
+        return reply(id, answered.map(|()| Response::Ok));
     }
     if let Request::WatchKeyStates { profile, actions } = request {
         // Subscribed before asking, so no change after the answer is missed.
@@ -366,6 +480,19 @@ async fn handle_message(
                 error,
             },
         };
+    }
+    if matches!(
+        request,
+        Request::BeginLivePreview { .. }
+            | Request::ApplyLivePreview { .. }
+            | Request::NavigateLivePreview { .. }
+            | Request::EndLivePreview { .. }
+    ) {
+        // Subscribed before the session exists, so nothing of it is missed.
+        if live.is_none() {
+            *live = Some(handle.subscribe_live_preview());
+        }
+        return reply(id, handle.live_preview(watch.viewer, request).await);
     }
     if matches!(request, Request::Subscribe) {
         if events.is_none() {

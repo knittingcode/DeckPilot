@@ -1,0 +1,20 @@
+{
+  "plugin": {
+    "name": "Liczba PR",
+    "description": "Pokazuje, ile pull requestów czeka na Twoją recenzję."
+  },
+  "actions": {
+    "category": "GitHub",
+    "count": {
+      "name": "Policz pull requesty",
+      "description": "Liczy otwarte pull requesty repozytorium.",
+      "repository": "Repozytorium"
+    }
+  },
+  "permissions": { "network": "Odczytuje pull requesty z API GitHuba." },
+  "errors": { "rateLimited": "GitHub prosi o chwilę cierpliwości." },
+  "prs_one": "{{count}} pull request",
+  "prs_few": "{{count}} pull requesty",
+  "prs_many": "{{count}} pull requestów",
+  "prs_other": "{{count}} pull requestu"
+}

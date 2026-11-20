@@ -92,6 +92,9 @@ pub struct RateLimits {
     /// `random.bytes`, counted in **bytes**: 4,096 per minute, refilled
     /// continuously, so one run is bounded as well.
     pub random_bytes: Rate,
+    /// `dialog.open` (plugin API 1.5): 6 per minute, refilled
+    /// continuously.
+    pub dialog: Rate,
 }
 
 impl Default for RateLimits {
@@ -107,6 +110,7 @@ impl Default for RateLimits {
             open_url_window: Rate::new(20, Duration::from_secs(600)),
             time: Rate::new(20, Duration::from_secs(1)),
             random_bytes: Rate::new(4096, Duration::from_secs(60)),
+            dialog: Rate::new(6, Duration::from_secs(60)),
         }
     }
 }

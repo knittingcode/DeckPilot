@@ -200,6 +200,8 @@ fn settings_schema(manifest: &Manifest) -> Result<ActionType, String> {
         .map(setting_spec)
         .collect::<Result<Vec<_>, _>>()?;
     Ok(ActionType {
+        editor_navigation: None,
+        title: None,
         id: ActionTypeId::new(format!("{}.settings", manifest.id)).map_err(|e| e.to_string())?,
         name: manifest.name.clone(),
         description: String::new(),
@@ -368,7 +370,9 @@ pub fn credential_slots(
         .collect()
 }
 
-pub fn known(plugin: &KnownPlugin, installed: bool) -> ipc::KnownPlugin {
+/// `restorable`: a bundled plugin the user removed that the agent can
+/// install again (`restoreBundledPlugin`).
+pub fn known(plugin: &KnownPlugin, installed: bool, restorable: bool) -> ipc::KnownPlugin {
     ipc::KnownPlugin {
         id: plugin.id.to_string(),
         name: plugin.display_name.clone(),
@@ -378,6 +382,7 @@ pub fn known(plugin: &KnownPlugin, installed: bool) -> ipc::KnownPlugin {
         installed,
         first_seen_at: plugin.first_seen_at,
         last_seen_at: plugin.last_seen_at,
+        restorable,
     }
 }
 

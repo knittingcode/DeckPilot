@@ -37,10 +37,13 @@ mod error;
 mod icon;
 mod identity;
 mod integrity;
+pub mod locale;
+mod localize;
 mod model;
 mod path_rules;
 mod unique_map;
 mod validate;
+mod visual;
 
 pub use compat::{
     ApiLevel, ApiRequirement, HostEnvironment, Incompatibility, MAX_RANGE_LEN, Platform,
@@ -63,9 +66,16 @@ pub use integrity::{
     DigestError, IntegrityError, MAX_PACKAGE_BYTES, MAX_PACKAGE_ENTRIES, PackageDigest,
     PackageIntegrity, REQUIRED_FILES, Sha256Digest,
 };
+pub use locale::LOCALIZATION_API;
 pub use model::*;
 pub use path_rules::{MAX_PATH_LEN, check_relative as check_relative_path};
 pub use validate::{GENERATED_SETTING_KEY, SHARED_ERROR_CODES};
+pub use visual::{
+    GRADIENT_COLORS, MAX_BACKGROUND_BYTES, MAX_BACKGROUND_SIDE, MAX_VISUAL_ASSET_ID,
+    MAX_VISUAL_ASSET_NAME, MAX_VISUAL_BACKGROUNDS, MAX_VISUAL_ICON_BYTES, MAX_VISUAL_ICON_SIDE,
+    MAX_VISUAL_ICONS, VISUAL_ASSETS_API, VisualAssetError, VisualAssets, VisualBackground,
+    VisualBackgroundKind, VisualFormat, VisualIcon, VisualUse, check_visual_asset,
+};
 
 /// The manifest JSON Schema this crate implements (draft 2020-12).
 pub const SCHEMA_JSON: &str = include_str!("../schema/plugin-manifest.schema.json");

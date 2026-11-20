@@ -1,0 +1,42 @@
+{
+  "manifestVersion": 1,
+  "id": "acme.pr-count",
+  "name": "t:plugin.name",
+  "version": "1.0.0",
+  "publisher": { "id": "acme", "name": "Acme Tools" },
+  "description": "t:plugin.description",
+  "license": "Apache-2.0",
+  "engines": { "deckpilot": ">=0.10.0 <1.0.0", "pluginApi": "^1.6" },
+  "runtime": { "kind": "wasm", "abi": 1 },
+  "entry": "src/lib.rs",
+  "icons": { "128": "assets/icon-128.png" },
+  "defaultLocale": "en",
+  "locales": ["en", "pl"],
+  "permissions": [
+    {
+      "kind": "network",
+      "hosts": ["api.github.com"],
+      "methods": ["GET"],
+      "justification": "t:permissions.network"
+    }
+  ],
+  "contributes": {
+    "actions": [
+      {
+        "id": "count",
+        "name": "t:actions.count.name",
+        "description": "t:actions.count.description",
+        "category": "t:actions.category",
+        "parameters": [
+          {
+            "key": "repository",
+            "label": "t:actions.count.repository",
+            "required": true,
+            "kind": { "type": "text", "maxLength": 128 }
+          }
+        ]
+      }
+    ],
+    "errorCodes": { "rate-limited": "t:errors.rateLimited" }
+  }
+}

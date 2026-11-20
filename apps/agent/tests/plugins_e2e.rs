@@ -68,6 +68,14 @@ const OPENER_SECRET: &str = "tok-51b8-opener-secret-value";
 const ORIGIN: &str = "acme.sdk-origin";
 const ORIGIN_SECRET: &str = "tok-9d2e-origin-secret-value";
 const FUTURE: &str = "acme.future-weather";
+/// The sample with visual assets (plugin API 1.8): an icon, an image
+/// background and a gradient for the shared libraries.
+const VISUALS: &str = "acme.visual-weather";
+/// The SDK test guest with English and Polish translations (plugin API
+/// 1.6).
+const LOCALIZED: &str = "acme.sdk-locale";
+const LOCALE_EN: &str = r#"{"plugin": {"name": "Localized test", "description": "A plugin that speaks Polish."}, "actions": {"translate": "Translate"}, "prs_one": "{{count}} PR", "prs_other": "{{count}} PRs"}"#;
+const LOCALE_PL: &str = r#"{"plugin": {"name": "Test lokalizacji", "description": "Wtyczka, która mówi po polsku."}, "actions": {"translate": "Przetłumacz"}, "prs_one": "{{count}} PR", "prs_few": "{{count}} PR-y", "prs_many": "{{count}} PR-ów", "prs_other": "{{count}} PR"}"#;
 /// Hello Weather's module declared with far more actions, outputs and
 /// icon than one IPC message carries.
 const BIG: &str = "acme.big-weather";
@@ -298,6 +306,7 @@ fn sdk_actions() -> Value {
     let fetch = outputs(&["error", "detail", "status", "body", "headers"]);
     let has = outputs(&["error", "detail", "set"]);
     let settings = outputs(&["error", "detail", "settings"]);
+    let translate = outputs(&["error", "detail", "locale", "count", "other"]);
     let open = outputs(&["error", "detail", "opened", "userInitiated"]);
     let run = outputs(&[
         "error",
@@ -385,6 +394,11 @@ fn sdk_actions() -> Value {
                 "kind": {"type": "integer", "min": 1}})],
         ),
         ("counter", vec![]),
+        // A standard dialog (plugin API 1.5); not called here: the agent's
+        // dialog path is tested in `plugins::executor::dialog_tests`.
+        ("ask", vec![]),
+        // The app's language and the plugin's translations (1.6).
+        ("translate", vec![]),
         (
             "probe",
             vec![json!({"key": "mode", "label": "Mode", "required": false,
@@ -398,6 +412,7 @@ fn sdk_actions() -> Value {
             "cred-fetch" => &fetch,
             "cred-has" => &has,
             "settings" => &settings,
+            "translate" => &translate,
             "open-url" | "open-if-user" => &open,
             "run-context" => &run,
             "clock" | "random" | "dice" => &ambient,
@@ -438,6 +453,23 @@ fn crashy_manifest() -> Value {
         {"id": "lastStatus", "name": "Last status", "valueType": {"type": "integer"},
          "scope": "machine"}
     ]);
+    manifest
+}
+
+/// The SDK test guest at plugin API 1.6, its name, description and one
+/// action named by translation keys of `locales/en.json` and `pl.json`.
+fn localized_manifest() -> Value {
+    let mut manifest = crashy_manifest();
+    manifest["id"] = json!(LOCALIZED);
+    manifest["engines"]["pluginApi"] = json!("^1.6");
+    manifest["name"] = json!("t:plugin.name");
+    manifest["description"] = json!("t:plugin.description");
+    manifest["locales"] = json!(["en", "pl"]);
+    for action in manifest["contributes"]["actions"].as_array_mut().unwrap() {
+        if action["id"] == "translate" {
+            action["name"] = json!("t:actions.translate");
+        }
+    }
     manifest
 }
 
@@ -545,8 +577,49 @@ fn origin_manifest() -> Value {
     manifest
 }
 
+/// The sample's manifest with `contributes.visualAssets`.
+fn visuals_manifest() -> Value {
+    let mut manifest = hello_manifest(VISUALS, "1.0.0");
+    manifest["engines"]["pluginApi"] = json!("^1.8");
+    manifest["contributes"]["visualAssets"] = json!({
+        "icons": [{"id": "logo", "name": "Logo", "asset": "assets/visual/logo.png"}],
+        "backgrounds": [
+            {"id": "photo", "name": "Photo", "type": "image", "asset": "assets/visual/photo.png"},
+            {"id": "dusk", "name": "Dusk", "type": "gradient", "colors": ["#ff8800", "#220044"], "angle": 180}
+        ]
+    });
+    manifest
+}
+
+/// Every file `contributes.visualAssets` names, as a small PNG of its own
+/// colour.
+fn write_visual_assets(dir: &Path, manifest: &Value) {
+    let assets = &manifest["contributes"]["visualAssets"];
+    let files = assets["icons"]
+        .as_array()
+        .into_iter()
+        .chain(assets["backgrounds"].as_array())
+        .flatten()
+        .filter_map(|entry| entry["asset"].as_str());
+    for (n, file) in files.enumerate() {
+        let shade = u8::try_from(40 + 60 * n).unwrap_or(255);
+        let frame = deckpilot_device::Frame::filled(48, 48, [shade, 30, 200]);
+        let path = dir.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, deckpilot_render::frame_png(&frame).unwrap()).unwrap();
+    }
+}
+
 fn write_plugin_dir(dir: &Path, manifest: &Value, icon: Option<&[u8]>) {
     std::fs::create_dir_all(dir.join("assets")).unwrap();
+    write_visual_assets(dir, manifest);
+    // Plugin API 1.6: the translations the manifest names.
+    for tag in manifest["locales"].as_array().into_iter().flatten() {
+        let tag = tag.as_str().unwrap();
+        std::fs::create_dir_all(dir.join("locales")).unwrap();
+        let text = if tag == "pl" { LOCALE_PL } else { LOCALE_EN };
+        std::fs::write(dir.join(format!("locales/{tag}.json")), text).unwrap();
+    }
     std::fs::write(
         dir.join("manifest.json"),
         serde_json::to_vec_pretty(manifest).unwrap(),
@@ -778,6 +851,8 @@ impl Registry {
         registry.add(&opener_manifest(), &artifacts.sdk_test);
         registry.add(&board_manifest(), &artifacts.sdk_test);
         registry.add(&origin_manifest(), &artifacts.sdk_test);
+        registry.add(&localized_manifest(), &artifacts.sdk_test);
+        registry.add(&visuals_manifest(), &artifacts.hello);
         registry.add_with(&big_manifest(), &artifacts.hello, Some(&big_icon()));
         let mut future = hello_manifest(FUTURE, "1.0.0");
         future["engines"]["deckpilot"] = json!(">=9.0.0 <10.0.0");
@@ -2662,6 +2737,79 @@ async fn plugin_actions_run_from_keys_run_action_and_workflows() {
     agent.stop().await;
 }
 
+/// The editor's live preview (protocol 16): a key assigned in the editor
+/// and not saved runs the plugin's action from a physical press, through
+/// the same pipeline and the same permission checks.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unsaved_binding_runs_a_plugin_action_with_its_permission_checks() {
+    use deckpilot_core::{ActionStatus, ParameterValue};
+    use deckpilot_ipc::live_preview::{PART_BUDGET, patch};
+    let registry = shared_registry();
+    let mut profile = deckpilot_core::Profile::new("Live plugin keys");
+    let greet = plugin_action(
+        &mut profile,
+        "Greet Ada",
+        GREET_TYPE,
+        &[("name", ParameterValue::Text("Ada".into()))],
+    );
+    bind_keys(&mut profile, &[]);
+    let saved = profile.layouts[0].clone();
+    let env = Env::with_profile("plugins-e2e-live", &profile);
+    let agent = Agent::started(&env, registry).await;
+    agent.install(HELLO, Some("1.0.0")).await.unwrap();
+    agent.enable(HELLO, &[NETWORK]).await.unwrap();
+    let device = agent.mock_device().await;
+    let mut editor = agent.client().await;
+    let Response::LivePreviewStarted { session, .. } = editor
+        .request(Request::BeginLivePreview {
+            device: device.clone(),
+            profile: profile.id,
+            layout: saved.id,
+            navigation: None,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("not started")
+    };
+    let mut working = saved.clone();
+    working.pages[0]
+        .bindings
+        .push(deckpilot_core::ControlBinding::new(
+            deckpilot_device::ControlId::Key { index: 3 },
+            deckpilot_core::Trigger::Press,
+            deckpilot_core::BindingTarget::action(greet),
+        ));
+    for part in patch(None, &working, PART_BUDGET).unwrap() {
+        editor
+            .request(Request::ApplyLivePreview {
+                session,
+                revision: 1,
+                part: Box::new(part),
+                last: true,
+            })
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        agent.press(&device, 3).await,
+        ("Greet Ada".to_owned(), ActionStatus::Succeeded)
+    );
+    agent
+        .request(Request::RevokePluginPermission {
+            plugin: HELLO.into(),
+            permission: NETWORK.into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        agent.press(&device, 3).await,
+        ("Greet Ada".to_owned(), ActionStatus::Failed)
+    );
+    drop(editor);
+    agent.stop().await;
+}
+
 /// A host that crashes in the middle of a key's action fails that action,
 /// not the agent.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -4111,6 +4259,7 @@ async fn a_plugin_larger_than_one_message_is_listed_shown_and_edited() {
                 plugin: BIG.into(),
                 offset,
                 navigation: None,
+                asset: None,
             })
             .await
             .unwrap();
@@ -4352,6 +4501,46 @@ async fn pages_open_only_in_runs_the_user_started() {
         ("Open PR".to_owned(), ActionStatus::Succeeded)
     );
     assert_eq!(env.opened_urls(), [page, page]);
+
+    // ---- the same key pressed by the app's preview (`simulatePress`,
+    // protocol 14): it runs through the same dispatch, but it is not the
+    // user's direct request, so the page is refused (`docs/editor-
+    // navigation-and-simulation.md`).
+    tokio::time::sleep(Duration::from_millis(2_100)).await;
+    let mut events = agent.events().await;
+    let layout = &profile.layouts[0];
+    let simulate = |confirmed| Request::SimulatePress {
+        device: device.clone(),
+        profile: profile.id,
+        layout: layout.id,
+        page: layout.home_page,
+        control: deckpilot_device::ControlId::Key { index: 0 },
+        kind: deckpilot_ipc::simulation::PressKind::Single,
+        confirmed,
+    };
+    let mut answer = agent.request(simulate(false)).await.unwrap();
+    if let Response::SimulatedPress {
+        outcome: deckpilot_ipc::simulation::SimulationOutcome::ConfirmationRequired { .. },
+    } = &answer
+    {
+        answer = agent.request(simulate(true)).await.unwrap();
+    }
+    assert!(
+        matches!(
+            &answer,
+            Response::SimulatedPress {
+                outcome: deckpilot_ipc::simulation::SimulationOutcome::Ran { dispatched }
+            } if !dispatched.is_empty()
+        ),
+        "{answer:?}"
+    );
+    let (name, _) = completed(&mut events).await;
+    assert_eq!(name, "Open PR");
+    assert_eq!(
+        env.opened_urls(),
+        [page, page],
+        "a simulated press reached the opener"
+    );
 
     // ---- a workflow the user started: cause `user`, the run's summary.
     tokio::time::sleep(Duration::from_millis(2_100)).await;
@@ -5424,4 +5613,257 @@ async fn plugins_with_dependencies_are_installed_and_removed_together() {
         .unwrap();
     assert_eq!(installed_ids(&agent).await, Vec::<String>::new());
     agent.stop().await;
+}
+
+/// Plugin API 1.6 end to end: a plugin whose package carries English and
+/// Polish translations (signed and pinned like its other files) is shown
+/// in English until an app says otherwise; after `setLocale` the agent
+/// announces it as changed, shows its name, description and action in
+/// Polish, and gives the plugin the language and its own translations
+/// (with Polish plurals). Uninstalling drops them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugin_texts_follow_the_apps_language() {
+    let registry = shared_registry();
+    let env = Env::new("plugins-e2e-locale");
+    let agent = Agent::started(&env, registry).await;
+    agent.install(LOCALIZED, None).await.unwrap();
+    agent.enable(LOCALIZED, &[NETWORK]).await.unwrap();
+    let runtime = match agent.request(Request::GetPluginRuntime).await.unwrap() {
+        Response::PluginRuntime { status } => status,
+        other => panic!("unexpected {other:?}"),
+    };
+    assert!(runtime.has_feature(deckpilot_ipc::plugins::feature::LOCALE));
+
+    // No app said anything: English.
+    let details = agent.details(LOCALIZED).await;
+    assert_eq!(details.summary.name, "Localized test");
+    let translate = |details: &PluginDetails| {
+        details
+            .summary
+            .actions
+            .iter()
+            .find(|a| a.action == "translate")
+            .map(|a| a.name.clone())
+    };
+    assert_eq!(translate(&details).as_deref(), Some("Translate"));
+    let english = agent
+        .invoke(LOCALIZED, "translate", json!({}))
+        .await
+        .unwrap();
+    let PluginActionOutcome::Ok { data, .. } = &english else {
+        panic!("{english:?}")
+    };
+    assert_eq!(data["locale"], "en");
+    assert_eq!(data["count"], "3 PRs");
+    // Not one of its keys: a label, never another plugin's text.
+    assert_eq!(data["other"], "Key");
+
+    let mut events = agent.client().await;
+    events.subscribe_plugin_events().await.unwrap();
+    let mut app = agent.client().await;
+    assert!(app.set_locale("pl-PL").await.unwrap());
+    let seen = drain(&mut events).await;
+    assert!(
+        seen.iter()
+            .any(|e| matches!(e, PluginEvent::Changed { plugin, .. } if plugin == LOCALIZED)),
+        "{seen:?}"
+    );
+    let details = agent.details(LOCALIZED).await;
+    assert_eq!(details.summary.name, "Test lokalizacji");
+    assert_eq!(translate(&details).as_deref(), Some("Przetłumacz"));
+    let Response::Plugins { plugins } = agent.request(Request::ListPlugins).await.unwrap() else {
+        panic!("plugins")
+    };
+    let listed = plugins.iter().find(|p| p.id == LOCALIZED).unwrap();
+    assert_eq!(listed.name, "Test lokalizacji");
+    let polish = agent
+        .invoke(LOCALIZED, "translate", json!({}))
+        .await
+        .unwrap();
+    let PluginActionOutcome::Ok { data, .. } = &polish else {
+        panic!("{polish:?}")
+    };
+    assert_eq!(data["locale"], "pl-PL");
+    assert_eq!(data["count"], "3 PR-y");
+
+    // The same language again: nothing to announce.
+    assert!(app.set_locale("pl-PL").await.unwrap());
+    let again = drain(&mut events).await;
+    assert!(
+        !again
+            .iter()
+            .any(|e| matches!(e, PluginEvent::Changed { plugin, .. } if plugin == LOCALIZED)),
+        "{again:?}"
+    );
+    agent
+        .request(Request::UninstallPlugin {
+            plugin: LOCALIZED.into(),
+            keep: PluginRetention::default(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        agent
+            .request(Request::GetPlugin {
+                plugin: LOCALIZED.into()
+            })
+            .await
+            .is_err()
+    );
+    agent.stop().await;
+}
+
+// --------------------------------------------------------- visual assets
+
+/// The hash of each key's image on the simulated device.
+async fn key_hashes(agent: &Agent, device: &deckpilot_device::DeviceId) -> Vec<Option<String>> {
+    let Response::MockDevice { inspection } = agent
+        .request(Request::InspectMockDevice {
+            device: device.clone(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("inspectMockDevice")
+    };
+    (0..3)
+        .map(|index| {
+            inspection
+                .frames
+                .iter()
+                .find(|frame| frame.control == deckpilot_device::ControlId::Key { index })
+                .and_then(|frame| frame.hash.clone())
+        })
+        .collect()
+}
+
+/// Waits until keys 0 and 2 (the plugin's background and icon) look like
+/// key 1 (the same action without them) or, with `drawn`, unlike it.
+async fn assets_drawn(agent: &Agent, device: &deckpilot_device::DeviceId, drawn: bool) {
+    let deadline = Instant::now() + Duration::from_secs(40);
+    loop {
+        let hashes = key_hashes(agent, device).await;
+        let shown = hashes[0].is_some() && hashes[1].is_some() && hashes[2].is_some();
+        let differ = hashes[0] != hashes[1] && hashes[2] != hashes[1];
+        let same = hashes[0] == hashes[1] && hashes[2] == hashes[1];
+        if shown && ((drawn && differ) || (!drawn && same)) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the plugin's assets were never {} ({hashes:?})",
+            if drawn { "drawn" } else { "left out" }
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Plugin visual assets (plugin API 1.8) through the real agent and a
+/// simulated device: listed for the libraries, served only as the signed
+/// package has them, drawn on keys while the plugin is enabled, left out
+/// (the key's default background, no icon of its own) while it is not,
+/// and drawn again once it is back, without the stored references ever
+/// changing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugin_visual_assets_follow_the_plugins_lifecycle() {
+    let registry = shared_registry();
+    let mut profile = deckpilot_core::Profile::new("Visuals");
+    let greet = plugin_action(&mut profile, "Greet", &format!("{VISUALS}.greet"), &[]);
+    bind_keys(&mut profile, &[greet, greet, greet]);
+    let look = |icon: Option<&str>, background: Option<&str>| deckpilot_core::KeyAppearance {
+        icon: icon.map(|id| deckpilot_core::IconRef {
+            id: deckpilot_core::AssetRef::parse(id).unwrap(),
+            fit: deckpilot_core::IconFit::Fit,
+        }),
+        background: background.map(|b| deckpilot_core::Background::parse(b).unwrap()),
+        ..deckpilot_core::KeyAppearance::default()
+    };
+    let bindings = &mut profile.layouts[0].pages[0].bindings;
+    bindings[0].appearance = Some(look(None, Some(&format!("asset:{VISUALS}.dusk"))));
+    bindings[2].appearance = Some(look(Some(&format!("{VISUALS}.logo")), None));
+    let stored = profile.layouts.clone();
+    let env = Env::with_profile("plugins-e2e-visual-assets", &profile);
+    let agent = env.start(registry);
+    agent.unlock().await;
+    let device = agent.mock_device().await;
+
+    // ---- not installed: the keys draw their fallback.
+    assets_drawn(&agent, &device, false).await;
+
+    // ---- installed and enabled: listed, served, drawn.
+    agent.install_enabled(VISUALS, &[NETWORK]).await;
+    assets_drawn(&agent, &device, true).await;
+    let Response::Plugins { plugins } = agent.request(Request::ListPlugins).await.unwrap() else {
+        panic!("listPlugins")
+    };
+    let listed = &plugins
+        .iter()
+        .find(|p| p.id == VISUALS)
+        .unwrap()
+        .visual_assets;
+    let ids: Vec<&str> = listed.iter().map(|a| a.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [
+            format!("{VISUALS}.logo"),
+            format!("{VISUALS}.photo"),
+            format!("{VISUALS}.dusk")
+        ]
+    );
+    assert_eq!(listed[2].colors, ["#ff8800", "#220044"]);
+    let file = |asset: &str| {
+        let request = Request::GetPluginIcon {
+            plugin: VISUALS.into(),
+            offset: 0,
+            navigation: None,
+            asset: Some(asset.into()),
+        };
+        let agent = &agent;
+        async move {
+            match agent.request(request).await.unwrap() {
+                Response::PluginIcon { icon, .. } => icon,
+                other => panic!("{other:?}"),
+            }
+        }
+    };
+    let logo = file("logo").await.expect("the icon's file");
+    assert_eq!(logo.media_type, "image/png");
+    assert!(file("dusk").await.is_none(), "a gradient has no file");
+    assert!(file("nothing").await.is_none());
+
+    // ---- disabled: left out, the references stay.
+    agent
+        .request(Request::DisablePlugin {
+            plugin: VISUALS.into(),
+        })
+        .await
+        .unwrap();
+    assets_drawn(&agent, &device, false).await;
+
+    // ---- enabled again: drawn again.
+    agent.enable(VISUALS, &[NETWORK]).await.unwrap();
+    assets_drawn(&agent, &device, true).await;
+
+    // ---- uninstalled, then installed again.
+    agent
+        .request(Request::UninstallPlugin {
+            plugin: VISUALS.into(),
+            keep: deckpilot_ipc::plugins::PluginRetention::default(),
+        })
+        .await
+        .unwrap();
+    assets_drawn(&agent, &device, false).await;
+    agent.install_enabled(VISUALS, &[NETWORK]).await;
+    assets_drawn(&agent, &device, true).await;
+
+    agent.stop().await;
+    // Nothing rewrote the layout: the keys still refer to the assets.
+    let store = support::open_store(&env.paths, &env.key);
+    let saved = deckpilot_storage::ConfigStore::load_profile(&store, profile.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        saved.layouts[0].pages[0].bindings,
+        stored[0].pages[0].bindings
+    );
 }

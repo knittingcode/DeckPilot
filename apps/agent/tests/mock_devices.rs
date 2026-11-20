@@ -57,9 +57,9 @@ fn icon(profile: &mut Profile, name: &str, color: [u8; 3]) -> KeyAppearance {
         .add_icon(deckpilot_render::icons::import(name, &png).unwrap())
         .unwrap();
     KeyAppearance {
-        background: Some(Color([10, 10, 10])),
+        background: Some(Color([10, 10, 10]).into()),
         icon: Some(IconRef {
-            id,
+            id: id.into(),
             fit: IconFit::Fit,
         }),
         ..KeyAppearance::default()

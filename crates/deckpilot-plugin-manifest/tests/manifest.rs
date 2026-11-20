@@ -319,6 +319,524 @@ fn views_declare_their_toolbar_context() {
 }
 
 #[test]
+fn dialogs_are_a_permission_of_plugin_api_1_5() {
+    use deckpilot_plugin_manifest::DIALOGS_API;
+    assert_eq!(DIALOGS_API, ApiLevel::new(1, 5));
+    let validator = schema();
+    let dialogs = json!({"kind": "dialogs", "justification": "Asks which repository to open."});
+
+    let mut value = example();
+    set(&mut value, "/engines/pluginApi", json!("^1.5"));
+    push(&mut value, "/permissions", dialogs.clone());
+    assert_eq!(schema_errors(&validator, &value), [] as [String; 0]);
+    let manifest = Manifest::parse_and_validate(&value.to_string()).unwrap();
+    let permission = manifest
+        .permissions
+        .iter()
+        .find(|p| p.kind() == PermissionKind::Dialogs)
+        .unwrap();
+    assert_eq!(PermissionKind::Dialogs.as_str(), "dialogs");
+    assert_eq!(permission.justification(), "Asks which repository to open.");
+    assert_eq!(serde_json::to_value(&manifest).unwrap(), value);
+
+    // Below 1.5: refused, with the level to set.
+    for level in ["^1.0", "^1.3", "^1.4"] {
+        let mut old = example();
+        set(&mut old, "/engines/pluginApi", json!(level));
+        push(&mut old, "/permissions", dialogs.clone());
+        let error = Manifest::parse_and_validate(&old.to_string()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("needs plugin API 1.5: set engines.pluginApi to `^1.5`"),
+            "{level}: {error}"
+        );
+    }
+
+    // Strict: no members but the justification, which it needs; `ui` and
+    // `customUi` stay forbidden.
+    for bad in [
+        json!({"kind": "dialogs"}),
+        json!({"kind": "dialogs", "justification": "Asks which repository.", "secret": true}),
+        json!({"kind": "dialogs", "justification": "Asks which repository.", "html": true}),
+        json!({"kind": "ui", "justification": "Shows its own window."}),
+        json!({"kind": "customUi", "justification": "Shows its own window."}),
+    ] {
+        let mut value = example();
+        set(&mut value, "/engines/pluginApi", json!("^1.5"));
+        push(&mut value, "/permissions", bad.clone());
+        assert!(
+            Manifest::parse_and_validate(&value.to_string()).is_err(),
+            "{bad}"
+        );
+        assert!(
+            !schema_errors(&validator, &value).is_empty(),
+            "{bad}: schema"
+        );
+    }
+}
+
+#[test]
+fn action_titles_are_plugin_api_1_8_and_data_only() {
+    use deckpilot_plugin_manifest::TITLE_API;
+    assert_eq!(TITLE_API, ApiLevel::new(1, 8));
+    let validator = schema();
+    let with = |level: &str, title: Value| {
+        let mut value = example();
+        set(&mut value, "/engines/pluginApi", json!(level));
+        set(&mut value, "/contributes/actions/0/title", title);
+        value
+    };
+    let title = json!({
+        "default": "CPU",
+        "dynamic": true,
+        "position": "bottom",
+        "supports": ["visibility", "position", "font", "style", "color", "layout"]
+    });
+    let value = with("^1.8", title.clone());
+    assert_eq!(schema_errors(&validator, &value), [] as [String; 0]);
+    let manifest = Manifest::parse_and_validate(&value.to_string()).unwrap();
+    let declared = manifest.contributes.actions()[0].title.as_ref().unwrap();
+    assert_eq!(declared.default.as_deref(), Some("CPU"));
+    assert_eq!(declared.dynamic, Some(true));
+    assert_eq!(serde_json::to_value(&manifest).unwrap(), value);
+    // Every member is optional.
+    assert!(Manifest::parse_and_validate(&with("^1.8", json!({})).to_string()).is_ok());
+
+    // Below 1.8: refused, with the level to set.
+    for level in ["^1.0", "^1.7"] {
+        let error =
+            Manifest::parse_and_validate(&with(level, title.clone()).to_string()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("needs plugin API 1.8: set engines.pluginApi to `^1.8`"),
+            "{level}: {error}"
+        );
+    }
+
+    // Bad values, refused by the validator and the schema alike; nothing
+    // but data (no UI, no script).
+    for bad in [
+        json!({"default": ""}),
+        json!({"default": "A title far longer than thirty-two characters"}),
+        json!({"position": "left"}),
+        json!({"supports": ["everything"]}),
+        json!({"supports": ["color", "color"]}),
+        json!({"editor": "index.html"}),
+        json!({"render": true}),
+    ] {
+        let value = with("^1.8", bad.clone());
+        assert!(
+            Manifest::parse_and_validate(&value.to_string()).is_err(),
+            "{bad}"
+        );
+        assert!(
+            !schema_errors(&validator, &value).is_empty(),
+            "{bad}: schema"
+        );
+    }
+}
+
+#[test]
+fn visual_assets_are_plugin_api_1_8_data_confined_to_the_package() {
+    use deckpilot_plugin_manifest::VISUAL_ASSETS_API;
+    assert_eq!(VISUAL_ASSETS_API, ApiLevel::new(1, 8));
+    let validator = schema();
+    let with = |level: &str, assets: Value| {
+        let mut value = example();
+        set(&mut value, "/engines/pluginApi", json!(level));
+        set(&mut value, "/contributes/visualAssets", assets);
+        value
+    };
+    let assets = json!({
+        "icons": [
+            {"id": "sunny", "name": "Sunny", "asset": "assets/icons/sunny.png", "keywords": ["sun"]}
+        ],
+        "backgrounds": [
+            {"id": "sky", "name": "Sky", "type": "image", "asset": "assets/backgrounds/sky.jpg"},
+            {"id": "dusk", "name": "Dusk", "type": "gradient", "colors": ["#ff8800", "#220044"], "angle": 135}
+        ]
+    });
+    let value = with("^1.8", assets.clone());
+    assert_eq!(schema_errors(&validator, &value), [] as [String; 0]);
+    let manifest = Manifest::parse_and_validate(&value.to_string()).unwrap();
+    let declared = manifest.contributes.visual_assets();
+    assert_eq!(declared.icons()[0].id, "sunny");
+    assert_eq!(declared.backgrounds().len(), 2);
+    assert_eq!(serde_json::to_value(&manifest).unwrap(), value);
+    // Their files are package files: hashed into the integrity record.
+    let files = manifest.referenced_files();
+    for file in ["assets/icons/sunny.png", "assets/backgrounds/sky.jpg"] {
+        assert!(files.iter().any(|f| f == file), "{file}");
+    }
+    assert_eq!(manifest.visual_asset_files().len(), 2);
+    // Names are display texts: translatable like every other (`t:`).
+    let mut translated = value.clone();
+    set(
+        &mut translated,
+        "/contributes/visualAssets/backgrounds/1/name",
+        json!("t:assets.dusk"),
+    );
+    let error = Manifest::parse_and_validate(&translated.to_string()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("contributes.visualAssets.backgrounds[1].name"),
+        "{error}"
+    );
+
+    // Below 1.8: refused, with the level to set.
+    for level in ["^1.0", "^1.7"] {
+        let error =
+            Manifest::parse_and_validate(&with(level, assets.clone()).to_string()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("needs plugin API 1.8: set engines.pluginApi to `^1.8`"),
+            "{level}: {error}"
+        );
+    }
+
+    // Icons and backgrounds share the plugin's ids (the schema cannot say
+    // so; the validator does).
+    let twice = json!({
+        "icons": [{"id": "same", "name": "A", "asset": "assets/a.png"}],
+        "backgrounds": [{"id": "same", "name": "B", "type": "gradient", "colors": ["#000000", "#ffffff"]}]
+    });
+    let error = Manifest::parse_and_validate(&with("^1.8", twice).to_string()).unwrap_err();
+    assert!(error.to_string().contains("same"), "{error}");
+
+    // Bad declarations, refused by the validator and the schema alike.
+    let icon = |icon: Value| json!({"icons": [icon]});
+    let background = |background: Value| json!({"backgrounds": [background]});
+    for bad in [
+        // Paths outside the package or outside assets/, wrong formats.
+        icon(json!({"id": "a", "name": "A", "asset": "../secret.png"})),
+        icon(json!({"id": "a", "name": "A", "asset": "/etc/passwd.png"})),
+        icon(json!({"id": "a", "name": "A", "asset": "assets/../x.png"})),
+        icon(json!({"id": "a", "name": "A", "asset": "file:///x.png"})),
+        icon(json!({"id": "a", "name": "A", "asset": "icons/a.png"})),
+        icon(json!({"id": "a", "name": "A", "asset": "assets/a.svg"})),
+        icon(json!({"id": "a", "name": "A", "asset": "assets/a.jpg"})),
+        background(json!({"id": "a", "name": "A", "type": "image", "asset": "assets/a.gif"})),
+        // Ids and names.
+        icon(json!({"id": "Bad.Id", "name": "A", "asset": "assets/a.png"})),
+        icon(json!({"id": "a", "name": "", "asset": "assets/a.png"})),
+        icon(json!({"id": "a", "name": "A".repeat(49), "asset": "assets/a.png"})),
+        // Types and their fields.
+        background(json!({"id": "a", "name": "A", "type": "image"})),
+        background(json!({"id": "a", "name": "A", "type": "gradient", "colors": ["#000000"]})),
+        background(
+            json!({"id": "a", "name": "A", "type": "gradient", "colors": ["#000000", "red"]}),
+        ),
+        background(
+            json!({"id": "a", "name": "A", "type": "gradient", "colors": ["#000000", "#ffffff"], "angle": 360}),
+        ),
+        background(
+            json!({"id": "a", "name": "A", "type": "gradient", "colors": ["#000000", "#ffffff"], "asset": "assets/a.png"}),
+        ),
+        background(json!({"id": "a", "name": "A", "type": "video", "asset": "assets/a.png"})),
+        // Data only: no code, no CSS.
+        background(
+            json!({"id": "a", "name": "A", "type": "gradient", "colors": ["#000000", "#ffffff"], "css": "linear-gradient(red, blue)"}),
+        ),
+        icon(json!({"id": "a", "name": "A", "asset": "assets/a.png", "script": "main.js"})),
+    ] {
+        let value = with("^1.8", bad.clone());
+        assert!(
+            Manifest::parse_and_validate(&value.to_string()).is_err(),
+            "{bad}"
+        );
+        assert!(
+            !schema_errors(&validator, &value).is_empty(),
+            "{bad}: schema"
+        );
+    }
+}
+
+#[test]
+fn editor_navigation_is_plugin_api_1_7_and_an_allowlist() {
+    use deckpilot_plugin_manifest::{EDITOR_NAVIGATION_API, EDITOR_NAVIGATION_OPERATIONS};
+    assert_eq!(EDITOR_NAVIGATION_API, ApiLevel::new(1, 7));
+    let validator = schema();
+    let with = |level: &str, navigation: Value| {
+        let mut value = example();
+        set(&mut value, "/engines/pluginApi", json!(level));
+        set(
+            &mut value,
+            "/contributes/actions/0/editorNavigation",
+            navigation,
+        );
+        value
+    };
+    // `repository` is a text parameter of the example's first action,
+    // `filter` a choice.
+    let open = json!({"operation": "folder.open", "targetParameter": "repository"});
+    let value = with("^1.7", open.clone());
+    assert_eq!(schema_errors(&validator, &value), [] as [String; 0]);
+    let manifest = Manifest::parse_and_validate(&value.to_string()).unwrap();
+    let declared = manifest.contributes.actions()[0]
+        .editor_navigation
+        .as_ref()
+        .unwrap();
+    assert_eq!(declared.operation, "folder.open");
+    assert_eq!(declared.target_parameter.as_deref(), Some("repository"));
+    assert_eq!(serde_json::to_value(&manifest).unwrap(), value);
+    for (operation, takes_target) in EDITOR_NAVIGATION_OPERATIONS {
+        let navigation = if takes_target {
+            json!({"operation": operation, "targetParameter": "repository"})
+        } else {
+            json!({"operation": operation})
+        };
+        let value = with("^1.7", navigation);
+        assert!(
+            Manifest::parse_and_validate(&value.to_string()).is_ok(),
+            "{operation}"
+        );
+        assert_eq!(schema_errors(&validator, &value), [] as [String; 0]);
+    }
+
+    // Below 1.7: refused, with the level to set.
+    for level in ["^1.0", "^1.5", "^1.6"] {
+        let error =
+            Manifest::parse_and_validate(&with(level, open.clone()).to_string()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("needs plugin API 1.7: set engines.pluginApi to `^1.7`"),
+            "{level}: {error}"
+        );
+    }
+
+    // Only the allowlist, only the action's own text parameters, a target
+    // exactly where the operation takes one; nothing executable.
+    for (bad, schema_refuses) in [
+        (json!({"operation": "url.open"}), true),
+        (json!({"operation": "profile.switch"}), true),
+        (json!({"operation": "folder.open"}), false),
+        (
+            json!({"operation": "folder.open", "targetParameter": "missing"}),
+            false,
+        ),
+        (
+            json!({"operation": "folder.open", "targetParameter": "filter"}),
+            false,
+        ),
+        (
+            json!({"operation": "page.next", "targetParameter": "repository"}),
+            false,
+        ),
+        (
+            json!({"operation": "folder.back", "pageParameter": "repository"}),
+            false,
+        ),
+        (
+            json!({"operation": "folder.back", "callback": "navigate"}),
+            true,
+        ),
+        (json!({"operation": "layout.back", "script": "go()"}), true),
+    ] {
+        let value = with("^1.7", bad.clone());
+        assert!(
+            Manifest::parse_and_validate(&value.to_string()).is_err(),
+            "{bad}"
+        );
+        assert_eq!(
+            !schema_errors(&validator, &value).is_empty(),
+            schema_refuses,
+            "{bad}: schema"
+        );
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // one contract, step by step
+fn localization_is_plugin_api_1_6() {
+    use deckpilot_plugin_manifest::LOCALIZATION_API;
+    use deckpilot_plugin_manifest::locale::{Catalog, LocaleTag, Messages};
+    assert_eq!(LOCALIZATION_API, ApiLevel::new(1, 6));
+    let validator = schema();
+
+    let localized = || {
+        let mut value = example();
+        set(&mut value, "/engines/pluginApi", json!("^1.6"));
+        set(&mut value, "/locales", json!(["en", "pl", "pl-PL"]));
+        set(&mut value, "/name", json!("t:plugin.name"));
+        set(&mut value, "/description", json!("t:plugin.description"));
+        set(
+            &mut value,
+            "/contributes/actions/0/name",
+            json!("t:actions.count.name"),
+        );
+        set(
+            &mut value,
+            "/permissions/0/justification",
+            json!("t:permissions.network"),
+        );
+        value
+    };
+    let value = localized();
+    assert_eq!(schema_errors(&validator, &value), [] as [String; 0]);
+    let manifest = Manifest::parse_and_validate(&value.to_string()).unwrap();
+    assert_eq!(manifest.default_locale(), "en");
+    assert_eq!(
+        manifest.locale_files(),
+        ["locales/en.json", "locales/pl.json", "locales/pl-PL.json"]
+    );
+    // The locale files are files the manifest names (hashed and pinned).
+    let files = manifest.referenced_files();
+    for file in ["locales/en.json", "locales/pl.json", "locales/pl-PL.json"] {
+        assert!(files.contains(file), "{file}");
+    }
+    assert_eq!(serde_json::to_value(&manifest).unwrap(), value);
+    let keys: Vec<String> = manifest
+        .translation_keys()
+        .into_iter()
+        .map(|(_, key)| key)
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "plugin.name",
+            "plugin.description",
+            "permissions.network",
+            "actions.count.name"
+        ]
+    );
+
+    // Translated: names and labels change, identifiers never do.
+    let mut locales = std::collections::BTreeMap::new();
+    locales.insert(
+        LocaleTag::parse("en").unwrap(),
+        Messages::from_pairs([
+            ("plugin.name", "PR count"),
+            ("plugin.description", "Counts pull requests."),
+            ("actions.count.name", "Count PRs"),
+        ])
+        .unwrap(),
+    );
+    locales.insert(
+        LocaleTag::parse("pl").unwrap(),
+        Messages::from_pairs([
+            ("plugin.name", "Liczba PR"),
+            ("actions.count.name", "Policz PR"),
+        ])
+        .unwrap(),
+    );
+    let catalog = Catalog::new(LocaleTag::parse("en").unwrap(), locales);
+    let mut missing = Vec::new();
+    let pl = LocaleTag::parse("pl-PL").unwrap();
+    let shown = manifest.localized(&catalog, Some(&pl), &mut |k| missing.push(k.to_owned()));
+    assert_eq!(shown.name, "Liczba PR");
+    assert_eq!(shown.description, "Counts pull requests.");
+    assert_eq!(shown.contributes.actions()[0].name, "Policz PR");
+    assert_eq!(
+        shown.contributes.actions()[0].id,
+        manifest.contributes.actions()[0].id
+    );
+    assert_eq!(shown.id, manifest.id);
+    // A key no locale has: a label from its last segment, reported.
+    assert_eq!(shown.permissions[0].justification(), "Network");
+    assert_eq!(missing, ["permissions.network"]);
+
+    // Below 1.6: `locales` and `defaultLocale` are refused, `t:` is text.
+    for level in ["^1.0", "^1.5"] {
+        let mut old = localized();
+        set(&mut old, "/engines/pluginApi", json!(level));
+        let error = Manifest::parse_and_validate(&old.to_string()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("locales: needs plugin API 1.6: set engines.pluginApi to `^1.6`"),
+            "{level}: {error}"
+        );
+    }
+    let mut plain = example();
+    set(&mut plain, "/name", json!("t:plugin.name"));
+    let plain = Manifest::parse_and_validate(&plain.to_string()).unwrap();
+    assert_eq!(plain.translation_keys(), [] as [(String, String); 0]);
+    assert_eq!(
+        plain.localized(&catalog, Some(&pl), &mut |_| {}).name,
+        "t:plugin.name"
+    );
+
+    // Bad declarations.
+    let refused = |f: &dyn Fn(&mut Value), path: &str, code: IssueCode| {
+        let mut value = localized();
+        f(&mut value);
+        let errors = match Manifest::parse_and_validate(&value.to_string()) {
+            Err(ManifestError::Invalid(errors)) => errors,
+            other => panic!("{path}: {other:?}"),
+        };
+        assert!(errors.has(path, code), "{path}: {errors}");
+    };
+    refused(
+        &|v| set(v, "/locales", json!(["en", "pl-pl"])),
+        "locales[1]",
+        IssueCode::InvalidValue,
+    );
+    refused(
+        &|v| set(v, "/locales", json!(["en", "en"])),
+        "locales[1]",
+        IssueCode::Duplicate,
+    );
+    refused(
+        &|v| set(v, "/locales", json!([])),
+        "locales",
+        IssueCode::Count,
+    );
+    refused(
+        &|v| set(v, "/locales", json!(["../x"])),
+        "locales[0]",
+        IssueCode::InvalidValue,
+    );
+    refused(
+        &|v| set(v, "/locales", json!(["pl"])),
+        "locales",
+        IssueCode::UnknownReference,
+    );
+    refused(
+        &|v| set(v, "/defaultLocale", json!("de")),
+        "defaultLocale",
+        IssueCode::UnknownReference,
+    );
+    refused(
+        &|v| set(v, "/name", json!("t:bad key")),
+        "name",
+        IssueCode::InvalidValue,
+    );
+    refused(
+        &|v| {
+            v.as_object_mut().unwrap().remove("locales");
+        },
+        "name",
+        IssueCode::UnknownReference,
+    );
+    let too_many: Vec<String> = (0u8..33)
+        .map(|i| format!("x{}", char::from(b'a' + i % 26)))
+        .collect();
+    refused(
+        &|v| set(v, "/locales", json!(too_many)),
+        "locales",
+        IssueCode::Count,
+    );
+    // The schema agrees on the tags.
+    let mut bad = localized();
+    set(&mut bad, "/locales", json!(["en", "pl_PL"]));
+    assert_ne!(schema_errors(&validator, &bad), [] as [String; 0]);
+    let mut with_default = localized();
+    set(&mut with_default, "/defaultLocale", json!("pl"));
+    assert_eq!(schema_errors(&validator, &with_default), [] as [String; 0]);
+    assert_eq!(
+        Manifest::parse_and_validate(&with_default.to_string())
+            .unwrap()
+            .default_locale(),
+        "pl"
+    );
+}
+
+#[test]
 fn schema_accepts_the_positive_fixtures() {
     let validator = schema();
     for (name, text) in [("example", EXAMPLE), ("full", FULL)] {

@@ -141,7 +141,11 @@ fn logging_is_best_effort_and_bounded() {
 fn versions_are_exposed() {
     assert_eq!(deckpilot_plugin_sdk::ABI_VERSION, 1);
     assert_eq!(deckpilot_plugin_sdk::API_LEVEL.to_string(), "1.0");
-    assert_eq!(deckpilot_plugin_sdk::LATEST_API_LEVEL.to_string(), "1.3");
+    assert_eq!(deckpilot_plugin_sdk::LATEST_API_LEVEL.to_string(), "1.6");
+    assert_eq!(
+        deckpilot_plugin_sdk::LOCALIZATION_API_LEVEL.to_string(),
+        "1.6"
+    );
     assert_eq!(deckpilot_plugin_sdk::SDK_VERSION, env!("CARGO_PKG_VERSION"));
 }
 
@@ -260,7 +264,9 @@ fn a_plugin_declares_the_api_level_it_needs() {
     let level = |major, minor| plugin().requires_api(ApiLevel { major, minor }).api_level();
     assert_eq!(level(0, 9), API_LEVEL);
     assert_eq!(level(1, 0), API_LEVEL);
-    assert_eq!(level(1, 3), LATEST_API_LEVEL);
+    assert_eq!(level(1, 3).to_string(), "1.3");
+    assert_eq!(level(1, 5).to_string(), "1.5");
+    assert_eq!(level(1, 6), LATEST_API_LEVEL);
     assert_eq!(level(1, 99), LATEST_API_LEVEL);
     assert_eq!(level(2, 0), LATEST_API_LEVEL);
 }
@@ -436,4 +442,86 @@ fn key_state_is_described_checked_and_optional() {
     assert_eq!(failed(state("cell", 99)).0, "invalid-parameters");
     assert_eq!(failed(state("plain", 0)).0, "unsupported");
     assert_eq!(failed(state("missing", 0)).0, "unsupported");
+}
+
+/// `locale.get` and `locale.translate` (plugin API 1.6) through the SDK:
+/// the locale tag, the plugin's own keys with parameters and plurals, the
+/// request checked before the host is asked, and an older agent's refusal.
+#[test]
+fn the_locale_and_translations_reach_the_host_as_plain_requests() {
+    use deckpilot_plugin_sdk::testing::MockHost;
+    use deckpilot_plugin_sdk::{CapabilityErrorKind, CapabilityRequest, TranslateArg};
+
+    let mut host = MockHost::localized(
+        "pl-PL",
+        &[
+            ("greeting", "Cześć, {{name}}!"),
+            ("prs_one", "{{count}} PR"),
+            ("prs_few", "{{count}} PR-y"),
+            ("prs_many", "{{count}} PR-ów"),
+        ],
+    );
+    let mut ctx = host.context();
+    assert_eq!(ctx.locale().unwrap(), "pl-PL");
+    assert_eq!(
+        ctx.t("greeting", &[("name", "Ala")]).unwrap(),
+        "Cześć, Ala!"
+    );
+    assert_eq!(ctx.t("prs", &[("count", 1)]).unwrap(), "1 PR");
+    assert_eq!(ctx.t("prs", &[("count", 22)]).unwrap(), "22 PR-y");
+    assert_eq!(ctx.t("prs", &[("count", 12)]).unwrap(), "12 PR-ów");
+    assert_eq!(
+        ctx.t(
+            "prs",
+            &[
+                ("count", TranslateArg::from(5)),
+                ("name", TranslateArg::from("x"))
+            ]
+        )
+        .unwrap(),
+        "5 PR-ów"
+    );
+    assert_eq!(ctx.text("settings.apiToken").unwrap(), "Api token");
+    // Refused locally: no host call.
+    let calls = ctx.calls();
+    for (key, params) in [
+        ("a b", vec![]),
+        ("../core.key", vec![]),
+        ("ok", vec![("not-a-name", TranslateArg::from(1))]),
+        ("ok", vec![("x", TranslateArg::from("y".repeat(257)))]),
+    ] {
+        let error = ctx.t(key, &params).unwrap_err();
+        assert_eq!(error.kind(), CapabilityErrorKind::BadRequest, "{key}");
+    }
+    assert_eq!(ctx.calls(), calls);
+    // The requests name a key only: no plugin, no namespace.
+    let translate = host
+        .requests()
+        .iter()
+        .find_map(|r| match r {
+            CapabilityRequest::LocaleTranslate(t) if t.key == "greeting" => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(translate).unwrap(),
+        json!({"key": "greeting", "params": {"name": "Ala"}})
+    );
+
+    // An agent before 1.6 does not know the operations.
+    let mut old = MockHost::new(|_| {
+        deckpilot_plugin_sdk::CallResult::error(
+            deckpilot_plugin_sdk::CallErrorCode::UnsupportedOp,
+            "unknown op",
+        )
+    });
+    let mut ctx = old.context();
+    assert_eq!(
+        ctx.locale().unwrap_err().kind(),
+        CapabilityErrorKind::Unsupported
+    );
+    assert_eq!(
+        ctx.text("greeting").unwrap_err().kind(),
+        CapabilityErrorKind::Unsupported
+    );
 }

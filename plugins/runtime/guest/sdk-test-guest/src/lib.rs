@@ -105,6 +105,10 @@ fn plugin() -> Plugin {
         // A plain GET whose failure goes through `?`: the code a plugin
         // reports without handling the error itself.
         .action(Action::new("get", get).param(Param::text("url").required()))
+        // A standard dialog (plugin API 1.5).
+        .action(Action::new("ask", ask))
+        // The app's language and the plugin's own translations (1.6).
+        .action(Action::new("translate", translate))
 }
 
 /// A server that answers late (canned in the agent's tests).
@@ -207,6 +211,40 @@ fn refused(e: &CapabilityError) -> Output {
     match e.network_kind() {
         Some(kind) => out.with("network", kind.code()),
         None => out,
+    }
+}
+
+/// Asks for a repository in a form and reports the answer.
+fn ask(ctx: &mut Context<'_>, _: &Args<'_>) -> ActionResult {
+    use deckpilot_plugin_sdk::dialog::{Dialog, DialogResultExt, Field};
+    let dialog = Dialog::form(
+        "Configure repository",
+        [Field::text("repository", "Repository path").required()],
+    )
+    .confirm_label("Save")
+    .timeout_seconds(30);
+    match ctx.dialog(dialog) {
+        Ok(answer) => Ok(Output::ok()
+            .with("confirmed", answer.is_confirmed())
+            .with("repository", answer.text("repository").unwrap_or_default())),
+        Err(e) => Ok(refused(&e)),
+    }
+}
+
+/// Reports the app's language and two of its own translations.
+fn translate(ctx: &mut Context<'_>, _: &Args<'_>) -> ActionResult {
+    let locale = match ctx.locale() {
+        Ok(locale) => locale,
+        Err(e) => return Ok(refused(&e)),
+    };
+    let count = ctx.t("prs", &[("count", 3)]);
+    let other = ctx.text("other.plugin.key");
+    match (count, other) {
+        (Ok(count), Ok(other)) => Ok(Output::ok()
+            .with("locale", locale)
+            .with("count", count)
+            .with("other", other)),
+        (Err(e), _) | (_, Err(e)) => Ok(refused(&e)),
     }
 }
 
@@ -365,6 +403,12 @@ fn probe_state(ctx: &mut Context<'_>, args: &Args<'_>) -> Result<KeyState, Plugi
         "notify" => refusal(ctx.notify("State", "from a state call")),
         "random" => refusal(ctx.random_bytes(8).map(|_| ())),
         "open" => refusal(ctx.open_url("https://github.com/acme/app")),
+        "dialog" => refusal(
+            ctx.dialog(deckpilot_plugin_sdk::dialog::Dialog::confirm(
+                "From a state call",
+            ))
+            .map(|_| ()),
+        ),
         "publish" => refusal(ctx.publish_variable("count", 1)),
         // More capability calls than a state call gets: how many answered.
         "flood" => {

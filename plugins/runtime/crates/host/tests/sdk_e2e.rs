@@ -57,6 +57,24 @@ impl CapabilityExecutor for StubExecutor {
                 CallResult::Ok(json!({"status": 200}))
             }
             Allowed::RunContext(run) => CallResult::Ok(serde_json::to_value(run).unwrap()),
+            // What the agent returns once the app answered: the answer,
+            // checked against the request.
+            Allowed::DialogOpen { request } => {
+                let values = json!({"repository": "~/code/shop"});
+                let checked = request
+                    .check_answer(values.as_object(), None)
+                    .expect("the answer fits");
+                CallResult::Ok(serde_json::to_value(checked).unwrap())
+            }
+            // The agent answers with the plugin's own catalog; here a
+            // fixed one.
+            Allowed::LocaleGet => CallResult::Ok(json!({"locale": "pl-PL"})),
+            Allowed::LocaleTranslate { request } if request.key == "prs" => {
+                CallResult::Ok(json!({"text": "3 PR-y"}))
+            }
+            Allowed::LocaleTranslate { request } => {
+                CallResult::Ok(json!({"text": request.key, "missing": true}))
+            }
             // A fixed instant and counting bytes: the agent's executor
             // reads the real clock and the real random source.
             Allowed::TimeNow => CallResult::Ok(
@@ -884,6 +902,7 @@ fn key_state_is_granted_typed_and_read_only() {
         json!({"kind": "keyState"}),
         json!({"kind": "notifications"}),
         json!({"kind": "openUrl", "origin": "https://github.com"}),
+        json!({"kind": "dialogs"}),
     ]);
     let f = fixture(&serde_json::to_string(&consent).unwrap());
     let mut h = spawn(&config(SDK_TEST_GUEST), &f);
@@ -909,6 +928,7 @@ fn key_state_is_granted_typed_and_read_only() {
         ("notify", "NotPermitted"),
         ("random", "NotPermitted"),
         ("open", "NotPermitted"),
+        ("dialog", "NotPermitted"),
         ("publish", "NotPermitted"),
         // Eight capability calls, then `throttled`.
         ("flood", "8"),
@@ -1004,4 +1024,79 @@ fn a_misbehaving_state_handler_ends_its_host_and_trips_the_breaker() {
         sup.invoke("inits", &Params::new(), T, &mut ex),
         Err(SupervisorError::Disabled)
     ));
+}
+
+/// `dialog.open` (plugin API 1.5) through the real host, supervisor and
+/// broker: granted and in a run the user started, the request reaches the
+/// executor and the plugin gets the checked answer; without the grant or
+/// in a run the user did not start it is refused before the executor.
+#[test]
+fn dialogs_need_the_grant_and_a_run_the_user_started() {
+    let ask = |f: &Fixture, run: Option<RunContext>| {
+        let mut h = spawn(&config(SDK_TEST_GUEST), f);
+        let mut ex = StubExecutor {
+            run,
+            ..StubExecutor::default()
+        };
+        let o = h.invoke("ask", &Params::new(), T, &mut ex).unwrap();
+        assert_eq!(h.shutdown(T).and_then(|s| s.code()), Some(exit_code::CLEAN));
+        (o, ex.executed)
+    };
+    let granted = fixture(r#"[{"kind":"dialogs"}]"#);
+    let (o, executed) = ask(&granted, Some(RunContext::direct(RunTrigger::Key)));
+    assert_eq!(data(&o)["confirmed"], ParamValue::Bool(true), "{o:?}");
+    assert_eq!(data(&o)["repository"], text("~/code/shop"));
+    assert!(
+        matches!(&executed[..], [Allowed::DialogOpen { request }] if request.title() == "Configure repository"),
+        "{executed:?}"
+    );
+
+    for run in [
+        Some(RunContext::workflow(RunCause::Schedule, None)),
+        Some(RunContext::workflow(RunCause::Startup, None)),
+        None,
+    ] {
+        let (o, executed) = ask(&granted, run.clone());
+        assert_eq!(data(&o)["error"], text("NotPermitted"), "{run:?}: {o:?}");
+        assert!(executed.is_empty(), "{run:?}");
+    }
+    let ungranted = fixture(r#"[{"kind":"notifications"}]"#);
+    let (o, executed) = ask(&ungranted, Some(RunContext::direct(RunTrigger::Key)));
+    assert_eq!(data(&o)["error"], text("NotPermitted"), "{o:?}");
+    assert!(executed.is_empty());
+    let audit = granted.audit.records();
+    assert!(audit.iter().any(|r| r.op == "dialog.open"
+        && r.decision == AuditDecision::Denied(DenyReason::DialogNotUserInitiated)));
+}
+
+/// `locale.get` and `locale.translate` (plugin API 1.6) through the real
+/// host, supervisor and broker: always allowed, the request names only a
+/// key (the executor resolves it for the session's plugin), and the plain
+/// answer reaches the plugin.
+#[test]
+fn the_locale_and_translations_need_no_grant() {
+    let f = fixture(r#"[{"kind":"notifications"}]"#);
+    let mut h = spawn(&config(SDK_TEST_GUEST), &f);
+    let mut ex = StubExecutor::default();
+    let o = h.invoke("translate", &Params::new(), T, &mut ex).unwrap();
+    assert_eq!(h.shutdown(T).and_then(|s| s.code()), Some(exit_code::CLEAN));
+    assert_eq!(data(&o)["locale"], text("pl-PL"), "{o:?}");
+    assert_eq!(data(&o)["count"], text("3 PR-y"));
+    assert!(
+        matches!(&ex.executed[..], [
+            Allowed::LocaleGet,
+            Allowed::LocaleTranslate { request: first },
+            Allowed::LocaleTranslate { request: second },
+        ] if first.key == "prs"
+            && first.params.get("count") == Some(&deckpilot_plugin_abi::locale::TranslateArg::from(3))
+            && second.key == "other.plugin.key"),
+        "{:?}",
+        ex.executed
+    );
+    let audit = f.audit.records();
+    assert!(
+        audit
+            .iter()
+            .any(|r| r.op == "locale.translate" && r.decision == AuditDecision::Allowed)
+    );
 }

@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn hints_replace_the_detail_and_appearance_is_kept() {
         let appearance = KeyAppearance {
-            background: Some(Color([1, 2, 3])),
+            background: Some(Color([1, 2, 3]).into()),
             ..KeyAppearance::default()
         };
         let base = base().with_appearance(Some(&appearance));

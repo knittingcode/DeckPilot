@@ -10,8 +10,11 @@
 //! * [`client`]: an async client used by the configuration app.
 //! * [`work_session`]: the work session shapes of protocol 8.
 //! * [`plugins`]: the plugin shapes of protocol 10.
+//! * [`plugin_dialogs`]: plugin dialogs of protocol 12.
 //! * [`plugin_answers`]: plugin answers that fit one message (lazy
 //!   listings, pages, icon chunks), on both sides.
+//! * [`simulation`]: simulated presses of protocol 14.
+//! * [`live_preview`]: the editor's live preview of protocol 16.
 //!
 //! Every connection starts with a `hello` carrying the protocol version and a
 //! random token that the agent writes to a file readable only by the current
@@ -22,15 +25,18 @@ pub mod client;
 pub mod endpoint;
 pub mod framing;
 pub mod instance;
+pub mod live_preview;
 pub mod paths;
 pub mod plugin_answers;
+pub mod plugin_dialogs;
 pub mod plugins;
 pub mod protocol;
+pub mod simulation;
 pub mod stream;
 pub mod token;
 pub mod work_session;
 
-pub use client::{AgentClient, ClientError};
+pub use client::{AgentClient, ClientError, MessageReceiver, RequestWriter};
 pub use endpoint::Endpoint;
 pub use paths::AgentPaths;
 pub use protocol::*;

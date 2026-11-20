@@ -138,7 +138,10 @@ async fn a_protocol_4_agent_is_used_with_protocol_4_only() {
         .await
         .unwrap();
     // The client stepped down from its own protocol until accepted.
-    assert_eq!(*peer.hellos.lock().unwrap(), [11, 10, 9, 8, 7, 6, 5, 4]);
+    assert_eq!(
+        *peer.hellos.lock().unwrap(),
+        [16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4]
+    );
     assert_eq!(client.protocol(), 4);
     assert_eq!(client.agent_protocol(), 4);
     assert_eq!(client.agent_version(), "0.5.0-2");
@@ -197,7 +200,10 @@ async fn agents_older_than_protocol_4_need_replacing() {
         "{refused:?}"
     );
     // It never went below the oldest protocol the app works with.
-    assert_eq!(*peer.hellos.lock().unwrap(), [11, 10, 9, 8, 7, 6, 5, 4]);
+    assert_eq!(
+        *peer.hellos.lock().unwrap(),
+        [16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4]
+    );
     // Protocol 1 still works for stopping it during an update.
     let mut stopper = AgentClient::connect_with_protocol(&peer.paths, ClientKind::Desktop, 1)
         .await
@@ -262,7 +268,10 @@ async fn a_protocol_6_agent_is_never_asked_about_variables() {
     let mut client = AgentClient::connect(&peer.paths, ClientKind::Desktop)
         .await
         .unwrap();
-    assert_eq!(*peer.hellos.lock().unwrap(), [11, 10, 9, 8, 7, 6]);
+    assert_eq!(
+        *peer.hellos.lock().unwrap(),
+        [16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6]
+    );
     assert_eq!(client.protocol(), 6);
     assert!(client.supports(Capability::Notifications));
     assert!(!client.supports(Capability::Variables));
@@ -301,7 +310,10 @@ async fn a_protocol_7_agent_is_never_asked_about_the_work_session() {
     let mut client = AgentClient::connect(&peer.paths, ClientKind::Desktop)
         .await
         .unwrap();
-    assert_eq!(*peer.hellos.lock().unwrap(), [11, 10, 9, 8, 7]);
+    assert_eq!(
+        *peer.hellos.lock().unwrap(),
+        [16, 15, 14, 13, 12, 11, 10, 9, 8, 7]
+    );
     assert_eq!(client.protocol(), 7);
     assert!(client.supports(Capability::Variables));
     assert!(!client.supports(Capability::WorkSession));
@@ -354,7 +366,10 @@ async fn a_protocol_8_agent_lists_variables_without_the_registry() {
     let mut client = AgentClient::connect(&peer.paths, ClientKind::Desktop)
         .await
         .unwrap();
-    assert_eq!(*peer.hellos.lock().unwrap(), [11, 10, 9, 8]);
+    assert_eq!(
+        *peer.hellos.lock().unwrap(),
+        [16, 15, 14, 13, 12, 11, 10, 9, 8]
+    );
     assert_eq!(client.protocol(), 8);
     assert!(client.supports(Capability::WorkSession));
     assert!(!client.supports(Capability::VariableRegistry));
@@ -392,7 +407,10 @@ async fn a_protocol_9_agent_is_never_asked_about_plugins() {
     let mut client = AgentClient::connect(&peer.paths, ClientKind::Desktop)
         .await
         .unwrap();
-    assert_eq!(*peer.hellos.lock().unwrap(), [11, 10, 9]);
+    assert_eq!(
+        *peer.hellos.lock().unwrap(),
+        [16, 15, 14, 13, 12, 11, 10, 9]
+    );
     assert_eq!(client.protocol(), 9);
     assert!(client.supports(Capability::VariableRegistry));
     assert!(!client.supports(Capability::Plugins));
@@ -411,6 +429,7 @@ async fn a_protocol_9_agent_is_never_asked_about_plugins() {
             plugin: plugin(),
             offset: 0,
             navigation: None,
+            asset: None,
         },
         Request::ListAvailablePlugins { refresh: true },
         Request::InstallPlugin {
@@ -484,7 +503,7 @@ async fn a_protocol_10_agent_is_never_asked_to_watch_key_states() {
     let mut client = AgentClient::connect(&peer.paths, ClientKind::Desktop)
         .await
         .unwrap();
-    assert_eq!(*peer.hellos.lock().unwrap(), [11, 10]);
+    assert_eq!(*peer.hellos.lock().unwrap(), [16, 15, 14, 13, 12, 11, 10]);
     assert_eq!(client.protocol(), 10);
     assert!(client.supports(Capability::Plugins));
     assert!(!client.supports(Capability::KeyStates));
@@ -507,4 +526,248 @@ async fn a_protocol_10_agent_is_never_asked_to_watch_key_states() {
     );
     // Refused before anything was sent.
     assert_eq!(peer.received.lock().unwrap().len(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_protocol_11_agent_is_never_told_about_plugin_dialogs() {
+    let peer = peer(11, "0.9.0");
+    let mut client = AgentClient::connect(&peer.paths, ClientKind::Desktop)
+        .await
+        .unwrap();
+    assert_eq!(*peer.hellos.lock().unwrap(), [16, 15, 14, 13, 12, 11]);
+    assert_eq!(client.protocol(), 11);
+    assert!(client.supports(Capability::KeyStates));
+    assert!(!client.supports(Capability::PluginDialogs));
+    // The subscription goes out as protocol 11 knows it: no announcement.
+    let _ = client
+        .subscribe_plugin_events_announcing(
+            true,
+            vec![deckpilot_ipc::plugin_dialogs::FEATURE.into()],
+        )
+        .await;
+    {
+        let received = peer.received.lock().unwrap();
+        assert_eq!(received.len(), 1);
+        assert_eq!(
+            received[0]["request"],
+            serde_json::json!({"type": "subscribePluginEvents", "migrations": true})
+        );
+    }
+    // Answers are refused before anything is sent.
+    let refused = client
+        .request(Request::AnswerPluginDialog {
+            dialog: "0f3a".into(),
+            plugin: "acme.repo".into(),
+            answer: deckpilot_ipc::plugin_dialogs::DialogAnswer::Cancelled {
+                reason: deckpilot_ipc::plugin_dialogs::AppCancelReason::User,
+            },
+        })
+        .await;
+    assert!(
+        matches!(
+            &refused,
+            Err(ClientError::Unsupported {
+                needs: 12,
+                protocol: 11,
+                ..
+            })
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(peer.received.lock().unwrap().len(), 1);
+}
+
+/// Protocol 13 (the app's language): an agent of protocol 12 is never told
+/// the locale; the client says so instead of sending it, and the agent keeps
+/// working in English with everything else as before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_protocol_12_agent_is_never_told_the_locale() {
+    let peer = peer(12, "0.10.0");
+    let mut client = AgentClient::connect(&peer.paths, ClientKind::Desktop)
+        .await
+        .unwrap();
+    assert_eq!(*peer.hellos.lock().unwrap(), [16, 15, 14, 13, 12]);
+    assert_eq!(client.protocol(), 12);
+    assert!(client.supports(Capability::PluginDialogs));
+    assert!(!client.supports(Capability::Locale));
+    // Not sent: the agent of protocol 12 does not know it.
+    assert!(!client.set_locale("pl").await.unwrap());
+    assert_eq!(
+        *peer.received.lock().unwrap(),
+        Vec::<serde_json::Value>::new()
+    );
+    let refused = client
+        .request(Request::SetLocale {
+            locale: "pl".into(),
+        })
+        .await;
+    assert!(
+        matches!(
+            &refused,
+            Err(ClientError::Unsupported {
+                needs: 13,
+                protocol: 12,
+                ..
+            })
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(
+        *peer.received.lock().unwrap(),
+        Vec::<serde_json::Value>::new()
+    );
+    // The rest of the connection is unchanged: its status is read.
+    assert!(matches!(
+        client.request(Request::GetStatus).await,
+        Ok(Response::Status { status }) if status.locale.is_none()
+    ));
+}
+
+/// Protocol 14 (simulated presses): an agent of protocol 13 has no
+/// `simulateInput`; the client refuses `simulatePress` before sending it,
+/// and the connection works as before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_protocol_13_agent_is_never_asked_to_simulate_a_press() {
+    use deckpilot_ipc::simulation::PressKind;
+    let peer = peer(13, "0.10.0");
+    let mut client = AgentClient::connect(&peer.paths, ClientKind::Desktop)
+        .await
+        .unwrap();
+    assert_eq!(*peer.hellos.lock().unwrap(), [16, 15, 14, 13]);
+    assert_eq!(client.protocol(), 13);
+    assert!(client.supports(Capability::Locale));
+    assert!(!client.supports(Capability::SimulateInput));
+    let refused = client
+        .request(Request::SimulatePress {
+            device: deckpilot_device::DeviceId {
+                model: deckpilot_device::DeviceModelId::new("elgato.stream-deck-mk2"),
+                serial: "MOCK-1".into(),
+            },
+            profile: deckpilot_core::ProfileId::new(),
+            layout: deckpilot_core::LayoutId::new(),
+            page: deckpilot_core::PageId::new(),
+            control: deckpilot_device::ControlId::Key { index: 0 },
+            kind: PressKind::Single,
+            confirmed: false,
+        })
+        .await;
+    assert!(
+        matches!(
+            &refused,
+            Err(ClientError::Unsupported {
+                needs: 14,
+                protocol: 13,
+                ..
+            })
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(
+        *peer.received.lock().unwrap(),
+        Vec::<serde_json::Value>::new()
+    );
+    assert!(matches!(
+        client.request(Request::GetStatus).await,
+        Ok(Response::Status { .. })
+    ));
+}
+
+/// Protocol 15 (restoring bundled plugins): an agent of protocol 14 has no
+/// `restoreBundled`; the client refuses `restoreBundledPlugin` before
+/// sending it, and the connection works as before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_protocol_14_agent_is_never_asked_to_restore_a_bundled_plugin() {
+    let peer = peer(14, "0.10.0");
+    let mut client = AgentClient::connect(&peer.paths, ClientKind::Desktop)
+        .await
+        .unwrap();
+    assert_eq!(*peer.hellos.lock().unwrap(), [16, 15, 14]);
+    assert_eq!(client.protocol(), 14);
+    assert!(client.supports(Capability::SimulateInput));
+    assert!(!client.supports(Capability::RestoreBundled));
+    let refused = client
+        .request(Request::RestoreBundledPlugin {
+            plugin: "deckpilot.notifications".into(),
+        })
+        .await;
+    assert!(
+        matches!(
+            &refused,
+            Err(ClientError::Unsupported {
+                needs: 15,
+                protocol: 14,
+                ..
+            })
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(
+        *peer.received.lock().unwrap(),
+        Vec::<serde_json::Value>::new()
+    );
+    assert!(matches!(
+        client.request(Request::GetStatus).await,
+        Ok(Response::Status { .. })
+    ));
+}
+
+/// A protocol 15 agent (DeckPilot before the live preview): the client
+/// refuses every live preview request before sending it, so the app falls
+/// back to "changes reach the device when saved"; the rest works.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_protocol_15_agent_is_never_asked_for_a_live_preview() {
+    use deckpilot_ipc::live_preview::EditorNavigation;
+    let peer = peer(15, "0.10.0");
+    let mut client = AgentClient::connect(&peer.paths, ClientKind::Desktop)
+        .await
+        .unwrap();
+    assert_eq!(*peer.hellos.lock().unwrap(), [16, 15]);
+    assert_eq!(client.protocol(), 15);
+    assert!(client.supports(Capability::RestoreBundled));
+    assert!(!client.supports(Capability::LivePreview));
+    let device = deckpilot_device::DeviceId {
+        model: deckpilot_device::DeviceModelId::new("elgato.stream-deck-mk2"),
+        serial: "MOCK-1".into(),
+    };
+    for request in [
+        Request::BeginLivePreview {
+            device: device.clone(),
+            profile: deckpilot_core::ProfileId::new(),
+            layout: deckpilot_core::LayoutId::new(),
+            navigation: None,
+        },
+        Request::ApplyLivePreview {
+            session: 1,
+            revision: 1,
+            part: Box::default(),
+            last: true,
+        },
+        Request::NavigateLivePreview {
+            session: 1,
+            navigation: EditorNavigation::LayoutBack,
+        },
+        Request::EndLivePreview { session: 1 },
+        Request::InspectMockDevice { device },
+    ] {
+        let refused = client.request(request).await;
+        assert!(
+            matches!(
+                &refused,
+                Err(ClientError::Unsupported {
+                    needs: 16,
+                    protocol: 15,
+                    ..
+                })
+            ),
+            "{refused:?}"
+        );
+    }
+    assert_eq!(
+        *peer.received.lock().unwrap(),
+        Vec::<serde_json::Value>::new()
+    );
+    assert!(matches!(
+        client.request(Request::GetStatus).await,
+        Ok(Response::Status { .. })
+    ));
 }

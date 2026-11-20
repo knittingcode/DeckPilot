@@ -124,7 +124,9 @@ impl Agent {
             | Request::SetAutostart { .. }
             | Request::ShowWindow
             | Request::RequestWindow { .. }
-            | Request::SimulateInput { .. } => return None,
+            | Request::SimulateInput { .. }
+            // Refused with a structured answer while locked.
+            | Request::SimulatePress { .. } => return None,
             _ if self.security != SecurityState::Unlocked => return Some(Err(locked())),
             _ => return None,
         };
@@ -317,6 +319,8 @@ impl Agent {
             security_state(&self.options.paths.database).unwrap_or(SecurityState::Locked);
         self.lock_reason = (self.security == SecurityState::Locked).then_some(reason);
         self.refresh_protection();
+        // No unsaved layout stays on a locked deck.
+        self.end_all_live_previews(deckpilot_ipc::live_preview::EndReason::Locked);
         self.runtime.set_profile(None, None);
         self.reload_icons();
         self.runtime.set_placeholder(Some("Locked"));

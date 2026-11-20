@@ -655,6 +655,24 @@ fn the_users_disable_or_uninstall_withdraws_the_legacy_actions() {
     assert_eq!(route(&manager, &newer), LegacyRoute::PluginWithdrawn);
 }
 
+/// The user's Restore of the plugin they uninstalled (`restoreBundledPlugin`)
+/// routes the migrated module's actions to it again.
+#[test]
+fn a_restore_after_the_users_uninstall_routes_to_the_plugin_again() {
+    let env = Env::new();
+    let bundle = env.bundle();
+    let mut manager = cut_over(&env, &bundle);
+    manager
+        .uninstall_by_user(&plugin_id(), Retention::default())
+        .unwrap();
+    assert_eq!(route(&manager, &bundle), LegacyRoute::PluginWithdrawn);
+    super::super::bundled::restore(&mut manager, &bundle, &plugin_id()).unwrap();
+    assert!(manager.store().tombstone(&plugin_id()).unwrap().is_none());
+    assert!(manager.store().plugin(&plugin_id()).unwrap().is_some());
+    assert_eq!(route(&manager, &bundle), LegacyRoute::Plugin);
+    assert_eq!(record(&manager).phase, MigrationPhase::CutOver);
+}
+
 #[test]
 fn a_build_without_the_plugin_routes_to_the_builtin() {
     let env = Env::new();

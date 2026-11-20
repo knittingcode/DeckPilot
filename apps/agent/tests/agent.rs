@@ -3337,11 +3337,11 @@ async fn keys_show_their_appearance_and_icons() {
         .add_icon(deckpilot_render::icons::import("Sun", &png).unwrap())
         .unwrap();
     let look = KeyAppearance {
-        background: Some(Color([20, 40, 60])),
+        background: Some(Color([20, 40, 60]).into()),
         text_color: Some(Color([255, 255, 0])),
         title_align: Some(TitleAlign::Bottom),
         icon: Some(IconRef {
-            id: icon,
+            id: icon.into(),
             fit: IconFit::Fit,
         }),
         ..KeyAppearance::default()
@@ -3456,6 +3456,79 @@ async fn folders_go_back_to_their_parent_with_an_automatic_back_key() {
         *frames == home_frames
     }));
     // The stored layout was not rewritten by any of this.
+    let stored = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    assert_eq!(stored, profile);
+    agent.shutdown().await;
+}
+
+/// The protected folder Back key (`docs/data-model.md`, "Pages and
+/// folders") on a simulated MK.2: drawn by the agent as its own icon on
+/// key 0 of the folder, going back one level, and Auto Exit run by the
+/// agent alone (no app is connected).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_folder_shows_its_protected_back_key_and_exits_by_itself() {
+    use deckpilot_core::{AutoExit, LayoutPage};
+
+    let agent = setup().await;
+    assert!(agent.frames_shown());
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let home = profile.layouts[0].home_page;
+    let mut folder = LayoutPage::folder("Folder", home);
+    folder.auto_exit = Some(AutoExit {
+        enabled: true,
+        seconds: 1,
+    });
+    let folder_id = folder.id;
+    profile.layouts[0].pages[0]
+        .bindings
+        .push(deckpilot_core::ControlBinding::new(
+            ControlId::Key { index: 5 },
+            deckpilot_core::Trigger::Press,
+            deckpilot_core::BindingTarget::OpenPage { page: folder_id },
+        ));
+    profile.layouts[0].pages.push(folder);
+    agent.store().save_profile(&profile).unwrap();
+    let mut client = agent.client().await;
+    client.request(Request::ReloadConfiguration).await.unwrap();
+    drop(client);
+
+    let key = |index| ControlId::Key { index };
+    let page = |status: &AgentStatus| status.devices[0].page.clone();
+    let system_back = key_image(&deckpilot_core::device_runtime::system_back_face());
+    assert!(agent.mock.wait_for(&agent.device, TIMEOUT, |frames, _| {
+        frames.get(&key(5)).is_some()
+    }));
+    agent
+        .wait_for_status(|s| page(s).as_deref() == Some("Home"))
+        .await;
+    let home_frames = agent.mock.frames(&agent.device);
+    assert_ne!(home_frames.get(&key(0)), Some(&system_back));
+
+    // The protected Back: drawn on key 0, one level up when pressed.
+    agent.mock.tap(&agent.device, key(5));
+    agent
+        .wait_for_status(|s| page(s).as_deref() == Some("Folder"))
+        .await;
+    assert!(agent.mock.wait_for(&agent.device, TIMEOUT, |frames, _| {
+        frames.get(&key(0)) == Some(&system_back)
+    }));
+    agent.mock.tap(&agent.device, key(0));
+    agent
+        .wait_for_status(|s| page(s).as_deref() == Some("Home"))
+        .await;
+
+    // Auto Exit: in again, and the agent alone brings it back after 1 s.
+    agent.mock.tap(&agent.device, key(5));
+    agent
+        .wait_for_status(|s| page(s).as_deref() == Some("Folder"))
+        .await;
+    agent
+        .wait_for_status(|s| page(s).as_deref() == Some("Home"))
+        .await;
+    assert!(agent.mock.wait_for(&agent.device, TIMEOUT, |frames, _| {
+        *frames == home_frames
+    }));
+    // Nothing of it was stored.
     let stored = agent.store().load_profile(agent.work.id).unwrap().unwrap();
     assert_eq!(stored, profile);
     agent.shutdown().await;
@@ -3888,4 +3961,225 @@ async fn previews_watch_live_key_states() {
     assert_eq!(states, Vec::new());
     drop(client);
     agent.shutdown().await;
+}
+
+/// Plugin dialogs (protocol 12): only a connection of protocol 12 that
+/// announced `pluginDialogs` receives them and may answer; a protocol 11
+/// connection never does, and without an announcing app nothing opens.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // one scenario, step by step
+async fn plugin_dialogs_reach_only_connections_that_announced_them() {
+    use deckpilot_ipc::plugin_dialogs::{
+        DialogAnswer, DialogCloseReason, DialogSpec, DialogType, FEATURE,
+    };
+    use deckpilot_ipc::plugins::PluginEvent;
+
+    let watchdog = watch();
+    let paths = temp_paths();
+    let (_, key) = seed(&paths);
+    let mock = MockBackend::new();
+    let ((task, stop), handle) =
+        start_agent_with_handle(paths.clone(), mock.clone(), Extras::default()).unwrap();
+    unlock_agent(&paths, &key).await;
+    let spec = || DialogSpec {
+        kind: DialogType::Confirm,
+        title: "Pull now?".into(),
+        message: None,
+        fields: Vec::new(),
+        options: Vec::new(),
+        confirm_label: None,
+        cancel_label: None,
+        destructive: false,
+        timeout_seconds: 60,
+    };
+    let answer = |dialog: &str, answer: DialogAnswer| Request::AnswerPluginDialog {
+        dialog: dialog.into(),
+        plugin: "acme.repo".into(),
+        answer,
+    };
+    let confirmed = || DialogAnswer::Confirmed {
+        values: None,
+        selected: None,
+    };
+
+    // No app: nothing opens.
+    assert!(
+        handle
+            .open_plugin_dialog("a1", "acme.repo", spec())
+            .is_none()
+    );
+
+    // A protocol 11 app subscribes (it knows no features); the client
+    // leaves the announcement out, and the agent would ignore it.
+    watchdog.step("a protocol 11 app");
+    let mut old = AgentClient::connect_with_protocol(&paths, ClientKind::Desktop, 11)
+        .await
+        .unwrap();
+    old.subscribe_plugin_events_announcing(false, vec![FEATURE.into()])
+        .await
+        .unwrap();
+    assert!(
+        handle
+            .open_plugin_dialog("a1", "acme.repo", spec())
+            .is_none()
+    );
+    // It cannot answer: the request is newer than its protocol.
+    assert!(matches!(
+        old.request(answer("a1", confirmed())).await,
+        Err(ClientError::Unsupported { .. })
+    ));
+    // Sent anyway on a raw protocol 11 connection, with the announcement:
+    // refused, and still no app.
+    let stream = paths.endpoint().connect().await.unwrap();
+    let stream = SharedStream::new(stream);
+    let mut reader = BufReader::new(stream.clone());
+    let mut writer = stream;
+    let token = std::fs::read_to_string(&paths.token_file).unwrap();
+    write_message(
+        &mut writer,
+        &json!({"type": "hello", "protocol": 11, "token": token.trim(), "client": "desktop"}),
+    )
+    .await
+    .unwrap();
+    let _welcome: Value = read_message(&mut reader).await.unwrap().unwrap();
+    write_message(
+        &mut writer,
+        &json!({"type": "request", "id": 1, "request":
+            {"type": "subscribePluginEvents", "features": ["pluginDialogs"]}}),
+    )
+    .await
+    .unwrap();
+    let ok: Value = read_message(&mut reader).await.unwrap().unwrap();
+    assert_eq!(ok["type"], "response", "{ok}");
+    assert!(
+        handle
+            .open_plugin_dialog("a1", "acme.repo", spec())
+            .is_none()
+    );
+    write_message(
+        &mut writer,
+        &json!({"type": "request", "id": 2, "request": {"type": "answerPluginDialog",
+            "dialog": "a1", "plugin": "acme.repo", "answer": {"outcome": "confirmed"}}}),
+    )
+    .await
+    .unwrap();
+    let refused: Value = read_message(&mut reader).await.unwrap().unwrap();
+    assert_eq!(refused["error"]["code"], "unsupported", "{refused}");
+
+    // A protocol 12 app that does not announce it: no app either, and it
+    // may not answer.
+    watchdog.step("a protocol 12 app");
+    let mut quiet = AgentClient::connect(&paths, ClientKind::Other)
+        .await
+        .unwrap();
+    quiet.subscribe_plugin_events().await.unwrap();
+    assert!(
+        handle
+            .open_plugin_dialog("a1", "acme.repo", spec())
+            .is_none()
+    );
+
+    // One that announces it receives the dialog and answers it.
+    let mut app = AgentClient::connect(&paths, ClientKind::Desktop)
+        .await
+        .unwrap();
+    assert_eq!(app.protocol(), PROTOCOL_VERSION);
+    app.subscribe_plugin_events_announcing(false, vec![FEATURE.into()])
+        .await
+        .unwrap();
+    let outcome = handle
+        .open_plugin_dialog("0f3a9c", "acme.repo", spec())
+        .expect("an app shows dialogs");
+    let opened = within("the dialog", TIMEOUT, app.next_plugin_event())
+        .await
+        .unwrap();
+    assert!(
+        matches!(&opened, PluginEvent::DialogOpened { dialog }
+            if dialog.id == "0f3a9c" && dialog.plugin == "acme.repo"
+                && dialog.plugin_name == "Test plugin" && dialog.spec.title == "Pull now?"),
+        "{opened:?}"
+    );
+    // The connection that did not announce it may not answer.
+    let refused = quiet.request(answer("0f3a9c", confirmed())).await;
+    assert!(
+        matches!(&refused, Err(ClientError::Agent(e)) if e.code == ErrorCode::Unsupported),
+        "{refused:?}"
+    );
+    // Another plugin's id: not found. An answer that does not fit: refused.
+    let wrong_plugin = app
+        .request(Request::AnswerPluginDialog {
+            dialog: "0f3a9c".into(),
+            plugin: "acme.other".into(),
+            answer: confirmed(),
+        })
+        .await;
+    assert!(
+        matches!(&wrong_plugin, Err(ClientError::Agent(e)) if e.code == ErrorCode::NotFound),
+        "{wrong_plugin:?}"
+    );
+    let unfit = app
+        .request(answer(
+            "0f3a9c",
+            DialogAnswer::Confirmed {
+                values: None,
+                selected: Some("x".into()),
+            },
+        ))
+        .await;
+    assert!(
+        matches!(&unfit, Err(ClientError::Agent(e)) if e.code == ErrorCode::InvalidRequest),
+        "{unfit:?}"
+    );
+    app.request(answer("0f3a9c", confirmed())).await.unwrap();
+    assert_eq!(
+        outcome.recv_timeout(TIMEOUT).unwrap(),
+        Some(json!({"outcome": "confirmed"}))
+    );
+    let closed = within("the close", TIMEOUT, app.next_plugin_event())
+        .await
+        .unwrap();
+    assert!(matches!(closed, PluginEvent::DialogClosed { reason, .. }
+        if reason == DialogCloseReason::Answered));
+    // A late answer: not found.
+    let late = app.request(answer("0f3a9c", confirmed())).await;
+    assert!(matches!(&late, Err(ClientError::Agent(e)) if e.code == ErrorCode::NotFound));
+
+    // The app leaves: an open dialog ends `appClosed`.
+    watchdog.step("the app leaves");
+    let outcome = handle
+        .open_plugin_dialog("1b2c", "acme.repo", spec())
+        .unwrap();
+    drop(app);
+    assert_eq!(outcome.recv_timeout(TIMEOUT).unwrap(), None);
+    assert!(
+        handle
+            .open_plugin_dialog("2c3d", "acme.repo", spec())
+            .is_none()
+    );
+
+    // The other connections never received a dialog event.
+    let quiet_events = tokio::time::timeout(Duration::from_millis(200), old.next_plugin_event());
+    assert!(
+        quiet_events.await.is_err(),
+        "the protocol 11 app received a plugin event"
+    );
+    let quiet_events = tokio::time::timeout(Duration::from_millis(200), quiet.next_plugin_event());
+    assert!(
+        quiet_events.await.is_err(),
+        "an app that did not announce received one"
+    );
+    let raw = tokio::time::timeout(
+        Duration::from_millis(200),
+        read_message::<_, Value>(&mut reader),
+    );
+    assert!(
+        raw.await.is_err(),
+        "the raw protocol 11 connection received a message"
+    );
+    drop((old, quiet, reader, writer));
+    stop.send(()).unwrap();
+    within("the agent task", TIMEOUT, task)
+        .await
+        .unwrap()
+        .unwrap();
 }

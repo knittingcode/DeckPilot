@@ -1,0 +1,18 @@
+{
+  "plugin": {
+    "name": "PR count",
+    "description": "Shows how many pull requests wait for your review."
+  },
+  "actions": {
+    "category": "GitHub",
+    "count": {
+      "name": "Count pull requests",
+      "description": "Counts the open pull requests of a repository.",
+      "repository": "Repository"
+    }
+  },
+  "permissions": { "network": "Reads pull requests from the GitHub API." },
+  "errors": { "rateLimited": "GitHub asks to wait a moment." },
+  "prs_one": "{{count}} pull request",
+  "prs_other": "{{count}} pull requests"
+}

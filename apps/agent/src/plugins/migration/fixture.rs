@@ -101,6 +101,8 @@ pub fn whoami_type() -> ActionType {
     };
     node.icon = Some("user".into());
     ActionType {
+        editor_navigation: None,
+        title: None,
         id: ActionTypeId::new(ACTION).expect("a valid id"),
         name: "Who am I".into(),
         description: "TEST FIXTURE: answers without asking anyone.".into(),

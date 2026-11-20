@@ -18,9 +18,11 @@
 
 pub mod capability;
 pub mod describe;
+pub mod dialog;
 pub mod frame;
 pub mod guest;
 pub mod limits;
+pub mod locale;
 pub mod protocol;
 pub mod state;
 pub mod value;
@@ -51,5 +53,9 @@ pub use value::{ActionOutcome, ParamValue, Params, ValidationError};
 /// `random.bytes` ([`capability::RandomReply`]) of plugin API 1.1, which
 /// only a guest that uses them sends; and the optional guest export
 /// `dp_state` of plugin API 1.2 ([`state`]), with the host protocol
-/// messages `state` and `stateResult` that carry it.
+/// messages `state` and `stateResult` that carry it; and the capability
+/// operation `dialog.open` of plugin API 1.5 ([`dialog`]), which only a
+/// guest that uses it sends; and the capability operations `locale.get`
+/// and `locale.translate` of plugin API 1.6 ([`locale`]), which only a
+/// guest that uses them sends.
 pub const ABI_VERSION: u32 = 1;

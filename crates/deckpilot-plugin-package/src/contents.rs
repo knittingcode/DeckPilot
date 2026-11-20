@@ -121,7 +121,8 @@ pub(crate) fn parse_manifest(files: &Files, first_party: bool) -> Result<Manifes
 /// The integrity record of `files` as `package`, checked against the
 /// manifest: only files the manifest names (plus the required ones and
 /// README/CHANGELOG), every named file present, size range; and every
-/// navigation icon one the app may show ([`check_navigation_icons`]).
+/// navigation icon one the app may show ([`check_navigation_icons`]);
+/// every locale file a valid translation file ([`check_locales`]).
 pub(crate) fn integrity(
     files: &Files,
     manifest: &Manifest,
@@ -140,7 +141,44 @@ pub(crate) fn integrity(
         .validate(manifest)
         .map_err(PackageError::Contents)?;
     check_navigation_icons(files, manifest)?;
+    check_visual_assets(files, manifest)?;
+    check_locales(files, manifest)?;
     Ok(integrity)
+}
+
+/// Every locale file of `locales` (plugin API 1.6) is a translation file
+/// [`deckpilot_plugin_manifest::locale::Messages::parse`] accepts: JSON
+/// objects of plain-text strings within the size, count, depth and length
+/// limits, well-formed placeholders and no markup. A package with another
+/// file there is refused when it is built and when it is read for
+/// installation; the files are hashed like every other (the manifest names
+/// them), so a changed translation is a changed package.
+pub(crate) fn check_locales(files: &Files, manifest: &Manifest) -> Result<(), PackageError> {
+    manifest
+        .catalog(|path| files.get(path).cloned())
+        .map(|_| ())
+        .map_err(|(path, error)| PackageError::Locale { path, error })
+}
+
+/// Every `contributes.visualAssets` file: its format matches its
+/// extension and its use (icons PNG, image backgrounds PNG or JPEG), within
+/// its size and pixel limits ([`deckpilot_plugin_manifest::check_visual_asset`]).
+/// A package with such a file is refused when it is built and when it is
+/// read for installation.
+pub(crate) fn check_visual_assets(files: &Files, manifest: &Manifest) -> Result<(), PackageError> {
+    for (path, used) in manifest.visual_asset_files() {
+        let bytes = files.get(path).ok_or_else(|| PackageError::VisualAsset {
+            path: path.to_owned(),
+            error: deckpilot_plugin_manifest::VisualAssetError::Malformed("package"),
+        })?;
+        deckpilot_plugin_manifest::check_visual_asset(path, used, bytes).map_err(|error| {
+            PackageError::VisualAsset {
+                path: path.to_owned(),
+                error,
+            }
+        })?;
+    }
+    Ok(())
 }
 
 /// Every `contributes.navigation` icon file: its format matches its

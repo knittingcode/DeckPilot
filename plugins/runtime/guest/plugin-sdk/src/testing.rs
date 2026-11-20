@@ -58,7 +58,8 @@ impl MockHost {
     /// Every request succeeds with `null` (an empty HTTP 200 for fetches,
     /// a run started from the app for `run.context`, the Unix epoch in
     /// UTC for `time.now`, zero bytes for `random.bytes`: use
-    /// [`MockHost::new`] for a time or bytes of your choice).
+    /// [`MockHost::new`] for a time or bytes of your choice; a dialog is
+    /// confirmed with its defaults, a selection with its first option).
     pub fn allow_all() -> Self {
         Self::new(|req| match req {
             CapabilityRequest::HttpFetch(_) => CallResult::Ok(serde_json::json!({"status": 200})),
@@ -73,8 +74,67 @@ impl MockHost {
                 let reply = deckpilot_plugin_abi::capability::RandomReply::new(&zeros);
                 CallResult::Ok(serde_json::to_value(reply).unwrap_or_default())
             }
+            CapabilityRequest::DialogOpen(d) => CallResult::Ok(
+                serde_json::to_value(crate::dialog::confirmed_with_defaults(d)).unwrap_or_default(),
+            ),
             _ => CallResult::Ok(serde_json::Value::Null),
         })
+    }
+
+    /// [`MockHost::allow_all`] for a plugin shown in `locale` with the
+    /// translations `messages` (flattened keys, plural forms as
+    /// `key_one`…): `locale.get` answers `locale`, `locale.translate` looks
+    /// the key up (the plural form for `count` by English or Polish rules),
+    /// fills `{{name}}` and answers a label made from the key when it is
+    /// missing, as the agent does.
+    pub fn localized(locale: &str, messages: &[(&str, &str)]) -> Self {
+        let locale = locale.to_owned();
+        let messages: std::collections::BTreeMap<String, String> = messages
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        let mut fallback = Self::allow_all();
+        Self::new(move |req| match req {
+            CapabilityRequest::LocaleGet(_) => {
+                CallResult::Ok(serde_json::json!({"locale": locale}))
+            }
+            CapabilityRequest::LocaleTranslate(t) => {
+                let count = t.params.get("count").and_then(|c| match c {
+                    deckpilot_plugin_abi::locale::TranslateArg::Number(n) => n.as_i64(),
+                    deckpilot_plugin_abi::locale::TranslateArg::Text(_) => None,
+                });
+                let language = locale.split(['-', '_']).next().unwrap_or_default();
+                let found = count
+                    .and_then(|n| {
+                        messages
+                            .get(&format!("{}_{}", t.key, plural(language, n)))
+                            .or_else(|| messages.get(&format!("{}_other", t.key)))
+                    })
+                    .or_else(|| messages.get(&t.key));
+                let (text, missing) = match found {
+                    Some(template) => {
+                        let mut text = template.clone();
+                        for (name, value) in &t.params {
+                            let value = match value {
+                                deckpilot_plugin_abi::locale::TranslateArg::Text(s) => s.clone(),
+                                deckpilot_plugin_abi::locale::TranslateArg::Number(n) => {
+                                    n.to_string()
+                                }
+                            };
+                            text = text.replace(&format!("{{{{{name}}}}}"), &value);
+                        }
+                        (text, false)
+                    }
+                    None => (humanize(&t.key), true),
+                };
+                CallResult::Ok(serde_json::json!({"text": text, "missing": missing}))
+            }
+            other => fallback.respond(other),
+        })
+    }
+
+    fn respond(&mut self, request: &CapabilityRequest) -> CallResult {
+        (self.respond)(request)
     }
 
     /// Every request is denied like an ungranted permission (logs too).
@@ -298,5 +358,48 @@ impl Transport for MockHost {
     fn call(&mut self, request: &CapabilityRequest) -> CallResult {
         self.requests.push(request.clone());
         (self.respond)(request)
+    }
+}
+
+/// The plural category of `n` (English and Polish rules, as the agent).
+fn plural(language: &str, n: i64) -> &'static str {
+    let i = n.unsigned_abs();
+    match (language, i) {
+        (_, 1) => "one",
+        ("pl", i) if (2..=4).contains(&(i % 10)) && !(12..=14).contains(&(i % 100)) => "few",
+        ("pl", _) => "many",
+        _ => "other",
+    }
+}
+
+/// A label from a key's last segment (`settings.apiToken` → `Api token`),
+/// as the agent shows a missing key.
+fn humanize(key: &str) -> String {
+    let segment = key.rsplit('.').next().unwrap_or(key);
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut previous_lower = false;
+    for c in segment.chars() {
+        if c == '_' || c == '-' {
+            if !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+            previous_lower = false;
+            continue;
+        }
+        if c.is_uppercase() && previous_lower && !word.is_empty() {
+            words.push(std::mem::take(&mut word));
+        }
+        previous_lower = c.is_lowercase() || c.is_ascii_digit();
+        word.extend(c.to_lowercase());
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    let text = words.join(" ");
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => "?".to_owned(),
     }
 }
