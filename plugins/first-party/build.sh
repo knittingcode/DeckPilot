@@ -5,7 +5,8 @@
 #
 #   plugins/first-party/build.sh --out DIR [--test-fixtures] [--target-dir DIR]
 #
-# Writes DIR/bundled/<id>/manifest.json, plugin.wasm, LICENSE, the icons
+# Writes DIR/bundled/<id>/manifest.json, plugin.wasm, LICENSE, the icons,
+# the visual assets (contributes.visualAssets, PNG or JPEG under assets/)
 # and the locale files (locales/<tag>.json) the manifest names, and
 # DIR/bundled/pins.json: for every plugin its id,
 # version, class and the size and sha256 of every file. The release build
@@ -39,7 +40,7 @@ while [ $# -gt 0 ]; do
     --out) out=$2; shift 2 ;;
     --target-dir) target_dir=$2; shift 2 ;;
     --test-fixtures) fixtures=true; shift ;;
-    -h | --help) sed -n '2,27p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,28p' "$0"; exit 0 ;;
     *) echo "build.sh: unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -130,6 +131,15 @@ for entry in ${entries[@]+"${entries[@]}"}; do
     mkdir -p "$target/assets"
     cp "$dir/$icon" "$target/$icon"
   done < <(jq -r '.icons // {} | .[]' "$manifest")
+  # Plugin API 1.8: the icons and image backgrounds the plugin adds to the
+  # libraries, checked against their use when the agent seeds them.
+  while IFS= read -r asset; do
+    [ -n "$asset" ] || continue
+    [[ "$asset" =~ ^assets/([A-Za-z0-9_][A-Za-z0-9._-]*/)*[A-Za-z0-9_][A-Za-z0-9._-]*\.(png|jpg|jpeg)$ ]] \
+      || fail "$manifest: visual asset $asset is not a .png, .jpg or .jpeg file under assets/"
+    mkdir -p "$(dirname "$target/$asset")"
+    cp "$dir/$asset" "$target/$asset"
+  done < <(jq -r '.contributes.visualAssets // {} | ((.icons // [])[].asset), ((.backgrounds // [])[] | .asset // empty)' "$manifest")
   # Plugin API 1.6: the translations the manifest declares, pinned below
   # like every other file (docs/marketplace/sdk/localization.md).
   while IFS= read -r tag; do

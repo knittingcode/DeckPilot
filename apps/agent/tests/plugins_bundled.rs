@@ -10,6 +10,9 @@
 //! * the pins come from `DECKPILOT_TEST_BUNDLED_PINS` (feature `test-hooks`
 //!   only), because the agent was compiled before the test built the
 //!   plugin; a release agent only trusts pins compiled into it;
+//! * a bundled plugin with translations (`locales/<tag>.json`, plugin API
+//!   1.6) and visual assets (PNG and JPEG under `assets/`, plugin API 1.8)
+//!   is seeded and loads like any other;
 //! * tampered files are refused at seeding and at load, the user's disable
 //!   and uninstall survive restarts, and a `deckpilot.*` package from a
 //!   file is refused.
@@ -131,6 +134,14 @@ impl Env {
         env
     }
 
+    /// As [`Env::new`], with the fixture at plugin API 1.8 carrying
+    /// translations and visual assets.
+    fn localized(name: &str) -> Self {
+        let env = Self::new(name);
+        env.add_translations_and_visual_assets();
+        env
+    }
+
     fn bundled(&self) -> PathBuf {
         self.dir.path().join("resources/bundled")
     }
@@ -152,6 +163,12 @@ impl Env {
             std::fs::copy(fixture().join(file), dir.join(file)).unwrap();
         }
         std::fs::copy(&artifacts().module, dir.join("plugin.wasm")).unwrap();
+        self.pin();
+    }
+
+    /// The pins of the staged files, next to them and as the agent "was
+    /// compiled with".
+    fn pin(&self) {
         let pins = Pins::compute(
             &self.bundled(),
             &[(
@@ -163,6 +180,54 @@ impl Env {
         .unwrap();
         std::fs::write(self.bundled().join("pins.json"), pins.to_json_pretty()).unwrap();
         std::fs::write(self.pins_file(), pins.to_json_pretty()).unwrap();
+    }
+
+    /// The staged fixture with `locales/en.json`, `locales/pl.json`, a PNG
+    /// icon and a JPEG background under `assets/visual/`, as
+    /// `plugins/first-party/build.sh` stages a plugin whose manifest names
+    /// them; pinned again.
+    fn add_translations_and_visual_assets(&self) {
+        let dir = self.plugin_dir();
+        let mut manifest: Value =
+            serde_json::from_slice(&std::fs::read(fixture().join("manifest.json")).unwrap())
+                .unwrap();
+        manifest["engines"]["pluginApi"] = json!("^1.8");
+        manifest["name"] = json!("t:plugin.name");
+        manifest["locales"] = json!(["en", "pl"]);
+        manifest["contributes"]["visualAssets"] = json!({
+            "icons": [{"id": "wave", "name": "Wave", "asset": "assets/visual/wave.png"}],
+            "backgrounds": [
+                {"id": "sky", "name": "Sky", "type": "image", "asset": "assets/visual/sky.jpg"}
+            ]
+        });
+        std::fs::write(
+            dir.join("manifest.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("locales")).unwrap();
+        std::fs::create_dir_all(dir.join("assets/visual")).unwrap();
+        std::fs::write(
+            dir.join("locales/en.json"),
+            r#"{"plugin": {"name": "Bundled Example"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("locales/pl.json"),
+            r#"{"plugin": {"name": "Przykład wbudowany"}}"#,
+        )
+        .unwrap();
+        std::fs::copy(
+            fixture().join("assets/icon-128.png"),
+            dir.join("assets/visual/wave.png"),
+        )
+        .unwrap();
+        // A JPEG of 400 x 200: an APP0 segment, then the frame header.
+        let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00];
+        jpeg.extend([0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0xc8, 0x01, 0x90]);
+        jpeg.extend([0x01, 0x01, 0x11, 0x00, 0xff, 0xd9]);
+        std::fs::write(dir.join("assets/visual/sky.jpg"), jpeg).unwrap();
+        self.pin();
     }
 
     /// The installed copy in the plugin store.
@@ -356,6 +421,53 @@ async fn a_bundled_plugin_is_seeded_and_runs_in_the_host() {
         agent.invoke(json!({"name": "Ada"})).await.unwrap(),
         PluginActionOutcome::Ok { .. }
     ));
+}
+
+/// Translations and visual assets are bundled files like the others:
+/// pinned, seeded into the plugin store, verified at every load.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_bundled_plugin_with_translations_and_visual_assets_is_seeded() {
+    let env = Env::localized("plugins-bundled-localized");
+    let agent = env.start().await;
+    assert_eq!(
+        agent.state().await,
+        Some(PluginState::Enabled),
+        "{}",
+        agent.log()
+    );
+    for file in [
+        "locales/en.json",
+        "locales/pl.json",
+        "assets/visual/wave.png",
+        "assets/visual/sky.jpg",
+    ] {
+        assert_eq!(
+            std::fs::read(env.installed(file)).unwrap(),
+            std::fs::read(env.plugin_dir().join(file)).unwrap(),
+            "{file}"
+        );
+    }
+    assert!(matches!(
+        agent.invoke(json!({"name": "Ada"})).await.unwrap(),
+        PluginActionOutcome::Ok { .. }
+    ));
+    // The next start verifies the installed copy, nested files included.
+    agent.stop().await;
+    let agent = env.start().await;
+    assert_eq!(
+        agent.state().await,
+        Some(PluginState::Enabled),
+        "{}",
+        agent.log()
+    );
+    agent.stop().await;
+
+    // A changed translation in the bundle is refused at seeding.
+    let env = Env::localized("plugins-bundled-localized-tampered");
+    flip_last_byte(&env.plugin_dir().join("locales/pl.json"));
+    let agent = env.start().await;
+    assert_eq!(agent.state().await, None);
+    assert!(agent.log().contains("locales/pl.json"), "{}", agent.log());
 }
 
 /// A plugin file in the application's resources that differs from the

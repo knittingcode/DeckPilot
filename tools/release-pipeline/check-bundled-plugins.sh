@@ -21,9 +21,13 @@
 #   * bundled/ holds pins.json and exactly one directory per listed plugin,
 #     nothing else;
 #   * each plugin directory holds exactly its pinned files, regular files
-#     only: manifest.json, plugin.wasm, LICENSE and icons assets/<name>.png;
-#     each with its pinned size and sha256, and the manifest names the
-#     pinned id and version;
+#     only: manifest.json, plugin.wasm, LICENSE, PNG or JPEG images under
+#     assets/ (icons and plugin API 1.8 visual assets, at most 1 MiB) and
+#     translations locales/<canonical tag>.json (plugin API 1.6, at most
+#     64 KiB), the paths a plugin package may contain
+#     (crates/deckpilot-plugin-bundled is_allowed_file); each with its
+#     pinned size and sha256, and the manifest names the pinned id and
+#     version;
 #   * there is no .dpplugin, no .minisig and no symbolic link anywhere;
 #   * the pins file equals the pins compiled into the agent.
 #
@@ -52,6 +56,35 @@ else
   sha() { shasum -a 256 < "$1" | cut -d' ' -f1; }
 fi
 size() { wc -c < "$1" | tr -d ' '; }
+
+# allowed <path>: the files a bundled plugin may contain, as
+# is_allowed_file in crates/deckpilot-plugin-bundled: the required files;
+# a PNG or JPEG under assets/ whose path a package may contain (segments
+# of letters, digits, _ . -, not starting with . or -, not ending with .,
+# no Windows device name, at most 128 characters); a translation of a
+# canonical locale tag directly in locales/.
+allowed() {
+  local file=$1 segment stem
+  case "$file" in manifest.json | plugin.wasm | LICENSE) return 0 ;; esac
+  [ "${#file}" -le 128 ] || return 1
+  if [[ "$file" =~ ^locales/[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?\.json$ ]]; then
+    return 0
+  fi
+  [[ "$file" =~ ^assets/([A-Za-z0-9_][A-Za-z0-9._-]*/)*[A-Za-z0-9_][A-Za-z0-9._-]*\.(png|jpg|jpeg)$ ]] || return 1
+  local IFS=/
+  for segment in $file; do
+    [[ "$segment" != *. ]] || return 1
+    stem=$(printf '%s' "${segment%%.*}" | tr '[:upper:]' '[:lower:]')
+    [[ ! "$stem" =~ ^(con|prn|aux|nul|com[0-9]|lpt[0-9])$ ]] || return 1
+  done
+}
+# max_bytes <path>: the largest such file (empty: the package limits).
+max_bytes() {
+  case "$1" in
+    locales/*) echo 65536 ;;
+    assets/*) echo 1048576 ;;
+  esac
+}
 
 [ -d "$bundled" ] || fail "$bundled is not a directory"
 pins="$bundled/pins.json"
@@ -97,9 +130,12 @@ while IFS=$'\t' read -r id version class; do
   done
   while IFS= read -r file; do
     [ -n "$file" ] || continue
-    [[ "$file" =~ ^(manifest\.json|plugin\.wasm|LICENSE|assets/[a-z0-9-]+\.png)$ ]] \
-      || fail "$id: $file is not allowed in a bundled plugin (manifest.json, plugin.wasm, LICENSE and assets/<name>.png icons only)"
+    allowed "$file" \
+      || fail "$id: $file is not allowed in a bundled plugin (manifest.json, plugin.wasm, LICENSE, .png/.jpg/.jpeg images under assets/ and locales/<tag>.json translations only)"
     printf '%s\n' "$pinned" | grep -x -F -- "$file" >/dev/null || fail "$id: $file is not pinned"
+    limit=$(max_bytes "$file")
+    [ -z "$limit" ] || [ "$(size "$dir/$file")" -le "$limit" ] \
+      || fail "$id: $file has $(size "$dir/$file") bytes, at most $limit are allowed"
   done <<< "$present"
   while IFS= read -r file; do
     [ -f "$dir/$file" ] || fail "$id: pinned $file is missing"

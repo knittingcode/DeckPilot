@@ -120,6 +120,19 @@ if "$here/check-bundled-plugins.sh" "$work/back\\slash/bundled" "$work/case/agen
   ok "a bundle under a path with a backslash"
 else bad "a bundle under a path with a backslash: $(cat "$work/check.log")"; fi
 
+# Translations (plugin API 1.6) and visual assets (plugin API 1.8), as
+# plugins/first-party/build.sh stages them.
+fresh
+mkdir -p "$plugin/locales" "$plugin/assets/visual"
+printf '{"plugin": {"name": "Bundled Example"}}' > "$plugin/locales/en.json"
+printf '{"plugin": {"name": "Przyklad"}}' > "$plugin/locales/pt-BR.json"
+printf 'jpeg' > "$plugin/assets/visual/Sky_1.jpg"
+printf 'jpeg' > "$plugin/assets/bg.jpeg"
+cp "$fixture/assets/icon-128.png" "$plugin/assets/visual/wave.png"
+pin "$work/case/bundled"
+agent_pins "$work/case/bundled/pins.json"
+passes "translations and PNG/JPEG visual assets under assets/"
+
 echo "== tampered files"
 fresh
 printf 'X' >> "$plugin/plugin.wasm"
@@ -155,6 +168,25 @@ printf 'x' > "$plugin/plugin.js"
 pin "$work/case/bundled"
 agent_pins "$work/case/bundled/pins.json"
 fails "a pinned file that is not allowed" "plugin.js is not allowed"
+# pinned_extra <path> [<bytes>]: a pinned file at <path> (a bad release
+# build that pinned whatever it staged).
+pinned_extra() {
+  fresh
+  mkdir -p "$(dirname "$plugin/$1")"
+  printf '%s' "${2:-x}" > "$plugin/$1"
+  pin "$work/case/bundled"
+  agent_pins "$work/case/bundled/pins.json"
+}
+for file in locales/pl_PL.json locales/pl-pl.json locales/english.json locales/en.yaml \
+  locales/x/en.json assets/en.json assets/icon.svg assets/icon.webp assets/icon.PNG \
+  assets/con.png assets/x./a.png other/icon.png icon.png; do
+  pinned_extra "$file"
+  fails "a pinned $file" "$file is not allowed"
+done
+pinned_extra locales/pl.json "$(head -c 65537 < /dev/zero | tr '\0' 'x')"
+fails "a translation over 64 KiB" "locales/pl.json has 65537 bytes, at most 65536"
+pinned_extra assets/visual/sky.jpg "$(head -c 1048577 < /dev/zero | tr '\0' 'x')"
+fails "an image over 1 MiB" "assets/visual/sky.jpg has 1048577 bytes, at most 1048576"
 fresh
 rm "$plugin/LICENSE"
 fails "a missing pinned file" "pinned LICENSE is missing"
