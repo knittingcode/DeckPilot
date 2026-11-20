@@ -488,7 +488,7 @@ describe("main window shell", { timeout: 20_000 }, () => {
 /** The toolbar's layout selector once it shows `name`. */
 function layoutShown(name: string) {
   return screen.findByRole("button", {
-    name: new RegExp(`^Layout: ${name.replace(/[.+]/g, "\\$&")}`),
+    name: new RegExp(`^Layout: ${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
   })
 }
 

@@ -213,13 +213,16 @@ pub fn window_controls_inset<R: Runtime>(window: WebviewWindow<R>) -> Option<f64
 
 /// macOS places the first button 7 pt in; Tauri's default when no position
 /// is configured is close to it.
+#[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHT_X: f64 = 7.0;
 
 /// Right edge of the three traffic lights whose first one starts at `x`.
 /// Before macOS 26 the buttons are 12 pt wide, 20 pt apart (centre to
 /// centre); from macOS 26 14 pt wide, 23 pt apart (measured on screen).
 /// An unknown version gets the larger geometry: too much room is harmless,
-/// too little overlaps the buttons.
+/// too little overlaps the buttons. Only macOS has traffic lights; the
+/// tests check the geometry on every platform.
+#[cfg(any(target_os = "macos", test))]
 fn controls_right_edge(x: f64, macos_major: Option<u32>) -> f64 {
     let (width, pitch) = match macos_major {
         Some(major) if major < 26 => (12.0, 20.0),

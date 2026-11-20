@@ -550,6 +550,29 @@ async fn the_editor_navigates_the_device_without_running_anything_or_an_echo() {
     s.agent.shutdown().await;
 }
 
+/// The device's image-write count once it has stopped changing (the same
+/// over five samples 100 ms apart, within 10 s).
+async fn settled_writes(s: &Setup) -> usize {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut last = s.mock.image_writes(&s.device);
+    let mut same = 0;
+    while same < 5 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the device never went quiet"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let now = s.mock.image_writes(&s.device);
+        if now == last {
+            same += 1;
+        } else {
+            same = 0;
+            last = now;
+        }
+    }
+    last
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn saving_keeps_the_page_and_draws_nothing() {
     let s = setup().await;
@@ -562,8 +585,9 @@ async fn saving_keeps_the_page_and_draws_nothing() {
     })
     .await;
     s.wait_page(s.ids.tools).await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    let writes = s.mock.image_writes(&s.device);
+    // The folder's frames are still being written on a slow machine: wait
+    // until the device is quiet, so only what the save draws is counted.
+    let writes = settled_writes(&s).await;
     // Saved as the app saves: the database, then a reload.
     s.agent
         .edit_profile(s.ids.profile, |profile| {

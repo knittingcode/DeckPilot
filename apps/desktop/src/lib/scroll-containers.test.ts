@@ -30,7 +30,7 @@ describe("scroll containers", () => {
         const classes = match[1] ?? ""
         if (SCROLLS.test(classes) && !POSITIONED.test(classes)) {
           const line = text.slice(0, match.index).split("\n").length
-          offenders.push(`${file.replace("../", "")}:${line}: "${classes}"`)
+          offenders.push(`${file.replace(/^(?:\.\.\/)+/, "")}:${line}: "${classes}"`)
         }
       }
     }

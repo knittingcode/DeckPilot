@@ -305,7 +305,8 @@ impl Gui {
         self.wait("//button[@aria-current='page'][.//span[normalize-space(.)='Device Editor']]");
         if self.wd().wait(EDITOR, Duration::from_secs(10)).is_ok() {
             self.wait(LIBRARY);
-            self.wait("//*[@data-slot='device-editor-main']//*[normalize-space(.)='Control']");
+            // The key inspector's region (empty until a key is selected).
+            self.wait("//*[@data-slot='device-editor-main']//*[@data-slot='inspector-region']");
         } else {
             eprintln!("[gui] no layout for the device yet: the editor shows its empty state");
         }
