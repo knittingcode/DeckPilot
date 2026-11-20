@@ -50,10 +50,14 @@ const fn policy(
 pub const GIT_POLICY: &[ToolPolicy] = &[
     policy(
         "status",
-        &["--porcelain=v2", "--branch", "-z"],
+        &["--porcelain=v2", "--branch", "-z", "--untracked-files"],
         ToolGrant::Read,
     ),
-    policy("log", &["-1", "--format"], ToolGrant::Read),
+    policy(
+        "log",
+        &["-1", "--no-show-signature", "--format"],
+        ToolGrant::Read,
+    ),
     policy("config", &["--get"], ToolGrant::Read),
     policy("remote", &[], ToolGrant::Read),
     policy("rev-parse", &["--verify", "-q"], ToolGrant::Read),
@@ -62,7 +66,8 @@ pub const GIT_POLICY: &[ToolPolicy] = &[
 
 /// What the built-in docker module runs today (`modules/docker/src/cli.rs`,
 /// `actions.rs`), X3b and X3c. `compose` subcommands always get the bound
-/// compose file and project from the host, never from the plugin.
+/// compose file, project directory and project name from the host (from
+/// the binding), never from the plugin.
 pub const DOCKER_POLICY: &[ToolPolicy] = &[
     policy("context show", &[], ToolGrant::Read),
     policy("version", &["--format"], ToolGrant::Read),
@@ -72,10 +77,18 @@ pub const DOCKER_POLICY: &[ToolPolicy] = &[
         &["--no-trunc", "--format", "--all", "--filter"],
         ToolGrant::Read,
     ),
-    policy("compose ps", &["--format"], ToolGrant::Read),
-    policy("compose logs", &["--tail", "--since"], ToolGrant::Read),
+    policy("compose ps", &["--format", "--all"], ToolGrant::Read),
+    policy(
+        "compose logs",
+        &["--tail", "--since", "--no-color"],
+        ToolGrant::Read,
+    ),
     policy("logs", &["--tail", "--since"], ToolGrant::Read),
-    policy("compose up", &["--detach"], ToolGrant::Modify),
+    policy(
+        "compose up",
+        &["--detach", "--remove-orphans"],
+        ToolGrant::Modify,
+    ),
     policy("compose down", &["--remove-orphans"], ToolGrant::Modify),
     policy("compose restart", &[], ToolGrant::Modify),
     policy("start", &[], ToolGrant::Modify),
@@ -162,6 +175,8 @@ pub const DOCKER_DENIED_OPTIONS: &[&str] = &[
     "--env",
     "--env-file",
     "--project-directory",
+    "-p",
+    "--project-name",
     "-f",
     "--file",
     "--rmi",
