@@ -1,22 +1,24 @@
 //! The GitLab and Jira cut-overs (`docs/marketplace/module-migration.md`
-//! §9, P11) end to end, through the real agent, the real sandboxed plugin
+//! §9, P11), and the GitHub cut-over for GitHub Enterprise Server, end to
+//! end, through the real agent, the real sandboxed plugin
 //! host, real storage and IPC, each test in its own data directory
 //! (feature `plugins`):
 //!
 //! * an alpha.3-style `deckpilot.db`: the built-in module saved and
 //!   enabled with **the server the user entered** (a self-managed GitLab
-//!   under a path, a Jira Cloud site), its credential stored, a profile
+//!   under a path, a Jira Cloud site, a GitHub Enterprise Server), its credential stored, a profile
 //!   with an MK.2 key bound to a legacy action and a workflow node running
 //!   another;
 //! * the shipped alias blocks (`ACTION_ALIASES`) and migration plans, and
-//!   `plugins/first-party/{gitlab,jira}` built to wasm and bundled as the
+//!   `plugins/first-party/{gitlab,jira,github}` built to wasm and bundled as the
 //!   release bundles them (class `migration`, pinned with
 //!   `DECKPILOT_TEST_BUNDLED_PINS`);
 //! * no server ever answers: the plugin's requests get canned answers
 //!   (`DECKPILOT_TEST_PLUGIN_HTTP`, which logs the credential header the
 //!   agent injected), and the built-in's go to a stand-in on 127.0.0.1
 //!   that records them (`DECKPILOT_TEST_BUILTIN_GITLAB_API`,
-//!   `DECKPILOT_TEST_BUILTIN_JIRA_SITE`, feature `test-hooks`: the
+//!   `DECKPILOT_TEST_BUILTIN_JIRA_SITE`, `DECKPILOT_TEST_BUILTIN_GITHUB_API`,
+//!   feature `test-hooks`: the
 //!   module's stored settings, and so what the migration carries, are
 //!   untouched). Which of the two got a request says which implementation
 //!   ran;
@@ -91,8 +93,8 @@ struct Module {
     sent: fn(&Module) -> String,
     /// What the plugin's log shows after the URL.
     logged: fn(&Module) -> String,
-    /// The plugin's declared host and web host, if it has one.
-    host: Option<&'static str>,
+    /// The plugin's declared API host and web host, if it has them.
+    hosts: Option<(&'static str, &'static str)>,
 }
 
 fn text(value: &str) -> ParameterValue {
@@ -176,7 +178,7 @@ const GITLAB: Module = Module {
     header: "private-token",
     sent: |m| m.secret.to_owned(),
     logged: |m| format!("\tPRIVATE-TOKEN: {}", m.secret),
-    host: Some("gitlab.com"),
+    hosts: Some(("gitlab.com", "gitlab.com")),
 };
 
 /// A self-managed GitLab under a path.
@@ -250,11 +252,94 @@ const JIRA: Module = Module {
         )
     },
     logged: |m| format!("\tauthorization: Basic {}", m.secret),
-    host: None,
+    hosts: None,
 };
 
 /// A Jira Cloud site.
 const OWN_JIRA: &str = "https://team.atlassian.net";
+
+// ------------------------------------------------- GitHub Enterprise Server
+
+fn github_answers(base: &str, target: &str) -> Answer {
+    let path = target.split('?').next().unwrap();
+    let web = base.strip_suffix("/api/v3").unwrap_or(base);
+    match path {
+        "/search/issues" => json_answer(
+            200,
+            &json!({"total_count": 2, "incomplete_results": false, "items": [
+                {"number": 12, "title": "Fix the build", "draft": false,
+                 "repository_url": format!("{base}/repos/octo/site"),
+                 "user": {"login": "mona"}, "html_url": format!("{web}/octo/site/pull/12")},
+                {"number": 11, "title": "Docs", "draft": true,
+                 "repository_url": format!("{base}/repos/octo/site"),
+                 "user": {"login": "hubot"}, "html_url": format!("{web}/octo/site/pull/11")}
+            ]}),
+        ),
+        "/repos/octo/site/commits/main/check-runs" => json_answer(
+            200,
+            &json!({"total_count": 2, "check_runs": [
+                {"name": "build", "status": "completed", "conclusion": "success"},
+                {"name": "lint", "status": "completed", "conclusion": "failure"}
+            ]}),
+        ),
+        "/repos/octo/site/commits/main/status" => json_answer(
+            200,
+            &json!({"sha": "0123abc", "state": "success", "statuses": [
+                {"context": "ci/legacy", "state": "success"}
+            ]}),
+        ),
+        _ => json_answer(404, &json!({"message": "Not Found"})),
+    }
+}
+
+const GITHUB: Module = Module {
+    id: "github",
+    name: "GitHub",
+    plugin: parity::Plugin {
+        id: "deckpilot.github",
+        dir: "github",
+        package: "deckpilot-github",
+    },
+    credential: "github.token",
+    secret: "ghp_cutover-ghe-5c2a-not-a-real-token",
+    slot: "token",
+    setting: "apiUrl",
+    stand_in: "DECKPILOT_TEST_BUILTIN_GITHUB_API",
+    settings: |m| {
+        ActionParameters::new()
+            .with("credential", text(m.credential))
+            .with("timeoutSeconds", ParameterValue::Integer(30))
+    },
+    key: Use {
+        name: "Open pull requests",
+        action: "github.pull-requests",
+        parameters: |_| {
+            ActionParameters::new()
+                .with("repository", text("octo/site"))
+                .with("credential", text(""))
+        },
+        asks: "/search/issues",
+    },
+    node: Use {
+        name: "Checks of main",
+        action: "github.checks",
+        parameters: |m| {
+            ActionParameters::new()
+                .with("repository", text("octo/site"))
+                .with("ref", text("main"))
+                .with("credential", text(m.credential))
+        },
+        asks: "/repos/octo/site/commits/main/check-runs",
+    },
+    answers: github_answers,
+    header: "authorization",
+    sent: |m| format!("Bearer {}", m.secret),
+    logged: |m| format!("\tauthorization: Bearer {}", m.secret),
+    hosts: Some(("api.github.com", "github.com")),
+};
+
+/// A GitHub Enterprise Server: its API under `/api/v3`.
+const OWN_GITHUB: &str = "https://ghe.example.com/api/v3";
 
 // ---------------------------------------------------------- environment
 
@@ -343,6 +428,9 @@ impl Env {
         ];
         if self.module.id == "gitlab" {
             targets.push("/projects/group%2Fapp/pipelines/77/jobs".into());
+        }
+        if self.module.id == "github" {
+            targets.push("/repos/octo/site/commits/main/status".into());
         }
         targets.sort_by_key(|t| std::cmp::Reverse(t.len()));
         targets
@@ -504,8 +592,10 @@ impl Env {
                 "DECKPILOT_TEST_PLUGIN_OPEN_URL",
                 self.dir.path().join("opened.txt"),
             )
-            .env(self.module.stand_in, self.stand_in.base())
             .env_remove("DECKPILOT_TEST_BUILTIN_GITHUB_API")
+            .env_remove("DECKPILOT_TEST_BUILTIN_GITLAB_API")
+            .env_remove("DECKPILOT_TEST_BUILTIN_JIRA_SITE")
+            .env(self.module.stand_in, self.stand_in.base())
             .env_remove("DECKPILOT_TEST_LEGACY_FIXTURE")
             .env_remove("DECKPILOT_TEST_MIGRATION_DECISIONS")
             .env_remove("DECKPILOT_TEST_MIGRATION_EXIT")
@@ -1001,9 +1091,9 @@ async fn upgrade(module: &'static Module, server: &'static str) {
     // What waits: the credential and the server, always; and the declared
     // host the built-in did not talk to here (medium tier, not derived).
     let mut expected = vec![credential.clone(), slot.clone()];
-    if let Some(host) = module.host {
-        expected.push(format!("network:{host}"));
-        expected.push(format!("openUrl:{host}"));
+    if let Some((api, web)) = module.hosts {
+        expected.push(format!("network:{api}"));
+        expected.push(format!("openUrl:{web}"));
     }
     assert_eq!(waiting(&asked), keys(&expected), "{asked:?}");
     let item = |key: &str| asked.consent.iter().find(|i| i.key == key).unwrap();
@@ -1170,6 +1260,14 @@ async fn an_alpha3_user_of_a_self_managed_gitlab_moves_to_the_plugin_after_conse
     upgrade(&GITLAB, OWN_GITLAB).await;
 }
 
+/// GitHub Enterprise Server (the `apiUrl` slot of `deckpilot.github`):
+/// the same as a self-managed GitLab; api.github.com and github.com, which
+/// the built-in did not talk to here, are asked for too, never derived.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_alpha3_github_enterprise_user_moves_to_the_plugin_after_consent() {
+    upgrade(&GITHUB, OWN_GITHUB).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_alpha3_jira_user_moves_to_the_plugin_after_consent() {
     upgrade(&JIRA, OWN_JIRA).await;
@@ -1312,6 +1410,7 @@ async fn unreachable_servers_and_unused_modules_stay_on_the_builtin() {
     for (module, saved) in [
         (&GITLAB, "http://gitlab.example.com/api/v4"),
         (&JIRA, "http://jira.example.com"),
+        (&GITHUB, "http://ghe.example.com/api/v3"),
     ] {
         let env = Env::new(
             &format!("plugins-cutover-{}-http", module.id),

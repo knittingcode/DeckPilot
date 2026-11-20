@@ -795,11 +795,14 @@ fn the_snapshot_reads_nothing_without_aliases() {
 }
 
 /// The shipped GitHub plan (P9): GitHub's API URL and the module's own
-/// credential are eligible; GitHub Enterprise (another `apiUrl`), a
-/// private API host and a per-action credential other than the module's
-/// keep the built-in, each with its reason.
+/// credential are eligible, and so is a GitHub Enterprise Server (another
+/// `apiUrl`, carried into the plugin's user-origin slot and asked for),
+/// also with private hosts allowed (asked for separately). A private
+/// api.github.com, a server no plugin can reach and a per-action
+/// credential other than the module's keep the built-in, each with its
+/// reason.
 #[test]
-fn the_github_plan_keeps_enterprise_private_hosts_and_overrides_on_the_builtin() {
+fn the_github_plan_takes_enterprise_servers_and_keeps_private_hosts_and_overrides() {
     fn github(config: &[(&str, ParameterValue)], credential: Option<&str>) -> Option<String> {
         let store = SqliteStore::open_in_memory().unwrap();
         let mut parameters = ActionParameters::new();
@@ -859,8 +862,25 @@ fn the_github_plan_keeps_enterprise_private_hosts_and_overrides_on_the_builtin()
     ));
     eligible(github(&[], Some("github.token")));
 
-    let ghe = github(&[("apiUrl", text("https://ghe.example.com/api/v3"))], None).unwrap();
-    assert!(ghe.contains("`apiUrl` is not the default origin"), "{ghe}");
+    // GitHub Enterprise Server: eligible; the consent to the server (and,
+    // with private hosts allowed, to the private network) is asked when
+    // the migration runs.
+    eligible(github(
+        &[("apiUrl", text("https://ghe.example.com/api/v3"))],
+        None,
+    ));
+    eligible(github(
+        &[
+            ("apiUrl", text("https://ghe.internal/api/v3")),
+            ("allowPrivateHost", ParameterValue::Boolean(true)),
+        ],
+        None,
+    ));
+    let plain = github(&[("apiUrl", text("http://ghe.example.com/api/v3"))], None).unwrap();
+    assert!(
+        plain.contains("is not a server a plugin can reach"),
+        "{plain}"
+    );
     let private = github(&[("allowPrivateHost", ParameterValue::Boolean(true))], None).unwrap();
     assert!(private.contains("`allowPrivateHost`"), "{private}");
     let other = github(&[], Some("other.token")).unwrap();

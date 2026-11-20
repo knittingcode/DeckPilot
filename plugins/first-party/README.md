@@ -28,9 +28,9 @@ pipeline does not package plugins at all (see "Packaging" below).
 | `github/` | `deckpilot.github`, class `migration`: the replacement of the built-in `github` module, checked against it by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_github.rs` |
 | `gitlab/` | `deckpilot.gitlab`, class `migration`: the replacement of the built-in `gitlab` module, for GitLab.com or a self-managed GitLab the user enters and allows; checked against the built-in by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_gitlab.rs` |
 | `jira/` | `deckpilot.jira`, class `migration`: the replacement of the built-in `jira` module, for the Jira Cloud site or Data Center the user enters and allows (it has no host of its own); checked against the built-in by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_jira.rs` |
-| `support/` | `deckpilot-first-party-support`: a library the plugins for a user-entered server share (URLs without a URL parser, the time limit counted with `Date` headers, text helpers). Compiled into each plugin's module; never bundled by itself |
+| `support/` | `deckpilot-first-party-support`: a library the plugins for a user-entered server (`gitlab`, `jira`, `github` for GitHub Enterprise Server) share (URLs without a URL parser, the time limit counted with `Date` headers, text helpers). Compiled into each plugin's module; never bundled by itself |
 | `notifications/` | `deckpilot.notifications`, class `default`: the replacement of the built-in `notifications` module, checked against it by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_notifications.rs` |
-| `<name>/` | One plugin: `Cargo.toml` (a member of the `plugins/runtime` workspace), `src/`, `manifest.json` (id `deckpilot.<name>`), `LICENSE` and its icons in `assets/` |
+| `<name>/` | One plugin: `Cargo.toml` (a member of the `plugins/runtime` workspace), `src/`, `manifest.json` (id `deckpilot.<name>`), `LICENSE`, its icons (and plugin API 1.8 visual assets, PNG or JPEG) in `assets/` and its translations in `locales/<tag>.json` (plugin API 1.6) |
 | `build.sh` | Builds the listed plugins to wasm (`wasm32-unknown-unknown`, `guest` profile, reproducible on one platform) and stages them with their pins |
 | `test-fixtures/` | **Test fixtures, never shipped**: `example-default` (`deckpilot.example-default`, class `default`, one action, one low-tier permission), `legacy-fixture` (`deckpilot.legacy-fixture`, class `migration`: the replacement of the agent's fixture legacy module in the module migration tests, with a low-, a medium- and a high-tier permission) and their own `bundled.json`, used only with `build.sh --test-fixtures` |
 
@@ -47,7 +47,8 @@ plugins/first-party/build.sh --out target/bundle --test-fixtures     # tests, dr
   deckpilot.<name>/manifest.json
   deckpilot.<name>/plugin.wasm
   deckpilot.<name>/LICENSE
-  deckpilot.<name>/assets/icon-128.png   the icons the manifest names, nothing else
+  deckpilot.<name>/assets/icon-128.png   the icons and visual assets (PNG, JPEG) the manifest names
+  deckpilot.<name>/locales/<tag>.json    the translations the manifest declares
 ```
 
 Never a `.dpplugin`, never an archive of its own, never a signature: a

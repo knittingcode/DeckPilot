@@ -18,9 +18,13 @@ built-in on the same data. Until the user approves, after a decline and
 for every computer that is not eligible (below), the built-in serves.
 `apps/agent/tests/plugins_cutover.rs` runs that upgrade end to end.
 
-Read-only. It talks to `https://api.github.com` only (GET), with the
-user's token from the credential slot `token` (bearer), and opens pages on
-`https://github.com` only.
+Read-only. It talks to `https://api.github.com` (GET), or, since 0.2.0, to
+the GitHub Enterprise Server API the user enters in `apiUrl`
+(`https://<host>/api/v3`, the setting's user-origin slot, like
+`deckpilot.gitlab`'s), with the user's token from the credential slot
+`token` (bearer), and opens pages on `https://github.com` or on that
+server. An entered server is reached only once the user allowed exactly
+it; a server on a private network needs its own private-network consent.
 
 ## The contract
 
@@ -61,15 +65,19 @@ idempotency flags and timeouts are identical.
 
 | Built-in setting | Plugin | Rule |
 | --- | --- | --- |
-| `apiUrl` | `apiUrl` (same kind, default, portability) | only `https://api.github.com`; anything else fails with `invalid-api-url`. GitHub Enterprise and other origins keep the built-in (`not_eligible`) until G2 |
+| `apiUrl` | `apiUrl` (same kind, default, portability; its user-origin slot) | `https://api.github.com` needs no consent of its own; a GitHub Enterprise Server API (`https://<host>/api/v3`) is reached only after the user allowed exactly it. The migration carries the server the built-in used into this setting and asks for it (G2); a plain `http` address fails with `invalid-api-url` and keeps the built-in (`not_eligible`) |
 | `timeoutSeconds` | `timeoutSeconds` (same) | the time limit of one action, counted with GitHub's `Date` headers (a guest has no clock) |
-| `credential` (a credential id, default `github.token`) | the credential slot `token` (bearer, api.github.com only) | the migration copies the secret into the slot after the user's consent (§5.5); the per-action `credential` override is dropped when it is empty or the module's own (`ParamRule::DropIfDefault`), any other value keeps the built-in (`not_eligible`) until G5 |
-| `allowPrivateHost` | not declared | plugins never reach private networks; a computer with it on keeps the built-in (G3) |
+| `credential` (a credential id, default `github.token`) | the credential slot `token` (bearer, api.github.com or the allowed server in `apiUrl`) | the migration copies the secret into the slot after the user's consent (§5.5); the per-action `credential` override is dropped when it is empty or the module's own (`ParamRule::DropIfDefault`), any other value keeps the built-in (`not_eligible`) until G5 |
+| `allowPrivateHost` | not declared | the `apiUrl` slot may be allowed on a private network, only with its own consent: the migration asks for it for the server the built-in used; with api.github.com the computer keeps the built-in (G3) |
 
 ## What the plugin does not reproduce
 
-Only GitHub Enterprise or another API origin, a private API host and a
-per-action credential other than the module's keep the built-in. The
+Only a private api.github.com, an API address no plugin can reach (plain
+`http`) and a per-action credential other than the module's keep the
+built-in. On GitHub Enterprise Cloud with data residency
+(`https://api.<name>.ghe.com`) the API works, but pages open on
+`<name>.ghe.com`, which is not the allowed server: `open` fails there
+with `not-permitted`. The
 rest works the same, with these differences, all on failure paths, limits
 or the editor. The numbers are P8's; its difference 4 (transport failures
 reported as `request-failed`) is gone: the plugin is built with the SDK
@@ -120,5 +128,12 @@ cd plugins/runtime && cargo test -p deckpilot-github         # unit tests
 ```
 
 No `url` crate in the module: its IDNA tables would double the module,
-which ships in every installer (`src/urls.rs` builds and checks the few
-URLs it needs; its tests compare it with the `url` crate).
+which ships in every installer. The few URLs it needs are built and
+checked by `deckpilot-first-party-support` (`../support/src/server.rs`,
+whose tests compare it with the `url` crate), shared with the other
+plugins for a server the user enters.
+
+A changed plugin gets a new version (`manifest.json` and `Cargo.toml`,
+0.2.0 for the GitHub Enterprise slot): the agent refuses a bundled copy
+whose files differ from the pins of the same version. The pins are
+written by the release build (`../build.sh`), never by hand.

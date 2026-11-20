@@ -971,9 +971,14 @@ async fn an_alpha3_github_user_moves_to_the_plugin_after_consent() {
             "github.open",
         ]
     );
-    let [item] = waiting.consent.as_slice() else {
-        panic!("only the token waits: {waiting:?}");
+    // The token, and the `apiUrl` slot (a GitHub Enterprise Server the
+    // user may enter later; it allows no server now), as for GitLab.com.
+    let [slot, item] = waiting.consent.as_slice() else {
+        panic!("the token and the slot wait: {waiting:?}");
     };
+    assert_eq!(slot.key, "network:user-origin:apiUrl");
+    assert_eq!(slot.decision, ConsentDecision::Pending);
+    assert_eq!(slot.origin, None, "no server is asked for");
     assert_eq!(item.key, "credentials:token");
     assert_eq!(item.decision, ConsentDecision::Pending);
     assert_eq!(item.permission.tier, ipc::PermissionTier::High);
@@ -984,7 +989,7 @@ async fn an_alpha3_github_user_moves_to_the_plugin_after_consent() {
             credential: CREDENTIAL.into(),
             slot: "token".into(),
             hosts: vec!["api.github.com".into()],
-            user_origin: None,
+            user_origin: Some("apiUrl".into()),
         })
     );
     assert_eq!(agent.plugin_origin().await, Some(PluginOrigin::Bundled));
@@ -1010,8 +1015,13 @@ async fn an_alpha3_github_user_moves_to_the_plugin_after_consent() {
         [
             ("network:api.github.com".into(), "migration:github".into()),
             ("openUrl:github.com".into(), "migration:github".into()),
+            (
+                "openUrl:user-origin:apiUrl".into(),
+                "migration:github".into()
+            ),
         ],
-        "derived: the built-in's origin and web host; never the token"
+        "derived: the built-in's origin and web host, and opening pages of a server the \
+         user allows (which opens nothing before one is allowed); never the token"
     );
     assert_eq!(store.credentials(&id).unwrap(), [], "nothing imported yet");
     let settings = store.settings(&id).unwrap();
@@ -1029,7 +1039,9 @@ async fn an_alpha3_github_user_moves_to_the_plugin_after_consent() {
     eprintln!("step 1: the key and the node ran the built-in");
 
     // 2. The user approves in the app's consent dialog.
-    let done = agent.decide(&["credentials:token"], &[]).await;
+    let done = agent
+        .decide(&["credentials:token", "network:user-origin:apiUrl"], &[])
+        .await;
     eprintln!("step 2: {:?}, route {:?}", done.phase, done.route);
     assert_eq!(done.phase, ipc::MigrationPhase::CutOver, "{done:?}");
     assert_eq!(done.route, MigrationRoute::Plugin);
@@ -1139,23 +1151,72 @@ async fn an_alpha3_github_user_moves_to_the_plugin_after_consent() {
     assert_eq!(env.legacy(), before);
 }
 
-/// A GitHub Enterprise user stays on the built-in: not eligible (G2),
-/// nothing installed, the key served by the built-in.
+/// A GitHub Enterprise user is asked for the token **and the server**
+/// (the `apiUrl` slot), never derived; the built-in serves until both are
+/// allowed, and declining the server keeps it, across restarts. The full
+/// upgrade to the plugin at that server is
+/// `plugins_cutover_servers.rs`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_github_enterprise_user_keeps_the_builtin() {
-    let env = Env::new("plugins-cutover-ghe", "https://ghe.example.com/api/v3");
+async fn a_github_enterprise_user_is_asked_for_the_server() {
+    const GHE: &str = "https://ghe.example.com/api/v3";
+    let env = Env::new("plugins-cutover-ghe", GHE);
+    let id = PluginId::parse(PLUGIN).unwrap();
     let before = env.legacy();
     let agent = env.start(Start::default()).await;
-    let info = agent.wait_listed(ipc::MigrationPhase::NotEligible).await;
-    eprintln!("GHE: {:?}: {:?}", info.phase, info.reason);
-    assert!(
-        info.reason.as_deref().is_some_and(|r| r.contains("apiUrl")),
-        "{info:?}"
-    );
+    let info = agent
+        .wait_listed(ipc::MigrationPhase::AwaitingConsent)
+        .await;
+    eprintln!("GHE: {:?}: {:?}", info.phase, info.consent);
+    let pending: Vec<&str> = info
+        .consent
+        .iter()
+        .filter(|i| i.decision == ConsentDecision::Pending)
+        .map(|i| i.key.as_str())
+        .collect();
+    for key in [
+        "credentials:token",
+        "network:user-origin:apiUrl",
+        "network:api.github.com",
+        "openUrl:github.com",
+    ] {
+        assert!(pending.contains(&key), "{key} is not asked: {pending:?}");
+    }
+    let server = info
+        .consent
+        .iter()
+        .find(|i| i.key == "network:user-origin:apiUrl")
+        .and_then(|i| i.origin.as_ref())
+        .unwrap();
+    assert_eq!(server.origin, GHE);
+    assert!(!server.private_network);
     assert_eq!(info.route, MigrationRoute::Builtin);
-    assert_eq!(info.consent, []);
-    assert_eq!(agent.plugin_state().await, None, "never installed");
+    assert_eq!(env.plugin_store().credentials(&id).unwrap(), []);
+    assert_eq!(
+        env.plugin_store().user_origins(&id).unwrap().len(),
+        0,
+        "no server allowed"
+    );
     let device = agent.device().await;
+    env.press_until(&agent, &device, Side::Builtin)
+        .await
+        .assert_builtin(SEARCH);
+
+    // Everything but the server: declined, the built-in keeps serving.
+    let others: Vec<&str> = pending
+        .iter()
+        .copied()
+        .filter(|k| *k != "network:user-origin:apiUrl")
+        .collect();
+    let declined = agent.decide(&others, &["network:user-origin:apiUrl"]).await;
+    eprintln!("GHE declined: {:?}: {:?}", declined.phase, declined.reason);
+    assert_eq!(declined.phase, ipc::MigrationPhase::NotEligible);
+    assert!(declined.can_retry);
+    assert_eq!(declined.route, MigrationRoute::Builtin);
+    assert_eq!(
+        env.plugin_store().user_origins(&id).unwrap().len(),
+        0,
+        "no server allowed"
+    );
     env.press_until(&agent, &device, Side::Builtin)
         .await
         .assert_builtin(SEARCH);
@@ -1183,7 +1244,9 @@ async fn declining_keeps_the_builtin_until_retry() {
     agent
         .wait_listed(ipc::MigrationPhase::AwaitingConsent)
         .await;
-    let declined = agent.decide(&[], &["credentials:token"]).await;
+    let declined = agent
+        .decide(&["network:user-origin:apiUrl"], &["credentials:token"])
+        .await;
     eprintln!("declined: {:?}: {:?}", declined.phase, declined.reason);
     assert_eq!(declined.phase, ipc::MigrationPhase::NotEligible);
     assert!(declined.can_retry);
@@ -1198,7 +1261,13 @@ async fn declining_keeps_the_builtin_until_retry() {
     let agent = env.start(Start::default()).await;
     let info = agent.listed().await;
     assert_eq!(info.phase, ipc::MigrationPhase::NotEligible, "{info:?}");
-    assert_eq!(info.consent[0].decision, ConsentDecision::Declined);
+    let token = |info: &ModuleMigrationInfo| {
+        info.consent
+            .iter()
+            .find(|i| i.key == "credentials:token")
+            .map(|i| i.decision)
+    };
+    assert_eq!(token(&info), Some(ConsentDecision::Declined), "{info:?}");
     let device = agent.device().await;
     env.press_until(&agent, &device, Side::Builtin)
         .await
@@ -1208,9 +1277,15 @@ async fn declining_keeps_the_builtin_until_retry() {
     let again = agent.retry().await;
     eprintln!("retry: {:?}", again.phase);
     assert_eq!(again.phase, ipc::MigrationPhase::AwaitingConsent);
-    assert_eq!(again.consent[0].decision, ConsentDecision::Pending);
+    assert_eq!(token(&again), Some(ConsentDecision::Pending), "{again:?}");
     assert_eq!(env.plugin_store().credentials(&id).unwrap(), []);
-    let done = agent.decide(&["credentials:token"], &[]).await;
+    let pending: Vec<&str> = again
+        .consent
+        .iter()
+        .filter(|i| i.decision == ConsentDecision::Pending)
+        .map(|i| i.key.as_str())
+        .collect();
+    let done = agent.decide(&pending, &[]).await;
     assert_eq!(done.phase, ipc::MigrationPhase::CutOver, "{done:?}");
     env.press_until(&agent, &device, Side::Plugin)
         .await

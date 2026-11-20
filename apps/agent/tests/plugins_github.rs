@@ -21,7 +21,11 @@
 //!   `plugins/first-party/github/README.md`);
 //! * network failures (a name that does not resolve, a certificate that
 //!   is not trusted) report the built-in's transport code on both sides:
-//!   the plugin reads the agent's network kind (`dp_features`).
+//!   the plugin reads the agent's network kind (`dp_features`);
+//! * a GitHub Enterprise Server the user enters in `apiUrl` (the plugin's
+//!   user-origin slot) is reached only once the user allowed exactly that
+//!   server (a private one only with its own consent), and only until the
+//!   consent is revoked; api.github.com needs none of its own.
 //!
 //! The plugin is pinned here as a `default`-class plugin and invoked by its
 //! own action types: `migration`-class plugins are installed only by the
@@ -48,7 +52,9 @@ use deckpilot_core::{
     ActionParameters, ActionStatus, ActionTypeId, CredentialId, ExecutionContext, MachineConfig,
     MemoryCredentials, ModuleRegistry, Os, ParameterValue, Profile, Secret,
 };
-use deckpilot_ipc::plugins::{PluginActionOutcome, PluginSecret, PluginState};
+use deckpilot_ipc::plugins::{
+    PluginActionOutcome, PluginSecret, PluginSettings, PluginState, UserOriginStatus,
+};
 use deckpilot_ipc::{
     AgentClient, AgentPaths, ClientError, ClientKind, KeyMaterial, Request, Response,
 };
@@ -62,12 +68,16 @@ use support::TempDir;
 const ID: &str = "deckpilot.github";
 const GRANTS: &[&str] = &[
     "network:api.github.com",
+    "network:user-origin:apiUrl",
     "credentials:token",
     "openUrl:github.com",
+    "openUrl:user-origin:apiUrl",
 ];
 /// The token the user stores, for the plugin and for the built-in.
 const TOKEN: &str = "ghp_parity-4d1f7a-not-a-real-token";
 const API: &str = "https://api.github.com";
+/// A GitHub Enterprise Server the user enters, as the agent normalizes it.
+const GHE_API: &str = "https://ghe.example.com/api/v3";
 /// GitHub's `Date` on every answer (the plugin's only clock).
 const DATE: &str = "Mon, 16 Nov 2026 10:00:00 GMT";
 const STARTUP: Duration = Duration::from_secs(30);
@@ -806,6 +816,10 @@ fn plugin_routes() -> Value {
         let a = answer(API, url.strip_prefix(API).unwrap());
         json!({"url": url, "status": a.status, "headers": a.headers, "body": a.body})
     }));
+    // The GitHub Enterprise Server's: the signed-in user only.
+    let a = answer(GHE_API, "/user");
+    routes.push(json!({"url": format!("{GHE_API}/user"), "status": a.status,
+                       "headers": a.headers, "body": a.body}));
     Value::Array(routes)
 }
 
@@ -1094,29 +1108,6 @@ async fn the_plugin_answers_as_the_builtin_does() {
     assert_eq!(plugin.code.as_deref(), Some("credential-missing"));
     compare(name, &builtin, &plugin, &mut problems);
 
-    // Another API (GitHub Enterprise) is the built-in's, never the plugin's.
-    agent
-        .ok(Request::SetPluginSettings {
-            plugin: ID.into(),
-            values: BTreeMap::from([(
-                "apiUrl".to_owned(),
-                json!("https://ghe.example.com/api/v3"),
-            )]),
-        })
-        .await;
-    let refused = agent.invoke("current-user", &json!({})).await;
-    assert_eq!(
-        refused.code.as_deref(),
-        Some("invalid-api-url"),
-        "{refused:?}"
-    );
-    agent
-        .ok(Request::SetPluginSettings {
-            plugin: ID.into(),
-            values: BTreeMap::from([("apiUrl".to_owned(), Value::Null)]),
-        })
-        .await;
-
     agent
         .ok(Request::SetPluginCredential {
             plugin: ID.into(),
@@ -1124,6 +1115,8 @@ async fn the_plugin_answers_as_the_builtin_does() {
             secret: PluginSecret::new(TOKEN),
         })
         .await;
+
+    let ghe_opened = github_enterprise(&env, &agent).await;
 
     // Every read, on both.
     let mut compared = Vec::new();
@@ -1171,6 +1164,7 @@ async fn the_plugin_answers_as_the_builtin_does() {
     let opened: Vec<String> = std::fs::read_to_string(env.opened())
         .unwrap_or_default()
         .lines()
+        .skip(ghe_opened)
         .map(str::to_owned)
         .collect();
     assert_eq!(opened, started);
@@ -1210,7 +1204,12 @@ async fn the_plugin_answers_as_the_builtin_does() {
     // bearer token, and the same requests as the built-in's but for the
     // page size (50 rather than up to 100).
     let log = std::fs::read_to_string(format!("{}.log", env.http().display())).unwrap();
-    let sent: Vec<&str> = log.lines().collect();
+    // The GitHub Enterprise Server's requests are checked by
+    // `github_enterprise`.
+    let sent: Vec<&str> = log
+        .lines()
+        .filter(|l| !l.starts_with(&format!("{GHE_API}/")))
+        .collect();
     assert_ne!(sent.len(), 0);
     for line in &sent {
         let (url, auth) = line.split_once('\t').unwrap_or((line, ""));
@@ -1237,6 +1236,149 @@ async fn the_plugin_answers_as_the_builtin_does() {
     assert_eq!(plugin_paths, paths(&seen));
 
     network_failures(&env, &agent).await;
+}
+
+fn sent(env: &Env) -> Vec<String> {
+    std::fs::read_to_string(format!("{}.log", env.http().display()))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+fn opened(env: &Env) -> Vec<String> {
+    std::fs::read_to_string(env.opened())
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+async fn settings(agent: &Agent, api_url: Value) -> PluginSettings {
+    match agent
+        .request(Request::SetPluginSettings {
+            plugin: ID.into(),
+            values: BTreeMap::from([("apiUrl".to_owned(), api_url)]),
+        })
+        .await
+        .unwrap_or_else(|e| panic!("setPluginSettings: {e}\n{}", agent.log()))
+    {
+        Response::PluginSettings { settings } => *settings,
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+/// GitHub Enterprise Server in `apiUrl`, the plugin's user-origin slot:
+/// nothing is sent there and nothing opened before the user allowed
+/// exactly that server, a private one needs its own consent, and a
+/// revoked consent refuses the very next call. Back on api.github.com,
+/// no consent is needed. Returns how many pages it opened.
+async fn github_enterprise(env: &Env, agent: &Agent) -> usize {
+    let entered = settings(agent, json!("https://GHE.example.com:443/api/v3/")).await;
+    let origin = &entered.origins[0];
+    assert_eq!(origin.setting, "apiUrl");
+    assert_eq!(origin.origin.as_deref(), Some(GHE_API), "{origin:?}");
+    assert_eq!(origin.status, UserOriginStatus::NeedsConsent, "{origin:?}");
+    assert_eq!(origin.credentials, ["token"]);
+    assert!(origin.opens_pages && !origin.private_host, "{origin:?}");
+    assert!(origin.private_network_allowed, "{origin:?}");
+
+    // Entered, not allowed: no request, no token, no page.
+    let before = sent(env);
+    let refused = agent.invoke("current-user", &json!({})).await;
+    assert_eq!(
+        refused.code.as_deref(),
+        Some("not-permitted"),
+        "{refused:?}"
+    );
+    let refused = agent
+        .invoke("open", &json!({"repository": "octo/site"}))
+        .await;
+    assert_eq!(
+        refused.code.as_deref(),
+        Some("not-permitted"),
+        "{refused:?}"
+    );
+    assert_eq!(sent(env), before, "a request before the consent");
+    assert_eq!(
+        opened(env),
+        Vec::<String>::new(),
+        "a page before the consent"
+    );
+
+    // The user allows exactly that server.
+    agent
+        .ok(Request::GrantPluginUserOrigin {
+            plugin: ID.into(),
+            setting: "apiUrl".into(),
+            origin: GHE_API.into(),
+            private_network: false,
+        })
+        .await;
+    let user = agent.invoke("current-user", &json!({})).await;
+    assert!(user.ok, "{user:?}\n{}", agent.log());
+    assert_eq!(user.data["login"], "octocat");
+    let new = sent(env)[before.len()..].to_vec();
+    assert_eq!(
+        new,
+        [format!("{GHE_API}/user\tauthorization: Bearer {TOKEN}")],
+        "only the allowed server, with the token"
+    );
+    tokio::time::sleep(Duration::from_millis(2_100)).await;
+    let page = agent
+        .invoke(
+            "open",
+            &json!({"repository": "octo/site", "pullRequest": 12}),
+        )
+        .await;
+    assert!(page.ok, "{page:?}");
+    assert_eq!(opened(env), ["https://ghe.example.com/octo/site/pull/12"]);
+    // github.com is not that server's web host.
+    let other = agent
+        .invoke("open", &json!({"url": "https://github.com/octo/site"}))
+        .await;
+    assert_eq!(other.code.as_deref(), Some("url-not-allowed"), "{other:?}");
+
+    // Revoked: refused on the very next call.
+    agent
+        .ok(Request::RevokePluginUserOrigin {
+            plugin: ID.into(),
+            setting: "apiUrl".into(),
+        })
+        .await;
+    let before = sent(env);
+    let refused = agent.invoke("current-user", &json!({})).await;
+    assert_eq!(
+        refused.code.as_deref(),
+        Some("not-permitted"),
+        "{refused:?}"
+    );
+    assert_eq!(sent(env), before, "a request after the consent was revoked");
+
+    // A server on a private network: allowing it needs the separate
+    // private-network consent.
+    let private = settings(agent, json!("https://10.0.0.5/api/v3")).await;
+    assert!(private.origins[0].private_host, "{:?}", private.origins);
+    let refused = agent
+        .request(Request::GrantPluginUserOrigin {
+            plugin: ID.into(),
+            setting: "apiUrl".into(),
+            origin: "https://10.0.0.5/api/v3".into(),
+            private_network: false,
+        })
+        .await;
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|e| e.to_string().contains("private network")),
+        "{refused:?}"
+    );
+
+    // Back to api.github.com: no consent of its own.
+    let public = settings(agent, Value::Null).await;
+    assert_eq!(public.effective["apiUrl"], json!(API));
+    tokio::time::sleep(Duration::from_millis(2_100)).await;
+    1
 }
 
 /// No answer at all: a name that does not resolve and a certificate that

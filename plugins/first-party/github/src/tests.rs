@@ -196,18 +196,23 @@ fn codes_slots_settings_and_permissions_are_declared() {
         .collect();
     assert_eq!(settings, [api::API_URL, api::TIMEOUT]);
     // GET to the API, the token to the API, pages on github.com: nothing
-    // else.
+    // else but the GitHub Enterprise server the user enters in `apiUrl`
+    // (and allows; a private network only with its own consent).
     assert_eq!(
         manifest["permissions"],
         json!([
             {"kind": "network", "hosts": ["api.github.com"], "methods": ["GET"],
+             "userOrigins": [{"setting": "apiUrl", "pathPrefix": true, "privateNetwork": true}],
              "justification": manifest["permissions"][0]["justification"]},
             {"kind": "credentials", "refs": ["token"],
              "justification": manifest["permissions"][1]["justification"]},
-            {"kind": "openUrl", "hosts": ["github.com"],
+            {"kind": "openUrl", "hosts": ["github.com"], "userOrigins": ["apiUrl"],
              "justification": manifest["permissions"][2]["justification"]},
         ])
     );
+    let token = &manifest["contributes"]["credentials"][0];
+    assert_eq!(token["hosts"], json!(["api.github.com"]));
+    assert_eq!(token["userOrigin"], "apiUrl");
 }
 
 #[test]
@@ -232,22 +237,112 @@ fn the_current_user() {
 }
 
 #[test]
-fn a_missing_token_or_another_api_is_refused_before_any_request() {
+fn a_missing_token_or_an_invalid_api_is_refused_before_any_request() {
     let agent = agent();
     agent.borrow_mut().token = false;
     let out = run(&agent, "repository", json!({"repository": "a/b"}));
     assert_eq!(failed(&out).0, "credential-missing");
-    let agent = self::agent();
+    for bad in [
+        "http://ghe.example.com/api/v3",
+        "https://user@ghe.example.com/api/v3",
+        "https://ghe.example.com/api/v3?x=1",
+        "ghe.example.com",
+    ] {
+        let agent = self::agent();
+        agent.borrow_mut().settings = json!({ "apiUrl": bad });
+        let out = run(&agent, "current-user", json!({}));
+        let (code, message) = failed(&out);
+        assert_eq!(code, "invalid-api-url", "{bad}");
+        assert!(message.contains("Settings › Plugins › GitHub"), "{message}");
+        assert!(agent.borrow().fetched.is_empty());
+        // Open checks the setting too, and opens nothing.
+        let out = run(&agent, "open", json!({"repository": "a/b"}));
+        assert_eq!(failed(&out).0, "invalid-api-url", "{bad}");
+        assert!(agent.borrow().opened.is_empty());
+    }
+}
+
+/// GitHub Enterprise Server: the API the user entered (the agent allows
+/// it only after the user's consent), its next pages only on it, and
+/// pages opened on its host.
+#[test]
+fn a_github_enterprise_server_is_read_and_opened() {
+    let agent = agent();
     agent.borrow_mut().settings = json!({"apiUrl": "https://ghe.example.com/api/v3"});
+    route(
+        &agent,
+        "https://ghe.example.com/api/v3/user",
+        answer(200, &json!({"login": "mona"})),
+    );
     let out = run(&agent, "current-user", json!({}));
-    let (code, message) = failed(&out);
-    assert_eq!(code, "invalid-api-url");
-    assert!(message.contains("built-in GitHub module"), "{message}");
-    assert!(agent.borrow().fetched.is_empty());
-    // Open checks the setting too, and opens nothing.
-    let out = run(&agent, "open", json!({"repository": "a/b"}));
-    assert_eq!(failed(&out).0, "invalid-api-url");
-    assert!(agent.borrow().opened.is_empty());
+    let (message, data) = ok(&out);
+    assert_eq!(message, "signed in to GitHub as mona");
+    // Without `html_url`, the profile is on the server's web host.
+    assert_eq!(data["url"], s("https://ghe.example.com/mona"));
+    assert_eq!(
+        agent.borrow().fetched,
+        ["https://ghe.example.com/api/v3/user"]
+    );
+
+    // A next page outside the entered API is refused.
+    route(
+        &agent,
+        "https://ghe.example.com/api/v3/search/issues",
+        answer(200, &json!({"total_count": 60, "items": []})).header(
+            "link",
+            "<https://ghe.example.com/other/search/issues?page=2>; rel=\"next\"",
+        ),
+    );
+    let out = run(
+        &agent,
+        "pull-requests",
+        json!({"repository": "octo/site", "limit": 60}),
+    );
+    assert_eq!(failed(&out).0, "invalid-response");
+
+    let out = run(
+        &agent,
+        "open",
+        json!({"repository": "octo/site", "pullRequest": 12}),
+    );
+    assert_eq!(
+        ok(&out).1["url"],
+        s("https://ghe.example.com/octo/site/pull/12")
+    );
+    for url in [
+        "https://github.com/octo/site",
+        "https://other.example.com/octo/site",
+    ] {
+        let out = run(&agent, "open", json!({ "url": url }));
+        assert_eq!(failed(&out).0, "url-not-allowed", "{url}");
+    }
+    assert_eq!(
+        agent.borrow().opened,
+        ["https://ghe.example.com/octo/site/pull/12"]
+    );
+}
+
+#[test]
+fn web_addresses_are_the_builtins() {
+    for (api, web) in [
+        ("https://api.github.com", "https://github.com/"),
+        ("https://API.GitHub.com/", "https://github.com/"),
+        ("https://api.octo.ghe.com", "https://octo.ghe.com/"),
+        ("https://ghe.example.com/api/v3", "https://ghe.example.com/"),
+        (
+            "https://ghe.example.com:8443/api/v3",
+            "https://ghe.example.com:8443/",
+        ),
+    ] {
+        let base = api::api_base(api).unwrap();
+        assert_eq!(api::web_base(&base).root(), web, "{api}");
+    }
+    assert_eq!(
+        api::api_base("https://api.github.com")
+            .unwrap()
+            .endpoint(&["repos", "octo", "a#b"], &[("per_page", "50")]),
+        "https://api.github.com/repos/octo/a%23b?per_page=50"
+    );
 }
 
 #[test]

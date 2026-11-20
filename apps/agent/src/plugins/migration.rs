@@ -185,12 +185,16 @@ pub(crate) const PLANS: &[MigrationPlan] = &[GITHUB, GITLAB, JIRA, NOTIFICATIONS
 /// - the credential setting `credential` (a credential id, default
 ///   `github.token`) is imported into the plugin's slot `token`, only with
 ///   the user's consent;
-/// - the origin `apiUrl`: only `https://api.github.com`, the plugin's
-///   default, is eligible; GitHub Enterprise and any other origin keep the
-///   built-in (`not_eligible`) until G2;
-/// - `allowPrivateHost` on keeps the built-in (G3, never migrated);
+/// - the origin `apiUrl`: `https://api.github.com` is the plugin's
+///   declared host; a GitHub Enterprise Server (`https://<host>/api/v3`)
+///   is carried into the plugin's `apiUrl` setting (its user-origin
+///   slot), and the user is asked to allow exactly that server;
+/// - `allowPrivateHost` on, for such a server, asks the user's separate
+///   consent to reach it on a private network; on for api.github.com
+///   keeps the built-in (G3);
 /// - `github.com` is the web host the built-in opens pages on (`openUrl`,
-///   derived: the built-in has `open-external`).
+///   derived when api.github.com is what the built-in used: the built-in
+///   has `open-external`).
 ///
 /// A per-action `credential` override other than empty or the module's
 /// own makes the module `not_eligible` ([`ParamRule::DropIfDefault`] in the
@@ -203,7 +207,7 @@ const GITHUB: MigrationPlan = MigrationPlan {
     origin: Some(OriginPlan {
         setting: deckpilot_modules::github::API_URL,
         default: Some(deckpilot_modules::github::DEFAULT_API_URL),
-        entered: false,
+        entered: true,
     }),
     private_network: Some(deckpilot_modules::github::ALLOW_PRIVATE),
     open_url_hosts: &["github.com"],
