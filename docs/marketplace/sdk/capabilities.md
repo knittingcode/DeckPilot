@@ -421,15 +421,63 @@ let nonce = ctx.random_bytes(16)?;         // 1 to 64 bytes
   default generators) still do not link or panic in the guest; seed a
   deterministic generator from `ctx.random_u64()`.
 
+## Plugin API 1.9: resources, tools and the project context
+
+Plugin API 1.9 adds the operations DeckPilot's own git, docker, workspace
+and projects plugins need (`plugins/runtime/crates/abi/src/privileged.rs`;
+reviewed in
+[module-migration.md §7](../module-migration.md#plugin-api-19-security-reviews-2026-11-20)).
+All but `profile.read` need permissions only **first-party plugins shipped
+inside the app** can declare ([permissions](permissions.md#plugin-api-19-first-party-bundled-plugins-only));
+for every other plugin they are denied. They need
+`"engines": { "pluginApi": "^1.9" }` (`PRIVILEGED_API_LEVEL` in the SDK).
+
+**Status: the ABI, the SDK and the broker's decisions are in place; the
+agent does not carry the operations out yet.** An allowed call is answered
+`unsupported-op` ("… is not implemented by this version of DeckPilot",
+`CapabilityErrorKind::Unsupported`) until the host side lands (WP-A3 to
+WP-A6 of the extraction).
+
+| Operation | `Context` | Needs | Run origin | Rate |
+| --- | --- | --- | --- | --- |
+| `resource.resolve {param \| role, projectId?, kinds}` → `{handle, kind, label, displayPath?}` | `resource_param`, `resource_role`, `resolve_resource` | `resources`; `displayPath` only with `resources:paths` | any | 20 per invocation |
+| `resource.open {handle, with?, position?, editor?}` | `open_resource` | `resources:open` | user-started | 1 per second, 5 per invocation |
+| `tool.run {tool, args, cwd, timeoutMs?}` → `{exit, stdout, stderr, truncated, durationMs}` | `run_tool` | `tools:git` or `tools:docker`; `ls-remote` also `tools:git:network`; docker's `start`, `stop`, `restart`, `compose up`, `compose down`, `compose restart` also `tools:docker:modify` | any; with `modify` user-started or a work session the user started | 20 starts per second; with `modify` 6 per minute |
+| `url.openParam {param, index?}` | `open_url_param` | `openUrl:from-params` | user-started | as `url.open`, 10 per invocation |
+| `project.current` → project or `null`, `project.list` → `{projects}` | `current_project`, `projects` | `projectContext` | any | |
+| `project.select {id}`, `project.cycle {direction, wrap?}` | `select_project`, `cycle_project` | `projectContext:select` | user-started (never a lifecycle event, so no loop on `ProjectChanged`) | 2 per second |
+| `profile.read` → `{profile?, project?}` | `profile` | `profile` with the `read` scopes (every publisher) | any | |
+
+- A resource **handle** is 128 random bits (32 lowercase hex characters),
+  bound to the plugin and the invocation; the guest never receives a path
+  (unless `resources:paths`). A `resource` parameter of an action reaches
+  the guest as such a handle.
+- `tool.run` takes an **argument array**, never a shell string, starting
+  with the subcommand (an array that starts with an option is refused,
+  `NoSubcommand`). The working directory is a handle. The executable, the
+  environment and the fixed options (`-C <dir> --no-pager …`) are the
+  host's; the agent checks every array against the host policy the
+  manifest declared a subset of
+  ([`tools`](permissions.md#tools)).
+- `url.openParam` opens the literal value the user stored in the
+  invocation's own parameter (http or https, no userinfo, at most 2,048
+  bytes, no template output): the plugin never passes a URL.
+- No operation is available in a [state call](actions.md#key-state).
+- Every call, allowed or denied, is audited by operation, never by value.
+
 ## What there is not (ABI 1)
 
-No file system, process, clipboard, keychain or shell access, ever. No
+No file system, process, clipboard, keychain or shell access, ever (plugin
+API 1.9's `tool.run` is not process access: DeckPilot's own bundled
+plugins name `git` or `docker` and an argument array, and the agent's
+policy builds and checks the command). No
 ambient clock or random source: `std::time::SystemTime::now()` and random
 number generators that read the system fail or panic in the guest; the
 time and random bytes come from the agent ([Time](#time),
 [Randomness](#randomness)). No sleep and no timers. No reading of the
-active profile or project (the run context names what started the run and
-how its workflow run is going, nothing more), of variables, no device
+active profile or project before plugin API 1.9's `profile.read` (the run
+context names what started the run and how its workflow run is going,
+nothing more), no reading of variables, no device
 access, no timers or background work, no streaming HTTP, no WebSockets.
 The JavaScript design (`plugins/sdk-js`) declares several of these; ABI 1
 does not implement them.

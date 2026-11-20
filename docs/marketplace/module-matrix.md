@@ -40,20 +40,30 @@ capabilities. **Verdict**: *core* (stays in the core, essential), *built-in*
 once the named gaps close). Gaps (G…) are defined in
 [module-migration.md § SDK gaps](module-migration.md#7-sdk-gaps).
 
+*Verdicts updated 2026-11-20* by the owner's decision
+([module-migration.md §11](module-migration.md#11-owner-decisions-of-2026-11-20)).
+The rows for `projects`, `workspace`, `git`, `docker`, `http`, `github`,
+`gitlab` and `jira`, and the new Workflows row, now carry the new verdicts.
+The X entries are the plugin API 1.9 security reviews
+([module-migration.md §7](module-migration.md#plugin-api-19-security-reviews-2026-11-20)).
+Nothing in them is implemented yet. The evidence columns describe the code
+as audited.
+
 | Module | Actions / variables | Internal APIs | Essential | Sandbox today | New host capabilities | Config and DB | Complexity / risk | Verdict |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `general` | 2 actions, 0 variables | profile and project (read), cancellation, progress | yes | no (no clock or sleep, no profile read) | G8 profile read, G10 sleep | none | low / high (every test and many workflows use `general.log`) | core |
-| `projects` | 9 actions (3 deprecated), 3 variables + 3 `ALIASES` | profile, `ContextEffect`, faces, machine and project resources; agent and app call its crate directly | yes | no | project-context write (never grantable) | `wrapAround`; module schema 1 adopting core tables | high / high | core |
+| `projects` | 9 actions (3 deprecated), 3 variables + 3 `ALIASES` | profile, `ContextEffect`, faces, machine and project resources; agent and app call its crate directly | yes | no | project-context write (never grantable) | `wrapAround`; module schema 1 adopting core tables | high / high | **plugin** `deckpilot.projects` (2026-11-20) for actions, variables, views, cycling; the project data model stays a core primitive |
 | `work-session` | 0 actions, 6 variables + 6 `ALIASES` | live session snapshot from the agent; page in the app | yes | no | work-session read/write (state is the agent's) | core schema 9 tables | high / high | core |
 | `system` | 6 actions | OS launcher, `run_process`, `sysinfo`, file checks, `PATH`, machine resources | launcher actions: yes | no | G12 resource launch, G11 process inspect, `process.exec` (refused) | `allowCommands` | high / high | core (launchers) + built-in (`run-command`, `process-status`) |
 | `notifications` | 2 actions | core notifier, run summary, workflow name | no | yes since P10 (G8 run summary, G9 severity, routing and delivery) | G9 notify severity, G8 run summary | 3 portable settings | low / medium (widely used) | default plugin (P10: `deckpilot.notifications`) |
-| `workspace` | 3 actions | OS launcher, path checks and canonicalize, project resources; depends on the `system` crate | no | no | G12 resource launch | none | medium / medium | built-in (later with G12) |
-| `git` | 6 actions | `git` CLI with a curated environment, `is_dir`, launcher, 30 s button state | no | no | `process.exec` for `git` (refused), G7 button state | 3 settings | high / medium | built-in |
-| `docker` | 7 actions | `docker` CLI with TLS, config and SSH-agent variables, path checks, 30 s button state | no | no | `process.exec` for `docker` (refused), G7 | 5 settings, `allowStateChanges` | high / medium | built-in |
-| `http` | 2 actions | its own HTTP client and SSRF policy, which the plugin executor and three modules reuse; credentials by id | no (its transport is) | no | G2 user origins, G3 private network, G4 limits, G5 credential selection | 3 settings, any `credentials` row | high / high | transport to core; actions built-in, later |
-| `github` | 6 actions | HTTP client, credentials by id, launcher for `open` | no | partly (api.github.com reads work with #232; `open`, GHE, paging headers do not) | G1 openUrl, G2, G4, G6, G5 (credential import) | 4 settings, `github.token` | medium / low | plugin (first) |
-| `gitlab` | 6 actions | as github, `PRIVATE-TOKEN` header | no | partly (gitlab.com only) | G1, G2, G4, G6 (`x-total`), G5 | 4 settings, `gitlab.token` | medium / low | plugin |
-| `jira` | 4 actions | as github; basic or bearer by deployment | no | no (no fixed host) | G1, G2 (always), G4, G5 | 5 settings, `jira.token` | medium / low | plugin |
+| `workspace` | 3 actions | OS launcher, path checks and canonicalize, project resources; depends on the `system` crate | no | no | G12 resource launch | none | medium / medium | **plugin** `deckpilot.workspace` (2026-11-20; X1, X2, X4, X5) |
+| `git` | 6 actions | `git` CLI with a curated environment, `is_dir`, launcher, 30 s button state | no | no | `process.exec` for `git` (refused), G7 button state | 3 settings | high / medium | **plugin** `deckpilot.git` (2026-11-20; X1, X2, X3a, X4) |
+| `docker` | 7 actions | `docker` CLI with TLS, config and SSH-agent variables, path checks, 30 s button state | no | no | `process.exec` for `docker` (refused), G7 | 5 settings, `allowStateChanges` | high / medium | **plugin** `deckpilot.docker` (2026-11-20; X1, X2, X3b, X3c) |
+| `http` | 2 actions | its own HTTP client and SSRF policy, which the plugin executor and three modules reuse; credentials by id | no (its transport is) | no | G2 user origins, G3 private network, G4 limits, G5 credential selection | 3 settings, any `credentials` row | high / high | **core** (2026-11-20, D1); transport already in `deckpilot-net` |
+| `github` | 6 actions | HTTP client, credentials by id, launcher for `open` | no | partly (api.github.com reads work with #232; `open`, GHE, paging headers do not) | G1 openUrl, G2, G4, G6, G5 (credential import) | 4 settings, `github.token` | medium / low | plugin (first); built-in removed after GHE slot and WP-T1 (2026-11-20, D2) |
+| `gitlab` | 6 actions | as github, `PRIVATE-TOKEN` header | no | partly (gitlab.com only) | G1, G2, G4, G6 (`x-total`), G5 | 4 settings, `gitlab.token` | medium / low | plugin; built-in removed after WP-T1 (2026-11-20, D2) |
+| `jira` | 4 actions | as github; basic or bearer by deployment | no | no (no fixed host) | G1, G2 (always), G4, G5 | 5 settings, `jira.token` | medium / low | plugin; built-in removed after WP-T1 (2026-11-20, D2) |
+| Workflows (not a module) | management UI only: list, editor, save/duplicate/delete (`apps/desktop/src-tauri/src/commands/workflows.rs`, `pages/workflows.tsx`, `workflow-builder/*`) | the core engine, execution IPC | engine yes, management no | n/a (no data ABI needed) | X8 `hostViews` | workflows stay in `profiles.document` | low / medium | **plugin** `deckpilot.workflows` (2026-11-20): manifest-only, activates the app-drawn `workflows` view; engine, `BindingTarget::Workflow` and run monitoring stay core |
 
 Size of each crate and its exclusive dependencies:
 [module-migration.md § Installer size](module-migration.md#8-installer-size).
@@ -225,6 +235,16 @@ table, not the keychain).
 8. **Referenced ids.** All nine; schema 3 and 4 rewrote older ids into them.
 9. **Complexity and risk.** High and high. **Core.**
 
+*Verdict (2026-11-20):* **plugin** `deckpilot.projects` for every
+user-facing part: the nine actions (the three deprecated ones as same-name
+deprecated actions), `projects.current.*` as host-published variables (X7),
+`wrapAround`, the `projects` host view, the status item and the dashboard
+card (X8), and select and cycle through `projectContext` (X6, high tier).
+The data model (`Project`, `ActiveProjectContext`, the three tables, the
+FKs, portability, IPC) stays a core primitive. `ProjectCatalog` moves into
+the core when the crate is removed (WP-C6). The resource-binding editor
+moves to core Settings › Resources.
+
 ### `work-session`
 
 1. **Actions.** None, by design (decision D11, `modules/work-session/src/lib.rs:5-9,83-85`).
@@ -337,6 +357,12 @@ Parity and the remaining differences:
 9. **Complexity and risk.** Medium and medium. **Built-in**, later with
    G12.
 
+*Verdict (2026-11-20):* **plugin** `deckpilot.workspace`, with an optional
+dependency on `deckpilot.projects` (`open-project` requires it). It uses
+resource handles (X1, X2), `resource.open` (X4, high) and
+`url.openParam` (X5, medium). The path helpers move from
+`modules/system/src/support.rs` into the core (WP-A3).
+
 ### `git`
 
 1. **Actions.** `git.status`, `.branch`, `.changes`, `.last-commit`,
@@ -366,6 +392,13 @@ Parity and the remaining differences:
 9. **Complexity and risk.** High and medium. **Built-in.** It uses the git
    CLI, not `git2`.
 
+*Verdict (2026-11-20):* **plugin** `deckpilot.git`, with an optional
+dependency on `deckpilot.projects`. It runs git through `tool.run` (X3a:
+`tools:git` and, for `remote-status` with refresh, `tools:git:network`,
+both high tier). `gitExecutable` becomes a host-held setting of the grant.
+`open-repository` uses `resource.open` (X4). The authority stays in the
+host. The gain is removability, not isolation of the process run.
+
 ### `docker`
 
 1. **Actions.** `docker.status`, `.containers`, `.compose-status`,
@@ -390,6 +423,13 @@ Parity and the remaining differences:
    (`src/lib.rs:146-207`).
 8. **Referenced ids.** All seven.
 9. **Complexity and risk.** High and medium. **Built-in.**
+
+*Verdict (2026-11-20):* **plugin** `deckpilot.docker`, with an optional
+dependency on `deckpilot.projects`. Reads go through `tools:docker` (X3b,
+high). `compose-up`, `compose-down` and `compose-restart` go through
+`tools:docker:modify` (X3c, high, off by default), which replaces
+`allowStateChanges`. `dockerExecutable` and `context` become host-held
+settings of the grant.
 
 ### `http`
 
@@ -426,6 +466,9 @@ Parity and the remaining differences:
 8. **Referenced ids.** Both, often with a `credential` parameter.
 9. **Complexity and risk.** High and high. Transport to a **core** crate
    first; actions **built-in**, later.
+
+*Verdict (2026-11-20):* **core** (D1). The actions stay, and the transport
+is already `crates/deckpilot-net`.
 
 ### `github`
 
@@ -464,6 +507,10 @@ the six actions with G1 and G6, pages of 50 and the credential slot
 `token`; bundled with class `migration`, not routed yet. Parity and the
 remaining differences: `plugins/first-party/github/README.md`.
 
+*Verdict (2026-11-20):* plugin only. The built-in is removed (WP-C5) once
+`deckpilot.github` has a user-origin slot for GitHub Enterprise (WP-B0) and
+WP-T1 passes. The §5.7 two-release rule is waived (D2).
+
 ### `gitlab`
 
 1. **Actions.** `gitlab.current-user`, `.project`, `.merge-requests`,
@@ -494,6 +541,9 @@ block once a computer's migration is cut over (the server the user had
 entered is asked for). Parity and the remaining differences:
 `plugins/first-party/gitlab/README.md`.
 
+*Verdict (2026-11-20):* plugin only. The built-in is removed (WP-C5) after
+WP-T1 (D2).
+
 ### `jira`
 
 1. **Actions.** `jira.myself`, `.issue`, `.issues` (fixed JQL templates only,
@@ -521,6 +571,9 @@ Bearer by `deployment`); bundled with class `migration` and routed by the
 `jira.*` alias block once a computer's migration is cut over (the site is
 asked for). Parity and the remaining differences:
 `plugins/first-party/jira/README.md`.
+
+*Verdict (2026-11-20):* plugin only. The built-in is removed (WP-C5) after
+WP-T1 (D2).
 
 ## Audit of 2026-11-16: where the migration stands
 
@@ -591,6 +644,14 @@ Not possible yet:
   built and verified with disposable test keys in tests and CI only.
 
 ### The order asked for, against the approved scope
+
+*Superseded 2026-11-20.* The table below records the 2026-11-15 scope. The
+owner's decision of 2026-11-20
+([module-migration.md §11](module-migration.md#11-owner-decisions-of-2026-11-20))
+chose option (b) for `git`, `docker` and `workspace`, and extracted the
+user-facing part of `projects`. `http`, `work-session`, `general` and the
+`system` launchers stay core. `system.run-command` and
+`system.process-status` stay built-in.
 
 The mission's order is GitHub, GitLab, Jira, HTTP, Git, Docker, Projects,
 Workspace, Work Session, with System and General audited separately. The
