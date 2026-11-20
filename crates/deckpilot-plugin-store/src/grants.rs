@@ -4,7 +4,12 @@
 //! A manifest's permissions become one [`GrantKey`] per normalized grant:
 //! per host for `network` and `openUrl`, per ref for `credentials`, per
 //! read entry for `variables`, one key for each other kind (two for
-//! `device`, one extra for `privateNetwork`). Consent is stored per
+//! `device`, one extra for `privateNetwork`). Plugin API 1.9's privileged
+//! kinds (first-party bundled plugins only) are one key per tool and
+//! sub-grant (`tools:git`, `tools:git:network`, `tools:docker`,
+//! `tools:docker:modify`), `resources` with `resources:paths` and
+//! `resources:open`, `openUrl:from-params`, `projectContext` with
+//! `projectContext:select`, and `hostViews`. Consent is stored per
 //! (plugin, key), never per version.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -13,11 +18,16 @@ use std::str::FromStr;
 
 use deckpilot_plugin_manifest::{
     CredentialScheme, HttpMethod, Manifest, Permission, PermissionKind, ProfileScope,
+    ToolExecutable,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// The key of the `privateNetwork` grant (no host has a name without a dot).
 pub const PRIVATE_NETWORK_KEY: &str = "private-network";
+
+/// The key of the `openUrl.fromParams` grant, `openUrl:from-params` (plugin
+/// API 1.9, X5; no host has a name without a dot).
+pub const OPEN_URL_FROM_PARAMS_KEY: &str = "from-params";
 
 pub(crate) const ALL_METHODS: [HttpMethod; 6] = [
     HttpMethod::Get,
@@ -28,7 +38,7 @@ pub(crate) const ALL_METHODS: [HttpMethod; 6] = [
     HttpMethod::Delete,
 ];
 
-const KINDS: [PermissionKind; 10] = [
+const KINDS: [PermissionKind; 14] = [
     PermissionKind::Network,
     PermissionKind::Credentials,
     PermissionKind::Notifications,
@@ -39,6 +49,10 @@ const KINDS: [PermissionKind; 10] = [
     PermissionKind::Background,
     PermissionKind::Device,
     PermissionKind::Dialogs,
+    PermissionKind::Tools,
+    PermissionKind::Resources,
+    PermissionKind::ProjectContext,
+    PermissionKind::HostViews,
 ];
 
 pub(crate) fn parse_kind(text: &str) -> Option<PermissionKind> {
@@ -63,6 +77,15 @@ impl GrantKey {
             kind,
             key: key.into(),
         }
+    }
+
+    /// Whether only a first-party plugin shipped inside the app may hold
+    /// it (plugin API 1.9's privileged kinds, X12): the manifest rules
+    /// refuse them for every other package, and the store refuses to
+    /// install or grant them from any other source.
+    pub fn is_first_party_only(&self) -> bool {
+        self.kind.is_first_party_only()
+            || (self.kind == PermissionKind::OpenUrl && self.key == OPEN_URL_FROM_PARAMS_KEY)
     }
 }
 
@@ -154,6 +177,32 @@ pub enum GrantScope {
     DeviceIcons,
     /// Standard dialogs drawn by DeckPilot (plugin API 1.5).
     Dialogs,
+    /// `tools:<git|docker>` (plugin API 1.9, X3): the declared
+    /// subcommands, each with its declared options, of the host's policy.
+    Tool {
+        subcommands: BTreeMap<String, Vec<String>>,
+    },
+    /// `tools:git:network`: `ls-remote` with the user's SSH identity.
+    ToolNetwork,
+    /// `tools:docker:modify`: starting, stopping and restarting.
+    ToolModify,
+    /// `resources`: `resource.resolve` of roles, labels only (X2).
+    Resources,
+    /// `resources:paths`: the bound path with a resolved handle (X2).
+    ResourcePaths,
+    /// `resources:open`: opening a bound location in a bound application
+    /// (X4).
+    ResourceOpen,
+    /// `openUrl:from-params`: the literal URL of the invocation's own
+    /// parameter (X5).
+    OpenUrlFromParams,
+    /// `projectContext`: the active profile's projects and the active one
+    /// (X6).
+    ProjectRead,
+    /// `projectContext:select`: switching the active project (X6).
+    ProjectSelect,
+    /// `hostViews`: the app's own views, status items and cards (X8).
+    HostViews,
 }
 
 /// The consent tier of a grant (architecture section 5.2).
@@ -173,17 +222,31 @@ impl GrantScope {
             | Self::UserOriginSlot {
                 private_network: true,
                 ..
-            } => Tier::High,
-            Self::Notifications | Self::Storage { .. } | Self::DeviceState | Self::DeviceIcons => {
-                Tier::Low
             }
+            // Plugin API 1.9 (module-migration.md §7): process execution,
+            // launching programs and switching the project are always
+            // asked for, never derived.
+            | Self::Tool { .. }
+            | Self::ToolNetwork
+            | Self::ToolModify
+            | Self::ResourceOpen
+            | Self::ProjectSelect => Tier::High,
+            Self::Notifications
+            | Self::Storage { .. }
+            | Self::DeviceState
+            | Self::DeviceIcons
+            | Self::HostViews => Tier::Low,
             Self::Host { .. }
             | Self::UserOriginSlot { .. }
             | Self::Profile { .. }
             | Self::Variable
             | Self::OpenUrl
             | Self::Background { .. }
-            | Self::Dialogs => Tier::Medium,
+            | Self::Dialogs
+            | Self::Resources
+            | Self::ResourcePaths
+            | Self::OpenUrlFromParams
+            | Self::ProjectRead => Tier::Medium,
         }
     }
 
@@ -224,6 +287,13 @@ impl GrantScope {
                         .all(|host| old_hosts.iter().any(|old| host_covers(old, host)))
             }
             (Self::Profile { read: old }, Self::Profile { read: new }) => is_subset(new, old),
+            // Every subcommand, with every option, was covered before.
+            (Self::Tool { subcommands: old }, Self::Tool { subcommands: new }) => {
+                new.iter().all(|(name, options)| {
+                    old.get(name)
+                        .is_some_and(|granted| is_subset(options, granted))
+                })
+            }
             (Self::Storage { quota_kb: old }, Self::Storage { quota_kb: new }) => new <= old,
             (
                 Self::Background {
@@ -328,6 +398,7 @@ fn key_covers(old: &GrantKey, new: &GrantKey) -> bool {
     }
     let special = |key: &GrantKey| {
         key.key == PRIVATE_NETWORK_KEY
+            || key.key == OPEN_URL_FROM_PARAMS_KEY
             || crate::origins::user_origin_setting(key).is_some()
             || crate::origins::open_url_user_origin_setting(key).is_some()
     };
@@ -400,6 +471,9 @@ impl GrantSet {
                     },
                 ),
                 Permission::OpenUrl { hosts, .. } => {
+                    // `fromParams` (plugin API 1.9) is one of the
+                    // privileged grants.
+                    set.insert_privileged(permission);
                     for host in hosts {
                         set.insert(
                             GrantKey::new(PermissionKind::OpenUrl, host.clone()),
@@ -429,23 +503,113 @@ impl GrantSet {
                     GrantKey::new(PermissionKind::Dialogs, ""),
                     GrantScope::Dialogs,
                 ),
-                Permission::Device { state, icons, .. } => {
-                    if *state == Some(true) {
-                        set.insert(
-                            GrantKey::new(PermissionKind::Device, "state"),
-                            GrantScope::DeviceState,
-                        );
-                    }
-                    if *icons == Some(true) {
-                        set.insert(
-                            GrantKey::new(PermissionKind::Device, "icons"),
-                            GrantScope::DeviceIcons,
-                        );
-                    }
-                }
+                Permission::Tools { .. }
+                | Permission::Resources { .. }
+                | Permission::ProjectContext { .. }
+                | Permission::HostViews { .. } => set.insert_privileged(permission),
+                Permission::Device { state, icons, .. } => set.insert_device(*state, *icons),
             }
         }
         set
+    }
+
+    /// `device:state` and `device:icons`, each when set.
+    fn insert_device(&mut self, state: Option<bool>, icons: Option<bool>) {
+        if state == Some(true) {
+            self.insert(
+                GrantKey::new(PermissionKind::Device, "state"),
+                GrantScope::DeviceState,
+            );
+        }
+        if icons == Some(true) {
+            self.insert(
+                GrantKey::new(PermissionKind::Device, "icons"),
+                GrantScope::DeviceIcons,
+            );
+        }
+    }
+
+    /// Plugin API 1.9's kinds (first-party bundled plugins only): one key
+    /// per tool and sub-grant, `resources` with `paths` and `open`,
+    /// `projectContext` with `select`, `hostViews`, and
+    /// `openUrl:from-params`.
+    fn insert_privileged(&mut self, permission: &Permission) {
+        match permission {
+            Permission::Tools { tools, .. } => {
+                for tool in tools {
+                    self.insert_tool(tool);
+                }
+            }
+            Permission::Resources { paths, open, .. } => {
+                self.insert(
+                    GrantKey::new(PermissionKind::Resources, ""),
+                    GrantScope::Resources,
+                );
+                if *paths == Some(true) {
+                    self.insert(
+                        GrantKey::new(PermissionKind::Resources, "paths"),
+                        GrantScope::ResourcePaths,
+                    );
+                }
+                if *open == Some(true) {
+                    self.insert(
+                        GrantKey::new(PermissionKind::Resources, "open"),
+                        GrantScope::ResourceOpen,
+                    );
+                }
+            }
+            Permission::ProjectContext { select, .. } => {
+                self.insert(
+                    GrantKey::new(PermissionKind::ProjectContext, ""),
+                    GrantScope::ProjectRead,
+                );
+                if *select == Some(true) {
+                    self.insert(
+                        GrantKey::new(PermissionKind::ProjectContext, "select"),
+                        GrantScope::ProjectSelect,
+                    );
+                }
+            }
+            Permission::HostViews { .. } => self.insert(
+                GrantKey::new(PermissionKind::HostViews, ""),
+                GrantScope::HostViews,
+            ),
+            Permission::OpenUrl {
+                from_params: Some(true),
+                ..
+            } => self.insert(
+                GrantKey::new(PermissionKind::OpenUrl, OPEN_URL_FROM_PARAMS_KEY),
+                GrantScope::OpenUrlFromParams,
+            ),
+            _ => {}
+        }
+    }
+
+    /// `tools:<tool>` with its subcommands and options, and the tool's
+    /// sub-grant (`tools:git:network`, `tools:docker:modify`) when it
+    /// declares it, each consented to on its own.
+    fn insert_tool(&mut self, tool: &deckpilot_plugin_manifest::ToolDeclaration) {
+        let name = tool.executable.as_str();
+        let subcommands = tool
+            .subcommands
+            .iter()
+            .map(|s| (s.name.clone(), sorted(s.options())))
+            .collect();
+        self.insert(
+            GrantKey::new(PermissionKind::Tools, name),
+            GrantScope::Tool { subcommands },
+        );
+        match tool.executable {
+            ToolExecutable::Git if tool.network() => self.insert(
+                GrantKey::new(PermissionKind::Tools, format!("{name}:network")),
+                GrantScope::ToolNetwork,
+            ),
+            ToolExecutable::Docker if tool.modify() => self.insert(
+                GrantKey::new(PermissionKind::Tools, format!("{name}:modify")),
+                GrantScope::ToolModify,
+            ),
+            _ => {}
+        }
     }
 
     /// One grant per credential ref, with the hosts, schemes and origin
@@ -910,6 +1074,93 @@ mod tests {
             .expect("a dialogs grant");
         assert_eq!(scope, &GrantScope::Dialogs);
         assert_eq!(scope.tier(), Tier::Medium);
+    }
+
+    /// Plugin API 1.9's privileged kinds (module-migration.md §7): one key
+    /// per tool and sub-grant, the tiers of the security reviews, and all
+    /// of them first-party only.
+    #[test]
+    fn the_privileged_kinds_of_1_9_have_the_reviewed_keys_and_tiers() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/example-manifest.json")).unwrap();
+        value["engines"]["pluginApi"] = "^1.9".into();
+        let permissions = value["permissions"].as_array_mut().unwrap();
+        permissions.retain(|p| p["kind"] != "network" && p["kind"] != "credentials");
+        permissions.extend([
+            serde_json::json!({"kind": "tools", "justification": "Runs git and docker for you.",
+            "tools": [
+                {"executable": "git", "network": true, "subcommands": [
+                    {"name": "status", "options": ["-z", "--branch"]}, {"name": "ls-remote"}]},
+                {"executable": "docker", "modify": true, "subcommands": [
+                    {"name": "ps"}, {"name": "compose up", "options": ["--detach"]}]}
+            ]}),
+            serde_json::json!({"kind": "resources", "paths": true, "open": true,
+                "justification": "Opens your folders."}),
+            serde_json::json!({"kind": "projectContext", "select": true,
+                "justification": "Switches the active project."}),
+            serde_json::json!({"kind": "hostViews", "justification": "Shows the Projects screen."}),
+            serde_json::json!({"kind": "openUrl", "hosts": [], "fromParams": true,
+                "justification": "Opens the links you typed."}),
+        ]);
+        let manifest = Manifest::from_json(&value.to_string()).unwrap();
+        let set = GrantSet::from_manifest(&manifest);
+        let tiers: BTreeMap<String, Tier> = set
+            .iter()
+            .filter(|(key, _)| key.is_first_party_only())
+            .map(|(key, scope)| (key.to_string(), scope.tier()))
+            .collect();
+        let expected: BTreeMap<String, Tier> = [
+            ("tools:git", Tier::High),
+            ("tools:git:network", Tier::High),
+            ("tools:docker", Tier::High),
+            ("tools:docker:modify", Tier::High),
+            ("resources", Tier::Medium),
+            ("resources:paths", Tier::Medium),
+            ("resources:open", Tier::High),
+            ("projectContext", Tier::Medium),
+            ("projectContext:select", Tier::High),
+            ("hostViews", Tier::Low),
+            ("openUrl:from-params", Tier::Medium),
+        ]
+        .into_iter()
+        .map(|(k, t)| (k.to_owned(), t))
+        .collect();
+        assert_eq!(tiers, expected);
+        // Every key reads back, and nothing else of the manifest is gated.
+        for key in set.keys() {
+            assert_eq!(key.to_string().parse::<GrantKey>().unwrap(), *key);
+        }
+        assert!(
+            !"background"
+                .parse::<GrantKey>()
+                .unwrap()
+                .is_first_party_only()
+        );
+        assert!(
+            !"openUrl:github.com"
+                .parse::<GrantKey>()
+                .unwrap()
+                .is_first_party_only()
+        );
+
+        // A tool grant covers a narrower declaration, never a new
+        // subcommand or option.
+        let git = set.get(&"tools:git".parse().unwrap()).unwrap();
+        let tool = |entries: &[(&str, &[&str])]| GrantScope::Tool {
+            subcommands: entries
+                .iter()
+                .map(|(n, o)| ((*n).to_owned(), o.iter().map(|s| (*s).to_owned()).collect()))
+                .collect(),
+        };
+        assert!(git.covers(&tool(&[("status", &["-z"])])));
+        assert!(!git.covers(&tool(&[("status", &["-z", "--porcelain=v2"])])));
+        assert!(!git.covers(&tool(&[("log", &[])])));
+        // `from-params` is not a host another openUrl grant could cover.
+        let host: GrantKey = "openUrl:from-params".parse().unwrap();
+        assert!(!key_covers(
+            &"openUrl:*.example.com".parse().unwrap(),
+            &host
+        ));
     }
 
     fn diff_fixture() -> (Vec<StoredGrant>, GrantSet) {

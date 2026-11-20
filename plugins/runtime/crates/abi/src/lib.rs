@@ -23,6 +23,7 @@ pub mod frame;
 pub mod guest;
 pub mod limits;
 pub mod locale;
+pub mod privileged;
 pub mod protocol;
 pub mod state;
 pub mod value;
@@ -57,5 +58,9 @@ pub use value::{ActionOutcome, ParamValue, Params, ValidationError};
 /// operation `dialog.open` of plugin API 1.5 ([`dialog`]), which only a
 /// guest that uses it sends; and the capability operations `locale.get`
 /// and `locale.translate` of plugin API 1.6 ([`locale`]), which only a
+/// guest that uses them sends; and the capability operations of plugin
+/// API 1.9 ([`privileged`]: `resource.resolve`, `resource.open`,
+/// `tool.run`, `url.openParam`, `project.current`, `project.list`,
+/// `project.select`, `project.cycle` and `profile.read`), which only a
 /// guest that uses them sends.
 pub const ABI_VERSION: u32 = 1;

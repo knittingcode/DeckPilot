@@ -12,7 +12,7 @@ use deckpilot_plugin_abi::{ActionOutcome, HttpMethod, ParamValue, Params};
 use deckpilot_plugin_broker::{ApprovedPermission, ApprovedPermissions};
 use deckpilot_plugin_manifest::{
     IconFormat, IconTheme, MAX_RASTER_ICON_BYTES, Manifest, PermissionKind, Sha256Digest,
-    ViewContext, ViewKind,
+    ViewContext,
 };
 use deckpilot_plugin_store::{
     AuditRecord, GrantKey, GrantScope, GrantStatus, InstallSource, PRIVATE_NETWORK_KEY,
@@ -384,12 +384,10 @@ pub fn navigation(manifest: &Manifest) -> Vec<ipc::PluginNavigationEntry> {
                 label: entry.label.clone(),
                 view: ipc::PluginView {
                     id: view.id.clone(),
-                    kind: match view.kind {
-                        ViewKind::Variables => "variables",
-                        ViewKind::Actions => "actions",
-                        ViewKind::Settings => "settings",
-                    }
-                    .to_owned(),
+                    // Plugin API 1.9 adds `workflows` and `projects` (the
+                    // app's own screens, `hostViews`); an app that does
+                    // not know a kind ignores the entry.
+                    kind: view.kind.as_str().to_owned(),
                     // Only the app's toolbar follows it; no data goes to the
                     // plugin for it.
                     context: view
@@ -705,8 +703,10 @@ fn origin_of(host: &str) -> Option<String> {
 
 /// What the broker may allow, from the effective grants of an enabled
 /// plugin (granted ∩ declared). Kinds the broker does not decide
-/// (profile, variables, background, `device:icons`) are not passed; their
-/// capabilities do not exist in ABI 1 or are refused by the executor. An
+/// (variables, background, `device:icons`, `hostViews`) are not passed;
+/// their capabilities do not exist in ABI 1. Plugin API 1.9's kinds and
+/// the profile read are passed, and the executor refuses their operations
+/// as not implemented until their host side lands. An
 /// `openUrl` grant is passed per exact host, like `network`; a wildcard
 /// host is not (the broker opens exact origins only).
 pub fn approved(effective: &[(GrantKey, GrantScope)]) -> (ApprovedPermissions, Vec<String>) {
@@ -731,8 +731,18 @@ pub fn approved_with(
     let mut skipped = Vec::new();
     for (key, scope) in effective {
         match (key.kind, scope) {
-            // Passed as the consented origin itself (`user_origins`).
-            (PermissionKind::Network, GrantScope::UserOriginSlot { .. }) => {}
+            // Passed as the consented origin itself (`user_origins`), and
+            // plugin API 1.9's kinds and the profile read, passed below,
+            // one record each.
+            (PermissionKind::Network, GrantScope::UserOriginSlot { .. })
+            | (
+                PermissionKind::Tools
+                | PermissionKind::Resources
+                | PermissionKind::ProjectContext
+                | PermissionKind::Profile,
+                _,
+            )
+            | (PermissionKind::OpenUrl, GrantScope::OpenUrlFromParams) => {}
             (PermissionKind::Network, GrantScope::Host { methods }) => match origin_of(&key.key) {
                 Some(origin) => out.push(ApprovedPermission::Network {
                     origin,
@@ -778,10 +788,67 @@ pub fn approved_with(
                     _ => skipped.push(key.to_string()),
                 }
             }
+            // `hostViews` places the app's own views and decides nothing
+            // in the broker; nor do the kinds without an operation.
             _ => skipped.push(key.to_string()),
         }
     }
+    out.extend(privileged(effective));
     (ApprovedPermissions(out), skipped)
+}
+
+/// The broker records of plugin API 1.9's kinds (first-party bundled
+/// plugins only, which the manifest rules and the store guarantee) and of
+/// the `profile` read: one per tool with its sub-grants, one for the
+/// resources, one for the project context. A sub-grant whose tool grant
+/// was revoked gives nothing. The agent does not carry these operations
+/// out yet (`executor.rs`), so a call the broker allows is answered as
+/// not implemented.
+fn privileged(effective: &[(GrantKey, GrantScope)]) -> Vec<ApprovedPermission> {
+    use deckpilot_plugin_abi::privileged::Tool;
+    use deckpilot_plugin_broker::ProfileScope;
+    let has = |scope: &GrantScope| effective.iter().any(|(_, s)| s == scope);
+    let has_key = |text: &str| effective.iter().any(|(k, _)| k.to_string() == text);
+    let mut out = Vec::new();
+    for (tool, name) in [(Tool::Git, "git"), (Tool::Docker, "docker")] {
+        if has_key(&format!("tools:{name}")) {
+            out.push(ApprovedPermission::Tool {
+                tool,
+                network: tool == Tool::Git && has_key("tools:git:network"),
+                modify: tool == Tool::Docker && has_key("tools:docker:modify"),
+            });
+        }
+    }
+    if has(&GrantScope::Resources) {
+        out.push(ApprovedPermission::Resources {
+            paths: has(&GrantScope::ResourcePaths),
+            open: has(&GrantScope::ResourceOpen),
+        });
+    }
+    if has(&GrantScope::OpenUrlFromParams) {
+        out.push(ApprovedPermission::OpenUrlFromParams {});
+    }
+    if has(&GrantScope::ProjectRead) {
+        out.push(ApprovedPermission::ProjectContext {
+            select: has(&GrantScope::ProjectSelect),
+        });
+    }
+    let read: BTreeSet<ProfileScope> = effective
+        .iter()
+        .filter_map(|(_, scope)| match scope {
+            GrantScope::Profile { read } => Some(read),
+            _ => None,
+        })
+        .flatten()
+        .map(|scope| match scope {
+            deckpilot_plugin_manifest::ProfileScope::Profile => ProfileScope::Profile,
+            deckpilot_plugin_manifest::ProfileScope::Project => ProfileScope::Project,
+        })
+        .collect();
+    if !read.is_empty() {
+        out.push(ApprovedPermission::Profile { read });
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1099,5 +1166,57 @@ mod tests {
                 "openUrl:*.github.com"
             ]
         );
+    }
+
+    /// Plugin API 1.9's grants reach the broker as one record per tool,
+    /// resources and project context; a sub-grant without its tool gives
+    /// nothing, and `hostViews` decides nothing there.
+    #[test]
+    fn privileged_grants_become_one_broker_record_each() {
+        use deckpilot_plugin_abi::privileged::Tool;
+        let key = |text: &str| text.parse::<GrantKey>().unwrap();
+        let (approved, skipped) = approved(&[
+            (
+                key("tools:git"),
+                GrantScope::Tool {
+                    subcommands: BTreeMap::new(),
+                },
+            ),
+            (key("tools:git:network"), GrantScope::ToolNetwork),
+            // Its tool grant was revoked: the sub-grant gives nothing.
+            (key("tools:docker:modify"), GrantScope::ToolModify),
+            (key("resources"), GrantScope::Resources),
+            (key("resources:open"), GrantScope::ResourceOpen),
+            (key("openUrl:from-params"), GrantScope::OpenUrlFromParams),
+            (key("projectContext"), GrantScope::ProjectRead),
+            (key("hostViews"), GrantScope::HostViews),
+            (
+                key("profile"),
+                GrantScope::Profile {
+                    read: vec![deckpilot_plugin_manifest::ProfileScope::Project],
+                },
+            ),
+        ]);
+        assert_eq!(
+            approved.0,
+            [
+                ApprovedPermission::Tool {
+                    tool: Tool::Git,
+                    network: true,
+                    modify: false,
+                },
+                ApprovedPermission::Resources {
+                    paths: false,
+                    open: true,
+                },
+                ApprovedPermission::OpenUrlFromParams {},
+                ApprovedPermission::ProjectContext { select: false },
+                ApprovedPermission::Profile {
+                    read: [deckpilot_plugin_broker::ProfileScope::Project].into(),
+                },
+            ]
+        );
+        assert_eq!(skipped, ["hostViews"]);
+        deckpilot_plugin_broker::Grants::derive(&approved).unwrap();
     }
 }

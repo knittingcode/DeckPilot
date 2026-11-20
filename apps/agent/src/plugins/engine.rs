@@ -222,6 +222,18 @@ pub(crate) fn action_type(plugin: &str, action: &Action) -> Result<ActionType, S
         .parameters
         .iter()
         .map(|parameter| {
+            // Plugin API 1.9's resource parameters (X1) reach a plugin as
+            // handles, which this agent does not issue yet (WP-A3).
+            if matches!(
+                parameter.kind,
+                deckpilot_plugin_manifest::ParameterKind::Resource { .. }
+            ) {
+                return Err(format!(
+                    "parameter `{}`: resource parameters are not implemented by this version \
+                     of DeckPilot",
+                    parameter.key
+                ));
+            }
             // Through `core_spec`: the kind's constraints (`maxLength`, …)
             // are camel case in the manifest and snake case in the core.
             serde_json::to_value(parameter)

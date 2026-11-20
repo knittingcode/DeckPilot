@@ -164,8 +164,9 @@ pub struct ExpectedFiles {
 ///
 /// Order: the file set must be exactly the pinned one and every file must
 /// have its pinned size and sha256, **before** anything is parsed; then the
-/// package shape, the manifest with the first-party rules
-/// ([`Manifest::validate_first_party`]: the id must be `deckpilot.*`), its id
+/// package shape, the manifest with the bundled first-party rules
+/// ([`Manifest::validate_bundled`]: the id must be `deckpilot.*`, and only
+/// here may it declare plugin API 1.9's privileged kinds), its id
 /// and version against the pins, and the artifact contract. The integrity
 /// record's package digest is that of the deterministic archive
 /// [`PackageBuilder`](crate::PackageBuilder) would write from these files.
@@ -207,8 +208,10 @@ pub fn verify_bundled_files(
     }
     contents::check_shape(&files, limits)?;
     let manifest = Manifest::from_slice(&files[MANIFEST])?;
+    // The only path that accepts plugin API 1.9's privileged kinds: every
+    // file matched the pins compiled into the agent above (X12).
     manifest
-        .validate_first_party()
+        .validate_bundled()
         .map_err(deckpilot_plugin_manifest::ManifestError::from)?;
     if manifest.id != expected.id || manifest.version != expected.version {
         return Err(PackageError::WrongPlugin {

@@ -59,7 +59,10 @@ impl MockHost {
     /// a run started from the app for `run.context`, the Unix epoch in
     /// UTC for `time.now`, zero bytes for `random.bytes`: use
     /// [`MockHost::new`] for a time or bytes of your choice; a dialog is
-    /// confirmed with its defaults, a selection with its first option).
+    /// confirmed with its defaults, a selection with its first option;
+    /// plugin API 1.9: `resource.resolve` a handle labelled with the
+    /// parameter or role, `tool.run` an exit status of 0 without output,
+    /// `project.list` no projects, `profile.read` nothing).
     pub fn allow_all() -> Self {
         Self::new(|req| match req {
             CapabilityRequest::HttpFetch(_) => CallResult::Ok(serde_json::json!({"status": 200})),
@@ -77,6 +80,19 @@ impl MockHost {
             CapabilityRequest::DialogOpen(d) => CallResult::Ok(
                 serde_json::to_value(crate::dialog::confirmed_with_defaults(d)).unwrap_or_default(),
             ),
+            // Plugin API 1.9: a handle labelled after what was asked for,
+            // a run that exits 0 with no output, no projects, an empty
+            // profile.
+            CapabilityRequest::ResourceResolve(r) => CallResult::Ok(serde_json::json!({
+                "handle": "0".repeat(deckpilot_plugin_abi::privileged::HANDLE_LEN),
+                "kind": r.kinds.first(),
+                "label": r.param.as_ref().or(r.role.as_ref()),
+            })),
+            CapabilityRequest::ToolRun(_) => CallResult::Ok(serde_json::json!({"exit": 0})),
+            CapabilityRequest::ProjectList(_) => {
+                CallResult::Ok(serde_json::json!({"projects": []}))
+            }
+            CapabilityRequest::ProfileRead(_) => CallResult::Ok(serde_json::json!({})),
             _ => CallResult::Ok(serde_json::Value::Null),
         })
     }

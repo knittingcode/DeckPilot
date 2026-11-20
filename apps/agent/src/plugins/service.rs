@@ -80,9 +80,15 @@ const INVALID_PARAMETERS: &str = "invalid-parameters";
 /// manifest's `locales`, `defaultLocale` and `t:` texts and `locale.get` and
 /// `locale.translate` (`docs/marketplace/sdk/localization.md`), 1.7 the
 /// actions' `editorNavigation` (`docs/editor-navigation-and-simulation.md`),
-/// 1.8 the actions' `title` (`docs/key-text.md`, "Plugin titles").
+/// 1.8 the actions' `title` (`docs/key-text.md`, "Plugin titles"), 1.9 the
+/// privileged kinds of DeckPilot's own bundled plugins (`tools`,
+/// `resources`, `projectContext`, `hostViews`, `openUrl.fromParams`,
+/// `resource` parameters, the `workflows` and `projects` views, status
+/// items and dashboard cards; `docs/marketplace/module-migration.md` §7)
+/// and their capability operations, which this agent refuses as not
+/// implemented until their host side lands (WP-A3 to WP-A6).
 /// A plugin whose manifest asks for a higher minor is `incompatible`.
-const PLUGIN_API: ApiLevel = ApiLevel::new(1, 8);
+const PLUGIN_API: ApiLevel = ApiLevel::new(1, 9);
 /// Longest any invocation may take, whatever the manifest says.
 const MAX_INVOCATION: Duration = Duration::from_secs(600);
 /// Where the registry's verified state is kept (outside `plugins/`,

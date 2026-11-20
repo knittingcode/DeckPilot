@@ -989,6 +989,73 @@ fn only_first_party_plugins_are_bundled() {
     assert_eq!(manager.store().journal().unwrap(), Vec::new());
 }
 
+/// Plugin API 1.9's privileged kinds (X12): recorded only for a plugin
+/// shipped inside the app, seeded with their low-tier grant only.
+#[test]
+fn privileged_kinds_are_installed_only_from_the_bundle() {
+    let env = Env::new();
+    let mut manager = env.open();
+    let mut permissions = base_permissions();
+    permissions.push(json!({"kind": "projectContext", "select": true,
+        "justification": "Switches the active project from a key."}));
+    permissions.push(json!({"kind": "hostViews",
+        "justification": "Shows the Projects screen."}));
+    let package = common::bundled_package_with("deckpilot.projects", "1.0.0", &permissions, |v| {
+        v["engines"]["pluginApi"] = json!("^1.9");
+    });
+    let id = package.manifest().id.clone();
+    let declared = grants_of(&package);
+    let gated: Vec<String> = declared
+        .keys()
+        .filter(|k| k.is_first_party_only())
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(
+        gated,
+        ["projectContext", "projectContext:select", "hostViews"]
+    );
+
+    for source in [
+        InstallSource::Registry {
+            registry: "official".into(),
+        },
+        InstallSource::Sideload,
+        InstallSource::Dev,
+    ] {
+        let result = manager.install(&package, &source, &Consent::none("user"));
+        assert!(
+            matches!(result, Err(StoreError::SourceNotAllowed { .. })),
+            "{source:?}: {result:?}"
+        );
+        assert!(manager.store().plugin(&id).unwrap().is_none());
+    }
+    // Selecting the project is high tier: never seeded.
+    let select: GrantKey = "projectContext:select".parse().unwrap();
+    let result = manager.install(
+        &package,
+        &InstallSource::Bundled,
+        &Consent::of([select], "bundled:0.10.0"),
+    );
+    assert!(
+        matches!(
+            result,
+            Err(StoreError::BundledGrant {
+                tier: Tier::High,
+                ..
+            })
+        ),
+        "{result:?}"
+    );
+    let host_views: GrantKey = "hostViews".parse().unwrap();
+    manager
+        .install(
+            &package,
+            &InstallSource::Bundled,
+            &Consent::of([host_views], "bundled:0.10.0"),
+        )
+        .unwrap();
+}
+
 #[test]
 fn a_bundled_plugin_is_seeded_with_derived_low_tier_grants_only() {
     let env = Env::new();

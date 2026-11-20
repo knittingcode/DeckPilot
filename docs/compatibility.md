@@ -91,6 +91,24 @@ summaries carry the optional `visualAssets` (older apps ignore it), and
 whose plugin runtime lists the feature `visualAssets` (an older agent would
 answer with the plugin's own icon).
 
+Plugin API 1.9 (unreleased,
+[marketplace/module-migration.md §7](marketplace/module-migration.md#plugin-api-19-security-reviews-2026-11-20)):
+additive. The manifest kinds `tools`, `resources`, `projectContext` and
+`hostViews`, `openUrl.fromParams`, `resource` parameters, the view kinds
+`workflows` and `projects`, and `contributes.statusItems` and
+`contributes.dashboardCards` validate only with `^1.9` and only for a
+first-party plugin shipped inside the app; every other manifest is refused
+them, and a `^1.8` manifest without them validates exactly as before. The
+capability operations `resource.resolve`, `resource.open`, `tool.run`,
+`url.openParam`, `project.current`, `project.list`, `project.select`,
+`project.cycle` and `profile.read` are compatible additions within ABI 1
+(a guest that does not use them never sends them; an older agent refuses
+them as unknown). This agent reports plugin API 1.9 and answers those
+operations as not implemented until their host side lands; an agent of 1.8
+reports a `^1.9` version `incompatible`. The SDK's `LATEST_API_LEVEL` is
+1.9. An older app ignores a navigation entry of an unknown view kind. No
+IPC protocol or document change.
+
 Before it, protocol 13 and plugin API 1.6: localization
 ([i18n.md](i18n.md#plugin-localization),
 [marketplace/sdk/localization.md](marketplace/sdk/localization.md)).

@@ -26,6 +26,10 @@ use crate::model::{
 };
 use crate::{MANIFEST_VERSION, path_rules};
 
+#[path = "privileged.rs"]
+mod privileged;
+pub(crate) use privileged::first_party_only;
+
 /// Error codes every plugin may return without declaring them (`SharedCode`
 /// in the SDK). `errorCodes` must not redeclare them (section 7, rule 13).
 pub const SHARED_ERROR_CODES: &[&str] = &[
@@ -373,6 +377,7 @@ pub(crate) fn check(manifest: &Manifest) -> Checker {
     error_codes(&mut c, manifest);
     needs_project(&mut c, manifest);
     dependencies(&mut c, manifest);
+    privileged::check(&mut c, manifest);
     c
 }
 
@@ -661,18 +666,7 @@ fn permissions(c: &mut Checker, m: &Manifest) {
                 }
                 c.unique(&field, read);
             }
-            Permission::Storage { quota_kb, .. } => {
-                if !(257..=10_240).contains(quota_kb) {
-                    c.error(
-                        format!("{path}.quotaKb"),
-                        IssueCode::Range,
-                        format!(
-                            "must be between 257 and 10240 (it is {quota_kb}); the first 256 KiB \
-                             need no permission"
-                        ),
-                    );
-                }
-            }
+            Permission::Storage { quota_kb, .. } => storage_quota(c, &path, *quota_kb),
             Permission::OpenUrl { .. } => open_url(c, &path, permission, m),
             Permission::Background {
                 min_interval_seconds,
@@ -692,8 +686,26 @@ fn permissions(c: &mut Checker, m: &Manifest) {
                 routing: Some(routing),
                 ..
             } => notification_routing(c, &format!("{path}.routing"), routing, m),
+            Permission::Tools { .. }
+            | Permission::Resources { .. }
+            | Permission::ProjectContext { .. }
+            | Permission::HostViews { .. } => privileged::permission(c, &path, permission),
             Permission::Notifications { routing: None, .. } | Permission::Dialogs { .. } => {}
         }
+    }
+}
+
+/// `storage.quotaKb`: above the 256 KiB every plugin has, at most 10 MiB.
+fn storage_quota(c: &mut Checker, path: &str, quota_kb: u64) {
+    if !(257..=10_240).contains(&quota_kb) {
+        c.error(
+            format!("{path}.quotaKb"),
+            IssueCode::Range,
+            format!(
+                "must be between 257 and 10240 (it is {quota_kb}); the first 256 KiB need no \
+                 permission"
+            ),
+        );
     }
 }
 
@@ -763,7 +775,9 @@ fn open_url(c: &mut Checker, path: &str, permission: &Permission, m: &Manifest) 
     else {
         return;
     };
-    let min = usize::from(user_origins.as_ref().is_none_or(Vec::is_empty));
+    let min = usize::from(
+        user_origins.as_ref().is_none_or(Vec::is_empty) && !permission.opens_from_params(),
+    );
     c.hosts_min(&format!("{path}.hosts"), hosts, min, 16);
     let Some(settings) = user_origins else {
         return;
@@ -958,6 +972,11 @@ fn parameter_kind(c: &mut Checker, path: &str, kind: &ParameterKind) {
             c.opt_text(&format!("{path}.valueLabel"), value_label.as_ref(), 32);
             max_len(c, "maxItems", *max_items, 200);
         }
+        ParameterKind::Resource { kinds } => {
+            let field = format!("{path}.kinds");
+            c.count(&field, kinds.len(), 1, 4);
+            c.unique(&field, kinds.iter().map(|k| k.as_str()));
+        }
         ParameterKind::Integer { .. } | ParameterKind::Boolean {} | ParameterKind::Project {} => {}
     }
 }
@@ -969,6 +988,7 @@ fn kind_name(kind: &ParameterKind) -> &'static str {
         ParameterKind::Boolean {} => "boolean",
         ParameterKind::Choice { .. } => "choice",
         ParameterKind::Project {} => "project",
+        ParameterKind::Resource { .. } => "resource",
         ParameterKind::Lines { .. } => "lines",
         ParameterKind::Pairs { .. } => "pairs",
         ParameterKind::Code { .. } => "code",
@@ -1037,6 +1057,9 @@ fn default_value(c: &mut Checker, path: &str, kind: &ParameterKind, value: &Para
             (!options.contains(choice)).then(|| format!("`{choice}` is not one of the options"))
         }
         (ParameterKind::Project {}, _) => Some("a project parameter cannot have a default".into()),
+        (ParameterKind::Resource { .. }, _) => {
+            Some("a resource parameter cannot have a default: the user binds it".into())
+        }
         (kind, value) => {
             let value = match value {
                 ParameterValue::Text(_) => "text",

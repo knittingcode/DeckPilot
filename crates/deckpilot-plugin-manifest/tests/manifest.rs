@@ -1057,9 +1057,11 @@ fn fixtures() -> Vec<Fixture> {
             },
         ),
         mutate(
+            // Plugin API 1.9 (first-party bundled only) gave it `kinds`,
+            // which it cannot do without (tests/privileged.rs).
             "resource parameter kind",
             true,
-            Structure("unknown variant `resource`"),
+            Structure("missing field `kinds`"),
             |v| {
                 set(
                     v,

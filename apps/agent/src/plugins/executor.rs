@@ -1233,6 +1233,27 @@ fn rank(severity: Severity) -> u8 {
     }
 }
 
+/// The answer to a plugin API 1.9 operation this agent does not carry out
+/// yet: `unsupported-op`, which the SDKs report as unsupported.
+fn not_implemented(allowed: &Allowed) -> CallResult {
+    let op = match allowed {
+        Allowed::ResourceResolve { .. } => "resource.resolve",
+        Allowed::ResourceOpen { .. } => "resource.open",
+        Allowed::ToolRun { .. } => "tool.run",
+        Allowed::OpenUrlParam { .. } => "url.openParam",
+        Allowed::ProjectCurrent => "project.current",
+        Allowed::ProjectList => "project.list",
+        Allowed::ProjectSelect { .. } => "project.select",
+        Allowed::ProjectCycle { .. } => "project.cycle",
+        Allowed::ProfileRead { .. } => "profile.read",
+        _ => "this operation",
+    };
+    CallResult::error(
+        CallErrorCode::UnsupportedOp,
+        format!("{op} is not implemented by this version of DeckPilot"),
+    )
+}
+
 fn storage_error(error: &StorageError) -> CallResult {
     let code = match error {
         StorageError::InvalidKey | StorageError::ValueTooLarge => CallErrorCode::BadRequest,
@@ -1310,6 +1331,10 @@ impl CapabilityExecutor for Executor {
 }
 
 impl Executor {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per allowed operation, read top to bottom"
+    )]
     fn run(
         &self,
         plugin: &PluginId,
@@ -1325,6 +1350,19 @@ impl Executor {
             Allowed::DialogOpen { request } => self.dialog(plugin, request, interrupt),
             Allowed::LocaleGet => self.locale(plugin),
             Allowed::LocaleTranslate { request } => self.translate(plugin, request),
+            // Plugin API 1.9 (`docs/marketplace/module-migration.md` §7):
+            // the broker decides them, the host side lands with WP-A3 to
+            // WP-A6. Until then each is refused as not implemented, before
+            // anything is resolved, run or opened.
+            Allowed::ResourceResolve { .. }
+            | Allowed::ResourceOpen { .. }
+            | Allowed::ToolRun { .. }
+            | Allowed::OpenUrlParam { .. }
+            | Allowed::ProjectCurrent
+            | Allowed::ProjectList
+            | Allowed::ProjectSelect { .. }
+            | Allowed::ProjectCycle { .. }
+            | Allowed::ProfileRead { .. } => not_implemented(allowed),
             Allowed::TimeNow => super::ambient::now(),
             Allowed::RandomBytes { length } => super::ambient::random(*length),
             Allowed::RunContext(context) => serde_json::to_value(context).map_or_else(
@@ -2528,5 +2566,44 @@ mod dialog_tests {
             running.join().unwrap(),
             CallResult::Ok(json!({"outcome": "cancelled", "reason": "appClosed"}))
         );
+    }
+
+    /// Plugin API 1.9's operations: the broker allows them with the
+    /// grants, and this agent refuses each as not implemented (WP-A3 to
+    /// WP-A6 carry them out), so nothing is resolved, run or opened.
+    #[test]
+    fn privileged_operations_are_refused_as_not_implemented() {
+        let fixture = fixture(
+            r#"[{"kind":"resources","paths":true,"open":true},{"kind":"openUrlFromParams"},
+                {"kind":"projectContext","select":true},{"kind":"profile","read":["profile","project"]},
+                {"kind":"tool","tool":"git","network":true},
+                {"kind":"tool","tool":"docker","modify":true}]"#,
+        );
+        let handle = "0123456789abcdef0123456789abcdef";
+        let interrupt = CallInterrupt::new(None, Instant::now() + Duration::from_secs(60));
+        for op in [
+            json!({"op": "resource.resolve", "args": {"role": "repository", "kinds": ["directory"]}}),
+            json!({"op": "resource.open", "args": {"handle": handle}}),
+            json!({"op": "tool.run", "args": {"tool": "git", "args": ["status"], "cwd": handle}}),
+            json!({"op": "tool.run", "args": {"tool": "docker", "args": ["compose", "up"], "cwd": handle}}),
+            json!({"op": "url.openParam", "args": {"param": "urls"}}),
+            json!({"op": "project.current", "args": {}}),
+            json!({"op": "project.list", "args": {}}),
+            json!({"op": "project.select", "args": {"id": "p-1"}}),
+            json!({"op": "project.cycle", "args": {"direction": "next"}}),
+            json!({"op": "profile.read", "args": {}}),
+        ] {
+            let request: CapabilityRequest = serde_json::from_value(op.clone()).unwrap();
+            let mut executor = fixture.executor(RunContext::direct(RunTrigger::Key));
+            let CallResult::Error(error) = fixture.call(&mut executor, &request, &interrupt) else {
+                panic!("{op}: carried out");
+            };
+            assert_eq!(error.code, CallErrorCode::UnsupportedOp, "{op}");
+            assert!(
+                error.message.contains(request.op()) && error.message.contains("not implemented"),
+                "{op}: {}",
+                error.message
+            );
+        }
     }
 }

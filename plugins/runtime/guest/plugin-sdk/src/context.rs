@@ -25,6 +25,9 @@ use serde_json::Value;
 use crate::definition::is_camel_key;
 use crate::output::{PluginError, codes};
 
+#[path = "privileged.rs"]
+mod privileged;
+
 /// Longest log line the host accepts; longer lines are cut (at a character
 /// boundary) by [`Context::log`].
 pub const MAX_LOG_LEN: usize = deckpilot_plugin_abi::limits::MAX_LOG_LEN;

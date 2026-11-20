@@ -41,6 +41,7 @@ pub mod locale;
 mod localize;
 mod model;
 mod path_rules;
+pub mod tools;
 mod unique_map;
 mod validate;
 mod visual;
@@ -94,7 +95,9 @@ pub const MAX_MANIFEST_BYTES: usize = 256 * 1024;
 
 /// Permission kinds a manifest might plausibly ask for that plugin API 1
 /// never grants (section 5.2), reported with a clearer message than
-/// "unknown variant".
+/// "unknown variant". `projectContext` is not among them since plugin API
+/// 1.9: it parses, and the publisher gate refuses it for every manifest
+/// but a first-party bundled one ([`Manifest::validate_bundled`]).
 const FORBIDDEN_PERMISSION_KINDS: &[&str] = &[
     "filesystem",
     "fileSystem",
@@ -107,7 +110,6 @@ const FORBIDDEN_PERMISSION_KINDS: &[&str] = &[
     "shell",
     "clipboard",
     "machineResources",
-    "projectContext",
     "hid",
     "usb",
     "brightness",
@@ -176,8 +178,15 @@ impl Manifest {
     }
 
     /// Checks every rule beyond structure; returns all problems found.
+    ///
+    /// The privileged kinds of plugin API 1.9 (`tools`, `resources`,
+    /// `projectContext`, `hostViews`, `openUrl.fromParams`, `resource`
+    /// parameters, host views) are refused
+    /// ([`IssueCode::FirstPartyOnly`]): only [`Manifest::validate_bundled`]
+    /// accepts them.
     pub fn validate(&self) -> Result<(), ValidationErrors> {
-        let errors = validate::check(self).errors;
+        let mut errors = validate::check(self).errors;
+        errors.extend(validate::first_party_only(self));
         if errors.is_empty() {
             Ok(())
         } else {
@@ -197,7 +206,42 @@ impl Manifest {
     /// registry pins the client marked first-party because the root-signed
     /// key set authorizes `deckpilot`): this says nothing about where a
     /// manifest came from.
+    ///
+    /// The privileged kinds of plugin API 1.9 stay refused
+    /// ([`IssueCode::FirstPartyOnly`], X12): a `deckpilot.*` package from a
+    /// registry never receives them. Only [`Manifest::validate_bundled`]
+    /// accepts them.
     pub fn validate_first_party(&self) -> Result<(), ValidationErrors> {
+        let mut errors = self.first_party_errors();
+        errors.extend(validate::first_party_only(self));
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(ValidationErrors(errors))
+        }
+    }
+
+    /// [`Manifest::validate_first_party`] for a plugin shipped inside the
+    /// application bundle, whose every file the caller has matched against
+    /// the sha256 pins compiled into the agent
+    /// (`deckpilot_plugin_package::verify_bundled_files`): the only rules
+    /// that accept the privileged kinds of plugin API 1.9 (`tools`,
+    /// `resources`, `projectContext`, `hostViews`, `openUrl.fromParams`,
+    /// `resource` parameters, host views; X12 in
+    /// `docs/marketplace/module-migration.md` §7). They still need
+    /// `"pluginApi": "^1.9"` and pass every other rule.
+    pub fn validate_bundled(&self) -> Result<(), ValidationErrors> {
+        let errors = self.first_party_errors();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(ValidationErrors(errors))
+        }
+    }
+
+    /// The rules of [`Manifest::validate_first_party`] without the
+    /// publisher gate of the privileged kinds.
+    fn first_party_errors(&self) -> Vec<Issue> {
         let mut errors = validate::check(self).errors;
         if self.publisher.id == FIRST_PARTY_PUBLISHER {
             errors.retain(|issue| {
@@ -213,11 +257,7 @@ impl Manifest {
                 ),
             });
         }
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(ValidationErrors(errors))
-        }
+        errors
     }
 
     /// Advice for reviewers that does not make the manifest invalid (e.g.

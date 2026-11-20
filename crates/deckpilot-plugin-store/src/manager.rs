@@ -228,6 +228,7 @@ impl PluginManager {
         let id = package.manifest().id.clone();
         store::check_source(&id, source)?;
         let declared = GrantSet::from_manifest(package.manifest());
+        check_privileged_source(&id, &declared, source)?;
         check_consent(&id, &declared, consent)?;
         if *source == InstallSource::Bundled {
             check_bundled_consent(&id, &declared, consent)?;
@@ -935,6 +936,7 @@ impl PluginManager {
     ) -> Result<UpdateOutcome> {
         let id = package.manifest().id.clone();
         store::check_source(&id, source)?;
+        check_privileged_source(&id, &GrantSet::from_manifest(package.manifest()), source)?;
         let pending = pending_version(package)?;
         self.tx(|tx, ctx| {
             ensure_idle(tx, &id)?;
@@ -1532,6 +1534,26 @@ fn check_consent(id: &PluginId, declared: &GrantSet, consent: &Consent) -> Resul
         Some(key) => Err(unknown(id, key)),
         None => Ok(()),
     }
+}
+
+/// Plugin API 1.9's privileged kinds (`tools`, `resources`,
+/// `projectContext`, `hostViews`, `openUrl.fromParams`) come only with a
+/// plugin shipped inside the app (X12 in
+/// `docs/marketplace/module-migration.md` §7). The manifest rules already
+/// refuse them for every other package; this keeps a store caller from
+/// recording them from another source all the same.
+fn check_privileged_source(
+    id: &PluginId,
+    declared: &GrantSet,
+    source: &InstallSource,
+) -> Result<()> {
+    if *source != InstallSource::Bundled && declared.keys().any(GrantKey::is_first_party_only) {
+        return Err(StoreError::SourceNotAllowed {
+            id: id.clone(),
+            origin: source.as_str(),
+        });
+    }
+    Ok(())
 }
 
 /// Seeding a bundled plugin grants low-tier permissions only (recorded as

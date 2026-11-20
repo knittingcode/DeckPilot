@@ -185,6 +185,17 @@ released either. 0.6.0 is the first version intended for publication.
   `contributes.visualAssets`): PNG icons, PNG or JPEG images and gradients,
   packaged, signed and checked like every other package file; no plugin
   code runs for them.
+- Plugin API 1.9, the platform for moving Git, Docker, Workspace, Projects
+  and Workflows into DeckPilot's own plugins (reviewed in
+  `docs/marketplace/module-migration.md` §7): manifest permissions `tools`
+  (brokered `git` and `docker` limited to an allowlist of subcommands and
+  options, with denylisted flags refused, separate network and modify
+  grants), `resources`, `projectContext` and `hostViews`,
+  `openUrl.fromParams`, `resource` parameters and the `workflows` and
+  `projects` views, with their grant tiers, capability operations, broker
+  checks and SDK calls. Only plugins shipped inside the app can declare
+  them; third-party and registry packages are refused. The agent does not
+  carry the operations out yet and answers them as not implemented.
 
 ### Changed
 

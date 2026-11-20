@@ -54,6 +54,10 @@ fn broker() -> Broker {
         time: plenty,
         random_bytes: plenty,
         dialog: plenty,
+        tool_run: plenty,
+        tool_modify: plenty,
+        resource_open: plenty,
+        project_switch: plenty,
     };
     let b = Broker::new(
         Arc::new(MemoryAudit::new(10)),

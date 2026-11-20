@@ -141,7 +141,11 @@ fn logging_is_best_effort_and_bounded() {
 fn versions_are_exposed() {
     assert_eq!(deckpilot_plugin_sdk::ABI_VERSION, 1);
     assert_eq!(deckpilot_plugin_sdk::API_LEVEL.to_string(), "1.0");
-    assert_eq!(deckpilot_plugin_sdk::LATEST_API_LEVEL.to_string(), "1.6");
+    assert_eq!(deckpilot_plugin_sdk::LATEST_API_LEVEL.to_string(), "1.9");
+    assert_eq!(
+        deckpilot_plugin_sdk::PRIVILEGED_API_LEVEL.to_string(),
+        "1.9"
+    );
     assert_eq!(
         deckpilot_plugin_sdk::LOCALIZATION_API_LEVEL.to_string(),
         "1.6"
@@ -266,7 +270,8 @@ fn a_plugin_declares_the_api_level_it_needs() {
     assert_eq!(level(1, 0), API_LEVEL);
     assert_eq!(level(1, 3).to_string(), "1.3");
     assert_eq!(level(1, 5).to_string(), "1.5");
-    assert_eq!(level(1, 6), LATEST_API_LEVEL);
+    assert_eq!(level(1, 6).to_string(), "1.6");
+    assert_eq!(level(1, 9), LATEST_API_LEVEL);
     assert_eq!(level(1, 99), LATEST_API_LEVEL);
     assert_eq!(level(2, 0), LATEST_API_LEVEL);
 }

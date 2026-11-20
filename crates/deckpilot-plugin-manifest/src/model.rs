@@ -275,6 +275,13 @@ pub enum Permission {
         /// consent to that exact server.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         user_origins: Option<Vec<String>>,
+        /// Plugin API 1.9, first-party bundled plugins only (X5,
+        /// `docs/marketplace/module-migration.md` §7): the agent may open
+        /// the literal http or https URL the user stored in one of the
+        /// invocation's own parameters (`url.openParam`). The plugin never
+        /// names the URL. `hosts` may then be empty.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_params: Option<bool>,
         justification: String,
     },
     /// Timers while the plugin is active.
@@ -297,6 +304,104 @@ pub enum Permission {
     /// started. Not plugin UI code (`ui` stays forbidden) and never a
     /// secret field.
     Dialogs { justification: String },
+    /// Plugin API 1.9, first-party bundled plugins only (X3): brokered runs
+    /// of the user's own `git` or `docker`, limited to the declared
+    /// subcommands and options of the host's policy
+    /// ([`crate::tools`]). Arguments are an array, never a shell string;
+    /// the working directory is a resource handle. High tier.
+    Tools {
+        tools: Vec<ToolDeclaration>,
+        justification: String,
+    },
+    /// Plugin API 1.9, first-party bundled plugins only (X2, X4):
+    /// `resource.resolve` of the active project's roles (medium), with
+    /// the bound path (`paths`, medium) and `resource.open` of a bound
+    /// location in a bound application (`open`, high).
+    Resources {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        paths: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        open: Option<bool>,
+        justification: String,
+    },
+    /// Plugin API 1.9, first-party bundled plugins only (X6): reading the
+    /// active profile's projects and the active project (medium), and
+    /// with `select` switching it (high), only in runs the user started.
+    ProjectContext {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        select: Option<bool>,
+        justification: String,
+    },
+    /// Plugin API 1.9, first-party bundled plugins only (X8): the
+    /// host-drawn views `workflows` and `projects`, and the
+    /// `contributes.statusItems` and `contributes.dashboardCards` the app
+    /// draws from core data. Placement only, no data. Low tier.
+    HostViews { justification: String },
+}
+
+/// One executable of the `tools` permission, with the subcommands and
+/// options of the host's policy the plugin may use.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolDeclaration {
+    /// `git` or `docker`: nothing else exists. The path is the user's own
+    /// host-held setting, never the plugin's.
+    pub executable: ToolExecutable,
+    pub subcommands: Vec<ToolSubcommand>,
+    /// `git` only: `ls-remote`, which uses the user's SSH identity and
+    /// credential helpers (`tools:git:network`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<bool>,
+    /// `docker` only: the subcommands that start, stop or restart
+    /// containers (`tools:docker:modify`, off by default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modify: Option<bool>,
+}
+
+impl ToolDeclaration {
+    pub fn network(&self) -> bool {
+        self.network == Some(true)
+    }
+
+    pub fn modify(&self) -> bool {
+        self.modify == Some(true)
+    }
+}
+
+/// The executables of the `tools` permission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolExecutable {
+    Git,
+    Docker,
+}
+
+impl ToolExecutable {
+    pub const ALL: [Self; 2] = [Self::Git, Self::Docker];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Git => "git",
+            Self::Docker => "docker",
+        }
+    }
+}
+
+/// A subcommand (`status`, `compose up`) and the options of it the plugin
+/// passes, each an exact token (`-z`) or the name of an option whose value
+/// the host checks (`--format`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolSubcommand {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<String>>,
+}
+
+impl ToolSubcommand {
+    pub fn options(&self) -> &[String] {
+        self.options.as_deref().unwrap_or_default()
+    }
 }
 
 /// Where a plugin's notifications go, as the user sets it in the plugin's
@@ -374,6 +479,17 @@ pub struct UserOriginSlot {
 }
 
 impl Permission {
+    /// Whether an `openUrl` permission declares `fromParams` (X5).
+    pub fn opens_from_params(&self) -> bool {
+        matches!(
+            self,
+            Self::OpenUrl {
+                from_params: Some(true),
+                ..
+            }
+        )
+    }
+
     /// The origin settings whose server's pages an `openUrl` permission
     /// may open.
     pub fn open_url_user_origins(&self) -> &[String] {
@@ -421,6 +537,10 @@ pub enum PermissionKind {
     Background,
     Device,
     Dialogs,
+    Tools,
+    Resources,
+    ProjectContext,
+    HostViews,
 }
 
 impl PermissionKind {
@@ -437,7 +557,20 @@ impl PermissionKind {
             Self::Background => "background",
             Self::Device => "device",
             Self::Dialogs => "dialogs",
+            Self::Tools => "tools",
+            Self::Resources => "resources",
+            Self::ProjectContext => "projectContext",
+            Self::HostViews => "hostViews",
         }
+    }
+
+    /// Whether the kind is one of plugin API 1.9's privileged kinds, which
+    /// only first-party bundled plugins may declare (X12).
+    pub fn is_first_party_only(self) -> bool {
+        matches!(
+            self,
+            Self::Tools | Self::Resources | Self::ProjectContext | Self::HostViews
+        )
     }
 }
 
@@ -454,6 +587,10 @@ impl Permission {
             Self::Background { .. } => PermissionKind::Background,
             Self::Device { .. } => PermissionKind::Device,
             Self::Dialogs { .. } => PermissionKind::Dialogs,
+            Self::Tools { .. } => PermissionKind::Tools,
+            Self::Resources { .. } => PermissionKind::Resources,
+            Self::ProjectContext { .. } => PermissionKind::ProjectContext,
+            Self::HostViews { .. } => PermissionKind::HostViews,
         }
     }
 
@@ -476,7 +613,11 @@ impl Permission {
             | Self::OpenUrl { justification, .. }
             | Self::Background { justification, .. }
             | Self::Device { justification, .. }
-            | Self::Dialogs { justification } => justification,
+            | Self::Tools { justification, .. }
+            | Self::Resources { justification, .. }
+            | Self::ProjectContext { justification, .. }
+            | Self::Dialogs { justification }
+            | Self::HostViews { justification } => justification,
         }
     }
 
@@ -492,7 +633,11 @@ impl Permission {
             | Self::OpenUrl { justification, .. }
             | Self::Background { justification, .. }
             | Self::Device { justification, .. }
-            | Self::Dialogs { justification } => justification,
+            | Self::Tools { justification, .. }
+            | Self::Resources { justification, .. }
+            | Self::ProjectContext { justification, .. }
+            | Self::Dialogs { justification }
+            | Self::HostViews { justification } => justification,
         }
     }
 }
@@ -549,6 +694,31 @@ pub struct Contributes {
     /// Icons and backgrounds for the shared libraries (plugin API 1.8).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visual_assets: Option<crate::visual::VisualAssets>,
+    /// Status-bar items the app draws from core data (plugin API 1.9,
+    /// first-party bundled plugins with `hostViews` only, X8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_items: Option<Vec<StatusItem>>,
+    /// Dashboard cards the app draws from core data (plugin API 1.9,
+    /// first-party bundled plugins with `hostViews` only, X8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dashboard_cards: Option<Vec<DashboardCard>>,
+}
+
+/// A status-bar item the host draws (X8). A closed list: the plugin names
+/// one, the app decides what it shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StatusItem {
+    /// The active project's key and name.
+    ActiveProject,
+}
+
+/// A dashboard card the host draws (X8). A closed list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DashboardCard {
+    /// The active project, with the switcher.
+    ActiveProject,
 }
 
 impl Contributes {
@@ -563,6 +733,14 @@ impl Contributes {
 
     pub fn navigation(&self) -> &[NavigationEntry] {
         self.navigation.as_deref().unwrap_or_default()
+    }
+
+    pub fn status_items(&self) -> &[StatusItem] {
+        self.status_items.as_deref().unwrap_or_default()
+    }
+
+    pub fn dashboard_cards(&self) -> &[DashboardCard] {
+        self.dashboard_cards.as_deref().unwrap_or_default()
     }
 
     pub fn views(&self) -> &[View] {
@@ -612,7 +790,8 @@ pub enum CodeLanguage {
 }
 
 /// The value a parameter accepts: `deckpilot-core`'s `ParameterKind` minus
-/// `resource` and `credential` (not available to plugins in API 1). The
+/// `credential` (not available to plugins), and with `resource` as plugin
+/// API 1.9 defines it for first-party bundled plugins (X1). The
 /// tag and field names match it, so the JSON maps one to one; the types are
 /// mirrored rather than imported to keep this crate free of core.
 ///
@@ -639,6 +818,12 @@ pub enum ParameterKind {
         options: Vec<String>,
     },
     Project {},
+    /// Plugin API 1.9, first-party bundled plugins only (X1): a resource
+    /// of one of `kinds`, fixed or a role of the active project. The guest
+    /// receives an opaque handle with the binding's label, never the path.
+    Resource {
+        kinds: Vec<ResourceKind>,
+    },
     #[serde(rename_all = "camelCase")]
     Lines {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -668,6 +853,27 @@ pub enum ParameterKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_length: Option<u64>,
     },
+}
+
+/// The kinds of machine resource a `resource` parameter accepts (X1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResourceKind {
+    Directory,
+    File,
+    Application,
+    DockerEnvironment,
+}
+
+impl ResourceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Directory => "directory",
+            Self::File => "file",
+            Self::Application => "application",
+            Self::DockerEnvironment => "dockerEnvironment",
+        }
+    }
 }
 
 /// A literal default value (`$defs/parameterValue`). References and
@@ -1011,6 +1217,14 @@ pub const VIEW_CONTEXT_API: ApiLevel = ApiLevel::new(1, 4);
 /// (`dialog.open`).
 pub const DIALOGS_API: ApiLevel = ApiLevel::new(1, 5);
 
+/// The plugin API level of the privileged kinds only first-party bundled
+/// plugins may declare (`docs/marketplace/module-migration.md` §7, X1 to
+/// X12): the `tools`, `resources`, `projectContext` and `hostViews`
+/// permissions, `openUrl.fromParams`, `resource` parameters, the view
+/// kinds `workflows` and `projects`, `contributes.statusItems` and
+/// `contributes.dashboardCards`.
+pub const PRIVILEGED_API: ApiLevel = ApiLevel::new(1, 9);
+
 /// Most `contributes.navigation` entries.
 pub const MAX_NAVIGATION_ENTRIES: usize = 4;
 /// Most `contributes.views`.
@@ -1094,6 +1308,29 @@ pub enum ViewKind {
     Actions,
     /// The plugin's configuration page.
     Settings,
+    /// The app's Workflows screen (plugin API 1.9, `hostViews`, X8).
+    Workflows,
+    /// The app's Projects screen (plugin API 1.9, `hostViews`, X8).
+    Projects,
+}
+
+impl ViewKind {
+    /// The name in manifests and over IPC.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Variables => "variables",
+            Self::Actions => "actions",
+            Self::Settings => "settings",
+            Self::Workflows => "workflows",
+            Self::Projects => "projects",
+        }
+    }
+
+    /// Whether the view is one of the app's own screens a first-party
+    /// plugin activates (`hostViews`).
+    pub fn is_host_view(self) -> bool {
+        matches!(self, Self::Workflows | Self::Projects)
+    }
 }
 
 /// What a view works on (plugin API 1.4), and so which of the app's

@@ -362,15 +362,13 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-github"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "deckpilot-first-party-support",
  "deckpilot-plugin-abi",
  "deckpilot-plugin-sdk",
- "form_urlencoded",
  "jsonschema",
- "percent-encoding",
  "serde_json",
- "url",
 ]
 
 [[package]]
