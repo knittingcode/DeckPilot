@@ -225,7 +225,11 @@ describe("LayoutEditor", { timeout: 20_000 }, () => {
     expect(screen.getByRole("region", { name: "Settings of 4 controls" })).toBeInTheDocument()
 
     await user.click(screen.getByRole("button", { name: "Deselect controls" }))
-    expect(control("Key 2")).toHaveAttribute("aria-pressed", "false")
+    // The canvas draws its keys again after the selection clears; on a slow
+    // machine that is still under way here.
+    await vi.waitFor(() => {
+      expect(control("Key 2")).toHaveAttribute("aria-pressed", "false")
+    })
   })
 
   it("heads the inspector with no title, only a deselect button that keeps the draft", async () => {
