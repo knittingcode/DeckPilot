@@ -23,6 +23,7 @@ pub mod credentials;
 pub mod crypto;
 mod engine;
 pub mod executions;
+mod files;
 pub mod gestures;
 pub mod layouts;
 mod legacy;

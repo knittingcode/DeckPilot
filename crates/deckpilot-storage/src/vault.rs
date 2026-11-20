@@ -30,6 +30,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 use crate::crypto::{KEY_LEN, KdfParams, Password, SecretKey, random_bytes};
+use crate::files;
 use crate::sqlite::{apply_key, check_integrity, export_database, verify_copy};
 use crate::{DatabaseKey, Encryption, Result, SqliteStore, StorageError};
 
@@ -148,7 +149,7 @@ fn write_atomically(path: &Path, contents: &[u8]) -> Result<()> {
         file.write_all(contents).map_err(io)?;
         file.sync_all().map_err(io)?;
     }
-    fs::rename(&temporary, path).map_err(io)
+    files::rename(&temporary, path).map_err(io)
 }
 
 /// Moves the SQLite side files (`-wal`, `-shm`) of `from` next to `to`.
@@ -156,7 +157,7 @@ fn move_side_files(from: &Path, to: &Path) -> Result<()> {
     for suffix in ["-wal", "-shm"] {
         let side = sibling(from, suffix);
         if side.exists() {
-            fs::rename(&side, sibling(to, suffix)).map_err(io)?;
+            files::rename(&side, sibling(to, suffix)).map_err(io)?;
         }
     }
     Ok(())
@@ -164,12 +165,54 @@ fn move_side_files(from: &Path, to: &Path) -> Result<()> {
 
 fn remove_side_files(path: &Path) {
     for suffix in ["-wal", "-shm"] {
-        let _ = fs::remove_file(sibling(path, suffix));
+        let _ = files::remove(sibling(path, suffix));
     }
 }
 
+/// The steps of [`Vault::swap_in_encrypted`], where tests make it fail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+enum SwapStep {
+    KeepOriginal,
+    MoveSideFiles,
+    MoveCopyIntoPlace,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Makes the swap on this thread fail before the given step.
+    static FAIL_SWAP_AT: std::cell::Cell<Option<SwapStep>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn swap_failpoint(step: SwapStep) -> Result<()> {
+    if FAIL_SWAP_AT.with(std::cell::Cell::get) == Some(step) {
+        return Err(io(std::io::Error::other(format!(
+            "injected failure before {step:?}"
+        ))));
+    }
+    Ok(())
+}
+
+#[cfg(not(test))]
+#[allow(clippy::unnecessary_wraps)]
+#[inline]
+fn swap_failpoint(_step: SwapStep) -> Result<()> {
+    Ok(())
+}
+
+/// Whether the file at `path` exists and is not a plain SQLite database.
+fn database_is_encrypted(path: &Path) -> bool {
+    use std::io::Read as _;
+    let mut header = [0u8; 16];
+    fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .is_ok_and(|()| &header != SQLITE_HEADER)
+}
+
 fn remove_database(path: &Path) {
-    let _ = fs::remove_file(path);
+    let _ = files::remove(path);
     remove_side_files(path);
 }
 
@@ -300,7 +343,7 @@ impl Vault {
     /// verified: the database is missing, but the replacement exists.
     fn recover_swap(&self) -> Result<()> {
         if !self.database.exists() && self.replacement().exists() {
-            fs::rename(self.replacement(), &self.database).map_err(io)?;
+            files::rename(self.replacement(), &self.database).map_err(io)?;
         }
         Ok(())
     }
@@ -315,9 +358,9 @@ impl Vault {
         }
         let created = fs::metadata(&self.database).is_ok_and(|m| m.len() > 0);
         if created && !self.vault_file().exists() {
-            fs::rename(&staged, self.vault_file()).map_err(io)
+            files::rename(&staged, self.vault_file()).map_err(io)
         } else {
-            fs::remove_file(&staged).map_err(io)
+            files::remove(&staged).map_err(io)
         }
     }
 
@@ -382,9 +425,9 @@ impl Vault {
         Self::write_vault(&self.setup_file(), protection)?;
         let created = SqliteStore::open(&self.database, &Encryption::Key(key.clone()))
             .map(drop)
-            .and_then(|()| fs::rename(self.setup_file(), self.vault_file()).map_err(io));
+            .and_then(|()| files::rename(self.setup_file(), self.vault_file()).map_err(io));
         if let Err(error) = created {
-            let _ = fs::remove_file(self.setup_file());
+            let _ = files::remove(self.setup_file());
             remove_database(&self.database);
             return Err(error);
         }
@@ -438,7 +481,7 @@ impl Vault {
         let aside = self
             .vault_file()
             .with_file_name(format!("deckpilot.vault.orphaned-{}.json", timestamp()));
-        fs::rename(self.vault_file(), &aside).map_err(io)?;
+        files::rename(self.vault_file(), &aside).map_err(io)?;
         Ok(aside)
     }
 
@@ -496,7 +539,7 @@ impl Vault {
                     // running right now holds the lock; afterwards there is
                     // nothing left to discard.
                     let _lock = self.lock()?;
-                    let _ = fs::remove_file(self.pending_vault_file());
+                    let _ = files::remove(self.pending_vault_file());
                     remove_database(&self.replacement());
                     remove_database(&self.previous());
                     return Ok(key);
@@ -513,7 +556,7 @@ impl Vault {
             && self.try_key(&key).is_ok()
         {
             let _lock = self.lock()?;
-            fs::rename(self.pending_vault_file(), self.vault_file()).map_err(io)?;
+            files::rename(self.pending_vault_file(), self.vault_file()).map_err(io)?;
             remove_database(&self.previous());
             return Ok(key);
         }
@@ -579,11 +622,11 @@ impl Vault {
         }
         Self::write_vault(&self.pending_vault_file(), protection)?;
         if let Err(error) = self.swap_in_replacement() {
-            let _ = fs::remove_file(self.pending_vault_file());
+            let _ = files::remove(self.pending_vault_file());
             remove_database(&self.replacement());
             return Err(error);
         }
-        fs::rename(self.pending_vault_file(), self.vault_file()).map_err(io)?;
+        files::rename(self.pending_vault_file(), self.vault_file()).map_err(io)?;
         remove_database(&self.previous());
         Ok(())
     }
@@ -592,11 +635,19 @@ impl Vault {
     /// database as `.previous` until the caller has finished.
     fn swap_in_replacement(&self) -> Result<()> {
         remove_database(&self.previous());
-        fs::rename(&self.database, self.previous()).map_err(io)?;
+        files::rename(&self.database, self.previous()).map_err(io)?;
         // Side files belong to the old database; never let them be applied
         // to the new one.
-        move_side_files(&self.database, &self.previous())?;
-        fs::rename(self.replacement(), &self.database).map_err(io)
+        let swapped = move_side_files(&self.database, &self.previous())
+            .and_then(|()| files::rename(self.replacement(), &self.database).map_err(io));
+        if swapped.is_err() && !self.database.exists() {
+            // Put the current database back; the caller removes the
+            // replacement. (Left as `.previous` only if even that fails.)
+            let _ = files::rename(self.previous(), &self.database)
+                .map_err(io)
+                .and_then(|()| move_side_files(&self.previous(), &self.database));
+        }
+        swapped
     }
 
     /// Encrypts a database written by an earlier, unencrypted DeckPilot with
@@ -647,12 +698,14 @@ impl Vault {
         key: &DatabaseKey,
         protection: &Protection,
     ) -> Result<PathBuf> {
+        let started = std::time::Instant::now();
         let _lock = self.lock()?;
         if self.detect()? != DatabaseState::Plaintext {
             return Err(StorageError::Vault(
                 "there is no unencrypted database to migrate".into(),
             ));
         }
+        let locked_ms = started.elapsed().as_millis();
         let source = crate::engine::open(&self.database)?;
         check_integrity(&source)?;
         refuse_plaintext_credentials(&source)?;
@@ -662,7 +715,9 @@ impl Vault {
         let version: u32 = source.pragma_query_value(None, "user_version", |row| row.get(0))?;
         let counts = row_counts(&source)?;
         export_database(&source, &self.replacement(), Some(key))?;
+        // Closed before any file is renamed (required on Windows).
         drop(source);
+        let exported_ms = started.elapsed().as_millis();
 
         let verified = verify_copy(&self.replacement(), &Encryption::Key(key.clone()), version)
             .and_then(|()| {
@@ -697,18 +752,80 @@ impl Vault {
             return Err(error);
         }
 
-        // The parameters can be written now: the state is decided by the
-        // database header, which is still plain until the swap.
-        Self::write_vault(&self.vault_file(), protection)?;
         if legacy.exists() {
             let older =
                 legacy.with_file_name(format!("deckpilot.unencrypted-backup-{}.db", timestamp()));
-            fs::rename(&legacy, older).map_err(io)?;
+            if let Err(error) = files::rename(&legacy, older) {
+                remove_database(&self.replacement());
+                return Err(io(error));
+            }
         }
-        fs::rename(&self.database, &legacy).map_err(io)?;
-        move_side_files(&self.database, &legacy)?;
-        fs::rename(self.replacement(), &self.database).map_err(io)?;
+        // The parameters can be written now: the state is decided by the
+        // database header, which is still plain until the swap. The key file
+        // they replace (normally none) is put back if the swap fails.
+        let previous_vault = match fs::read(self.vault_file()) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                remove_database(&self.replacement());
+                return Err(io(error));
+            }
+        };
+        if let Err(error) = Self::write_vault(&self.vault_file(), protection) {
+            remove_database(&self.replacement());
+            return Err(error);
+        }
+        let verified_ms = started.elapsed().as_millis();
+        if let Err(error) = self.swap_in_encrypted(&legacy) {
+            tracing::warn!(%error, "the encrypted copy could not be swapped in; the unencrypted database is kept");
+            self.undo_encryption(&legacy, previous_vault.as_deref());
+            return Err(error);
+        }
+        tracing::debug!(
+            locked_ms,
+            exported_ms,
+            verified_ms,
+            swapped_ms = started.elapsed().as_millis(),
+            "encrypted the unencrypted database"
+        );
         Ok(legacy)
+    }
+
+    /// Moves the plain database to `legacy` and the encrypted replacement
+    /// into its place. Every connection to either file must be closed (see
+    /// [`crate::files`]).
+    fn swap_in_encrypted(&self, legacy: &Path) -> Result<()> {
+        swap_failpoint(SwapStep::KeepOriginal)?;
+        files::rename(&self.database, legacy).map_err(io)?;
+        swap_failpoint(SwapStep::MoveSideFiles)?;
+        move_side_files(&self.database, legacy)?;
+        swap_failpoint(SwapStep::MoveCopyIntoPlace)?;
+        files::rename(self.replacement(), &self.database).map_err(io)
+    }
+
+    /// Puts the plain database back after [`Vault::swap_in_encrypted`]
+    /// failed, so that the error leaves it as it was: the plain database
+    /// in place, the key file as before, no replacement. If even that
+    /// fails, the files are left for [`Vault::recover_swap`], which
+    /// completes the swap on the next start (the encrypted copy and the
+    /// new key file are both verified and in place by then).
+    fn undo_encryption(&self, legacy: &Path, previous_vault: Option<&[u8]>) {
+        if !self.database.exists() || database_is_encrypted(&self.database) {
+            if self.database.exists() && files::rename(&self.database, self.replacement()).is_err()
+            {
+                return;
+            }
+            if files::rename(legacy, &self.database).is_err()
+                || move_side_files(legacy, &self.database).is_err()
+            {
+                return;
+            }
+        }
+        remove_database(&self.replacement());
+        let _ = match previous_vault {
+            Some(bytes) => write_atomically(&self.vault_file(), bytes),
+            None => files::remove(self.vault_file()).map_err(io),
+        };
     }
 
     /// Unencrypted copies left by [`Vault::encrypt_plaintext`].
@@ -743,7 +860,7 @@ impl Vault {
     pub fn remove_legacy_copies(&self) -> Result<usize> {
         let copies = self.legacy_copies();
         for copy in &copies {
-            fs::remove_file(copy).map_err(io)?;
+            files::remove(copy).map_err(io)?;
             remove_side_files(copy);
         }
         Ok(copies.len())

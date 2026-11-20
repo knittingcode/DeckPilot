@@ -6,6 +6,7 @@
 //! Each test binary uses a different subset, hence `dead_code`.
 #![allow(dead_code)]
 
+pub mod agent_log;
 pub mod fakes;
 pub mod http;
 pub mod watchdog;

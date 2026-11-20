@@ -38,6 +38,9 @@ use watchdog::{Watchdog, within};
 #[path = "support/watchdog.rs"]
 mod watchdog;
 
+#[path = "support/agent_log.rs"]
+mod agent_log;
+
 /// Upper bound for conditions to be reached; generous for slow CI runners
 /// (passing tests continue as soon as the condition holds).
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -1328,18 +1331,42 @@ async fn agent_status(paths: &AgentPaths) -> Option<AgentStatus> {
 
 async fn wait_for(paths: &AgentPaths, predicate: impl Fn(&AgentStatus) -> bool) -> AgentStatus {
     let deadline = tokio::time::Instant::now() + TIMEOUT;
+    let mut last = None;
     loop {
-        if let Some(status) = agent_status(paths).await
-            && predicate(&status)
-        {
-            return status;
+        // One status request that gets no answer must not keep the loop
+        // past its deadline.
+        let status = tokio::time::timeout(ATTEMPT, agent_status(paths))
+            .await
+            .ok()
+            .flatten();
+        if let Some(status) = status {
+            if predicate(&status) {
+                return status;
+            }
+            last = Some(status);
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "condition not reached in time"
+            "condition not reached in time; the last status: {}\nthe agents' log:\n{}",
+            last.as_ref()
+                .map_or_else(|| "none (no answer)".to_owned(), describe),
+            agent_log::test_log()
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+/// What a failed wait shows of the agent's status.
+fn describe(status: &AgentStatus) -> String {
+    format!(
+        "security {:?}, lock reason {:?}, problem {:?}, protection {:?}, {} profile(s), {} device(s)",
+        status.security,
+        status.lock_reason,
+        status.security_problem,
+        status.protection,
+        status.profiles.len(),
+        status.devices.len()
+    )
 }
 
 async fn request(paths: &AgentPaths, request: Request) -> Result<Response, ClientError> {

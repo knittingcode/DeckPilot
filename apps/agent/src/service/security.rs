@@ -17,7 +17,7 @@ use deckpilot_keystore::{KeyStore, KeyStoreError, Scope, SystemKeyStore};
 use deckpilot_storage::policy::AutoLock;
 use deckpilot_storage::vault::{self, DatabaseState, Vault};
 use deckpilot_storage::{DatabaseKey, Encryption, SqliteStore, StorageError};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use tokio::sync::oneshot;
 
@@ -184,6 +184,7 @@ impl Agent {
         self.publish();
         let commands = self.handle.commands.clone();
         tokio::task::spawn_blocking(move || {
+            let started = std::time::Instant::now();
             let result = match state {
                 DatabaseState::Missing => vault.initialize_system(keys.as_ref()).inspect(|_| {
                     info!(store = %keys.name(), "created an encrypted configuration with a system-managed key");
@@ -196,6 +197,13 @@ impl Agent {
                     }),
                 DatabaseState::Encrypted => vault.unlock_system(keys.as_ref()),
             };
+            let elapsed_ms = started.elapsed().as_millis();
+            match &result {
+                Ok(_) => debug!(?state, elapsed_ms, "the system key is ready"),
+                Err(error) => {
+                    warn!(?state, elapsed_ms, %error, "the system key could not be used");
+                }
+            }
             let _ = commands.send(Command::SystemKey(KeyOutcome { state, result }));
         });
     }
@@ -281,13 +289,19 @@ impl Agent {
                 "there is no encrypted database to unlock",
             ));
         }
-        let store = match SqliteStore::open(&database, &Encryption::Key(key.clone())) {
+        let started = std::time::Instant::now();
+        let opened = SqliteStore::open(&database, &Encryption::Key(key.clone()));
+        let open_ms = started.elapsed().as_millis();
+        let store = match opened {
             Ok(store) => store,
             Err(StorageError::InvalidKey) => {
                 warn!("rejected an unlock attempt with a wrong key");
                 return Err(IpcError::new(ErrorCode::Unauthorized, "wrong key"));
             }
-            Err(error) => return Err(storage_error(&error)),
+            Err(error) => {
+                warn!(%error, open_ms, "the configuration could not be opened");
+                return Err(storage_error(&error));
+            }
         };
         self.store = Some(store);
         self.plugins.opened(&key);
@@ -298,11 +312,16 @@ impl Agent {
         self.last_activity = self.now_seconds();
         self.refresh_protection();
         self.runtime.set_placeholder(None);
-        info!("configuration unlocked");
+        info!(open_ms, "configuration unlocked");
         if let Err(error) = self.load_configuration() {
+            warn!(%error, "the unlocked configuration could not be loaded");
             self.lock(LockReason::Requested);
             return Err(storage_error(&error));
         }
+        debug!(
+            elapsed_ms = started.elapsed().as_millis(),
+            "the unlocked configuration is loaded"
+        );
         Ok(())
     }
 
