@@ -215,7 +215,34 @@ function Ui-Joined($Root) {
 
 function Ui-HasText($Root, [string]$Text) {
   if (Ui-All $Root { (Ui-Name $_) -eq $Text } | Select-Object -First 1) { return $true }
-  return (Ui-Joined $Root).Contains($Text)
+  if ((Ui-Joined $Root).Contains($Text)) { return $true }
+  # FindAll searches the control view: Chromium leaves the plain text runs
+  # of a list item named by aria-labelledby out of it (the installed list's
+  # "v0.1.0", run 44665060136), the raw view has them.
+  return (Ui-RawJoined $Root).Contains($Text)
+}
+
+# The names of an element and its descendants in the raw view, in tree
+# order, joined like Ui-Joined; at most $Max elements.
+function Ui-RawJoined($Root, [int]$Max = 5000) {
+  $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+  $names = New-Object System.Collections.Generic.List[string]
+  $stack = New-Object System.Collections.Generic.Stack[object]
+  $stack.Push($Root)
+  $seen = 0
+  try {
+    while ($stack.Count -gt 0 -and $seen -lt $Max) {
+      $e = $stack.Pop()
+      $seen++
+      $n = Ui-Name $e
+      if ($n) { $names.Add($n) }
+      $children = New-Object System.Collections.Generic.List[object]
+      $c = $walker.GetFirstChild($e)
+      while ($c) { $children.Add($c); $c = $walker.GetNextSibling($c) }
+      for ($i = $children.Count - 1; $i -ge 0; $i--) { $stack.Push($children[$i]) }
+    }
+  } catch { }
+  return ($names -join '') -replace '\s+', ' '
 }
 
 function Ui-Rect($Window) {
@@ -542,14 +569,25 @@ function Invoke-UiFlow([string]$Exe, $Envs) {
       $main = $state.main
       [void](Ui-Marketplace $main)
       [void](Ui-Tab $main 'Installed')
-      $switch = Ui-Find $main "switch 'Enable $($script:PluginName)'" { (Ui-Name $_) -eq "Enable $($script:PluginName)" }
+      # From 0.9.0 (plugin API 1.4) the install plan activates a plugin whose
+      # install consent covered all its permissions: disable it here first so
+      # enabling it again goes through the consent review as before.
+      $enableName = "Enable $($script:PluginName)"
+      $disableName = "Disable $($script:PluginName)"
+      $atInstall = Ui-Find $main "switch '$enableName' or '$disableName'" { (Ui-Name $_) -eq $enableName -or (Ui-Name $_) -eq $disableName }
+      $disabled = ''
+      if ((Ui-Name $atInstall) -eq $disableName) {
+        [void](Ui-Invoke $atInstall)
+        $disabled = 'enabled at install, disabled with its switch; '
+      }
+      $switch = Ui-Find $main "switch '$enableName'" { (Ui-Name $_) -eq $enableName } $script:UiLong
       [void](Ui-Invoke $switch)
       $confirm = Ui-Button $main 'Enable'
       $consentShot = Ui-Shot 'enable-consent'
       $boxes = Ui-CheckAll $main
       [void](Ui-Invoke $confirm)
       $on = Ui-Find $main "switch 'Disable $($script:PluginName)'" { (Ui-Name $_) -eq "Disable $($script:PluginName)" } $script:UiLong
-      "$boxes consent box(es); switch now '$(Ui-Name $on)'; $consentShot; $(Ui-Shot 'enabled')"
+      "$disabled$boxes consent box(es); switch now '$(Ui-Name $on)'; $consentShot; $(Ui-Shot 'enabled')"
     }
     'plugin toolbar entries' = {
       # No production plugin contributes toolbar entries (contributes.navigation).
