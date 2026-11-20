@@ -1,33 +1,8 @@
-import { useDndMonitor, useDroppable } from "@dnd-kit/core"
-import { ListOrdered, X } from "lucide-react"
-import { useState, type ReactNode } from "react"
+import { useDndMonitor } from "@dnd-kit/core"
+import { useState } from "react"
 import { toast } from "sonner"
 
-import { IncompatibleNote } from "@/components/incompatible-note"
-import { ParameterField } from "@/components/parameter-field"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
-import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { ConfirmDialog } from "@/components/dialogs"
 import {
   bindingsFor,
   controlKey,
@@ -36,9 +11,8 @@ import {
   setBinding,
   targetLabel,
 } from "@/lib/layout-model"
-import { initialValue } from "@/lib/parameters"
+import { type TranslationKey, useTranslation } from "@/i18n"
 import type {
-  ActionParameters,
   ActionType,
   BindingTarget,
   ControlBinding,
@@ -46,17 +20,20 @@ import type {
   DeviceLayout,
   Gesture,
   GestureTimings,
-  ParameterValue,
   Profile,
   Trigger,
 } from "@/lib/types"
-import { cn } from "@/lib/utils"
-import { setOverride } from "@/lib/workflow-model"
 
+import {
+  GestureCard,
+  type CardTiming,
+  type GestureCardProps,
+  type GestureTargetGroup,
+} from "./gesture-card"
+import { GestureCarousel } from "./gesture-carousel"
 import {
   GESTURE_LABELS,
   GESTURES,
-  TIMING_LIMITS,
   clickTiming,
   convertToGestures,
   gestureBinding,
@@ -66,38 +43,13 @@ import {
   needsConversion,
   setGesture,
   setKeyTiming,
+  releaseSlotId,
   slotGesture,
-  timingError,
   triggerFor,
-  updateBinding,
   type ClickTiming,
-  type TimingField,
 } from "./model"
 
-/** One option of the target selects; the layout editor's `TargetGroup`. */
-export interface GestureTargetGroup {
-  label: string
-  options: { value: string; label: string; target: BindingTarget; unavailable?: string }[]
-}
-
-/** Why the option of `value` cannot be placed now, if it cannot. */
-function unavailableIn(groups: GestureTargetGroup[], value: string): string | undefined {
-  for (const group of groups) {
-    const found = group.options.find((o) => o.value === value)
-    if (found) return found.unavailable
-  }
-  return undefined
-}
-
-/** Why a target already assigned cannot run now; it stays assigned. */
-function UnavailableNote({ reason }: { reason: string | undefined }) {
-  if (!reason) return null
-  return (
-    <p className="text-xs text-destructive" role="note">
-      Unavailable: {reason}. It stays assigned and runs again once the plugin can.
-    </p>
-  )
-}
+export type { GestureTargetGroup } from "./gesture-card"
 
 export interface GestureEditorProps {
   draft: DeviceLayout
@@ -140,6 +92,11 @@ export interface GestureEditorProps {
   notRun?: { trigger: Trigger; reason: string }[]
   /** The placeholder of a binding's label, e.g. the title it shows without one. */
   labelPlaceholder?: (binding: ControlBinding) => string | undefined
+  /**
+   * Whether the binding's label is the key's visible title, edited in the
+   * Inspector's key header (not again in its card).
+   */
+  titleInHeader?: (binding: ControlBinding) => boolean
 }
 
 /** The reason a binding of `trigger` is kept but not run, if it is. */
@@ -163,11 +120,12 @@ function SlotDrops({
 }: {
   control: ControlId
   resolve: NonNullable<GestureEditorProps["resolveDrop"]>
-  onDrop: (gesture: Gesture, target: BindingTarget) => void
+  onDrop: (gesture: Gesture | "release", target: BindingTarget) => void
 }) {
   useDndMonitor({
     onDragEnd: (event) => {
-      const gesture = slotGesture(control, event.over?.id)
+      const gesture =
+        event.over?.id === releaseSlotId(control) ? "release" : slotGesture(control, event.over?.id)
       if (!gesture) return
       void Promise.resolve(resolve(event.active.data.current)).then((target) => {
         if (target) onDrop(gesture, target)
@@ -177,45 +135,15 @@ function SlotDrops({
   return null
 }
 
-/** One gesture's slot: a drop target around its row. */
-function Slot({
-  id,
-  filled,
-  droppable,
-  children,
-}: {
-  id: string
-  filled: boolean
-  droppable: boolean
-  children: ReactNode
-}) {
-  const { setNodeRef, isOver } = useDroppable({ id, disabled: !droppable })
-  return (
-    <div
-      ref={setNodeRef}
-      data-gesture-slot={filled ? "filled" : "empty"}
-      className={cn(
-        "rounded-md border p-2",
-        !filled && "border-dashed",
-        isOver && "ring-2 ring-emerald-400",
-      )}
-    >
-      {children}
-    </div>
-  )
-}
-
 interface PendingConversion {
   gesture: Gesture
   target: BindingTarget
 }
 
-const CLICK_NOTES: Record<ClickTiming, (defaults: number) => string> = {
-  immediate: () => "A single click fires as soon as the key is pressed.",
-  onRelease: () =>
-    "A single click fires when the key is released before the long-press time, so a hold can be told apart.",
-  afterWindow: (ms) =>
-    `A single click fires after the double-click window (${ms} ms) has passed without a second press.`,
+const CLICK_NOTES: Record<ClickTiming, TranslationKey> = {
+  immediate: "editor:gesture.clickNote.immediate",
+  onRelease: "editor:gesture.clickNote.onRelease",
+  afterWindow: "editor:gesture.clickNote.afterWindow",
 }
 
 /**
@@ -224,9 +152,9 @@ const CLICK_NOTES: Record<ClickTiming, (defaults: number) => string> = {
  * timings (docs/gestures-and-work-session.md, section 10).
  */
 export function GestureEditor(props: GestureEditorProps) {
+  const { t } = useTranslation()
   const { draft, pageId, control, defaults, onChange } = props
   const [pending, setPending] = useState<PendingConversion | null>(null)
-  const [overridesOpen, setOverridesOpen] = useState<Gesture | null>(null)
   const mode = keyMode(draft, pageId, control)
   const timing = clickTiming(draft, pageId, control)
   const own = keyTimings(draft, pageId, control)
@@ -240,7 +168,10 @@ export function GestureEditor(props: GestureEditorProps) {
     const refused = target ? props.incompatible?.(target, triggerFor(mode, gesture)) : null
     if (refused) {
       toast.error(
-        `Not put on the ${GESTURE_LABELS[gesture].toLowerCase()} of ${controlLabel(control)}`,
+        t("editor:gesture.refused", {
+          gesture: GESTURE_LABELS[gesture].toLowerCase(),
+          control: controlLabel(control),
+        }),
         { description: refused },
       )
       return
@@ -259,111 +190,141 @@ export function GestureEditor(props: GestureEditorProps) {
     setPending(null)
   }
 
+  /** What the raw release does (keys without gestures); `null` removes it. */
+  const assignRelease = (target: BindingTarget | null) => {
+    const trigger: Trigger = { type: "release" }
+    const refused = target ? props.incompatible?.(target, trigger) : null
+    if (refused) {
+      toast.error(
+        t("editor:gesture.refused", {
+          gesture: t("editor:gesture.release").toLowerCase(),
+          control: controlLabel(control),
+        }),
+        { description: refused },
+      )
+      return
+    }
+    onChange(
+      target
+        ? setBinding(draft, pageId, {
+            control,
+            trigger,
+            target,
+            label: release?.label ?? null,
+            ...(release?.appearance ? { appearance: release.appearance } : {}),
+          })
+        : removeBinding(draft, pageId, control, trigger),
+    )
+  }
+
   const bound = (gesture: Gesture) =>
     bindingsFor(draft, pageId, control).some((b) => b.trigger.type === gesture)
+  const allGroups = [...props.groups, ...(props.gestureGroups ?? [])]
 
+  /** The key's timing a gesture's card edits, once it matters. */
+  const timingOf = (gesture: Gesture): CardTiming | undefined => {
+    const field =
+      gesture === "doubleClick" ? "doubleClickMs" : gesture === "longPress" ? "longPressMs" : null
+    if (!field || (!bound(gesture) && own?.[field] === undefined)) return undefined
+    const id = `${base}-${field === "doubleClickMs" ? "double" : "long"}-ms`
+    return {
+      id,
+      field,
+      value: own?.[field],
+      fallback: defaults[field],
+      onCommit: (value) => {
+        onChange(setKeyTiming(draft, pageId, control, field, value), id)
+      },
+    }
+  }
+
+  // One card per gesture, and the raw release while the key has no gestures.
+  const cards: GestureCardProps[] = GESTURES.map((gesture) => {
+    const binding = gestureBinding(draft, pageId, control, gesture)
+    const trigger = binding?.trigger ?? triggerFor(mode, gesture)
+    const title = GESTURE_LABELS[gesture]
+    return {
+      id: `${base}-${gesture}`,
+      title,
+      trigger,
+      binding,
+      groups: allGroups,
+      encode: props.encode,
+      decode: props.decode,
+      incompatible: props.incompatible,
+      notRun: notRunReason(props.notRun, trigger, binding),
+      slot: props.resolveDrop ? gestureSlotId(control, gesture) : undefined,
+      pageId,
+      timing: timingOf(gesture),
+      onAssign: (target) => {
+        assign(gesture, target)
+      },
+      details: {
+        draft,
+        pageId,
+        profile: props.profile,
+        types: props.types,
+        inSentence: GESTURE_LABELS[gesture].toLowerCase(),
+        onChange,
+        onEditWorkflow: props.onEditWorkflow,
+        labelPlaceholder: props.labelPlaceholder,
+        titleInHeader: props.titleInHeader,
+      },
+    }
+  })
+  if (mode !== "gesture") {
+    const trigger: Trigger = { type: "release" }
+    cards.push({
+      id: `${base}-release`,
+      title: t("editor:gesture.release"),
+      trigger,
+      binding: release,
+      groups: props.groups,
+      encode: props.encode,
+      decode: props.decode,
+      incompatible: props.incompatible,
+      notRun: notRunReason(props.notRun, trigger, release),
+      help: t("editor:gesture.releaseHint"),
+      slot: props.resolveDrop ? releaseSlotId(control) : undefined,
+      pageId,
+      onAssign: (target) => {
+        assignRelease(target)
+      },
+    })
+  }
   return (
-    <section className="grid gap-4" aria-labelledby={`${base}-heading`}>
+    <section className="grid min-w-0 gap-3" aria-labelledby={`${base}-heading`}>
       <div className="grid gap-1">
         <h3 id={`${base}-heading`} className="text-sm font-medium">
-          Gestures
+          {t("editor:gesture.heading")}
         </h3>
         <p className="text-xs text-muted-foreground" role="note">
           {mode === "raw"
-            ? "Single click (immediate): this key acts as soon as it is pressed. Adding a double click or long press switches it to gestures."
-            : CLICK_NOTES[timing](doubleClickMs)}
+            ? t("editor:gesture.rawNote")
+            : t(CLICK_NOTES[timing], { ms: doubleClickMs })}
         </p>
       </div>
 
       {props.resolveDrop && (
-        <SlotDrops control={control} resolve={props.resolveDrop} onDrop={assign} />
-      )}
-      {GESTURES.map((gesture) => (
-        <GestureRow
-          key={gesture}
-          {...props}
-          slot={gestureSlotId(control, gesture)}
-          gesture={gesture}
-          label={
-            gesture === "click" && mode !== "gesture"
-              ? `${GESTURE_LABELS.click} (immediate)`
-              : GESTURE_LABELS[gesture]
-          }
-          id={`${base}-${gesture}`}
-          binding={gestureBinding(draft, pageId, control, gesture)}
-          overridesOpen={overridesOpen === gesture}
-          onToggleOverrides={() => {
-            setOverridesOpen(overridesOpen === gesture ? null : gesture)
-          }}
-          onAssign={(target) => {
-            assign(gesture, target)
-          }}
-        />
-      ))}
-
-      {mode !== "gesture" && (
-        <div className="grid gap-2" role="group" aria-labelledby={`${base}-release-label`}>
-          <Label id={`${base}-release-label`} htmlFor={`${base}-release`}>
-            Release (immediate)
-          </Label>
-          <TargetSelect
-            id={`${base}-release`}
-            groups={props.groups}
-            encode={props.encode}
-            trigger={{ type: "release" }}
-            incompatible={props.incompatible}
-            value={release?.target}
-            onValueChange={(value) => {
-              const target = props.decode(value)
-              onChange(
-                target
-                  ? setBinding(draft, pageId, {
-                      control,
-                      trigger: { type: "release" },
-                      target,
-                      label: release?.label ?? null,
-                      ...(release?.appearance ? { appearance: release.appearance } : {}),
-                    })
-                  : removeBinding(draft, pageId, control, { type: "release" }),
-              )
-            }}
-          />
-          <UnavailableNote
-            reason={release ? unavailableIn(props.groups, props.encode(release.target)) : undefined}
-          />
-          <IncompatibleNote reason={notRunReason(props.notRun, { type: "release" }, release)} />
-          <p className="text-xs text-muted-foreground">
-            Runs when the key is let go, without delay. Keys with a double click or long press
-            cannot use it.
-          </p>
-        </div>
-      )}
-
-      {(bound("doubleClick") || own?.doubleClickMs !== undefined) && (
-        <TimingInput
-          id={`${base}-double-ms`}
-          field="doubleClickMs"
-          value={own?.doubleClickMs}
-          fallback={defaults.doubleClickMs}
-          onCommit={(value) => {
-            onChange(
-              setKeyTiming(draft, pageId, control, "doubleClickMs", value),
-              `${base}-double-ms`,
-            )
+        <SlotDrops
+          control={control}
+          resolve={props.resolveDrop}
+          onDrop={(gesture, target) => {
+            if (gesture === "release") assignRelease(target)
+            else assign(gesture, target)
           }}
         />
       )}
-      {(bound("longPress") || own?.longPressMs !== undefined) && (
-        <TimingInput
-          id={`${base}-long-ms`}
-          field="longPressMs"
-          value={own?.longPressMs}
-          fallback={defaults.longPressMs}
-          onCommit={(value) => {
-            onChange(setKeyTiming(draft, pageId, control, "longPressMs", value), `${base}-long-ms`)
-          }}
-        />
-      )}
+      <GestureCarousel
+        label={t("editor:gesture.heading")}
+        count={cards.length}
+        dragAware={props.resolveDrop !== undefined}
+        renderCard={(index, visible) => {
+          const card = cards[index]
+          if (!card) return null
+          return <GestureCard key={card.id} {...card} droppable={visible} />
+        }}
+      />
 
       {props.issues.length > 0 && (
         <ul className="grid gap-1 text-xs text-destructive" role="alert">
@@ -390,331 +351,6 @@ export function GestureEditor(props: GestureEditorProps) {
   )
 }
 
-function TargetSelect({
-  id,
-  groups,
-  encode,
-  trigger,
-  incompatible,
-  value,
-  onValueChange,
-}: {
-  id: string
-  groups: GestureTargetGroup[]
-  encode: (target: BindingTarget | undefined) => string
-  /** What the chosen target is bound to, for `incompatible`. */
-  trigger: Trigger
-  incompatible: GestureEditorProps["incompatible"]
-  value: BindingTarget | undefined
-  onValueChange: (value: string) => void
-}) {
-  return (
-    <Select value={encode(value)} onValueChange={onValueChange}>
-      <SelectTrigger id={id} className="w-full">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="none">Nothing</SelectItem>
-        {groups.map((group) => (
-          <SelectGroup key={group.label}>
-            <SelectLabel>{group.label}</SelectLabel>
-            {group.options.map((option) => {
-              const why = incompatible?.(option.target, trigger) ?? undefined
-              return (
-                <SelectItem
-                  key={option.value}
-                  value={option.value}
-                  disabled={option.unavailable !== undefined || why !== undefined}
-                  title={why}
-                >
-                  {option.label}
-                  {option.unavailable !== undefined
-                    ? " (unavailable)"
-                    : why !== undefined && " (not on this control)"}
-                </SelectItem>
-              )
-            })}
-          </SelectGroup>
-        ))}
-      </SelectContent>
-    </Select>
-  )
-}
-
-function GestureRow({
-  draft,
-  pageId,
-  control,
-  profile,
-  groups,
-  gestureGroups,
-  encode,
-  decode,
-  types,
-  gesture,
-  label,
-  id,
-  binding,
-  overridesOpen,
-  onToggleOverrides,
-  onAssign,
-  onChange,
-  slot,
-  resolveDrop,
-  onEditWorkflow,
-  incompatible,
-  notRun,
-  labelPlaceholder,
-}: GestureEditorProps & {
-  /** The id of the row's drop target. */
-  slot: string
-  gesture: Gesture
-  label: string
-  id: string
-  binding: ControlBinding | undefined
-  overridesOpen: boolean
-  onToggleOverrides: () => void
-  onAssign: (target: BindingTarget | null) => void
-}) {
-  const target = binding?.target
-  const action =
-    target?.type === "action" ? profile.actions.find((a) => a.id === target.action) : undefined
-  const type = action ? types.find((t) => t.id === action.actionType) : undefined
-  const overrides = target?.type === "action" ? (target.overrides ?? {}) : {}
-  const overrideCount = Object.keys(overrides).length
-  // A step workflow is edited from the key; a graph in the workflow builder.
-  const steps =
-    target?.type === "workflow"
-      ? profile.workflows.find((w) => w.id === target.workflow && !w.graph)
-      : undefined
-
-  const setOverrides = (next: ActionParameters) => {
-    if (!binding || binding.target.type !== "action") return
-    const updated: BindingTarget = {
-      type: "action",
-      action: binding.target.action,
-      ...(Object.keys(next).length > 0 ? { overrides: next } : {}),
-    }
-    onChange(updateBinding(draft, pageId, { ...binding, target: updated }), `${id}-overrides`)
-  }
-
-  const droppable = resolveDrop !== undefined
-  const trigger = binding?.trigger ?? triggerFor(keyMode(draft, pageId, control), gesture)
-  return (
-    <Slot id={slot} filled={binding !== undefined} droppable={droppable}>
-      <div className="grid gap-2" role="group" aria-labelledby={`${id}-label`}>
-        <div className="flex items-center gap-2">
-          <Label id={`${id}-label`} htmlFor={id} className="flex-1">
-            {label}
-          </Label>
-          {binding && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-6"
-              aria-label={`Remove ${label}`}
-              title={`Remove what ${label.toLowerCase()} does`}
-              onClick={() => {
-                onAssign(null)
-              }}
-            >
-              <X />
-            </Button>
-          )}
-        </div>
-        {!binding && droppable && (
-          <p className="text-xs text-muted-foreground">
-            Drop an action, a workflow or a page here, or choose:
-          </p>
-        )}
-        <TargetSelect
-          id={id}
-          groups={[...groups, ...(gestureGroups ?? [])]}
-          encode={encode}
-          trigger={trigger}
-          incompatible={incompatible}
-          value={target}
-          onValueChange={(value) => {
-            onAssign(decode(value))
-          }}
-        />
-        <UnavailableNote
-          reason={
-            binding
-              ? unavailableIn([...groups, ...(gestureGroups ?? [])], encode(binding.target))
-              : undefined
-          }
-        />
-        <IncompatibleNote reason={notRunReason(notRun, trigger, binding)} />
-        {binding && (
-          <Input
-            aria-label={`Label for ${label}`}
-            placeholder={labelPlaceholder?.(binding) ?? "Label (optional)"}
-            maxLength={32}
-            value={binding.label ?? ""}
-            onChange={(e) => {
-              onChange(
-                updateBinding(draft, pageId, { ...binding, label: e.target.value || null }),
-                `${id}-label`,
-              )
-            }}
-          />
-        )}
-        {steps && onEditWorkflow && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-fit"
-            onClick={() => {
-              onEditWorkflow(steps.id)
-            }}
-          >
-            <ListOrdered /> Edit steps ({steps.steps.length})
-          </Button>
-        )}
-        {action && type && type.parameters.length > 0 && (
-          <>
-            <Button
-              variant="link"
-              size="sm"
-              className="h-auto w-fit p-0"
-              aria-expanded={overridesOpen}
-              aria-controls={`${id}-overrides`}
-              onClick={onToggleOverrides}
-            >
-              {overridesOpen
-                ? "Hide parameters"
-                : overrideCount > 0
-                  ? `Parameters for this gesture (${overrideCount} overridden)`
-                  : "Override parameters for this gesture"}
-            </Button>
-            {overridesOpen && (
-              <div id={`${id}-overrides`} className="grid gap-2">
-                <p className="text-xs text-muted-foreground">
-                  Overrides apply to this {GESTURE_LABELS[gesture].toLowerCase()} only; “
-                  {action.name}” itself stays unchanged.
-                </p>
-                {type.parameters.map((spec) => {
-                  const value: ParameterValue | undefined = overrides[spec.key]
-                  return (
-                    <div key={spec.key} className="grid gap-2 rounded-md border border-dashed p-2">
-                      <label className="flex items-center gap-2 text-sm">
-                        <Checkbox
-                          checked={value !== undefined}
-                          onCheckedChange={(checked) => {
-                            setOverrides(
-                              setOverride(
-                                overrides,
-                                spec.key,
-                                checked === true
-                                  ? (action.parameters[spec.key] ?? initialValue(spec))
-                                  : undefined,
-                              ),
-                            )
-                          }}
-                        />
-                        Override “{spec.label}”
-                      </label>
-                      {value !== undefined && (
-                        <ParameterField
-                          spec={spec}
-                          value={value}
-                          projects={profile.projects}
-                          actionType={action.actionType}
-                          onChange={(next) => {
-                            setOverrides(setOverride(overrides, spec.key, next))
-                          }}
-                        />
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </Slot>
-  )
-}
-
-/**
- * A timing of the key in milliseconds. Empty uses the default. Values out of
- * range are explained and not applied.
- */
-function TimingInput({
-  id,
-  field,
-  value,
-  fallback,
-  onCommit,
-}: {
-  id: string
-  field: TimingField
-  value: number | undefined
-  fallback: number
-  onCommit: (value: number | undefined) => void
-}) {
-  const { min, max, label } = TIMING_LIMITS[field]
-  const [text, setText] = useState(value === undefined ? "" : String(value))
-  // Follow changes made elsewhere (undo, "Use default"), not the typing.
-  const [shown, setShown] = useState(value)
-  if (shown !== value) {
-    setShown(value)
-    setText(value === undefined ? "" : String(value))
-  }
-  const error = timingError(field, text)
-  return (
-    <div className="grid gap-1">
-      <Label htmlFor={id}>{label} (ms)</Label>
-      <div className="flex items-center gap-2">
-        <Input
-          id={id}
-          type="number"
-          inputMode="numeric"
-          min={min}
-          max={max}
-          step={10}
-          className="w-32"
-          placeholder={`Default (${fallback})`}
-          value={text}
-          aria-invalid={error ? true : undefined}
-          aria-describedby={`${id}-hint${error ? ` ${id}-error` : ""}`}
-          onChange={(e) => {
-            const next = e.target.value
-            setText(next)
-            if (timingError(field, next) === null) {
-              onCommit(next.trim() === "" ? undefined : Number(next))
-            }
-          }}
-        />
-        {value !== undefined && (
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label={`Use the default ${label.toLowerCase()}`}
-            onClick={() => {
-              setText("")
-              onCommit(undefined)
-            }}
-          >
-            Use default
-          </Button>
-        )}
-      </div>
-      <p id={`${id}-hint`} className="text-xs text-muted-foreground">
-        {min}–{max} ms. {value === undefined ? "Using" : "Default:"} this computer&apos;s default (
-        {fallback} ms).
-      </p>
-      {error && (
-        <p id={`${id}-error`} className="text-xs text-destructive" role="alert">
-          {error}
-        </p>
-      )}
-    </div>
-  )
-}
-
 function ConversionDialog({
   control,
   pending,
@@ -736,52 +372,52 @@ function ConversionDialog({
   onConfirm: () => void
   onCancel: () => void
 }) {
+  const { t } = useTranslation()
   const name = controlLabel(control)
   const adding = pending ? GESTURE_LABELS[pending.gesture].toLowerCase() : ""
-  const after =
-    pending?.gesture === "doubleClick"
-      ? `after the double-click window (${doubleClickMs} ms) has passed without a second press`
-      : `when the key is released before the long-press time (${longPressMs} ms)`
+
   return (
-    <AlertDialog
+    <ConfirmDialog
       open={pending !== null}
       onOpenChange={(open) => {
+        // Also called after confirming; `onConfirm` has cleared it already.
         if (!open) onCancel()
       }}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Switch {name} to gestures?</AlertDialogTitle>
-          <AlertDialogDescription asChild>
-            <div className="grid gap-2">
-              {pending?.gesture === "click" ? (
-                <p>
-                  {name} acts as soon as it is pressed. A Work Session controller needs gestures, so
-                  its single click becomes a gesture. With no double click or long press it still
-                  fires on the press.
-                </p>
-              ) : (
-                <p>
-                  {name} acts as soon as it is pressed. To add a {adding}, its single click becomes
-                  a gesture: it then fires {after}, so it reacts a little later than now.
-                </p>
-              )}
-              {release && (
-                <p>
-                  Its release binding (“
-                  {targetLabel(release.target, profile.actions, profile.workflows, draft)}”) is
-                  removed: a key with gestures cannot also react to its release.
-                </p>
-              )}
-              <p>Nothing changes on the device until you save the layout.</p>
-            </div>
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={onConfirm}>Switch to gestures</AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+      title={t("editor:gesture.convert.title", { control: name })}
+      // The switch itself keeps the key's click; only removing a release
+      // binding drops data, so only then is it a destructive confirmation.
+      destructive={release !== undefined}
+      description={
+        <span className="grid gap-2">
+          {pending?.gesture === "click" ? (
+            <span>{t("editor:gesture.convert.click", { control: name })}</span>
+          ) : (
+            <span>
+              {pending?.gesture === "doubleClick"
+                ? t("editor:gesture.convert.doubleClick", {
+                    control: name,
+                    gesture: adding,
+                    ms: doubleClickMs,
+                  })
+                : t("editor:gesture.convert.longPress", {
+                    control: name,
+                    gesture: adding,
+                    ms: longPressMs,
+                  })}
+            </span>
+          )}
+          {release && (
+            <span>
+              {t("editor:gesture.convert.release", {
+                target: targetLabel(release.target, profile.actions, profile.workflows, draft),
+              })}
+            </span>
+          )}
+          <span>{t("editor:gesture.convert.untilSaved")}</span>
+        </span>
+      }
+      confirmLabel={t("editor:gesture.convert.confirm")}
+      onConfirm={onConfirm}
+    />
   )
 }

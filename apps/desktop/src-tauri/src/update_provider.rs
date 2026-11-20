@@ -320,10 +320,14 @@ fn failed(stage: provider::Stage, error: &crate::error::CommandError) -> UpdateE
 /// The message a command returns for a provider error. The GitHub
 /// provider's messages are today's, word for word.
 pub fn command_error(error: UpdateError) -> crate::error::CommandError {
-    crate::error::CommandError::Invalid(match error {
+    use crate::error::CommandError;
+    CommandError::Invalid(match error {
         UpdateError::Failed { message, .. } => message,
         UpdateError::NotConfigured(provider::NotConfigured::NoUpdaterKey) => {
-            "updates are not configured in this build".to_owned()
+            return CommandError::invalid(
+                "updatesNotConfigured",
+                "updates are not configured in this build",
+            );
         }
         // Today's wording too, with the reason (a build run from `target/`
         // on Linux or Windows has no package format).

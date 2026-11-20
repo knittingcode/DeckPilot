@@ -1,0 +1,486 @@
+{
+  "dashboard": {
+    "title": "Dashboard",
+    "description": "What is running right now",
+    "activateFailed": "The profile was not activated",
+    "updated": {
+      "title": "DeckPilot was updated",
+      "description": "Updated from {{from}} to {{to}}. Your configuration was kept."
+    },
+    "updateAvailable": "Version {{version}} is available",
+    "viewUpdate": "View update",
+    "now": "Now",
+    "activeProfile": "Active profile",
+    "activeProfileHint": "The profile that runs on the device.",
+    "chooseProfile": "Choose a profile",
+    "createProfile": "Create a profile",
+    "agent": "Background agent",
+    "agentSummary_one": "Version {{version}} · {{count}} device",
+    "agentSummary_other": "Version {{version}} · {{count}} devices",
+    "noDevice": {
+      "title": "No Stream Deck detected",
+      "description": "Connect a supported device; it is picked up automatically."
+    },
+    "inProfile": "In {{profile}}",
+    "counts": {
+      "actions": "Actions",
+      "workflows": "Workflows",
+      "layouts": "Layouts"
+    }
+  },
+  "profiles": {
+    "new": "New profile",
+    "toast": {
+      "openFailed": "{{profile}} could not be opened for editing",
+      "activated": "{{profile}} is active",
+      "activateFailed": "{{profile}} was not activated",
+      "deleted": "Profile deleted"
+    },
+    "all": {
+      "title": "All profiles",
+      "description": "The active profile runs on the device. Any profile can be edited: select it here or in the toolbar."
+    },
+    "empty": {
+      "title": "No profiles yet",
+      "body": "Create your first profile with New profile in the toolbar."
+    },
+    "table": {
+      "label": "Profiles",
+      "name": "Name",
+      "modified": "Last modified",
+      "status": "Status",
+      "actions": "Actions"
+    },
+    "beingEdited": "Being edited",
+    "editProfile": "Edit {{profile}}",
+    "runsOnDevice": "Runs on the device",
+    "active": "Active",
+    "inactive": "Inactive",
+    "makeActive": "Make active",
+    "makeActiveLabel": "Make {{profile}} active",
+    "editing": {
+      "description": "The profile being edited.",
+      "editDetails": "Edit details…",
+      "details": "Details of {{profile}}",
+      "description_label": "Description",
+      "noDescription": "No description",
+      "actions": "Actions",
+      "workflows": "Workflows",
+      "projects": "Projects"
+    },
+    "menu": {
+      "more": "More for {{profile}}",
+      "rename": "Rename…",
+      "duplicate": "Duplicate…",
+      "delete": "Delete…"
+    },
+    "delete": {
+      "title": "Delete “{{profile}}”?",
+      "active": "This profile is active on the device. Its actions, workflows and projects are deleted and the device shows no layout until another profile is activated. Its layouts are kept: they stay in Layouts, used by no profile unless another profile uses them too.",
+      "inactive": "Its actions, workflows and projects are deleted. This cannot be undone. Its layouts are kept: they stay in Layouts, used by no profile unless another profile uses them too.",
+      "failed": "{{profile}} was not deleted"
+    },
+    "form": {
+      "copyName": "{{profile}} (copy)",
+      "createTitle": "New profile",
+      "renameTitle": "Edit profile",
+      "duplicateTitle": "Duplicate profile",
+      "createFailed": "The profile was not created",
+      "renameFailed": "The profile was not saved",
+      "duplicateFailed": "The profile was not duplicated",
+      "saved": "Saved",
+      "duplicateDescription": "The copy gets its own actions, workflows and projects, and independent copies of its layouts. Changing one profile never changes the other.",
+      "save": "Save",
+      "name": "Name",
+      "description": "Description"
+    }
+  },
+  "pluginView": {
+    "gone": {
+      "page": "Plugin view",
+      "title": "This plugin view is not available",
+      "body": "Its plugin was disabled or uninstalled, or no longer offers it.",
+      "openEditor": "Open the Device Editor"
+    },
+    "variables": {
+      "title": "Variables of {{plugin}}",
+      "description": "Live values the plugin publishes under <code>{{namespace}}</code>. Insert one in an action or a key label with {{reference}}."
+    },
+    "actions": {
+      "title": "Actions of {{plugin}}"
+    },
+    "settings": {
+      "title": "Settings of {{plugin}}",
+      "description": "Stored by the agent for this plugin only. Also in Settings › Extensions › Plugins."
+    }
+  },
+  "shell": {
+    "unsavedWarning": "Save or revert the current layout first"
+  },
+  "projects": {
+    "page": {
+      "title": "Projects",
+      "description": "Projects of this profile and their resources on this machine"
+    },
+    "tabs": {
+      "projects": "Projects",
+      "machine": "This machine"
+    },
+    "option": "{{key}} · {{project}}",
+    "status": {
+      "ok": "Found",
+      "missing": "Missing",
+      "unbound": "Not set on this machine",
+      "unchecked": "Not checked",
+      "tooltip": "Active project of {{profile}}: {{project}}"
+    },
+    "kind": {
+      "directory": "Directory",
+      "application": "Application",
+      "terminal": "Terminal",
+      "dockerEnvironment": "Docker environment",
+      "service": "Local service",
+      "url": "URL",
+      "other": "Other"
+    },
+    "switcher": {
+      "failed": "The project was not switched",
+      "none": "This profile has no projects.",
+      "inactiveProfile": "Projects can be switched for the profile that is active on the device.",
+      "previous": "Previous project",
+      "next": "Next project",
+      "active": "Active project",
+      "title": "Project switcher",
+      "description": "Switching only changes which project actions refer to. Nothing is checked out, restarted or launched.",
+      "inactiveWithProject": "{{profile}} is not active on the device. Its active project is {{key}}; it is restored when the profile is activated.",
+      "inactiveNoProject": "{{profile}} is not active on the device. Its active project is not set; it is restored when the profile is activated."
+    },
+    "card": {
+      "label": "Active project",
+      "project": "{{key}} · {{project}}",
+      "projectInProfile": "{{key}} · {{project}} in {{profile}}",
+      "none": "None",
+      "noActiveProfile": "Activate a profile to switch projects."
+    },
+    "actions": {
+      "new": "New project",
+      "switch": "Switch project",
+      "selectFailed": "{{key}} was not selected"
+    },
+    "cycle": {
+      "moveFailed": "The project was not moved",
+      "title": "Cycle order",
+      "description": "{{projects}} in the cycle. Drag to reorder. Next and previous project follow this order.",
+      "descriptionEmpty": "Drag to reorder. Next and previous project follow this order.",
+      "empty": "No projects in this profile",
+      "emptyHint": "Projects give actions a context, such as the repository of the active project."
+    },
+    "default": {
+      "label": "Default project",
+      "description": "Selected when the profile is activated and no project was chosen before.",
+      "saved": "Default project saved",
+      "saveFailed": "The default project was not saved",
+      "first": "First project in the order"
+    },
+    "item": {
+      "deleted": "Project deleted",
+      "reorder": "Reorder {{key}}",
+      "active": "Active",
+      "default": "Default",
+      "resourceStatus": "({{status}})",
+      "edit": "Edit {{key}}",
+      "copy": "Copy {{key}} to another profile",
+      "copyTooltip": "Copy to another profile",
+      "delete": "Delete {{key}}",
+      "deleteTitle": "Delete {{key}}?",
+      "deleteDescription": "Actions that refer to its resources through the active project will no longer resolve while no project provides them.",
+      "deleteFailed": "{{key}} was not deleted"
+    },
+    "copy": {
+      "title": "Copy {{key}} to another profile",
+      "description": "The other profile gets its own copy with the same key, name and resource roles. Later changes to either project do not affect the other.",
+      "submit": "Copy project",
+      "done": "{{key}} copied to {{profile}}",
+      "failed": "{{key}} was not copied",
+      "target": "Target profile"
+    },
+    "form": {
+      "incompleteResource": "Each resource needs a role and a resource key.",
+      "repeatedRole": "The role “{{role}}” is used twice.",
+      "saved": "Project saved",
+      "editTitle": "Edit {{key}}",
+      "newTitle": "New project",
+      "description": "Resources map a role (for example <role>repository</role>) to a logical key such as <key>shop.repository</key>. Each machine maps keys to real paths.",
+      "save": "Save",
+      "saveFailed": "The project was not saved",
+      "key": "Key",
+      "name": "Name",
+      "namePlaceholder": "Online Shop",
+      "resources": "Resources",
+      "resource": "Resource {{number}}",
+      "role": "Role",
+      "resourceKey": "Resource key",
+      "removeResource": "Remove resource",
+      "addResource": "Add resource"
+    },
+    "machine": {
+      "title": "Resources on this machine",
+      "description": "Logical resources used by projects, mapped to paths, applications or URLs on this computer. These mappings are never part of a profile.",
+      "add": "Add mapping",
+      "empty": "No resources used or mapped yet",
+      "value": "{{kind}}: {{value}}",
+      "usedBy_one": "Used by {{projects}}",
+      "usedBy_other": "Used by {{projects}}",
+      "edit": "Edit {{key}}",
+      "remove": "Remove {{key}}",
+      "removeTitle": "Remove the mapping for {{key}}?",
+      "removeDescription": "Actions using this resource cannot resolve it on this machine until it is mapped again.",
+      "removeConfirm": "Remove",
+      "removeFailed": "The mapping for {{key}} was not removed"
+    },
+    "binding": {
+      "browseFailed": "The file browser did not open",
+      "browseNext": "Type the path instead",
+      "editTitle": "Map {{key}}",
+      "newTitle": "New mapping",
+      "description": "Stored for this computer only.",
+      "saved": "Mapping saved",
+      "saveFailed": "The mapping for {{key}} was not saved",
+      "kind": "Kind",
+      "value": "Value",
+      "valuePlaceholder": "Path, application, container name…",
+      "browse": "Browse"
+    }
+  },
+  "workSession": {
+    "checkAgent": "Check that the agent is running in Settings › Agent.",
+    "unlockNext": "Unlock DeckPilot if it is locked, then try again.",
+    "loadFailed": "The work session could not be loaded",
+    "state": {
+      "idle": {
+        "label": "No work session",
+        "hint": "Click the Work Session key to start one."
+      },
+      "starting": {
+        "label": "Starting…",
+        "hint": "The start workflow is running. Time counts once it succeeds. Hold the key to cancel."
+      },
+      "working": {
+        "label": "Working",
+        "hint": "To finish, click the key to run the end check. Without a verification workflow, hold the key instead."
+      },
+      "verifyingEnd": {
+        "label": "Checking…",
+        "hint": "The verification workflow is running; the timer keeps going. Hold the key to cancel the check."
+      },
+      "readyToFinish": {
+        "label": "Ready to finish",
+        "hint": "Click the key to finish and stop the timer. Hold it to keep working."
+      },
+      "stopping": {
+        "label": "Stopping…",
+        "hint": "The session is being closed. The stop time is already fixed."
+      }
+    },
+    "record": {
+      "starting": "Starting",
+      "active": "Active",
+      "stopping": "Stopping",
+      "stopped": "Finished",
+      "aborted": "Did not start"
+    },
+    "notice": {
+      "startFailed": {
+        "title": "The work session did not start",
+        "next": "Check the start workflow's run in its history, then click the key to start again."
+      },
+      "startInterrupted": {
+        "title": "Starting the work session was interrupted",
+        "next": "The start workflow may have run partly. Click the key to start again."
+      },
+      "verificationFailed": {
+        "title": "The end check failed",
+        "next": "The timer keeps running. Check the verification workflow's run, then check again from the key."
+      },
+      "verificationInterrupted": {
+        "title": "The end check was interrupted",
+        "next": "The timer keeps running. Check again from the key."
+      },
+      "notReady": {
+        "title": "Not ready to finish yet",
+        "next": "The verification workflow answered no. The timer keeps running."
+      },
+      "approvalExpired": {
+        "title": "The approval to finish expired",
+        "next": "Run the end check again from the key, then click it to finish."
+      },
+      "approvalInvalidated": {
+        "title": "The approval to finish was withdrawn",
+        "next": "Run the end check again from the key, then click it to finish."
+      },
+      "needsReview": {
+        "title": "A gap in the session needs review",
+        "next": "It is counted. Exclude it in the session history if you did not work then."
+      }
+    },
+    "review": {
+      "agentDown": "DeckPilot's agent was not running",
+      "sleep": "The computer was asleep",
+      "clockBack": "The clock was set back",
+      "clockForward": "The clock jumped forward"
+    },
+    "verificationIssue": {
+      "missingCanFinish": "Has no output “canFinish”. Add a Boolean output named canFinish.",
+      "canFinishNotBoolean": "Its output “canFinish” is not a Boolean. Change its kind to Boolean.",
+      "detailsNotText": "Its output “details” is not text. Change its kind to Text."
+    },
+    "issues": {
+      "quoted": "“{{name}}”",
+      "unfilledInputs_one": "Needs the input {{names}}, which a work session cannot give. Give it a default or make it optional.",
+      "unfilledInputs_other": "Needs the inputs {{names}}, which a work session cannot give. Give them a default or make them optional.",
+      "missingWorkflow": "This workflow no longer exists. Choose another one or none.",
+      "minutesRange": "Enter whole minutes from {{min}} to {{max}}."
+    },
+    "check": {
+      "noResult": "No result",
+      "canFinish": "Can finish",
+      "notReady": "Not ready to finish",
+      "last": "Last end check: {{outcome}}",
+      "details": "— {{details}}",
+      "withDetails": "{{outcome}} — {{details}}",
+      "withTime": "{{result}} ({{time}})"
+    },
+    "history": {
+      "title": "History",
+      "description": "Sessions kept on this computer, newest first. Gaps longer than the review threshold are counted and flagged; exclude one if you did not work then.",
+      "loadFailed": "The session history could not be loaded",
+      "empty": "No sessions yet",
+      "emptyHint": "Sessions appear here once the Work Session key has started one.",
+      "sessions": "Work sessions",
+      "showOlder": "Show older sessions",
+      "duration": "Duration {{duration}}",
+      "gapsToReview_one": "{{count}} gap to review",
+      "gapsToReview_other": "{{count}} gaps to review",
+      "notice": "Notice",
+      "flaggedGaps": "Flagged gaps",
+      "intervals": "Intervals",
+      "noIntervals": "None: the timer never started (the start workflow did not succeed).",
+      "interval": "{{from}} – {{to}}",
+      "intervalOpen": "{{from}} – now",
+      "gapExcluded": "(a gap after it is excluded)",
+      "lastCheck": "Last end check",
+      "transitions": "Transitions",
+      "gap": {
+        "counted": "The gap is counted",
+        "excluded": "The gap is excluded",
+        "countFailed": "The gap was not counted",
+        "excludeFailed": "The gap was not excluded",
+        "statusExcluded": "Excluded",
+        "statusCounted": "Counted",
+        "statusUnreviewed": "Counted, not reviewed",
+        "summary": "{{kind}}: {{span}} ({{duration}})",
+        "includeLabel": "Include the gap {{span}}",
+        "include": "Include",
+        "excludeLabel": "Exclude the gap {{span}}",
+        "exclude": "Exclude",
+        "keepLabel": "Keep the gap {{span}} counted",
+        "keep": "Keep counted"
+      }
+    },
+    "status": {
+      "title": "Current session",
+      "description": "Operated from its key on the device; this page only shows the state.",
+      "state": "State",
+      "project": "Project",
+      "started": "Started",
+      "notices": "Notices",
+      "clearFailed": "The notices were not cleared",
+      "clearNotices": "Clear notices",
+      "elapsed": "Elapsed"
+    },
+    "page": {
+      "title": "Work Session",
+      "description": "Time worked, started and finished from a key on the device",
+      "unsupportedTitle": "Work sessions need a newer agent",
+      "unsupportedDescription": "The running agent does not support work sessions. Restart the agent in Settings › Agent so the one installed with this app runs.",
+      "otherProject": "Project of another profile",
+      "key": {
+        "title": "Work Session key",
+        "description": "Any key can control the work session; no action is created for it.",
+        "step1": "Open the Layout Designer and select a key.",
+        "step2": "In its gestures, choose <em>Changes with state</em> and then <em>Work Session</em>.",
+        "step3": "The key then shows the state and the elapsed time. Click it to start; when working, click it to run the end check, or hold it if no verification workflow is set; click it again when it shows Finish Work.",
+        "open": "Open Layout Designer"
+      }
+    },
+    "settings": {
+      "title": "Settings",
+      "description": "For sessions started while this profile is active. Saving withdraws an approval to finish, so a session that is ready to finish needs a new end check.",
+      "loadFailed": "The work session settings could not be loaded",
+      "form": "Work session settings",
+      "saved": "Work session settings saved",
+      "saveFailed": "The work session settings were not saved",
+      "start": {
+        "label": "Start workflow",
+        "hint": "Runs when the key starts a session; time counts once it succeeds. If it fails, the session does not start."
+      },
+      "verification": {
+        "label": "End verification workflow",
+        "hint": "Must output canFinish (Boolean): true allows finishing, false keeps the session running. An optional text output details is shown with the result. Without one, holding the key in a running session makes it ready to finish at once."
+      },
+      "unusable": "Workflows that cannot verify the end",
+      "approval": {
+        "label": "Approval lasts (minutes)",
+        "hint": "How long a passed end check allows finishing."
+      },
+      "reviewGap": {
+        "label": "Flag gaps longer than (minutes)",
+        "hint": "Longer gaps (sleep, agent not running) are counted and flagged in the history."
+      },
+      "format": {
+        "label": "Elapsed time on keys",
+        "minutes": "h:mm (redrawn once a minute)",
+        "seconds": "h:mm:ss (redrawn every second)"
+      },
+      "gestures": {
+        "title": "Gesture timings",
+        "description": "How long a long press or a double click takes is set on the key, in the Layout Designer's gesture editor. Keys without their own timings use the defaults in Settings › Devices.",
+        "open": "Open Settings › Devices"
+      },
+      "save": "Save settings",
+      "discard": "Discard changes",
+      "none": "None",
+      "deletedWorkflow": "Deleted workflow"
+    }
+  },
+  "http": {
+    "credentials": {
+      "loadFailed": "The credentials could not be loaded",
+      "loadNext": "Unlock DeckPilot and reopen this page",
+      "title": "Credentials",
+      "description": "Tokens and passwords that requests use by their name. They are stored encrypted on this computer only: never in a workflow, never in an export, and never shown again after saving.",
+      "empty": "No credentials are stored.",
+      "stored": "Stored credentials",
+      "replace": "Replace secret",
+      "delete": "Delete {{name}}",
+      "deleteTitle": "Delete {{name}}?",
+      "deleteDescription": "Requests that use it will fail until a credential with this name is stored again.",
+      "deleteFailed": "{{name}} was not deleted",
+      "replaced": "{{name}} replaced",
+      "replaceFailed": "{{name}} was not replaced",
+      "newSecret": "New secret for {{name}}",
+      "save": "Save",
+      "storedToast": "{{name}} stored",
+      "storeFailed": "{{name}} was not stored",
+      "add": "Add a credential",
+      "name": "Name",
+      "nameInvalid": "Lower case letters, digits, “.”, “_” and “-”, starting with a letter.",
+      "nameTaken": "A credential with this name exists; saving replaces it.",
+      "nameHint": "What actions refer to, e.g. in an HTTP request's Credential field.",
+      "descriptionLabel": "Description",
+      "secret": "Secret",
+      "secretHint": "A token, or user:password for basic authentication.",
+      "submit": "Store credential"
+    }
+  }
+}

@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
+
+import { i18n } from "@/i18n"
 
 import {
+  VALUE_TYPES,
   draftOf,
   formatValue,
   keyProblem,
@@ -78,5 +81,23 @@ describe("values", () => {
       slots.map((s) => scopeLabel(s, [shop], [{ id: "profile-1", name: "Work", updatedAt: 0 }])),
     ).toEqual(["Global", "Profile Work", "Project SHOP"])
     expect(slotsFor(definition, null, [shop])).toEqual([{ kind: "global" }])
+  })
+})
+
+describe("shared variable texts in Polish", () => {
+  afterEach(async () => {
+    await i18n.changeLanguage("en")
+  })
+
+  it("follow the window's language when read", async () => {
+    const label = () => VALUE_TYPES.find((t) => t.type === "secretRef")?.label
+    expect(label()).toBe("Stored credential")
+    await i18n.changeLanguage("pl")
+    expect(label()).toBe("Zapisane poświadczenie")
+    expect(keyProblem("system.x", [])).toBe("Przestrzeń „system” jest zarezerwowana.")
+    expect(parseValue({ type: "integer" }, { text: "4.5" })).toEqual({
+      error: "Wprowadź liczbę całkowitą.",
+    })
+    expect(scopeLabel({ kind: "execution", execution: "e1" }, [], [])).toBe("Podczas uruchomienia")
   })
 })

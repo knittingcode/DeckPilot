@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
+
+import { i18n } from "@/i18n"
 
 import {
   conditionAllowed,
@@ -35,7 +37,11 @@ describe("workflow editing", () => {
   it("validates names, actions and conditions", () => {
     const first = { ...newStep("a"), condition: { type: "previousFailed" } as const }
     const invalid: Workflow = { id: "w", name: " ", steps: [first, newStep("zzz")] }
-    expect(validateWorkflow(invalid, new Set(["a"]))).toHaveLength(3)
+    expect(validateWorkflow(invalid, new Set(["a"]))).toEqual([
+      "Enter a name.",
+      "Step 1: there is no previous step.",
+      "Step 2: choose an action.",
+    ])
     expect(validateWorkflow(workflow, new Set(["a", "b", "c"]))).toEqual([])
     expect(conditionAllowed({ type: "previousSucceeded" }, 1)).toBe(true)
   })
@@ -71,5 +77,22 @@ describe("shown workflow", () => {
     const selection = { id: "gone", waiting: { data: before, shown: "a" } }
     expect(shownWorkflow(selection, [b], after, drafts)).toBe("b")
     expect(shownWorkflow(selection, [], after, drafts)).toBe("new")
+  })
+})
+
+describe("workflow validation in Polish", () => {
+  afterEach(async () => {
+    await i18n.changeLanguage("en")
+  })
+
+  it("follows the window's language", async () => {
+    const first = { ...newStep("a"), condition: { type: "previousFailed" } as const }
+    const invalid: Workflow = { id: "w", name: "", steps: [first, newStep("zzz")] }
+    await i18n.changeLanguage("pl")
+    expect(validateWorkflow(invalid, new Set(["a"]))).toEqual([
+      "Wprowadź nazwę.",
+      "Krok 1: nie ma poprzedniego kroku.",
+      "Krok 2: wybierz akcję.",
+    ])
   })
 })

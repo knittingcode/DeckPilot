@@ -1,6 +1,7 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from "react"
 
 import { ErrorNotice, Loading } from "@/components/page"
+import { DialogProvider } from "@/components/dialogs/dialog-service"
 import { ThemeProvider } from "@/components/theme-provider"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -8,6 +9,7 @@ import { api } from "@/lib/api"
 import { failureMessage } from "@/lib/failure"
 import type { WindowSpec } from "@/lib/types"
 import { coalescedReporter, naturalSize } from "@/lib/window-fit"
+import { i18n, useTranslation } from "@/i18n"
 
 import { windowView } from "./registry"
 import { WindowContext, type WindowContextValue } from "./window-context"
@@ -18,16 +20,23 @@ import { WindowContext, type WindowContextValue } from "./window-context"
  * to the content (see `src-tauri/src/windows.rs`).
  */
 export function WindowApp({ id }: { id: string }) {
+  const { t } = useTranslation()
   const [spec, setSpec] = useState<WindowSpec | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
     api.currentWindow().then(
       (current) => {
         if (current?.id === id) setSpec(current)
-        else setError(`this window is not registered as ${id}`)
+        else setError(i18n.t("settings:window.notRegistered", { id }))
       },
       (e: unknown) => {
-        setError(failureMessage("This window could not load", e, "Close it and try again"))
+        setError(
+          failureMessage(
+            i18n.t("settings:window.loadFailed"),
+            e,
+            i18n.t("settings:window.loadFailedNext"),
+          ),
+        )
       },
     )
   }, [id])
@@ -38,10 +47,12 @@ export function WindowApp({ id }: { id: string }) {
         <FitToContent wide={spec?.size === "large" || spec?.size === "fullscreen"}>
           {error || !View ? (
             <div className="w-[360px] p-6">
-              <ErrorNotice error={error ?? `unknown window ${id}`} />
+              <ErrorNotice error={error ?? t("settings:window.unknown", { id })} />
             </div>
           ) : spec ? (
-            <Hosted spec={spec} View={View} />
+            <DialogProvider>
+              <Hosted spec={spec} View={View} />
+            </DialogProvider>
           ) : (
             <div className="w-[360px] p-6">
               <Loading />
@@ -126,7 +137,11 @@ function FitToContent({ wide, children }: { wide: boolean; children: React.React
     const mutations = new MutationObserver(observeRoot)
     mutations.observe(element, { childList: true, subtree: true })
     observeRoot()
+    // A new viewport after a resize: measure again, so a title bar derived
+    // from a viewport measured mid-resize is corrected (see window-fit.ts).
+    window.addEventListener("resize", reporter.schedule)
     return () => {
+      window.removeEventListener("resize", reporter.schedule)
       mutations.disconnect()
       resize.disconnect()
       reporter.dispose()

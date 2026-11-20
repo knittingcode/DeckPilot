@@ -64,7 +64,7 @@ describe("navigation", () => {
     let state = openSettings(initialNavigation(), "storage")
     state = closeSettings(state)
     expect(current(openSettings(state))).toEqual(settings("storage"))
-    expect(current(openSettings(initialNavigation()))).toEqual(settings("appearance"))
+    expect(current(openSettings(initialNavigation()))).toEqual(settings("profiles"))
   })
 
   it("does not record the same location twice in a row", () => {
@@ -106,7 +106,7 @@ describe("navigation", () => {
 
   it("translates page references from other windows and older versions", () => {
     expect(locationOf("projects/projects")).toEqual(workspace("projects/projects"))
-    expect(locationOf("settings")).toEqual(settings("appearance"))
+    expect(locationOf("settings")).toEqual(settings("profiles"))
     expect(locationOf("settings:security")).toEqual(settings("security"))
     expect(locationOf("devices")).toEqual(settings("devices"))
     // The Device Models page moved into Settings › Devices.

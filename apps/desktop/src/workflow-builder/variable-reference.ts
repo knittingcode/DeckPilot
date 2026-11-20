@@ -8,21 +8,63 @@
 import { type ReactNode, createElement } from "react"
 
 import { VariablePicker as UniversalVariablePicker } from "@/components/variable-picker/variable-picker"
+import { type TranslationKey, i18n } from "@/i18n"
 import type { ParameterKind, VariableDefinition, VariableType } from "@/lib/types"
 import { TEMPLATE_KIND } from "@/lib/variables"
 
-/** The read-only variables of a run and their types. */
-export const SYSTEM_VARIABLES: Record<string, { type: VariableType; label: string }> = {
-  "system.project.current.id": { type: { type: "projectId" }, label: "Current project" },
-  "system.project.current.key": { type: { type: "string" }, label: "Current project key" },
-  "system.project.current.name": { type: { type: "string" }, label: "Current project name" },
-  "system.profile.current.id": { type: { type: "profileId" }, label: "Current profile" },
-  "system.profile.current.name": { type: { type: "string" }, label: "Current profile name" },
-  "system.device.current.id": { type: { type: "string" }, label: "Device that started the run" },
-  "system.platform": { type: { type: "string" }, label: "Operating system" },
-  "workflow.id": { type: { type: "string" }, label: "This workflow" },
-  "workflow.execution.id": { type: { type: "string" }, label: "This run" },
+/**
+ * Labels translated when they are read, in the window's language: for
+ * label records that callers index like plain strings. Components that
+ * show them use `useTranslation`, so they re-render on a language change.
+ */
+export function translatedLabels<K extends string>(
+  keys: Record<K, TranslationKey>,
+): Readonly<Record<K, string>> {
+  const labels = {} as Record<K, string>
+  for (const key of Object.keys(keys) as K[]) {
+    const translationKey: TranslationKey = keys[key]
+    Object.defineProperty(labels, key, { enumerable: true, get: () => i18n.t(translationKey) })
+  }
+  return labels
 }
+
+const SYSTEM_LABEL = translatedLabels({
+  "system.project.current.id": "workflows:variables.system.projectId",
+  "system.project.current.key": "workflows:variables.system.projectKey",
+  "system.project.current.name": "workflows:variables.system.projectName",
+  "system.profile.current.id": "workflows:variables.system.profileId",
+  "system.profile.current.name": "workflows:variables.system.profileName",
+  "system.device.current.id": "workflows:variables.system.deviceId",
+  "system.platform": "workflows:variables.system.platform",
+  "workflow.id": "workflows:variables.system.workflowId",
+  "workflow.execution.id": "workflows:variables.system.executionId",
+})
+
+const SYSTEM_TYPE: Record<keyof typeof SYSTEM_LABEL, VariableType> = {
+  "system.project.current.id": { type: "projectId" },
+  "system.project.current.key": { type: "string" },
+  "system.project.current.name": { type: "string" },
+  "system.profile.current.id": { type: "profileId" },
+  "system.profile.current.name": { type: "string" },
+  "system.device.current.id": { type: "string" },
+  "system.platform": { type: "string" },
+  "workflow.id": { type: "string" },
+  "workflow.execution.id": { type: "string" },
+}
+
+/** The read-only variables of a run and their types. */
+export const SYSTEM_VARIABLES: Record<string, { type: VariableType; readonly label: string }> =
+  Object.fromEntries(
+    (Object.keys(SYSTEM_TYPE) as (keyof typeof SYSTEM_TYPE)[]).map((reference) => [
+      reference,
+      {
+        type: SYSTEM_TYPE[reference],
+        get label() {
+          return SYSTEM_LABEL[reference]
+        },
+      },
+    ]),
+  )
 
 const SEGMENT = /^[a-z][A-Za-z0-9_]{0,31}$/
 const STEP = /^steps\.[a-z][a-z0-9_]{0,47}\.output\.[A-Za-z0-9_]{1,64}$/
@@ -30,22 +72,24 @@ const STEP = /^steps\.[a-z][a-z0-9_]{0,47}\.output\.[A-Za-z0-9_]{1,64}$/
 /** Why `text` (without braces) is not a reference, or `null`. */
 export function referenceSyntaxProblem(text: string): string | null {
   const reference = text.trim()
-  if (!reference) return "Enter a reference, e.g. shared.paths.root"
+  if (!reference) return i18n.t("workflows:variables.problem.empty")
   if (reference.startsWith("steps.")) {
-    return STEP.test(reference) ? null : `“${reference}” is not steps.<node>.output.<key>`
+    return STEP.test(reference)
+      ? null
+      : i18n.t("workflows:variables.problem.notStep", { reference })
   }
   if (reference.startsWith("shared.")) {
     const key = reference.slice("shared.".length).split(".")
     if (key.length < 2 || key.length > 4 || !key.every((s) => SEGMENT.test(s))) {
-      return `“${reference}” is not shared.<namespace>.<name>`
+      return i18n.t("workflows:variables.problem.notShared", { reference })
     }
     if (["steps", "system", "workflow"].includes(key[0] ?? "")) {
-      return `the namespace “${key[0] ?? ""}” is reserved`
+      return i18n.t("workflows:variables.problem.reserved", { namespace: key[0] ?? "" })
     }
     return null
   }
   if (reference in SYSTEM_VARIABLES) return null
-  return `“${reference}” is not a reference; use shared.…, system.…, workflow.… or steps.…`
+  return i18n.t("workflows:variables.problem.unknown", { reference })
 }
 
 /** The type of a non-`steps` reference, when known before the run. */
@@ -99,19 +143,19 @@ export function rendersAsText(type: VariableType): boolean {
 export function expects(kind: ParameterKind): string {
   switch (kind.type) {
     case "integer":
-      return "a whole number"
+      return i18n.t("workflows:variables.expects.integer")
     case "boolean":
-      return "true or false"
+      return i18n.t("workflows:variables.expects.boolean")
     case "choice":
-      return "one of its choices"
+      return i18n.t("workflows:variables.expects.choice")
     case "resource":
-      return "a resource"
+      return i18n.t("workflows:variables.expects.resource")
     case "project":
-      return "a project"
+      return i18n.t("workflows:variables.expects.project")
     case "credential":
-      return "a credential"
+      return i18n.t("workflows:variables.expects.credential")
     default:
-      return "text"
+      return i18n.t("workflows:variables.expects.text")
   }
 }
 
@@ -137,11 +181,15 @@ export type VariablePicker = (props: {
  * hidden while the agent lacks the `variables` capability, and hands back
  * the reference, which is what the mapping stores.
  */
-export const VARIABLE_PICKER: VariablePicker = ({ expected, fieldLabel = "Variable", onPick }) =>
+export const VARIABLE_PICKER: VariablePicker = ({
+  expected,
+  fieldLabel = i18n.t("workflows:variables.picker.field"),
+  onPick,
+}) =>
   createElement(UniversalVariablePicker, {
     kind: expected ?? TEMPLATE_KIND,
     fieldLabel,
-    label: `Choose a variable for ${fieldLabel}`,
+    label: i18n.t("workflows:variables.picker.label", { field: fieldLabel }),
     className: "size-7",
     onPick,
   })

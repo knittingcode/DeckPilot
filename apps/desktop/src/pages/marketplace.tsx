@@ -1,4 +1,5 @@
 import { Page } from "@/components/page"
+import { useTranslation } from "@/i18n"
 import { PluginsSettings } from "@/plugins/marketplace"
 
 /**
@@ -7,8 +8,9 @@ import { PluginsSettings } from "@/plugins/marketplace"
  * Settings › Extensions › Plugins. Only in builds with plugins.
  */
 export function MarketplacePage() {
+  const { t } = useTranslation()
   return (
-    <Page title="Marketplace" description="Signed community plugins from the verified registry">
+    <Page title={t("marketplace:page.title")} description={t("marketplace:page.description")}>
       <div className="mx-auto grid w-full max-w-5xl gap-6">
         <PluginsSettings />
       </div>

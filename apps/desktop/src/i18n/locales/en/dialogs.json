@@ -1,0 +1,16 @@
+{
+  "discard": {
+    "title": "Discard your changes?",
+    "description": "What you entered in this dialog is not saved.",
+    "confirm": "Discard"
+  },
+  "selection": {
+    "choose": "Choose",
+    "filter": "Filter",
+    "empty": "Nothing to choose from."
+  },
+  "permission": {
+    "allow": "Allow",
+    "requestedBy": "Requested by"
+  }
+}

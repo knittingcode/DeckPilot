@@ -4,39 +4,47 @@
  * presents it.
  */
 
+import type { TranslationKey } from "@/i18n"
+
 import type { DeviceModel, Platform, PlatformVerification, VerificationLevel } from "./types"
 
 export const PLATFORMS: Platform[] = ["macos", "windows", "linux"]
 
+/** Product names, the same in every language. */
 export const PLATFORM_LABELS: Record<Platform, string> = {
   macos: "macOS",
   windows: "Windows",
   linux: "Linux",
 }
 
-export const LEVELS: Record<VerificationLevel, { label: string; detail: string }> = {
-  unsupported: { label: "Unsupported", detail: "Not supported on this platform." },
-  experimental: {
-    label: "Experimental",
-    detail: "A work-in-progress definition that may be incomplete or wrong.",
-  },
-  defined: {
-    label: "Layout design only",
-    detail: "Layouts can be designed and saved. There is no driver for this model.",
-  },
-  driverImplemented: {
-    label: "Driver, not tested",
-    detail: "A driver exists for this platform, but it has not been tested.",
-  },
-  automatedTests: {
-    label: "Automated tests only",
-    detail: "The driver passes automated tests here, but has not been tested on a physical device.",
-  },
-  physicallyVerified: {
-    label: "Physically verified",
-    detail: "Tested on a physical device on this platform.",
-  },
-}
+/** Keys of `devices.json` (`verification.level.*`), resolved with `t` where they are shown. */
+export const LEVELS: Record<VerificationLevel, { label: TranslationKey; detail: TranslationKey }> =
+  {
+    unsupported: {
+      label: "devices:verification.level.unsupported.label",
+      detail: "devices:verification.level.unsupported.detail",
+    },
+    experimental: {
+      label: "devices:verification.level.experimental.label",
+      detail: "devices:verification.level.experimental.detail",
+    },
+    defined: {
+      label: "devices:verification.level.defined.label",
+      detail: "devices:verification.level.defined.detail",
+    },
+    driverImplemented: {
+      label: "devices:verification.level.driverImplemented.label",
+      detail: "devices:verification.level.driverImplemented.detail",
+    },
+    automatedTests: {
+      label: "devices:verification.level.automatedTests.label",
+      detail: "devices:verification.level.automatedTests.detail",
+    },
+    physicallyVerified: {
+      label: "devices:verification.level.physicallyVerified.label",
+      detail: "devices:verification.level.physicallyVerified.detail",
+    },
+  }
 
 /** The entry for `platform`; a platform without one is `defined`. */
 export function verificationOn(model: DeviceModel, platform: Platform): PlatformVerification {

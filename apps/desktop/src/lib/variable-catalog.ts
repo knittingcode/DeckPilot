@@ -10,6 +10,7 @@ import type {
   VariableScope,
   VariableType,
 } from "./types"
+import type { TranslationKey } from "@/i18n"
 
 /**
  * Legacy ids and the module-owned ids they resolve as. Mirrors
@@ -73,15 +74,16 @@ export function insertedReference(entry: CatalogEntry): string {
 /** A scope as the Variables page filters it: stored scopes and declared ones. */
 export type CatalogScope = VariableScope | DeclaredScope
 
-export const CATALOG_SCOPE_LABEL: Record<CatalogScope, string> = {
-  global: "Global",
-  profile: "Profile",
-  project: "Project",
-  execution: "Run",
-  machine: "This computer",
-  device: "Device",
-  workflow: "Workflow",
-  workSession: "Work session",
+/** Translation keys, resolved with `t` when shown. */
+export const CATALOG_SCOPE_LABEL: Record<CatalogScope, TranslationKey> = {
+  global: "workflows:catalogScope.global",
+  profile: "workflows:catalogScope.profile",
+  project: "workflows:catalogScope.project",
+  execution: "workflows:catalogScope.execution",
+  machine: "workflows:catalogScope.machine",
+  device: "workflows:catalogScope.device",
+  workflow: "workflows:catalogScope.workflow",
+  workSession: "workflows:catalogScope.workSession",
 }
 
 /** One line of the Variables page. */

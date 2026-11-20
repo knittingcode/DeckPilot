@@ -1,5 +1,6 @@
 import { SettingsRow } from "@/components/settings-layout"
 import { useAsync } from "@/hooks/use-async"
+import { useTranslation } from "@/i18n"
 import { api } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
 
@@ -7,6 +8,7 @@ import { ProjectSwitcher } from "./project-switcher"
 
 /** Dashboard row: the active project of the active profile and a switcher. */
 export function ActiveProjectCard() {
+  const { t } = useTranslation()
   const { profiles, revision } = useAppContext()
   const activeId = profiles.activeProfileId
   const { state } = useAsync(
@@ -17,13 +19,19 @@ export function ActiveProjectCard() {
   const project = view?.profile.projects.find((p) => p.id === view.activeProjectId)
   return (
     <SettingsRow
-      label="Active project"
+      label={t("workspace:projects.card.label")}
       description={
         project
-          ? `${project.key} · ${project.name}${view ? ` in ${view.profile.name}` : ""}`
+          ? view
+            ? t("workspace:projects.card.projectInProfile", {
+                key: project.key,
+                project: project.name,
+                profile: view.profile.name,
+              })
+            : t("workspace:projects.card.project", { key: project.key, project: project.name })
           : activeId
-            ? "None"
-            : "Activate a profile to switch projects."
+            ? t("workspace:projects.card.none")
+            : t("workspace:projects.card.noActiveProfile")
       }
     >
       {view && activeId && (

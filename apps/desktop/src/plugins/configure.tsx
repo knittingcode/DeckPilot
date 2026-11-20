@@ -8,20 +8,13 @@
 // is read once, the input is cleared at once, and it goes to the agent.
 // Nothing here logs it, puts it into browser storage, or shows it again.
 
-import { RotateCcw } from "lucide-react"
+import { RotateCcw, Settings2 } from "lucide-react"
 import { useEffect, useId, useRef, useState, type SyntheticEvent } from "react"
 import { toast } from "sonner"
 
+import { FieldError, ModalShell } from "@/components/dialogs"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -32,10 +25,12 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import { i18n, useTranslation } from "@/i18n"
 import { cn } from "@/lib/utils"
 
 import { pluginErrorText, type PluginClient, type PluginErrorText } from "./api"
 import { Notice } from "./components"
+import { errorSentence } from "./dialog-error"
 import { formatTime, secretProblem } from "./model"
 import {
   defaultText,
@@ -68,30 +63,25 @@ export function ConfigureDialog({
   /** Settings or credentials changed (the list reads the plugin again). */
   onChanged: () => void
 }) {
+  const { t } = useTranslation()
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) onClose()
-      }}
+    <ModalShell
+      presentation="dialog"
+      size="medium"
+      icon={Settings2}
+      title={t("plugins:configure.title", { name: item.summary.name })}
+      description={t("plugins:configure.description", { version: item.summary.version })}
+      onClose={onClose}
     >
-      <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle>Configure {item.summary.name}</DialogTitle>
-          <DialogDescription>
-            Settings and credentials of version {item.summary.version}, stored by the agent for this
-            plugin only.
-          </DialogDescription>
-        </DialogHeader>
-        <PluginConfiguration
-          id={item.summary.id}
-          name={item.summary.name}
-          client={client}
-          onClose={onClose}
-          onChanged={onChanged}
-        />
-      </DialogContent>
-    </Dialog>
+      {/* The settings form has its own actions: it is also shown outside a dialog. */}
+      <PluginConfiguration
+        id={item.summary.id}
+        name={item.summary.name}
+        client={client}
+        onClose={onClose}
+        onChanged={onChanged}
+      />
+    </ModalShell>
   )
 }
 
@@ -115,6 +105,7 @@ export function PluginConfiguration({
   /** Settings or credentials changed. */
   onChanged: () => void
 }) {
+  const { t } = useTranslation()
   const [settings, setSettings] = useState<Loaded<{ status: "ready"; settings: PluginSettings }>>({
     status: "loading",
   })
@@ -156,10 +147,12 @@ export function PluginConfiguration({
             id="configure-settings"
             className="text-xs font-medium text-muted-foreground uppercase"
           >
-            Settings
+            {t("plugins:configure.settings")}
           </h4>
           {settings.status === "loading" ? (
-            <p className="text-sm text-muted-foreground">Loading settings…</p>
+            <p className="text-sm text-muted-foreground">
+              {t("plugins:configure.loadingSettings")}
+            </p>
           ) : settings.status === "error" ? (
             <ErrorText error={settings.error} />
           ) : (
@@ -197,19 +190,23 @@ export function PluginConfiguration({
             id="configure-credentials"
             className="text-xs font-medium text-muted-foreground uppercase"
           >
-            Credentials
+            {t("plugins:configure.credentials")}
           </h4>
           {slots.status === "loading" ? (
-            <p className="text-sm text-muted-foreground">Loading credentials…</p>
+            <p className="text-sm text-muted-foreground">
+              {t("plugins:configure.loadingCredentials")}
+            </p>
           ) : slots.status === "error" ? (
             <ErrorText error={slots.error} />
           ) : (
             <>
               <p className="text-xs text-muted-foreground">
-                A secret goes to the agent once and is never shown again, here or anywhere. The
-                plugin never sees it: the agent adds it only to requests to the hosts listed.
+                {t("plugins:configure.credentialsHint")}
               </p>
-              <ul className="grid divide-y border-y" aria-label={`Credentials of ${name}`}>
+              <ul
+                className="grid divide-y border-y"
+                aria-label={t("plugins:configure.credentialsOf", { name })}
+              >
                 {slots.credentials.map((slot) => (
                   <CredentialRow
                     key={slot.key}
@@ -229,21 +226,15 @@ export function PluginConfiguration({
         </section>
       )}
       {!hasSettings && !hasCredentials && (
-        <p className="text-sm text-muted-foreground">
-          This version declares no settings and no credentials.
-        </p>
+        <p className="text-sm text-muted-foreground">{t("plugins:configure.nothing")}</p>
       )}
     </>
   )
 }
 
 function ErrorText({ error }: { error: PluginErrorText }) {
-  return (
-    <p role="alert" className="text-sm text-destructive">
-      {error.title}: {error.message}
-      {error.hint ? ` ${error.hint}` : ""}
-    </p>
-  )
+  const id = useId()
+  return <FieldError id={id} message={errorSentence(error)} />
 }
 
 const DEFAULT_CHOICE = "\u0000default"
@@ -257,6 +248,7 @@ function SettingsForm({
   save: (values: Record<string, string | number | boolean | null>) => Promise<PluginSettings>
   onCancel: () => void
 }) {
+  const { t } = useTranslation()
   const [draft, setDraft] = useState<SettingDraft>(() => draftOf(settings))
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [formErrors, setFormErrors] = useState<string[]>([])
@@ -275,7 +267,7 @@ function SettingsForm({
     setSaving(true)
     save(values)
       .then(() => {
-        toast.success("Settings saved")
+        toast.success(i18n.t("plugins:configure.saved"))
       })
       .catch((error: unknown) => {
         const text = pluginErrorText(error)
@@ -284,7 +276,7 @@ function SettingsForm({
           setErrors(problems.fields)
           setFormErrors(problems.form)
         } else {
-          setFormErrors([`${text.title}: ${text.message}${text.hint ? ` ${text.hint}` : ""}`])
+          setFormErrors([errorSentence(text)])
         }
       })
       .finally(() => {
@@ -293,13 +285,19 @@ function SettingsForm({
   }
 
   return (
-    <form className="grid gap-4" aria-label="Settings" noValidate onSubmit={submit}>
+    <form
+      className="grid gap-4"
+      aria-label={t("plugins:configure.settings")}
+      noValidate
+      onSubmit={submit}
+    >
       {missing.length > 0 && (
-        <Notice title="Required settings are missing">
+        <Notice title={t("plugins:settings.missing.title")}>
           <p>
-            {missing.join(", ")} {missing.length === 1 ? "has" : "have"} no value and no default.
-            The plugin runs without {missing.length === 1 ? "it" : "them"}, and its actions may fail
-            until {missing.length === 1 ? "it is" : "they are"} set.
+            {t("plugins:settings.missing.text", {
+              count: missing.length,
+              settings: missing.join(", "),
+            })}
           </p>
         </Notice>
       )}
@@ -326,18 +324,16 @@ function SettingsForm({
           ))}
         </div>
       )}
-      <p className="text-xs text-muted-foreground">
-        Settings are not secret. Never enter a password or token here; the plugin's credentials
-        below are the place for secrets.
-      </p>
-      <DialogFooter>
+      <p className="text-xs text-muted-foreground">{t("plugins:settings.notSecret")}</p>
+      {/* Plain layout, not a dialog part: the form is also shown outside a dialog. */}
+      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
         <Button type="button" variant="outline" onClick={onCancel}>
-          Cancel
+          {t("common:actions.cancel")}
         </Button>
         <Button type="submit" disabled={saving || !dirty}>
-          {saving ? "Saving…" : "Save settings"}
+          {saving ? t("plugins:settings.saving") : t("plugins:settings.save")}
         </Button>
-      </DialogFooter>
+      </div>
     </form>
   )
 }
@@ -358,6 +354,7 @@ function SettingRow({
   error: string | undefined
   onChange: (value: string | boolean | null) => void
 }) {
+  const { t } = useTranslation()
   const id = useId()
   const control = settingControl(field)
   const fallback = defaultText(field)
@@ -440,7 +437,9 @@ function SettingRow({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={DEFAULT_CHOICE}>
-              {fallback ? `Default (${fallback})` : "Not set"}
+              {fallback
+                ? t("plugins:settings.defaultChoice", { value: fallback })
+                : t("plugins:settings.notSet")}
             </SelectItem>
             {control.options.map((option) => (
               <SelectItem key={option} value={option}>
@@ -454,16 +453,20 @@ function SettingRow({
     case "unsupported":
       input = (
         <p {...common} className="text-sm text-muted-foreground">
-          Settings of kind “{control.kind}” cannot be changed here.
+          {t("plugins:settings.unsupported", { kind: control.kind })}
         </p>
       )
   }
 
   const limits = [
-    control.type === "integer" && control.min !== undefined ? `at least ${control.min}` : null,
-    control.type === "integer" && control.max !== undefined ? `at most ${control.max}` : null,
+    control.type === "integer" && control.min !== undefined
+      ? t("plugins:settings.limit.min", { min: control.min })
+      : null,
+    control.type === "integer" && control.max !== undefined
+      ? t("plugins:settings.limit.max", { max: control.max })
+      : null,
     (control.type === "text" || control.type === "multiline") && control.maxLength !== undefined
-      ? `up to ${control.maxLength} characters`
+      ? t("plugins:settings.limit.length", { count: control.maxLength })
       : null,
   ].filter(Boolean)
 
@@ -479,21 +482,23 @@ function SettingRow({
             </span>
           )}
         </label>
-        {field.required && <span className="sr-only">(required)</span>}
-        {missing && <Badge variant="destructive">Missing</Badge>}
-        {!saved && value === null && fallback !== null && <Badge variant="outline">Default</Badge>}
+        {field.required && <span className="sr-only">{t("plugins:dialog.required")}</span>}
+        {missing && <Badge variant="destructive">{t("plugins:settings.missingBadge")}</Badge>}
+        {!saved && value === null && fallback !== null && (
+          <Badge variant="outline">{t("plugins:settings.defaultBadge")}</Badge>
+        )}
         {(saved || value !== null) && control.type !== "unsupported" && (
           <Button
             type="button"
             variant="ghost"
             size="sm"
             className="ml-auto h-7"
-            aria-label={`Reset ${field.label} to its default`}
+            aria-label={t("plugins:settings.resetNamed", { label: field.label })}
             onClick={() => {
               onChange(null)
             }}
           >
-            <RotateCcw /> Reset to default
+            <RotateCcw /> {t("plugins:settings.reset")}
           </Button>
         )}
       </div>
@@ -501,8 +506,12 @@ function SettingRow({
       <p id={`${id}-help`} className="text-xs text-muted-foreground">
         {[
           field.description,
-          fallback !== null ? `Default: ${fallback}.` : field.required ? "No default." : null,
-          limits.length > 0 ? `${limits.join(", ")}.` : null,
+          fallback !== null
+            ? t("plugins:settings.defaultIs", { value: fallback })
+            : field.required
+              ? t("plugins:settings.noDefault")
+              : null,
+          limits.length > 0 ? t("plugins:settings.limits", { limits: limits.join(", ") }) : null,
         ]
           .filter(Boolean)
           .join(" ")}
@@ -529,6 +538,7 @@ function CredentialRow({
   remove: () => Promise<PluginCredentialSlot[]>
   onSlots: (slots: PluginCredentialSlot[]) => void
 }) {
+  const { t } = useTranslation()
   const id = useId()
   const [mode, setMode] = useState<"idle" | "entering" | "confirmRemove">("idle")
   const [busy, setBusy] = useState(false)
@@ -558,11 +568,10 @@ function CredentialRow({
       .then((slots) => {
         setMode("idle")
         onSlots(slots)
-        toast.success(`${slot.label} stored`)
+        toast.success(i18n.t("plugins:credentials.stored", { label: slot.label }))
       })
       .catch((e: unknown) => {
-        const text = pluginErrorText(e)
-        setError(`${text.title}: ${text.message}`)
+        setError(errorSentence(pluginErrorText(e), false))
       })
       .finally(() => {
         setBusy(false)
@@ -582,11 +591,10 @@ function CredentialRow({
       .then((slots) => {
         setMode("idle")
         onSlots(slots)
-        toast.success(`${slot.label} removed`)
+        toast.success(i18n.t("plugins:credentials.removed", { label: slot.label }))
       })
       .catch((e: unknown) => {
-        const text = pluginErrorText(e)
-        setError(`${text.title}: ${text.message}`)
+        setError(errorSentence(pluginErrorText(e), false))
       })
       .finally(() => {
         setBusy(false)
@@ -600,7 +608,9 @@ function CredentialRow({
           {slot.label}
         </span>
         <span className="font-mono text-xs text-muted-foreground">{slot.key}</span>
-        <Badge variant={slot.set ? "secondary" : "outline"}>{slot.set ? "Set" : "Not set"}</Badge>
+        <Badge variant={slot.set ? "secondary" : "outline"}>
+          {slot.set ? t("plugins:credentials.set") : t("plugins:settings.notSet")}
+        </Badge>
         {mode === "idle" && (
           <span className="ml-auto flex gap-2">
             <Button
@@ -608,13 +618,17 @@ function CredentialRow({
               variant="outline"
               size="sm"
               disabled={busy}
-              aria-label={`${slot.set ? "Replace" : "Set"} ${slot.label}`}
+              aria-label={
+                slot.set
+                  ? t("plugins:credentials.replaceNamed", { label: slot.label })
+                  : t("plugins:credentials.setNamed", { label: slot.label })
+              }
               onClick={() => {
                 setError(null)
                 setMode("entering")
               }}
             >
-              {slot.set ? "Replace…" : "Set…"}
+              {slot.set ? t("plugins:credentials.replace") : t("plugins:credentials.setButton")}
             </Button>
             {slot.set && (
               <Button
@@ -622,50 +636,37 @@ function CredentialRow({
                 variant="ghost"
                 size="sm"
                 disabled={busy}
-                aria-label={`Remove ${slot.label}`}
+                aria-label={t("plugins:credentials.removeNamed", { label: slot.label })}
                 onClick={() => {
                   setMode("confirmRemove")
                 }}
               >
-                Remove
+                {t("plugins:credentials.remove")}
               </Button>
             )}
           </span>
         )}
       </div>
       {slot.description && <p className="text-xs text-muted-foreground">{slot.description}</p>}
-      <p className="text-xs text-muted-foreground">
-        Sent only to{" "}
-        {slot.hosts.length > 0 || slot.userOrigin
-          ? [
-              ...slot.hosts,
-              ...(slot.userOrigin
-                ? [`the server in the setting “${slot.userOrigin}” once you allow it`]
-                : []),
-            ].join(", ")
-          : "no host"}
-        {slot.schemes.length > 0 ? ` (${slot.schemes.join(", ")})` : ""}.
-        {slot.set && slot.updatedAt !== undefined ? ` Stored ${formatTime(slot.updatedAt)}.` : ""}
-      </p>
+      <p className="text-xs text-muted-foreground">{sentTo(slot)}</p>
       {slot.setupUrl && (
         <p className="text-xs text-muted-foreground">
-          Where to get one: <span className="break-all select-text">{slot.setupUrl}</span>
+          {t("plugins:credentials.setupUrl")}{" "}
+          <span className="break-all select-text">{slot.setupUrl}</span>
         </p>
       )}
       {!slot.granted && (
-        <p className="text-xs text-muted-foreground">
-          Its permission is not granted: a stored secret is not used until you grant it.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("plugins:credentials.notGranted")}</p>
       )}
       {mode === "entering" && (
         <form
           className="flex flex-wrap items-center gap-2"
-          aria-label={`Set ${slot.label}`}
+          aria-label={t("plugins:credentials.setNamed", { label: slot.label })}
           autoComplete="off"
           onSubmit={submit}
         >
           <label htmlFor={`${id}-secret`} className="sr-only">
-            {slot.label} for {plugin}
+            {t("plugins:credentials.inputLabel", { label: slot.label, plugin })}
           </label>
           <Input
             ref={input}
@@ -682,10 +683,10 @@ function CredentialRow({
             disabled={busy}
           />
           <Button type="submit" size="sm" disabled={busy}>
-            {busy ? "Storing…" : "Store"}
+            {busy ? t("plugins:credentials.storing") : t("plugins:credentials.store")}
           </Button>
           <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={cancel}>
-            Cancel
+            {t("common:actions.cancel")}
           </Button>
         </form>
       )}
@@ -693,11 +694,11 @@ function CredentialRow({
         <div
           className="flex flex-wrap items-center gap-2 text-sm"
           role="group"
-          aria-label={`Remove ${slot.label}?`}
+          aria-label={t("plugins:credentials.removeAsk", { label: slot.label })}
         >
-          <span>Remove the stored {slot.label}? The plugin cannot use it afterwards.</span>
+          <span>{t("plugins:credentials.removeConfirm", { label: slot.label })}</span>
           <Button type="button" variant="destructive" size="sm" disabled={busy} onClick={doRemove}>
-            Remove
+            {t("plugins:credentials.remove")}
           </Button>
           <Button
             type="button"
@@ -708,7 +709,7 @@ function CredentialRow({
               setMode("idle")
             }}
           >
-            Keep it
+            {t("plugins:credentials.keep")}
           </Button>
         </div>
       )}
@@ -719,4 +720,25 @@ function CredentialRow({
       )}
     </li>
   )
+}
+
+/** Where a credential slot's secret goes, and when it was stored. */
+function sentTo(slot: PluginCredentialSlot): string {
+  const targets = [
+    ...slot.hosts,
+    ...(slot.userOrigin
+      ? [i18n.t("plugins:credentials.userOrigin", { setting: slot.userOrigin })]
+      : []),
+  ]
+  const where = targets.length > 0 ? targets.join(", ") : i18n.t("plugins:credentials.noHost")
+  const sent =
+    slot.schemes.length > 0
+      ? i18n.t("plugins:credentials.sentToSchemes", {
+          targets: where,
+          schemes: slot.schemes.join(", "),
+        })
+      : i18n.t("plugins:credentials.sentTo", { targets: where })
+  return slot.set && slot.updatedAt !== undefined
+    ? `${sent} ${i18n.t("plugins:credentials.storedAt", { time: formatTime(slot.updatedAt) })}`
+    : sent
 }

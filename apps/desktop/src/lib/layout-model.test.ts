@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
+
+import { i18n } from "@/i18n"
 
 import {
   addPage,
   ancestors,
   bindingsFor,
+  controlLabel,
   controlsOf,
   defaultTrigger,
   deletePage,
@@ -14,7 +17,9 @@ import {
   setAutoReturn,
   setBinding,
   supportedTriggers,
+  targetLabel,
   topLevelPages,
+  triggerLabel,
 } from "./layout-model"
 import type { ControlBinding, DeviceLayout, DeviceModel } from "./types"
 
@@ -254,5 +259,26 @@ describe("page tree", () => {
     // Off again: the page is exactly as before, without the field.
     expect(setAutoReturn(closing, "tools", false)).toEqual(l)
     expect(setAutoReturn(l, "tools", false).pages.some((p) => "autoReturn" in p)).toBe(false)
+  })
+})
+
+describe("control and trigger names in Polish", () => {
+  afterEach(async () => {
+    await i18n.changeLanguage("en")
+  })
+
+  it("follow the window's language", async () => {
+    expect(controlLabel({ kind: "key", index: 0 })).toBe("Key 1")
+    expect(triggerLabel({ type: "rotateClockwise" })).toBe("Turn right")
+    await i18n.changeLanguage("pl")
+    expect(controlLabel({ kind: "key", index: 0 })).toBe("Klawisz 1")
+    expect(controlLabel({ kind: "encoder", index: 1 })).toBe("Pokrętło 2")
+    expect(controlLabel({ kind: "touchZone", index: 2 })).toBe("Strefa dotykowa 3")
+    expect(triggerLabel({ type: "rotateClockwise" })).toBe("Obrót w prawo")
+    expect(triggerLabel({ type: "touch", gesture: "swipe" })).toBe("Przesunięcie")
+    const layout = { pages: [] } as unknown as DeviceLayout
+    expect(targetLabel({ type: "openPage", page: "gone" }, [], [], layout)).toBe(
+      "Otwórz „brakująca strona”",
+    )
   })
 })

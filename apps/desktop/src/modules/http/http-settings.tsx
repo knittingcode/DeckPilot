@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { SettingsSection } from "@/components/settings-layout"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { useTranslation } from "@/i18n"
 import { api } from "@/lib/api"
 import { toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
@@ -29,26 +30,29 @@ export function HttpSettings() {
 }
 
 function Credentials() {
+  const { t } = useTranslation()
   const [credentials, setCredentials] = useState<CredentialInfo[] | null>(null)
   useEffect(() => {
     api.listCredentials().then(setCredentials, (e: unknown) => {
       toastFailure(
-        "The credentials could not be loaded",
+        t("workspace:http.credentials.loadFailed"),
         e,
-        "Unlock DeckPilot and reopen this page",
+        t("workspace:http.credentials.loadNext"),
       )
       setCredentials([])
     })
-  }, [])
+  }, [t])
   return (
     <SettingsSection
-      title="Credentials"
-      description="Tokens and passwords that requests use by their name. They are stored encrypted on this computer only: never in a workflow, never in an export, and never shown again after saving."
+      title={t("workspace:http.credentials.title")}
+      description={t("workspace:http.credentials.description")}
     >
       {credentials === null ? null : credentials.length === 0 ? (
-        <p className="border-y py-3 text-sm text-muted-foreground">No credentials are stored.</p>
+        <p className="border-y py-3 text-sm text-muted-foreground">
+          {t("workspace:http.credentials.empty")}
+        </p>
       ) : (
-        <ul className="grid divide-y border-y" aria-label="Stored credentials">
+        <ul className="grid divide-y border-y" aria-label={t("workspace:http.credentials.stored")}>
           {credentials.map((credential) => (
             <CredentialRow key={credential.id} credential={credential} onChange={setCredentials} />
           ))}
@@ -66,6 +70,7 @@ function CredentialRow({
   credential: CredentialInfo
   onChange: (credentials: CredentialInfo[]) => void
 }) {
+  const { t } = useTranslation()
   const [secret, setSecret] = useState("")
   const [replacing, setReplacing] = useState(false)
   return (
@@ -83,7 +88,7 @@ function CredentialRow({
             setReplacing(!replacing)
           }}
         >
-          Replace secret
+          {t("workspace:http.credentials.replace")}
         </Button>
         <ConfirmDialog
           trigger={
@@ -91,16 +96,16 @@ function CredentialRow({
               variant="ghost"
               size="icon-sm"
               className="size-7"
-              aria-label={`Delete ${credential.id}`}
+              aria-label={t("workspace:http.credentials.delete", { name: credential.id })}
             >
               <Trash2 className="size-4" />
             </Button>
           }
-          title={`Delete ${credential.id}?`}
-          description="Requests that use it will fail until a credential with this name is stored again."
+          title={t("workspace:http.credentials.deleteTitle", { name: credential.id })}
+          description={t("workspace:http.credentials.deleteDescription")}
           onConfirm={() => {
             api.deleteCredential(credential.id).then(onChange, (e: unknown) => {
-              toastFailure(`${credential.id} was not deleted`, e)
+              toastFailure(t("workspace:http.credentials.deleteFailed", { name: credential.id }), e)
             })
           }}
         />
@@ -115,10 +120,13 @@ function CredentialRow({
                 setSecret("")
                 setReplacing(false)
                 onChange(next)
-                toast.success(`${credential.id} replaced`)
+                toast.success(t("workspace:http.credentials.replaced", { name: credential.id }))
               },
               (e: unknown) => {
-                toastFailure(`${credential.id} was not replaced`, e)
+                toastFailure(
+                  t("workspace:http.credentials.replaceFailed", { name: credential.id }),
+                  e,
+                )
               },
             )
           }}
@@ -126,14 +134,14 @@ function CredentialRow({
           <Input
             type="password"
             autoComplete="off"
-            aria-label={`New secret for ${credential.id}`}
+            aria-label={t("workspace:http.credentials.newSecret", { name: credential.id })}
             value={secret}
             onChange={(e) => {
               setSecret(e.target.value)
             }}
           />
           <Button type="submit" disabled={secret === ""}>
-            Save
+            {t("workspace:http.credentials.save")}
           </Button>
         </form>
       )}
@@ -148,6 +156,7 @@ function NewCredential({
   existing: CredentialInfo[]
   onChange: (credentials: CredentialInfo[]) => void
 }) {
+  const { t } = useTranslation()
   const [id, setId] = useState("")
   const [description, setDescription] = useState("")
   const [secret, setSecret] = useState("")
@@ -164,17 +173,17 @@ function NewCredential({
             setId("")
             setDescription("")
             setSecret("")
-            toast.success(`${id} stored`)
+            toast.success(t("workspace:http.credentials.storedToast", { name: id }))
           },
           (e: unknown) => {
-            toastFailure(`${id} was not stored`, e)
+            toastFailure(t("workspace:http.credentials.storeFailed", { name: id }), e)
           },
         )
       }}
     >
-      <h4 className="text-sm font-medium">Add a credential</h4>
+      <h4 className="text-sm font-medium">{t("workspace:http.credentials.add")}</h4>
       <div className="grid gap-2">
-        <Label htmlFor="credential-id">Name</Label>
+        <Label htmlFor="credential-id">{t("workspace:http.credentials.name")}</Label>
         <Input
           id="credential-id"
           placeholder="github.token"
@@ -185,14 +194,16 @@ function NewCredential({
         />
         <p className="text-xs text-muted-foreground">
           {id !== "" && !validId
-            ? "Lower case letters, digits, “.”, “_” and “-”, starting with a letter."
+            ? t("workspace:http.credentials.nameInvalid")
             : taken
-              ? "A credential with this name exists; saving replaces it."
-              : "What actions refer to, e.g. in an HTTP request's Credential field."}
+              ? t("workspace:http.credentials.nameTaken")
+              : t("workspace:http.credentials.nameHint")}
         </p>
       </div>
       <div className="grid gap-2">
-        <Label htmlFor="credential-description">Description</Label>
+        <Label htmlFor="credential-description">
+          {t("workspace:http.credentials.descriptionLabel")}
+        </Label>
         <Input
           id="credential-description"
           value={description}
@@ -203,7 +214,7 @@ function NewCredential({
         />
       </div>
       <div className="grid gap-2">
-        <Label htmlFor="credential-secret">Secret</Label>
+        <Label htmlFor="credential-secret">{t("workspace:http.credentials.secret")}</Label>
         <Input
           id="credential-secret"
           type="password"
@@ -214,12 +225,12 @@ function NewCredential({
           }}
         />
         <p className="text-xs text-muted-foreground">
-          A token, or user:password for basic authentication.
+          {t("workspace:http.credentials.secretHint")}
         </p>
       </div>
       <div>
         <Button type="submit" disabled={!validId || secret === ""}>
-          Store credential
+          {t("workspace:http.credentials.submit")}
         </Button>
       </div>
     </form>

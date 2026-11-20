@@ -2,6 +2,8 @@
 
 import { toast } from "sonner"
 
+import { i18n } from "@/i18n"
+
 import { sentence } from "./failure"
 import type { AgentReload } from "./types"
 
@@ -13,14 +15,15 @@ export function appliedByAgent(reload: AgentReload | undefined): boolean {
 /**
  * Why the agent may not use a saved change yet, or `undefined` when there
  * is nothing to say: it applied the change, or it is not running and reads
- * the change when it starts.
+ * the change when it starts. In the window's language; the agent's own
+ * message is shown as it is.
  */
 export function reloadProblem(reload: AgentReload | undefined): string | undefined {
   switch (reload?.state) {
     case "timedOut":
-      return "The agent did not confirm that it applied the change. It applies it when it can, or restart it in Settings › Background Agent."
+      return i18n.t("errors:agentReload.timedOut")
     case "failed":
-      return `The agent did not apply the change: ${sentence(reload.message)}`
+      return i18n.t("errors:agentReload.failed", { reason: sentence(reload.message) })
     default:
       return undefined
   }

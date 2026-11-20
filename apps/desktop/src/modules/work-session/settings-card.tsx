@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import type { AsyncState } from "@/hooks/use-async"
+import { useTranslation } from "@/i18n"
 import { api } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
 import { failureMessage, toastFailure } from "@/lib/failure"
@@ -45,15 +46,11 @@ export function SettingsCard({
   workflows: Workflow[]
   onSaved: (settings: WorkSessionSettings) => void
 }) {
+  const { t } = useTranslation()
   return (
     <SettingsSection
-      title="Settings"
-      description={
-        <>
-          For sessions started while this profile is active. Saving withdraws an approval to finish,
-          so a session that is ready to finish needs a new end check.
-        </>
-      }
+      title={t("workspace:workSession.settings.title")}
+      description={t("workspace:workSession.settings.description")}
     >
       <div className="grid gap-3">
         {settings.status === "loading" ? (
@@ -61,9 +58,9 @@ export function SettingsCard({
         ) : settings.status === "error" ? (
           <ErrorNotice
             error={failureMessage(
-              "The work session settings could not be loaded",
+              t("workspace:workSession.settings.loadFailed"),
               settings.error,
-              "Check that the agent is running in Settings › Agent.",
+              t("workspace:workSession.checkAgent"),
             )}
           />
         ) : (
@@ -91,6 +88,7 @@ function SettingsForm({
   workflows: Workflow[]
   onSaved: (settings: WorkSessionSettings) => void
 }) {
+  const { t } = useTranslation()
   const { openSettings } = useAppContext()
   const [initial, setInitial] = useState(() => draftOf(saved))
   const [draft, setDraft] = useState(initial)
@@ -107,7 +105,7 @@ function SettingsForm({
   return (
     <form
       className="grid max-w-xl gap-5"
-      aria-label="Work session settings"
+      aria-label={t("workspace:workSession.settings.form")}
       onSubmit={(event) => {
         event.preventDefault()
         if (!settings) return
@@ -119,14 +117,14 @@ function SettingsForm({
             setDraft(next)
             setSaving(false)
             onSaved(stored)
-            toast.success("Work session settings saved")
+            toast.success(t("workspace:workSession.settings.saved"))
           },
           (e: unknown) => {
             setSaving(false)
             toastFailure(
-              "The work session settings were not saved",
+              t("workspace:workSession.settings.saveFailed"),
               e,
-              "Unlock DeckPilot if it is locked, then try again.",
+              t("workspace:workSession.unlockNext"),
             )
           },
         )
@@ -134,8 +132,8 @@ function SettingsForm({
     >
       <WorkflowField
         id="work-session-start"
-        label="Start workflow"
-        hint="Runs when the key starts a session; time counts once it succeeds. If it fails, the session does not start."
+        label={t("workspace:workSession.settings.start.label")}
+        hint={t("workspace:workSession.settings.start.hint")}
         value={draft.startWorkflow}
         workflows={workflows}
         disabledIssue={inputIssue}
@@ -146,8 +144,8 @@ function SettingsForm({
       />
       <WorkflowField
         id="work-session-verification"
-        label="End verification workflow"
-        hint="Must output canFinish (Boolean): true allows finishing, false keeps the session running. An optional text output details is shown with the result. Without one, holding the key in a running session makes it ready to finish at once."
+        label={t("workspace:workSession.settings.verification.label")}
+        hint={t("workspace:workSession.settings.verification.hint")}
         value={draft.verificationWorkflow}
         workflows={workflows}
         disabledIssue={verificationWorkflowIssue}
@@ -158,8 +156,8 @@ function SettingsForm({
       />
       {unusable.length > 0 && (
         <div className="grid gap-1 text-sm">
-          <span className="font-medium">Workflows that cannot verify the end</span>
-          <ul aria-label="Workflows that cannot verify the end" className="grid gap-1">
+          <span className="font-medium">{t("workspace:workSession.settings.unusable")}</span>
+          <ul aria-label={t("workspace:workSession.settings.unusable")} className="grid gap-1">
             {unusable.map(({ workflow, issue }) => (
               <li key={workflow.id} className="text-muted-foreground">
                 <span className="text-foreground">{workflow.name}</span>: {issue}
@@ -171,8 +169,8 @@ function SettingsForm({
       <div className="grid gap-4 sm:grid-cols-2">
         <NumberField
           id="work-session-approval"
-          label="Approval lasts (minutes)"
-          hint="How long a passed end check allows finishing."
+          label={t("workspace:workSession.settings.approval.label")}
+          hint={t("workspace:workSession.settings.approval.hint")}
           field="approvalMinutes"
           draft={draft}
           issues={issues}
@@ -181,8 +179,8 @@ function SettingsForm({
         />
         <NumberField
           id="work-session-review"
-          label="Flag gaps longer than (minutes)"
-          hint="Longer gaps (sleep, agent not running) are counted and flagged in the history."
+          label={t("workspace:workSession.settings.reviewGap.label")}
+          hint={t("workspace:workSession.settings.reviewGap.hint")}
           field="reviewGapMinutes"
           draft={draft}
           issues={issues}
@@ -191,7 +189,9 @@ function SettingsForm({
         />
       </div>
       <div className="grid gap-2">
-        <Label htmlFor="work-session-format">Elapsed time on keys</Label>
+        <Label htmlFor="work-session-format">
+          {t("workspace:workSession.settings.format.label")}
+        </Label>
         <Select
           value={draft.elapsedFormat}
           onValueChange={(value) => {
@@ -202,19 +202,21 @@ function SettingsForm({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="minutes">h:mm (redrawn once a minute)</SelectItem>
-            <SelectItem value="seconds">h:mm:ss (redrawn every second)</SelectItem>
+            <SelectItem value="minutes">
+              {t("workspace:workSession.settings.format.minutes")}
+            </SelectItem>
+            <SelectItem value="seconds">
+              {t("workspace:workSession.settings.format.seconds")}
+            </SelectItem>
           </SelectContent>
         </Select>
       </div>
       <section aria-labelledby="work-session-gestures" className="grid gap-2">
         <h3 id="work-session-gestures" className="text-sm font-medium">
-          Gesture timings
+          {t("workspace:workSession.settings.gestures.title")}
         </h3>
         <p className="text-xs text-muted-foreground">
-          How long a long press or a double click takes is set on the key, in the Layout
-          Designer&apos;s gesture editor. Keys without their own timings use the defaults in
-          Settings › Devices.
+          {t("workspace:workSession.settings.gestures.description")}
         </p>
         <div>
           <Button
@@ -225,13 +227,13 @@ function SettingsForm({
               openSettings("devices")
             }}
           >
-            Open Settings › Devices
+            {t("workspace:workSession.settings.gestures.open")}
           </Button>
         </div>
       </section>
       <div className="flex gap-2">
         <Button type="submit" disabled={!settings || !dirty || saving}>
-          Save settings
+          {t("workspace:workSession.settings.save")}
         </Button>
         <Button
           type="button"
@@ -241,7 +243,7 @@ function SettingsForm({
             setDraft(initial)
           }}
         >
-          Discard changes
+          {t("workspace:workSession.settings.discard")}
         </Button>
       </div>
     </form>
@@ -267,6 +269,7 @@ function WorkflowField({
   issue?: string
   onChange: (value: string | null) => void
 }) {
+  const { t } = useTranslation()
   const known = value === null || workflows.some((w) => w.id === value)
   return (
     <div className="grid gap-2">
@@ -286,8 +289,12 @@ function WorkflowField({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={NONE}>None</SelectItem>
-          {!known && value && <SelectItem value={value}>Deleted workflow</SelectItem>}
+          <SelectItem value={NONE}>{t("workspace:workSession.settings.none")}</SelectItem>
+          {!known && value && (
+            <SelectItem value={value}>
+              {t("workspace:workSession.settings.deletedWorkflow")}
+            </SelectItem>
+          )}
           {workflows.map((workflow) => (
             <SelectItem
               key={workflow.id}

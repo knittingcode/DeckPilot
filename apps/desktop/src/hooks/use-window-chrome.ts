@@ -20,12 +20,21 @@ import { IS_MAC } from "./use-navigation"
 export interface WindowChrome {
   /** The app titlebar occupies the native titlebar area. */
   overlay: boolean
-  /** Room to leave for the native window controls, in pixels. */
+  /**
+   * Right edge of the native window controls that overlay the content, in
+   * pixels from the window's left edge; 0 when there are none (Windows,
+   * Linux, fullscreen). The toolbar adds `--titlebar-controls-gap` after it.
+   */
   controlsInset: number
 }
 
-/** Right edge of the traffic lights at `trafficLightPosition.x = 16`. */
-const TRAFFIC_LIGHTS_WIDTH = 68
+/**
+ * Until the native side answered (`window_controls_inset`): the right edge
+ * of the larger traffic lights of macOS 26 and later at
+ * `trafficLightPosition.x = 16`. Too much room is harmless; too little
+ * overlaps the buttons.
+ */
+const FALLBACK_CONTROLS_EDGE = 76
 
 function inTauri() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
@@ -34,6 +43,19 @@ function inTauri() {
 export function useWindowChrome(): WindowChrome {
   const overlay = IS_MAC && inTauri()
   const [fullscreen, setFullscreen] = useState(false)
+  const [edge, setEdge] = useState<number | null>(null)
+
+  // Where the traffic lights end depends on the macOS version; the app
+  // reports it for this window.
+  useEffect(() => {
+    if (!overlay) return
+    api.windowControlsInset().then(
+      (measured) => {
+        if (typeof measured === "number" && measured > 0) setEdge(measured)
+      },
+      () => undefined,
+    )
+  }, [overlay])
 
   useEffect(() => {
     if (!overlay) return
@@ -50,7 +72,10 @@ export function useWindowChrome(): WindowChrome {
     }
   }, [overlay])
 
-  return { overlay, controlsInset: overlay && !fullscreen ? TRAFFIC_LIGHTS_WIDTH : 0 }
+  return {
+    overlay,
+    controlsInset: overlay && !fullscreen ? Math.ceil(edge ?? FALLBACK_CONTROLS_EDGE) : 0,
+  }
 }
 
 /** Elements inside the titlebar that keep their own pointer behaviour. */

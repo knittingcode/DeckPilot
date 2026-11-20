@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react"
 
 import type { AsyncState } from "@/hooks/use-async"
+import { i18n } from "@/i18n"
 import type { EditorPlace } from "@/layout-editor/use-layout-editing"
 import type { DeviceId, DeviceModel } from "@/lib/types"
 
@@ -50,7 +51,13 @@ export interface EditorSelection {
 
 export const EditorSelectionContext = createContext<EditorSelection | null>(null)
 
+/** The English text of `unsavedWarning()`; prefer the function, which follows the language. */
 export const UNSAVED_WARNING = "Save or revert the current layout first"
+
+/** Shown when a change of selection would discard unsaved edits, in the window's language. */
+export function unsavedWarning(): string {
+  return i18n.t("workspace:shell.unsavedWarning")
+}
 
 /** Whether the editor's layout has unsaved changes; owned by the shell. */
 export interface DirtyFlag {

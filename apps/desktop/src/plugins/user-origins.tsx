@@ -14,23 +14,25 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { i18n, type TranslationKey, useTranslation } from "@/i18n"
 
 import { pluginErrorText } from "./api"
+import { errorSentence } from "./dialog-error"
 import { formatTime } from "./model"
 import type { PluginSettings, PluginUserOrigin, UserOriginStatus } from "./types"
-import { consentText, listed } from "./user-origins-text"
+import { consentText, quotedList } from "./user-origins-text"
 
-const STATUS: Record<
+const STATUS = {
+  unset: { label: "plugins:settings.notSet", variant: "outline" },
+  invalid: { label: "plugins:origins.status.invalid", variant: "destructive" },
+  declared: { label: "plugins:origins.status.declared", variant: "secondary" },
+  slotNotGranted: { label: "plugins:origins.status.slotNotGranted", variant: "outline" },
+  needsConsent: { label: "plugins:origins.status.needsConsent", variant: "destructive" },
+  granted: { label: "plugins:origins.status.granted", variant: "secondary" },
+} as const satisfies Record<
   UserOriginStatus,
-  { label: string; variant: "secondary" | "outline" | "destructive" }
-> = {
-  unset: { label: "Not set", variant: "outline" },
-  invalid: { label: "Invalid", variant: "destructive" },
-  declared: { label: "Declared", variant: "secondary" },
-  slotNotGranted: { label: "Not permitted", variant: "outline" },
-  needsConsent: { label: "Needs your consent", variant: "destructive" },
-  granted: { label: "Allowed", variant: "secondary" },
-}
+  { label: TranslationKey; variant: "secondary" | "outline" | "destructive" }
+>
 
 export function UserOriginsSection({
   plugin,
@@ -47,16 +49,17 @@ export function UserOriginsSection({
   /** The agent's answer after a grant or a revocation. */
   onSettings: (settings: PluginSettings) => void
 }) {
+  const { t } = useTranslation()
   return (
     <section className="grid gap-3" aria-labelledby="configure-servers">
       <h4 id="configure-servers" className="text-xs font-medium text-muted-foreground uppercase">
-        Servers you enter
+        {t("plugins:origins.title")}
       </h4>
-      <p className="text-xs text-muted-foreground">
-        The plugin reaches the server in these settings only after you allow exactly that server.
-        Changing a setting ends its consent; DeckPilot then asks again.
-      </p>
-      <ul className="grid divide-y border-y" aria-label={`Servers of ${plugin}`}>
+      <p className="text-xs text-muted-foreground">{t("plugins:origins.intro")}</p>
+      <ul
+        className="grid divide-y border-y"
+        aria-label={t("plugins:origins.list", { name: plugin })}
+      >
         {origins.map((origin) => (
           <OriginRow
             key={origin.setting}
@@ -85,6 +88,7 @@ function OriginRow({
   revoke: (setting: string) => Promise<PluginSettings>
   onSettings: (settings: PluginSettings) => void
 }) {
+  const { t } = useTranslation()
   const id = useId()
   // The private network is never assumed: unticked for every new server.
   const [privateNetwork, setPrivateNetwork] = useState(false)
@@ -108,8 +112,7 @@ function OriginRow({
         toast.success(done)
       })
       .catch((e: unknown) => {
-        const text = pluginErrorText(e)
-        setError(`${text.title}: ${text.message}`)
+        setError(errorSentence(pluginErrorText(e), false))
       })
       .finally(() => {
         setBusy(false)
@@ -122,9 +125,9 @@ function OriginRow({
         <span id={`${id}-label`} className="text-sm font-medium">
           {origin.label}
         </span>
-        <Badge variant={status.variant}>{status.label}</Badge>
+        <Badge variant={status.variant}>{t(status.label)}</Badge>
         {origin.status === "granted" && origin.privateNetworkGranted && (
-          <Badge variant="outline">Private network</Badge>
+          <Badge variant="outline">{t("plugins:origins.privateNetwork")}</Badge>
         )}
         {origin.status === "granted" && (
           <Button
@@ -133,51 +136,45 @@ function OriginRow({
             size="sm"
             className="ml-auto h-7"
             disabled={busy}
-            aria-label={`Revoke ${origin.label}`}
+            aria-label={t("plugins:origins.revokeNamed", { label: origin.label })}
             onClick={() => {
-              run(() => revoke(origin.setting), `${origin.label}: consent revoked`)
+              run(
+                () => revoke(origin.setting),
+                i18n.t("plugins:origins.revoked", { label: origin.label }),
+              )
             }}
           >
-            Revoke
+            {t("marketplace:installed.revoke")}
           </Button>
         )}
       </div>
       {origin.origin && <p className="font-mono text-xs break-all select-text">{origin.origin}</p>}
       {origin.status === "unset" && (
-        <p className="text-xs text-muted-foreground">
-          No server is set, so the plugin reaches none through this setting.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("plugins:origins.unset")}</p>
       )}
       {origin.status === "invalid" && (
         <p className="text-xs text-destructive">
-          The setting {origin.problem ?? "is not a server this plugin can use"}.
+          {origin.problem
+            ? t("plugins:origins.invalidBecause", { problem: origin.problem })
+            : t("plugins:origins.invalid")}
         </p>
       )}
       {origin.status === "declared" && (
-        <p className="text-xs text-muted-foreground">
-          A host the plugin declares, allowed when you installed it.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("plugins:origins.declared")}</p>
       )}
       {origin.status === "slotNotGranted" && (
         <p className="text-xs text-muted-foreground">
-          The plugin's permission to connect to a server you enter is not granted. Grant “
-          {origin.permission}” first; nothing goes to this server until then.
+          {t("plugins:origins.slotNotGranted", { permission: origin.permission })}
         </p>
       )}
       {origin.status === "granted" && (
-        <p className="text-xs text-muted-foreground">
-          Allowed{origin.grantedAt !== undefined ? ` ${formatTime(origin.grantedAt)}` : ""}
-          {origin.privateNetworkGranted ? ", on your private network" : ""}.
-          {origin.credentials?.length
-            ? ` ${listed(origin.credentials.map((c) => `“${c}”`))} ${origin.credentials.length === 1 ? "is" : "are"} sent there.`
-            : ""}
-        </p>
+        <p className="text-xs text-muted-foreground">{grantedText(origin)}</p>
       )}
       {origin.status === "needsConsent" && origin.origin && (
         <div
           className="grid gap-2 rounded-md bg-muted/50 p-2"
           role="group"
-          aria-label={`Allow ${origin.origin}?`}
+          aria-label={t("plugins:origins.allowAsk", { server: origin.origin })}
         >
           <p className="text-sm">{consentText(plugin, origin)}</p>
           {origin.privateNetworkAllowed && (
@@ -193,21 +190,19 @@ function OriginRow({
               />
               <div className="grid gap-1">
                 <label htmlFor={`${id}-private`} className="text-sm leading-none font-medium">
-                  Also allow it on my private network
+                  {t("plugins:origins.alsoPrivate")}
                 </label>
                 <p id={`${id}-private-help`} className="text-xs text-muted-foreground">
                   {needsPrivate
-                    ? "Required: this is a local name or address. "
-                    : "Only if the server resolves to an address on your network. "}
-                  This computer and link-local addresses are never reachable.
+                    ? t("plugins:origins.privateRequired")
+                    : t("plugins:origins.privateOptional")}{" "}
+                  {t("plugins:origins.neverLocal")}
                 </p>
               </div>
             </div>
           )}
           {needsPrivate && !origin.privateNetworkAllowed && (
-            <p className="text-xs text-destructive">
-              This server is on a private network, which this plugin's setting does not allow.
-            </p>
+            <p className="text-xs text-destructive">{t("plugins:origins.privateNotAllowed")}</p>
           )}
           <div>
             <Button
@@ -219,11 +214,11 @@ function OriginRow({
                 if (!server) return
                 run(
                   () => grant(origin.setting, server, privateNetwork),
-                  `${origin.label}: ${server} allowed`,
+                  i18n.t("plugins:origins.allowed", { label: origin.label, server }),
                 )
               }}
             >
-              {busy ? "Allowing…" : "Allow"}
+              {busy ? t("plugins:origins.allowing") : t("permissions:review.allow")}
             </Button>
           </div>
         </div>
@@ -235,4 +230,23 @@ function OriginRow({
       )}
     </li>
   )
+}
+
+/** What a granted server's consent covers, in words. */
+function grantedText(origin: PluginUserOrigin): string {
+  const at = origin.grantedAt !== undefined ? formatTime(origin.grantedAt) : null
+  const allowed = origin.privateNetworkGranted
+    ? at
+      ? i18n.t("plugins:origins.grantedPrivateAt", { time: at })
+      : i18n.t("plugins:origins.grantedPrivate")
+    : at
+      ? i18n.t("plugins:origins.grantedAt", { time: at })
+      : i18n.t("plugins:origins.grantedPlain")
+  const credentials = origin.credentials ?? []
+  return credentials.length > 0
+    ? `${allowed} ${i18n.t("plugins:origins.secretsSent", {
+        count: credentials.length,
+        secrets: quotedList(credentials),
+      })}`
+    : allowed
 }

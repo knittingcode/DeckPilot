@@ -1,0 +1,193 @@
+{
+  "activeProfileTooltip": "Profile active on the device",
+  "agent": {
+    "title": "Background agent",
+    "short": "Agent",
+    "connection": "Connection",
+    "version": "Version",
+    "versionValue": "{{version}} (protocol {{protocol}})",
+    "runningFor": "Running for",
+    "startedAt": "Started {{time}}",
+    "appVersion": "App version",
+    "settings": "Agent settings",
+    "diagnostics": "Logs & diagnostics",
+    "state": {
+      "connecting": "Connecting to agent…",
+      "running": "Agent running",
+      "stopped": "Agent stopped",
+      "incompatible": "Agent version mismatch"
+    },
+    "checkLogInDiagnostics": "Check its log in Settings › Diagnostics",
+    "badge": {
+      "checking": "Checking…",
+      "running": "Running",
+      "stopped": "Stopped"
+    },
+    "stoppedPanel": {
+      "notStartedCheckLog": "The agent did not start. Check its log for details.",
+      "notStarted": "The agent did not start",
+      "explanation": "The background agent handles devices and runs actions. It keeps running when this window is closed.",
+      "start": "Start agent",
+      "notFound": "The agent executable was not found next to this application. Start<code>deckpilot-agent</code>manually."
+    }
+  },
+  "detail": {
+    "title": "Devices",
+    "tooltip": "Connected Stream Deck devices",
+    "noneDetected": "No Stream Deck detected.",
+    "agentStopped": "The agent is not running.",
+    "simulated": "Simulated",
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "serialState": "{{serial}} · {{state}}",
+    "settings": "Device settings"
+  },
+  "summary": {
+    "none": "No devices",
+    "physical_one": "{{count}} device",
+    "physical_other": "{{count}} devices",
+    "simulated_one": "{{count}} simulated",
+    "simulated_other": "{{count}} simulated",
+    "both": "{{physical}} · {{simulated}}"
+  },
+  "compatibility": {
+    "feature": {
+      "encryptedDatabase": "the encrypted configuration",
+      "backgroundExecutions": "background workflow runs and their history",
+      "notifications": "workflow notifications"
+    },
+    "channel": {
+      "github": "GitHub Releases",
+      "homebrew": "Homebrew",
+      "winget": "WinGet",
+      "apt": "the APT repository",
+      "flathub": "Flathub",
+      "macAppStore": "the Mac App Store",
+      "microsoftStore": "the Microsoft Store"
+    },
+    "restarted": "The agent was restarted",
+    "notRestarted": "The agent was not restarted",
+    "title": {
+      "updateRequired": "The running agent is too old for this app",
+      "otherInstallation": "The running agent belongs to another installation",
+      "mismatch": "The running agent does not match this app"
+    },
+    "otherInstallation": "The agent was installed from {{agent}}, this app from {{app}}. DeckPilot works only with the agent of its own installation; restarting replaces it with this app's agent.",
+    "versions": "Agent {{agent}}, app {{app}}.",
+    "replaceRequired": "Nothing can be configured until it is replaced by the agent of this app.",
+    "restartToMatch": "Restart the agent so both run the same version.",
+    "unavailable": "Until then these are unavailable: {{features}}.",
+    "running_one": "A workflow is running in the agent. Restarting now interrupts it; the history records that.",
+    "running_other": "{{count}} workflows are running in the agent. Restarting now interrupts them; the history records that.",
+    "restartEllipsis": "Restart agent…",
+    "restart": "Restart agent",
+    "interruptAndRestart": "Interrupt workflows and restart",
+    "wait": "Wait for them"
+  },
+  "refresh": {
+    "label": "Refresh devices",
+    "done": "Devices refreshed",
+    "failed": "The devices were not refreshed",
+    "next": "Check that the agent is running"
+  },
+  "row": {
+    "usb": "USB",
+    "showingPage": "showing page “{{page}}”"
+  },
+  "indicator": {
+    "checking": "Checking the agent",
+    "openSettings": "{{label}}, open agent settings"
+  },
+  "models": {
+    "supportedTitle": "Supported Models",
+    "supportedDescription": "Models tested on a physical device on at least one platform. The badges show the status on each platform.",
+    "noneVerified": "No model has been verified yet.",
+    "showExperimental": "Show experimental models",
+    "experimentalTitle": "Experimental, not verified",
+    "experimentalDescription": "These models have not been tested on a physical device on any platform. Layouts can be designed for them, but they are not supported.",
+    "platformLevel": "{{platform}}: {{level}}",
+    "gesture": {
+      "tap": "Tap",
+      "longPress": "Long press",
+      "swipe": "Swipe"
+    },
+    "none": "None",
+    "keys": "Keys",
+    "keysValue": "{{total}} ({{columns}} × {{rows}})",
+    "keysWithImage": "{{total}} ({{columns}} × {{rows}}), {{width}} × {{height}} px {{format}}",
+    "dials": "Dials",
+    "dialsPressable": "{{dials}}, pressable",
+    "touchStrip": "Touch strip",
+    "zones_one": "{{count}} zone",
+    "zones_other": "{{count}} zones",
+    "zonesWithImage_one": "{{count}} zone of {{width}} × {{height}} px",
+    "zonesWithImage_other": "{{count}} zones of {{width}} × {{height}} px",
+    "keyGestures": "Key gestures",
+    "keyGesturesValue": "Click, double click, long press",
+    "touchGestures": "Touch gestures",
+    "usbIdentity": "USB identity",
+    "verification": "Verification",
+    "asOf": "(as of {{date}})",
+    "designLayout": "Design a layout"
+  },
+  "page": {
+    "refreshHint": "Look for connected devices again",
+    "connectedTitle": "Connected devices",
+    "connectedDescription": "Devices appear automatically when connected. Simulated devices are for development and testing. On Linux, a udev rule is required for access.",
+    "noneDetected": "No Stream Deck detected",
+    "editLayout": "Edit layout",
+    "display": "Display",
+    "brightness": "Brightness",
+    "brightnessDescription": "Applies to every connected device.",
+    "brightnessFailed": "The brightness was not changed",
+    "apply": "Apply"
+  },
+  "layoutStatus": {
+    "noProfile": "No active profile",
+    "unknownModel": "Unsupported device model",
+    "missing": "No layout for this model",
+    "compatible": "Layout “{{name}}”",
+    "invalid": "Layout “{{name}}” has problems"
+  },
+  "verification": {
+    "onPlatform": "{{level}} on {{platform}}",
+    "level": {
+      "unsupported": {
+        "label": "Unsupported",
+        "detail": "Not supported on this platform."
+      },
+      "experimental": {
+        "label": "Experimental",
+        "detail": "A work-in-progress definition that may be incomplete or wrong."
+      },
+      "defined": {
+        "label": "Layout design only",
+        "detail": "Layouts can be designed and saved. There is no driver for this model."
+      },
+      "driverImplemented": {
+        "label": "Driver, not tested",
+        "detail": "A driver exists for this platform, but it has not been tested."
+      },
+      "automatedTests": {
+        "label": "Automated tests only",
+        "detail": "The driver passes automated tests here, but has not been tested on a physical device."
+      },
+      "physicallyVerified": {
+        "label": "Physically verified",
+        "detail": "Tested on a physical device on this platform."
+      }
+    }
+  },
+  "gestureDefaults": {
+    "title": "Gesture timing",
+    "description": "Defaults for keys with a double click or long press. A key can use other values in the layout designer. Keys that only act on a press are not affected.",
+    "doubleClickHint": "Time from releasing a key to pressing it again that still counts as a double click. A single click on a key with a double click waits this long.",
+    "longPressHint": "How long a key must be held to count as a long press.",
+    "field": "{{label}} (ms)",
+    "range": "{{min}}–{{max}} ms, default {{default}} ms.",
+    "enterValue": "Enter a value.",
+    "saved": "Gesture timings saved",
+    "restore": "Restore defaults",
+    "save": "Save"
+  }
+}

@@ -14,6 +14,7 @@ import type { TargetGroup } from "./targets"
 
 const groups: TargetGroup[] = [
   {
+    id: "actions",
     label: "Actions",
     options: [
       {
@@ -40,6 +41,7 @@ const groups: TargetGroup[] = [
     ],
   },
   {
+    id: "navigation",
     label: "Navigation",
     options: [{ value: "back", label: "Back", target: { type: "back" }, kind: "navigation" }],
   },

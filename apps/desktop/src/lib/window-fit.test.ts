@@ -46,6 +46,27 @@ describe("coalescedReporter", () => {
     expect(report).toHaveBeenCalledTimes(2)
   })
 
+  it("reports again when the viewport settles, then stops", () => {
+    let measurement = { width: 440, height: 239, viewportWidth: 440, viewportHeight: 120 }
+    const report = vi.fn()
+    const reporter = coalescedReporter(() => measurement, report)
+    reporter.schedule()
+    vi.advanceTimersByTime(100)
+    expect(report).toHaveBeenCalledTimes(1)
+    // The window was resized: same content, new viewport. The native side
+    // gets a measurement it can derive the title bar from correctly.
+    measurement = { ...measurement, viewportHeight: 248 }
+    reporter.schedule()
+    vi.advanceTimersByTime(100)
+    expect(report).toHaveBeenCalledTimes(2)
+    expect(report).toHaveBeenLastCalledWith(measurement)
+    // Nothing changed after the correcting fit: no further report.
+    reporter.schedule()
+    vi.advanceTimersByTime(100)
+    expect(report).toHaveBeenCalledTimes(2)
+    reporter.dispose()
+  })
+
   it("ignores empty measurements", () => {
     const report = vi.fn()
     const reporter = coalescedReporter(() => ({ width: 0, height: 0 }), report)

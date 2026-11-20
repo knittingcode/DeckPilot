@@ -10,15 +10,17 @@ import { toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
 import { initialValue } from "@/lib/parameters"
 import type { ActionParameters, ModuleInfo } from "@/lib/types"
+import { useTranslation } from "@/i18n"
 
 /** Settings page generated from the settings a module declares in its manifest. */
 export function ModuleSettingsForm({ module }: { module: ModuleInfo }) {
+  const { t } = useTranslation()
   const { setModules, refresh } = useAppContext()
   const [draft, setDraft] = useState<ActionParameters>(module.configValues)
   const [saving, setSaving] = useState(false)
   const changed = JSON.stringify(draft) !== JSON.stringify(module.configValues)
   return (
-    <SettingsSection title="Settings" description={module.description}>
+    <SettingsSection title={t("settings:title")} description={module.description}>
       <div className="grid max-w-xl gap-4 border-t pt-4">
         {/* Module settings are read as saved; no resolver turns references
             in them into values, so the picker is off here. */}
@@ -44,7 +46,7 @@ export function ModuleSettingsForm({ module }: { module: ModuleInfo }) {
             setDraft(module.configValues)
           }}
         >
-          Revert
+          {t("settings:shared.revert")}
         </Button>
         <Button
           size="sm"
@@ -57,10 +59,10 @@ export function ModuleSettingsForm({ module }: { module: ModuleInfo }) {
                 (next) => {
                   setModules(next)
                   refresh()
-                  toast.success(`${module.name} settings saved`)
+                  toast.success(t("settings:moduleSettings.saved", { module: module.name }))
                 },
                 (e: unknown) => {
-                  toastFailure(`${module.name} settings were not saved`, e)
+                  toastFailure(t("settings:moduleSettings.notSaved", { module: module.name }), e)
                 },
               )
               .finally(() => {
@@ -68,7 +70,7 @@ export function ModuleSettingsForm({ module }: { module: ModuleInfo }) {
               })
           }}
         >
-          Save
+          {t("settings:shared.save")}
         </Button>
       </div>
     </SettingsSection>

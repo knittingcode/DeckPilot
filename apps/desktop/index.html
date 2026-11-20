@@ -1,5 +1,10 @@
 <!doctype html>
-<html lang="en">
+<!--
+  Permanently dark (src/lib/theme.ts). The class and background apply before
+  the stylesheet loads, so the window never flashes white; the colour is the
+  --background token of index.css and the native windows' backgroundColor.
+-->
+<html lang="en" class="dark" style="color-scheme: dark; background-color: #111111">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />

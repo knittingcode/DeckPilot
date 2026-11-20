@@ -9,6 +9,8 @@
 // not one). Settings are never secret: secrets are credential slots, so
 // no field here is ever a password input.
 
+import { i18n } from "@/i18n"
+
 import type { PluginSettingField, PluginSettings, PluginSettingValue } from "./types"
 
 /** How a field is edited. */
@@ -81,7 +83,9 @@ export function draftOf(settings: PluginSettings): SettingDraft {
 /** The default of a field as text, for placeholders and "Default: …". */
 export function defaultText(field: PluginSettingField): string | null {
   if (field.default === undefined) return null
-  if (typeof field.default === "boolean") return field.default ? "On" : "Off"
+  if (typeof field.default === "boolean") {
+    return field.default ? i18n.t("plugins:settings.on") : i18n.t("plugins:settings.off")
+  }
   return String(field.default)
 }
 
@@ -102,7 +106,8 @@ function parse(
   if (control.type === "integer") {
     const trimmed = draft.trim()
     const n = Number(trimmed)
-    if (trimmed === "" || !Number.isSafeInteger(n)) return { error: "Enter a whole number." }
+    if (trimmed === "" || !Number.isSafeInteger(n))
+      return { error: i18n.t("plugins:dialog.error.wholeNumber") }
     return { value: n }
   }
   return { value: draft }

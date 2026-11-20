@@ -202,7 +202,7 @@ describe("navigation hook", () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", ctrlKey: true }))
     })
     // The settings are a location of the main window, at the default page.
-    expect(result.current.location).toEqual({ mode: "settings", page: "appearance" })
+    expect(result.current.location).toEqual({ mode: "settings", page: "profiles" })
     // The workspace page they return to (and that stays mounted under them).
     expect(result.current.workspace).toBe("workflows")
     // No back and forward: neither shortcuts nor mouse buttons move.
@@ -211,7 +211,7 @@ describe("navigation hook", () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "[", metaKey: true }))
       window.dispatchEvent(new MouseEvent("mouseup", { button: 3 }))
     })
-    expect(result.current.location).toEqual({ mode: "settings", page: "appearance" })
+    expect(result.current.location).toEqual({ mode: "settings", page: "profiles" })
     expect(result.current).not.toHaveProperty("back")
     act(() => {
       result.current.closeSettings()

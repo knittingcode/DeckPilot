@@ -1,5 +1,6 @@
-import { EXECUTION_STATE_LABEL, type LiveExecution, executionDuration } from "@/lib/executions"
-import type { ExecutionSummary, ProjectOutcome } from "@/lib/types"
+import { type TranslationKey, i18n } from "@/i18n"
+import { type LiveExecution, executionDuration } from "@/lib/executions"
+import type { ExecutionState, ExecutionSummary, ProjectOutcome } from "@/lib/types"
 
 import type { WorkflowGraph } from "@/lib/types"
 
@@ -46,12 +47,26 @@ export function nodeRuns(run: LiveExecution | undefined): Record<string, NodeRun
   return result
 }
 
+const STATE_LABEL: Record<ExecutionState, TranslationKey> = {
+  running: "workflows:run.state.running",
+  succeeded: "workflows:run.state.succeeded",
+  failed: "workflows:run.state.failed",
+  cancelled: "workflows:run.state.cancelled",
+  interrupted: "workflows:run.state.interrupted",
+}
+
 /** One line about a run: state, progress or duration. */
 export function runSummary(run: ExecutionSummary, now: number) {
   if (run.state === "running") {
-    return `Running · ${run.completedNodes} of ${run.totalNodes} nodes`
+    return i18n.t("workflows:run.summary.running", {
+      completed: run.completedNodes,
+      count: run.totalNodes,
+    })
   }
-  return `${EXECUTION_STATE_LABEL[run.state]} · ${formatMs(executionDuration(run, now))}`
+  return i18n.t("workflows:run.summary.finished", {
+    state: i18n.t(STATE_LABEL[run.state]),
+    duration: formatMs(executionDuration(run, now)),
+  })
 }
 
 /**
@@ -64,13 +79,16 @@ export function projectOutcomeText(
 ): string | null {
   switch (outcome?.type) {
     case "applied":
-      return `Switched DeckPilot to ${key(outcome.project)}`
+      return i18n.t("workflows:run.project.applied", { project: key(outcome.project) })
     case "keptInRun":
-      return `Worked on ${key(outcome.project)} within the run`
+      return i18n.t("workflows:run.project.keptInRun", { project: key(outcome.project) })
     case "notApplied":
       return outcome.project
-        ? `Did not switch to ${key(outcome.project)}: ${outcome.reason}`
-        : `Did not switch the project: ${outcome.reason}`
+        ? i18n.t("workflows:run.project.notAppliedTo", {
+            project: key(outcome.project),
+            reason: outcome.reason,
+          })
+        : i18n.t("workflows:run.project.notApplied", { reason: outcome.reason })
     default:
       return null
   }
@@ -88,11 +106,11 @@ export function runBlockedReason(state: {
   profileId: string
   profileName: string
 }): string | null {
-  if (state.isNew) return "Save the workflow to run it"
-  if (state.dirty) return "Save your changes to run the workflow"
-  if (!state.agentRunning) return "The agent is not running. Start it in Settings › Agent"
+  if (state.isNew) return i18n.t("workflows:run.blocked.new")
+  if (state.dirty) return i18n.t("workflows:run.blocked.dirty")
+  if (!state.agentRunning) return i18n.t("workflows:run.blocked.agent")
   if (state.activeProfileId !== state.profileId) {
-    return `Workflows run for the active profile. Make “${state.profileName}” active to run this one`
+    return i18n.t("workflows:run.blocked.profile", { profile: state.profileName })
   }
   return null
 }

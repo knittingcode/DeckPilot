@@ -14,6 +14,7 @@ import {
 
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { Button } from "@/components/ui/button"
+import { useTranslation } from "@/i18n"
 import { formatTimestamp } from "@/lib/format"
 import { type LiveExecution, executionProgress } from "@/lib/executions"
 import type { ExecutionState } from "@/lib/types"
@@ -21,6 +22,7 @@ import { cn } from "@/lib/utils"
 
 import { formatMs } from "./describe"
 import type { NodeRun } from "./node-view"
+import { STATUS_LABEL } from "./run-debug"
 import { projectOutcomeText, runSummary, triggerText } from "./run-model"
 
 export function StateIcon({ state, className }: { state: ExecutionState; className?: string }) {
@@ -59,10 +61,16 @@ export function RunHistory({
   /** A project's key by its id. */
   projectKey: (id: string | null | undefined) => string
 }) {
+  const { t } = useTranslation()
   return (
-    <section className="grid gap-2 border-t px-4 py-3" aria-label="Runs">
+    <section
+      className="grid gap-2 border-t px-4 py-3"
+      aria-label={t("workflows:run.history.title")}
+    >
       <div className="flex items-center gap-2">
-        <h3 className="flex-1 text-xs font-medium text-muted-foreground uppercase">Runs</h3>
+        <h3 className="flex-1 text-xs font-medium text-muted-foreground uppercase">
+          {t("workflows:run.history.title")}
+        </h3>
         {shown && (
           <Button
             variant="ghost"
@@ -72,34 +80,35 @@ export function RunHistory({
               onShow(null)
             }}
           >
-            Hide on canvas
+            {t("workflows:run.history.hide")}
           </Button>
         )}
         {runs.some((r) => r.state !== "running") && (
           <ConfirmDialog
             trigger={
-              <Button variant="ghost" size="icon" className="size-6" aria-label="Clear history">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-6"
+                aria-label={t("workflows:run.history.clear")}
+              >
                 <Trash2 className="size-3.5" />
               </Button>
             }
-            title="Clear the run history of this workflow?"
-            description="Finished runs are deleted. Running workflows are not affected."
-            confirmLabel="Clear"
+            title={t("workflows:run.history.clearTitle")}
+            description={t("workflows:run.history.clearDescription")}
+            confirmLabel={t("common:actions.clear")}
             onConfirm={onClear}
           />
         )}
       </div>
       {problem && (
         <p role="alert" className="text-xs text-destructive">
-          Earlier runs could not be loaded: {problem.replace(/\.?$/, ".")} They load again when the
-          agent reconnects.
+          {t("workflows:run.history.problem", { problem: problem.replace(/\.?$/, ".") })}
         </p>
       )}
       {runs.length === 0 && !problem && (
-        <p className="text-xs text-muted-foreground">
-          No runs yet. Runs started here, from a Stream Deck or while the app was closed appear
-          here.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("workflows:run.history.empty")}</p>
       )}
       <ul className="grid gap-1">
         {runs.map((run) => (
@@ -152,7 +161,7 @@ export function RunHistory({
                   className="h-1 flex-1 overflow-hidden rounded-full bg-muted"
                   role="progressbar"
                   aria-valuenow={executionProgress(run)}
-                  aria-label="Progress"
+                  aria-label={t("workflows:run.history.progress")}
                 >
                   <span
                     className="block h-full bg-primary transition-[width]"
@@ -163,12 +172,14 @@ export function RunHistory({
                   variant="ghost"
                   size="sm"
                   className="h-6 px-1.5 text-xs"
-                  aria-label={`Cancel the run started ${formatTimestamp(Math.floor(run.startedAt / 1000))}`}
+                  aria-label={t("workflows:run.history.cancel", {
+                    time: formatTimestamp(Math.floor(run.startedAt / 1000)),
+                  })}
                   onClick={() => {
                     onCancel(run.id)
                   }}
                 >
-                  <Square className="size-3" /> Cancel
+                  <Square className="size-3" /> {t("common:actions.cancel")}
                 </Button>
               </div>
             )}
@@ -181,13 +192,21 @@ export function RunHistory({
 
 /** What a node did in the shown run: state, timing, message, error, outputs. */
 export function NodeRunReport({ run }: { run: NodeRun }) {
+  const { t } = useTranslation()
   if (run.state === "running") {
     return (
-      <section className="grid gap-2 border-t px-4 py-3" aria-label="Run">
-        <h3 className="text-xs font-medium text-muted-foreground uppercase">Run</h3>
+      <section
+        className="grid gap-2 border-t px-4 py-3"
+        aria-label={t("workflows:run.report.title")}
+      >
+        <h3 className="text-xs font-medium text-muted-foreground uppercase">
+          {t("workflows:run.report.title")}
+        </h3>
         <p className="flex items-center gap-1.5 text-xs">
           <Loader2 className="size-3.5 animate-spin text-primary" />
-          {run.attempt && run.attempt > 1 ? `Running, attempt ${run.attempt}` : "Running"}
+          {run.attempt && run.attempt > 1
+            ? t("workflows:run.report.runningAttempt", { attempt: run.attempt })
+            : t("workflows:run.report.running")}
           {run.progress?.message ? ` · ${run.progress.message}` : ""}
         </p>
       </section>
@@ -196,25 +215,30 @@ export function NodeRunReport({ run }: { run: NodeRun }) {
   const { report } = run
   const outputs = Object.entries(report.output ?? {})
   return (
-    <section className="grid gap-2 border-t px-4 py-3" aria-label="Run">
-      <h3 className="text-xs font-medium text-muted-foreground uppercase">Run</h3>
+    <section className="grid gap-2 border-t px-4 py-3" aria-label={t("workflows:run.report.title")}>
+      <h3 className="text-xs font-medium text-muted-foreground uppercase">
+        {t("workflows:run.report.title")}
+      </h3>
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
-        <dt className="text-muted-foreground">Result</dt>
-        <dd className="capitalize">{report.status}</dd>
+        <dt className="text-muted-foreground">{t("workflows:run.node.result")}</dt>
+        <dd className="capitalize">{STATUS_LABEL[report.status]}</dd>
         {report.attempts > 0 && (
           <>
-            <dt className="text-muted-foreground">Attempts</dt>
+            <dt className="text-muted-foreground">{t("workflows:run.report.attempts")}</dt>
             <dd>
               {report.attempts}
               {report.attempts > 1 && (
-                <span className="text-muted-foreground"> · retry waits under Run details</span>
+                <span className="text-muted-foreground">
+                  {" · "}
+                  {t("workflows:run.report.retryWaits")}
+                </span>
               )}
             </dd>
           </>
         )}
-        <dt className="text-muted-foreground">Started</dt>
-        <dd>after {formatMs(report.startedMs)}</dd>
-        <dt className="text-muted-foreground">Duration</dt>
+        <dt className="text-muted-foreground">{t("workflows:run.node.started")}</dt>
+        <dd>{t("workflows:run.report.after", { time: formatMs(report.startedMs) })}</dd>
+        <dt className="text-muted-foreground">{t("workflows:run.node.duration")}</dt>
         <dd>{formatMs(report.durationMs)}</dd>
       </dl>
       {report.message && (
@@ -241,13 +265,13 @@ export function NodeRunReport({ run }: { run: NodeRun }) {
           </span>
           <span className="break-words">{report.error.message}</span>
           {report.error.retryable && (
-            <span className="text-muted-foreground">Running it again may help.</span>
+            <span className="text-muted-foreground">{t("workflows:run.report.retryable")}</span>
           )}
         </div>
       )}
       {outputs.length > 0 && (
         <div className="grid gap-1">
-          <h4 className="text-xs font-medium">Outputs</h4>
+          <h4 className="text-xs font-medium">{t("workflows:run.outputs.title")}</h4>
           <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
             {outputs.map(([key, value]) => (
               <div key={key} className="contents">
@@ -257,7 +281,7 @@ export function NodeRunReport({ run }: { run: NodeRun }) {
             ))}
           </dl>
           <p className="text-[0.6875rem] text-muted-foreground">
-            Only outputs the action declares are recorded.
+            {t("workflows:run.report.declaredOnly")}
           </p>
         </div>
       )}

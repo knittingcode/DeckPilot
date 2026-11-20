@@ -1,5 +1,8 @@
 // Pure helpers of the marketplace screens.
 
+import { type TranslationKey, currentLanguage, i18n } from "@/i18n"
+import { formatDate as formatLocalDate, formatDateTime } from "@/i18n/format"
+
 import { toPluginError, type PluginClient } from "./api"
 import type {
   AvailablePlugin,
@@ -105,8 +108,12 @@ export function knownUninstalled(
   return snapshot.known?.find((k) => k.id === id && !k.installed)
 }
 
+/** One decimal below 10, none above, in the window's number format (`1.5` / `1,5`). */
 function oneDecimal(n: number): string {
-  return n < 10 ? String(Math.round(n * 10) / 10) : String(Math.round(n))
+  return new Intl.NumberFormat(currentLanguage(), {
+    maximumFractionDigits: n < 10 ? 1 : 0,
+    useGrouping: false,
+  }).format(n)
 }
 
 /** `512 B`, `1.5 KiB`, `256 KiB`, `2 MiB`. */
@@ -119,8 +126,11 @@ export function formatBytes(bytes: number): string {
 
 /** What a plugin's storage holds, against its quota. */
 export function storageText(usage: PluginStorageUsage): string {
-  const keys = `${String(usage.keys)} of ${String(usage.maxKeys)} keys`
-  return `${formatBytes(usage.usedBytes)} of ${formatBytes(usage.quotaBytes)} used (${keys})`
+  return i18n.t("plugins:storage.usage", {
+    used: formatBytes(usage.usedBytes),
+    quota: formatBytes(usage.quotaBytes),
+    keys: i18n.t("plugins:storage.keys", { count: usage.maxKeys, used: String(usage.keys) }),
+  })
 }
 
 /**
@@ -150,10 +160,10 @@ export const MAX_SECRET_BYTES = 16 * 1024
 
 /** Why `secret` cannot be sent to the agent; never repeats the secret. */
 export function secretProblem(secret: string): string | null {
-  if (secret === "") return "Enter the secret."
-  if (/[\r\n\0]/.test(secret)) return "A secret cannot contain line breaks."
+  if (secret === "") return i18n.t("plugins:credentials.problem.empty")
+  if (/[\r\n\0]/.test(secret)) return i18n.t("plugins:credentials.problem.lineBreaks")
   if (new TextEncoder().encode(secret).length > MAX_SECRET_BYTES) {
-    return "The secret is longer than 16 KiB."
+    return i18n.t("plugins:credentials.problem.tooLong")
   }
   return null
 }
@@ -178,15 +188,15 @@ export function classifyPlugins(
 /** Why nothing can be installed or updated right now, or `null`. */
 export function installBlock(snapshot: MarketplaceSnapshot): string | null {
   if (!snapshot.registry) {
-    return "No plugin registry is configured in the agent (--plugin-registry)."
+    return i18n.t("marketplace:blocked.noRegistry")
   }
   switch (snapshot.registry.freshness) {
     case "fresh":
       return null
     case "stale":
-      return "The registry is out of date; installing and updating are paused until it is checked again."
+      return i18n.t("marketplace:blocked.stale")
     case "neverVerified":
-      return "The registry has not been verified yet; nothing can be installed."
+      return i18n.t("marketplace:blocked.neverVerified")
   }
 }
 
@@ -268,15 +278,20 @@ export function updateCandidates(snapshot: MarketplaceSnapshot): UpdateCandidate
   })
 }
 
-export const STATE_LABELS: Record<PluginState, string> = {
-  installing: "Installing",
-  disabled: "Disabled",
-  enabled: "Enabled",
-  updating: "Updating",
-  rollingBack: "Rolling back",
-  uninstalling: "Uninstalling",
-  broken: "Broken",
-  quarantined: "Quarantined",
+const STATE_LABELS = {
+  installing: "plugins:state.installing",
+  disabled: "plugins:state.disabled",
+  enabled: "plugins:state.enabled",
+  updating: "plugins:state.updating",
+  rollingBack: "plugins:state.rollingBack",
+  uninstalling: "plugins:state.uninstalling",
+  broken: "plugins:state.broken",
+  quarantined: "plugins:state.quarantined",
+} as const satisfies Record<PluginState, TranslationKey>
+
+/** A plugin's state as a label ("Enabled"). */
+export function stateLabel(state: PluginState): string {
+  return i18n.t(STATE_LABELS[state])
 }
 
 /** Entries whose name, id, summary or publisher contain every word. */
@@ -304,12 +319,21 @@ export function platformLabel(platform: string): string {
   return PLATFORM_LABELS[platform] ?? platform
 }
 
+/** "A, B and C" in the window's language (without a serial comma). */
+export function listed(items: string[]): string {
+  if (items.length <= 1) return items.join("")
+  return i18n.t("plugins:list.and", {
+    items: items.slice(0, -1).join(", "),
+    last: items[items.length - 1] ?? "",
+  })
+}
+
 /** Platforms of a version in words; none listed means every platform. */
 export function platformsText(platforms: string[] | undefined): string {
-  if (!platforms || platforms.length === 0) return "macOS, Windows and Linux"
+  if (!platforms || platforms.length === 0) return i18n.t("marketplace:platforms.all")
   const labels = platforms.map(platformLabel)
-  if (labels.length === 1) return `${labels[0] ?? ""} only`
-  return `${labels.slice(0, -1).join(", ")} and ${labels.at(-1) ?? ""}`
+  if (labels.length === 1) return i18n.t("marketplace:platforms.only", { platform: labels[0] })
+  return listed(labels)
 }
 
 /** Every category the registry's plugins name, sorted. */
@@ -325,7 +349,7 @@ export function categoryLabel(category: string): string {
 
 /** A date of the agent (seconds since the epoch) for people. */
 export function formatDate(seconds: number): string {
-  return new Date(seconds * 1000).toLocaleDateString(undefined, {
+  return formatLocalDate(currentLanguage(), seconds * 1000, {
     year: "numeric",
     month: "short",
     day: "numeric",
@@ -334,10 +358,7 @@ export function formatDate(seconds: number): string {
 
 /** A time of the agent (seconds since the epoch) for people. */
 export function formatTime(seconds: number): string {
-  return new Date(seconds * 1000).toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  })
+  return formatDateTime(currentLanguage(), seconds * 1000)
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

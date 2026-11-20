@@ -1,3 +1,4 @@
+import type { TranslationKey } from "@/i18n"
 import { Store } from "@/lib/status"
 import type {
   AgentExecutionEvent,
@@ -156,12 +157,13 @@ export class ExecutionStore extends Store<LiveExecution> {
   }
 }
 
-export const EXECUTION_STATE_LABEL: Record<ExecutionState, string> = {
-  running: "Running",
-  succeeded: "Succeeded",
-  failed: "Failed",
-  cancelled: "Cancelled",
-  interrupted: "Interrupted",
+/** Keys of `workflows.json`, resolved with `t` where they are shown. */
+export const EXECUTION_STATE_LABEL: Record<ExecutionState, TranslationKey> = {
+  running: "workflows:run.state.running",
+  succeeded: "workflows:run.state.succeeded",
+  failed: "workflows:run.state.failed",
+  cancelled: "workflows:run.state.cancelled",
+  interrupted: "workflows:run.state.interrupted",
 }
 
 /** Percent of resolved nodes; real progress, not an estimate of time. */

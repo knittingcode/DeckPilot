@@ -17,6 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useEditingProfile } from "@/hooks/use-profile"
+import { useTranslation } from "@/i18n"
 import { useTitlebar } from "@/hooks/use-titlebar"
 import { actionReferences, isDirect, referenceTarget } from "@/lib/action-references"
 import { useActionModules, useAppContext } from "@/lib/app-context"
@@ -27,16 +28,20 @@ import type { ActionInstance, ActionReference, ActionType, ProfileView } from "@
 import { cn } from "@/lib/utils"
 
 export function ActionsPage() {
+  const { t } = useTranslation()
   return (
     <Page
-      title="Action Library"
-      description="Actions you configured, ready for workflows and keys"
+      title={t("navigation:pages.actions")}
+      description={t("actions:library.description")}
       profileScoped
     >
       <RequireProfile>{() => <ActionLibrary />}</RequireProfile>
     </Page>
   )
 }
+
+/** The category of actions whose type names none. */
+const OTHER = "Other"
 
 /** A plugin whose actions the library shows alone (its toolbar view). */
 export interface LibraryPlugin {
@@ -78,6 +83,7 @@ function Library({
   reload: () => void
   plugin?: LibraryPlugin
 }) {
+  const { t } = useTranslation()
   // A plugin's view: its actions only (types `<plugin id>.<action>`).
   const view = useMemo(
     () =>
@@ -111,14 +117,14 @@ function Library({
     actions: [
       {
         id: "actions.new",
-        label: "New action",
+        label: t("actions:library.new"),
         icon: Plus,
         placement: "primary",
         onSelect: startNew,
       },
       {
         id: "actions.search",
-        label: "Search",
+        label: t("actions:library.search"),
         icon: Search,
         onSelect: () => {
           searchRef.current?.focus()
@@ -131,8 +137,10 @@ function Library({
   const typeOf = (id: string) => types.find((t) => t.id === id)
   const availability = (id: string) => typeAvailability(modules, id)
   const categories = [
-    ...new Set(view.profile.actions.map((a) => typeOf(a.actionType)?.category ?? "Other")),
+    ...new Set(view.profile.actions.map((a) => typeOf(a.actionType)?.category ?? OTHER)),
   ].sort()
+  // The fallback category is the app's; plugin categories are shown as they are.
+  const categoryLabel = (c: string) => (c === OTHER ? t("actions:library.otherCategory") : c)
 
   const groups = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -147,7 +155,7 @@ function Library({
     })
     const byCategory = new Map<string, ActionInstance[]>()
     for (const action of matches) {
-      const key = types.find((t) => t.id === action.actionType)?.category ?? "Other"
+      const key = types.find((t) => t.id === action.actionType)?.category ?? OTHER
       byCategory.set(key, [...(byCategory.get(key) ?? []), action])
     }
     return [...byCategory.entries()].sort(([a], [b]) => a.localeCompare(b))
@@ -177,15 +185,15 @@ function Library({
       >
         <div className="grid gap-2">
           <h2 id="action-list-title" className="text-sm leading-6 font-semibold">
-            Actions
+            {t("actions:library.listTitle")}
           </h2>
           <div className="relative">
             <Search className="absolute top-1/2 left-2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               className="h-8 pl-8"
               ref={searchRef}
-              placeholder="Search actions"
-              aria-label="Search actions"
+              placeholder={t("actions:library.searchPlaceholder")}
+              aria-label={t("actions:library.searchPlaceholder")}
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value)
@@ -193,34 +201,44 @@ function Library({
             />
           </div>
           <Select value={category} onValueChange={setCategory}>
-            <SelectTrigger size="sm" className="w-full" aria-label="Filter by category">
+            <SelectTrigger
+              size="sm"
+              className="w-full"
+              aria-label={t("actions:library.filterCategory")}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All categories</SelectItem>
+              <SelectItem value="all">{t("actions:library.allCategories")}</SelectItem>
               {categories.map((c) => (
                 <SelectItem key={c} value={c}>
-                  {c}
+                  {categoryLabel(c)}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
-        <div className="-mx-2 grid content-start gap-3 border-t px-2 pt-3 lg:overflow-y-auto">
+        <div className="relative -mx-2 grid content-start gap-3 border-t px-2 pt-3 lg:overflow-y-auto">
           {view.profile.actions.length === 0 && (
             <EmptyState
               variant="plain"
-              title={plugin ? `No actions of ${plugin.name} yet` : "No actions yet"}
+              title={
+                plugin
+                  ? t("actions:library.emptyPlugin", { plugin: plugin.name })
+                  : t("actions:library.empty")
+              }
             >
-              Actions you create appear here, ready for workflows and device keys.
+              {t("actions:library.emptyHint")}
             </EmptyState>
           )}
           {view.profile.actions.length > 0 && groups.length === 0 && (
-            <p className="text-sm text-muted-foreground">No actions match.</p>
+            <p className="text-sm text-muted-foreground">{t("actions:library.noMatches")}</p>
           )}
           {groups.map(([group, actions]) => (
-            <section key={group} className="grid min-w-0 gap-1" aria-label={group}>
-              <h3 className="px-2 text-xs font-medium text-muted-foreground uppercase">{group}</h3>
+            <section key={group} className="grid min-w-0 gap-1" aria-label={categoryLabel(group)}>
+              <h3 className="px-2 text-xs font-medium text-muted-foreground uppercase">
+                {categoryLabel(group)}
+              </h3>
               {actions.map((action) => {
                 const used = actionReferences(view.profile, action.id).filter(isDirect).length
                 return (
@@ -245,13 +263,19 @@ function Library({
                     {!availability(action.actionType).available && (
                       <Badge
                         variant="outline"
-                        title={availability(action.actionType).reason ?? "Its module is disabled"}
+                        title={
+                          availability(action.actionType).reason ??
+                          t("actions:library.moduleDisabled")
+                        }
                       >
-                        Unavailable
+                        {t("actions:library.unavailable")}
                       </Badge>
                     )}
                     {used > 0 && (
-                      <Badge variant="secondary" title={`Used ${used} time(s)`}>
+                      <Badge
+                        variant="secondary"
+                        title={t("actions:library.usedTimes", { count: used })}
+                      >
                         {used}
                       </Badge>
                     )}
@@ -290,8 +314,8 @@ function Library({
       ) : creating && newType ? (
         <Panel
           className="content-start"
-          title="New action"
-          description="Step 2 of 2: name it and set its parameters"
+          title={t("actions:library.new")}
+          description={t("actions:library.step2")}
         >
           <ActionEditor
             key={`new:${newType}`}
@@ -319,8 +343,8 @@ function Library({
       ) : creating ? (
         <Panel
           className="content-start"
-          title="New action"
-          description="Step 1 of 2: choose what the action does"
+          title={t("actions:library.new")}
+          description={t("actions:library.step1")}
         >
           <ActionTypeChooser
             modules={modules}
@@ -335,19 +359,15 @@ function Library({
       ) : (
         <div className="grid content-start">
           {view.profile.actions.length === 0 ? (
-            <EmptyState title="Create your first action">
-              <p>
-                An action is one thing DeckPilot does, such as running a command or opening a URL.
-                Choose a type from your modules, give it a name and set its parameters. Then put it
-                on a device key or into a workflow.
-              </p>
+            <EmptyState title={t("actions:library.first.title")}>
+              <p>{t("actions:library.first.body")}</p>
               <Button type="button" className="mt-3" onClick={startNew}>
-                <Plus /> Create action
+                <Plus /> {t("actions:library.first.create")}
               </Button>
             </EmptyState>
           ) : (
-            <EmptyState title="No action selected">
-              Choose an action on the left, or create a new one.
+            <EmptyState title={t("actions:library.noSelection.title")}>
+              {t("actions:library.noSelection.body")}
             </EmptyState>
           )}
         </div>

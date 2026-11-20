@@ -3,6 +3,7 @@ import { useEffect } from "react"
 
 import { useExecutions } from "@/hooks/use-executions"
 import { useSnapshot, useStatus } from "@/hooks/use-status"
+import { i18n } from "@/i18n"
 import { EXECUTION_EVENT, api } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
 import { ExecutionStore, executionProgress } from "@/lib/executions"
@@ -75,8 +76,11 @@ export function ExecutionSync() {
           status?.notifications.notify({
             key: `workflow.${run.workflow}.failed`,
             severity: "error",
-            title: `Workflow “${run.workflowName}” ${run.state === "failed" ? "failed" : "was interrupted"}`,
-            message: run.message || "Open the workflow to see which step failed.",
+            title:
+              run.state === "failed"
+                ? i18n.t("actions:execution.failedTitle", { workflow: run.workflowName })
+                : i18n.t("actions:execution.interruptedTitle", { workflow: run.workflowName }),
+            message: run.message || i18n.t("actions:execution.openToSee"),
           })
         }
       }
@@ -98,7 +102,7 @@ export function ExecutionSync() {
         status.operations.start({
           id,
           kind: "workflow",
-          title: `Workflow “${run.workflowName}”`,
+          title: i18n.t("actions:execution.operation", { workflow: run.workflowName }),
           startedAt: run.startedAt,
           progress: executionProgress(run),
           completed: run.completedNodes,
@@ -117,7 +121,9 @@ export function ExecutionSync() {
               : {
                   error:
                     run.message ||
-                    `The workflow ${run.state === "failed" ? "failed" : "was interrupted"}`,
+                    (run.state === "failed"
+                      ? i18n.t("actions:execution.failed")
+                      : i18n.t("actions:execution.interrupted")),
                 },
         )
       }

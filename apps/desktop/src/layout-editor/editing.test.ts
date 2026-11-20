@@ -326,7 +326,15 @@ describe("folders", () => {
     const made = must(createFolder(mk2, l, "home", key(3), "new"))
     // The page is new, named so that it clashes with none, and stored
     // inside the page it was created from.
-    expect(made.pages.at(-1)).toEqual({ id: "new", name: "Folder 2", parent: "home", bindings: [] })
+    // It has the protected Back on its first key and Auto Exit stored off.
+    expect(made.pages.at(-1)).toEqual({
+      id: "new",
+      name: "Folder 2",
+      parent: "home",
+      bindings: [],
+      back: { position: "reserved" },
+      autoExit: { enabled: false, seconds: 10 },
+    })
     expect(bindingsFor(made, "home", key(3))).toEqual([
       {
         control: key(3),
@@ -343,7 +351,7 @@ describe("folders", () => {
       { ...l.pages[0], bindings: made.pages[0]?.bindings },
       l.pages[1],
     ])
-    // The device adds a Back key itself; the editor says so.
+    // No Back binding: the device shows its system Back on the first key.
     expect(hasWayBack(made, "new")).toBe(false)
   })
 

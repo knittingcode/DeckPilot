@@ -1,0 +1,371 @@
+{
+  "errors": {
+    "unexpected": "Unexpected error",
+    "sentence": "{{title}}: {{message}}",
+    "sentenceWithHint": "{{title}}: {{message}} {{hint}}",
+    "title": {
+      "agentNotRunning": "The agent is not running",
+      "agentTooOld": "The running agent is too old",
+      "communication": "DeckPilot could not talk to the agent",
+      "noDialog": "No file dialog is available",
+      "pluginsUnavailable": "Plugins are not available in the agent",
+      "platformUnsupported": "Plugins cannot run on this platform",
+      "locked": "DeckPilot is locked",
+      "notInstalled": "The plugin is not installed",
+      "unknownPlugin": "The registry does not offer this plugin or version",
+      "storeUnavailable": "The plugin database cannot be opened",
+      "alreadyInstalled": "The plugin is already installed",
+      "consentRequired": "Consent is missing",
+      "unknownPermission": "The plugin's permissions changed",
+      "registryUnavailable": "The registry is not available",
+      "revoked": "The version was withdrawn",
+      "incompatible": "Not compatible with this DeckPilot",
+      "invalidPackage": "The package was refused",
+      "unsupportedRuntime": "Unsupported kind of plugin",
+      "invalidState": "Not possible in the plugin's current state",
+      "notEnabled": "The plugin is not enabled",
+      "hostFailed": "The plugin host failed",
+      "broken": "The plugin's files were modified",
+      "busy": "The plugin is busy",
+      "invalidParameters": "Invalid parameters",
+      "invalidData": "The values do not fit what the plugin declares",
+      "unknownMigration": "No such module migration",
+      "answerTooLarge": "The agent's answer is too large",
+      "requiredBy": "Other plugins need this plugin",
+      "dependency": "Its dependencies cannot be installed",
+      "planChanged": "The install plan changed",
+      "notBundled": "Not one of DeckPilot's own plugins",
+      "notPinned": "This DeckPilot does not include the plugin",
+      "failed": "The request failed"
+    },
+    "hint": {
+      "agentNotRunning": "Start the agent in Settings › Background Agent, then try again.",
+      "agentTooOld": "Restart the agent in Settings › Background Agent so that the agent of this release runs.",
+      "pluginsUnavailable": "Plugins need an agent built with the `plugins` feature and not started with --disable-plugins.",
+      "platformUnsupported": "Plugins can be installed and inspected here, but only run where the plugin sandbox is verified: macOS, Linux and Windows.",
+      "locked": "Unlock DeckPilot, then try again.",
+      "storeUnavailable": "The plugin database cannot be opened with the current key (e.g. after a password change while the agent was locked).",
+      "consentRequired": "Consent to every permission the plugin declares.",
+      "unknownPermission": "Reload the plugin; its permissions changed.",
+      "registryUnavailable": "Check the registry the agent uses, then try again.",
+      "revoked": "The registry withdrew this version; choose another one or uninstall it.",
+      "incompatible": "This DeckPilot cannot run it; update DeckPilot or choose another version.",
+      "invalidPackage": "Only package files whose bytes the verified registry pins can be installed.",
+      "unsupportedRuntime": "Only WebAssembly plugins (ABI 1) can be installed.",
+      "invalidState": "Reload the list; the plugin changed in the meantime.",
+      "notEnabled": "Enable the plugin first.",
+      "hostFailed": "The plugin host failed or is backing off after crashes; try again later.",
+      "broken": "Its installed files no longer match their record; roll back or uninstall it.",
+      "alreadyInstalled": "Update it instead.",
+      "busy": "Wait for its running actions to finish, then try again.",
+      "requiredBy": "Disable the plugins that need it with it, or first.",
+      "dependency": "The plugin needs plugins or versions that cannot be installed here.",
+      "planChanged": "Review the new plan and confirm it again.",
+      "notBundled": "Only plugins that come with DeckPilot can be restored; install others from the marketplace.",
+      "notPinned": "Install a DeckPilot release that includes it, then restore it.",
+      "answerTooLarge": "Part of it does not fit one message to the app, even in parts (for instance a plugin's very large settings); ask the plugin's publisher to shorten its manifest."
+    }
+  },
+  "list": {
+    "and": "{{items}} and {{last}}"
+  },
+  "storage": {
+    "usage": "{{used}} of {{quota}} used ({{keys}})",
+    "keys_one": "{{used}} of {{count}} key",
+    "keys_other": "{{used}} of {{count}} keys"
+  },
+  "state": {
+    "installing": "Installing",
+    "disabled": "Disabled",
+    "enabled": "Enabled",
+    "updating": "Updating",
+    "rollingBack": "Rolling back",
+    "uninstalling": "Uninstalling",
+    "broken": "Broken",
+    "quarantined": "Quarantined"
+  },
+  "credentials": {
+    "problem": {
+      "empty": "Enter the secret.",
+      "lineBreaks": "A secret cannot contain line breaks.",
+      "tooLong": "The secret is longer than 16 KiB."
+    },
+    "stored": "{{label}} stored",
+    "removed": "{{label}} removed",
+    "set": "Set",
+    "setButton": "Set…",
+    "replace": "Replace…",
+    "setNamed": "Set {{label}}",
+    "replaceNamed": "Replace {{label}}",
+    "remove": "Remove",
+    "removeNamed": "Remove {{label}}",
+    "removeAsk": "Remove {{label}}?",
+    "removeConfirm": "Remove the stored {{label}}? The plugin cannot use it afterwards.",
+    "keep": "Keep it",
+    "setupUrl": "Where to get one:",
+    "notGranted": "Its permission is not granted: a stored secret is not used until you grant it.",
+    "inputLabel": "{{label}} for {{plugin}}",
+    "store": "Store",
+    "storing": "Storing…",
+    "userOrigin": "the server in the setting “{{setting}}” once you allow it",
+    "noHost": "no host",
+    "sentTo": "Sent only to {{targets}}.",
+    "sentToSchemes": "Sent only to {{targets}} ({{schemes}}).",
+    "storedAt": "Stored {{time}}."
+  },
+  "settings": {
+    "on": "On",
+    "off": "Off",
+    "missing": {
+      "title": "Required settings are missing",
+      "text_one": "{{settings}} has no value and no default. The plugin runs without it, and its actions may fail until it is set.",
+      "text_other": "{{settings}} have no value and no default. The plugin runs without them, and its actions may fail until they are set."
+    },
+    "notSecret": "Settings are not secret. Never enter a password or token here; the plugin's credentials below are the place for secrets.",
+    "save": "Save settings",
+    "saving": "Saving…",
+    "defaultChoice": "Default ({{value}})",
+    "notSet": "Not set",
+    "unsupported": "Settings of kind “{{kind}}” cannot be changed here.",
+    "limit": {
+      "min": "at least {{min}}",
+      "max": "at most {{max}}",
+      "length_one": "up to {{count}} character",
+      "length_other": "up to {{count}} characters"
+    },
+    "limits": "{{limits}}.",
+    "missingBadge": "Missing",
+    "defaultBadge": "Default",
+    "resetNamed": "Reset {{label}} to its default",
+    "reset": "Reset to default",
+    "defaultIs": "Default: {{value}}.",
+    "noDefault": "No default."
+  },
+  "dialog": {
+    "requestedBy": "Requested by <name>{{name}}</name>",
+    "required": "(required)",
+    "onePerLine": "One per line",
+    "choosePlaceholder": "Choose…",
+    "tooLong": "The answer is too long. Shorten the text and try again.",
+    "error": {
+      "maxCharacters_one": "At most {{count}} character.",
+      "maxCharacters_other": "At most {{count}} characters.",
+      "wholeNumber": "Enter a whole number.",
+      "atLeast": "At least {{min}}.",
+      "atMost": "At most {{max}}.",
+      "chooseOption": "Choose one of the options.",
+      "maxLines_one": "At most {{count}} line.",
+      "maxLines_other": "At most {{count}} lines.",
+      "lineLength_one": "Each line has at most {{count}} character.",
+      "lineLength_other": "Each line has at most {{count}} characters."
+    }
+  },
+  "origins": {
+    "quoted": "“{{name}}”",
+    "consent": {
+      "thisServer": "this server",
+      "ask": "Allow {{plugin}} to send data to {{server}}?",
+      "askWithSecrets_one": "Allow {{plugin}} to send data and your {{secrets}} secret to {{server}}?",
+      "askWithSecrets_other": "Allow {{plugin}} to send data and your {{secrets}} secrets to {{server}}?",
+      "requests": "Requests ({{methods}}) go to exactly this server, nowhere else.",
+      "requestsPath": "Requests ({{methods}}) go to exactly this server and path, nowhere else.",
+      "pages": "It may also open pages of {{server}} in your browser, in actions you start."
+    },
+    "title": "Servers you enter",
+    "intro": "The plugin reaches the server in these settings only after you allow exactly that server. Changing a setting ends its consent; DeckPilot then asks again.",
+    "list": "Servers of {{name}}",
+    "status": {
+      "invalid": "Invalid",
+      "declared": "Declared",
+      "slotNotGranted": "Not permitted",
+      "needsConsent": "Needs your consent",
+      "granted": "Allowed"
+    },
+    "privateNetwork": "Private network",
+    "revokeNamed": "Revoke {{label}}",
+    "revoked": "{{label}}: consent revoked",
+    "unset": "No server is set, so the plugin reaches none through this setting.",
+    "invalid": "The setting is not a server this plugin can use.",
+    "invalidBecause": "The setting {{problem}}.",
+    "declared": "A host the plugin declares, allowed when you installed it.",
+    "slotNotGranted": "The plugin's permission to connect to a server you enter is not granted. Grant “{{permission}}” first; nothing goes to this server until then.",
+    "grantedPlain": "Allowed.",
+    "grantedAt": "Allowed {{time}}.",
+    "grantedPrivate": "Allowed, on your private network.",
+    "grantedPrivateAt": "Allowed {{time}}, on your private network.",
+    "secretsSent_one": "{{secrets}} is sent there.",
+    "secretsSent_other": "{{secrets}} are sent there.",
+    "allowAsk": "Allow {{server}}?",
+    "alsoPrivate": "Also allow it on my private network",
+    "privateRequired": "Required: this is a local name or address.",
+    "privateOptional": "Only if the server resolves to an address on your network.",
+    "neverLocal": "This computer and link-local addresses are never reachable.",
+    "privateNotAllowed": "This server is on a private network, which this plugin's setting does not allow.",
+    "allowed": "{{label}}: {{server}} allowed",
+    "allowing": "Allowing…"
+  },
+  "dependencies": {
+    "state": {
+      "installed": "Installed {{version}}",
+      "available": "Available",
+      "installedOff": "Installed {{version}}, turned off",
+      "off": "Turned off",
+      "wrongVersion": "Installed {{version}}; needs {{needed}}",
+      "otherVersion": "Installed in another version; needs {{needed}}",
+      "notInDeckPilot": "Not available in this DeckPilot",
+      "notInstalled": "Not installed",
+      "unusable": "Installed, but cannot be used"
+    },
+    "title": "Dependencies",
+    "titleOfVersion": "Dependencies of version {{version}}",
+    "requires": "Requires",
+    "optional": "Optional integrations",
+    "optionalHint": "Optional integrations are never installed by themselves; without one, only the actions that use it are unavailable.",
+    "builtIn": "Built in",
+    "optionalBadge": "Optional",
+    "usedByActions": "Used by: <code>{{actions}}</code>",
+    "usedBy": "Used by",
+    "dependentOptional": "optional {{version}}",
+    "dependentRequires": "requires {{version}}",
+    "off": "Off"
+  },
+  "migration": {
+    "status": {
+      "moving": {
+        "label": "Moving to a plugin",
+        "text": "{{module}} is moving to the plugin {{plugin}}. The built-in keeps running its actions until the move is done."
+      },
+      "waiting": {
+        "label": "Waiting for your consent",
+        "text": "{{module}} can move to the plugin {{plugin}} once you allow what the plugin needs. Until then the built-in keeps running its actions."
+      },
+      "unavailable": {
+        "label": "Actions unavailable",
+        "text": "{{module}}'s actions run in {{plugin}}, which is not available: {{reason}}.",
+        "removed": "it was removed"
+      },
+      "moved": {
+        "label": "Moved to a plugin",
+        "text": "{{module}}'s actions run in the plugin {{plugin}}; your actions keep working unchanged."
+      },
+      "builtin": {
+        "label": "Staying built-in"
+      },
+      "failed": {
+        "textFinal_one": "The move to {{plugin}} failed {{count}} time; DeckPilot tries again only when you press Retry. The built-in keeps running its actions.",
+        "textFinal_other": "The move to {{plugin}} failed {{count}} times; DeckPilot tries again only when you press Retry. The built-in keeps running its actions.",
+        "text": "The move to {{plugin}} failed; DeckPilot tries again at its next start. The built-in keeps running its actions."
+      },
+      "notEligible": {
+        "text": "{{module}} stays built-in on this computer; its actions keep working."
+      },
+      "other": {
+        "label": "Unknown state",
+        "text": "The agent reports a state this app does not know; {{module}}'s actions are unchanged."
+      }
+    },
+    "fromSetting": "From the setting",
+    "notice": {
+      "title": "Built-in modules moving to plugins",
+      "text": "Some built-in modules are replaced by plugins that ship with DeckPilot. Your actions, keys and workflows keep their action types and keep working; nothing is deleted.",
+      "list": "Module migrations",
+      "attempts_one": "{{attempts}} of {{count}} automatic attempt",
+      "attempts_other": "{{attempts}} of {{count}} automatic attempts",
+      "reason": "Reason:",
+      "review": "Review…",
+      "retry": "Retry",
+      "askAgain": "Ask again",
+      "retryNamed": "Retry: {{module}}",
+      "askAgainNamed": "Ask again: {{module}}"
+    },
+    "import": {
+      "label": "What is imported",
+      "credential": "Stored credential",
+      "slot": "Into the plugin's slot",
+      "sentTo": "Sent only to",
+      "allowedServer": "the server you allow in {{setting}}",
+      "declaredHosts": "the hosts the plugin declares"
+    },
+    "origin": {
+      "label": "The server",
+      "server": "Server",
+      "requests": "Requests",
+      "anyMethod": "any method",
+      "requestsServer": "{{methods}}, to exactly this server",
+      "requestsPath": "{{methods}}, to exactly this server and path",
+      "secrets": "Secrets sent there",
+      "pages": "Pages opened",
+      "pagesOf": "of {{server}}, in actions you start"
+    },
+    "item": {
+      "privateNetwork": "Reach {{server}} on your private network",
+      "connect": "Connect to {{server}}",
+      "credential": "Use your stored credential {{credential}}"
+    },
+    "dialog": {
+      "title": "{{module}} actions now run as a plugin",
+      "description": "The plugin {{plugin}} replaces the built-in {{module}} module. It gets nothing the built-in did not use, and these only with your consent. Until you allow every item, the built-in keeps running your actions.",
+      "declined": "{{module}} stays built-in; you can ask again later.",
+      "allAllowed": "You allowed every item.",
+      "undecided": "{{undecided}} of {{total}} items still need your decision.",
+      "notNow": "Not now",
+      "confirm": "Confirm",
+      "never": "Credentials and access to your local network are never granted automatically. Stored credentials stay where they are; the plugin gets a copy in its own slot.",
+      "nothing": "Nothing waits for your consent.",
+      "list": "What the plugin asks for",
+      "decision": "Decision: {{key}}",
+      "dontAllow": "Don't allow"
+    }
+  },
+  "plan": {
+    "label": "Install plan",
+    "intro": "Review what this plugin may do. Check each permission to consent to it.",
+    "introMore_one": "It needs {{count}} more plugin, installed first. Each plugin gets only the permissions you grant it here.",
+    "introMore_other": "It needs {{count}} more plugins, installed first. Each plugin gets only the permissions you grant it here.",
+    "planning": "Planning again…",
+    "noConsent": "No permission needs your consent.",
+    "installCount": "Install {{number}}",
+    "installing": "Installing…",
+    "checked": "Every package was downloaded and checked against the signed registry; nothing is installed before you confirm. If one step fails, what was done is undone.",
+    "requested": "Requested",
+    "neededBecause": "Needed because {{reasons}}",
+    "allowNamed": "Allow {{name}}: {{title}}",
+    "alsoInstall": "Also install <name>{{name}}</name> <id>{{id}}</id>",
+    "withoutIt": "Without it these actions are unavailable: <code>{{actions}}</code>",
+    "blocked": "This plan cannot be installed yet",
+    "installedOff": "Plugins cannot run on this computer: they are installed turned off.",
+    "action": {
+      "install": "Install",
+      "update": "Update",
+      "enable": "Turn on",
+      "keep": "Already installed",
+      "builtin": "Built in",
+      "enableBuiltin": "Built in, turned off"
+    }
+  },
+  "removal": {
+    "turnOffTitle": "Turn off {{name}}?",
+    "turnOff": "Turn off",
+    "turnOffCount": "Turn off {{number}}",
+    "uninstallCount": "Uninstall {{number}}",
+    "dependents": "Other plugins need it. They are turned off with it; nothing else is uninstalled unless you check it below.",
+    "review": "Review what this changes.",
+    "alsoOff": "Also turned off",
+    "unavailable": "Actions that become unavailable",
+    "optionalIntegration": "its optional integration",
+    "orphans": "Installed only for it",
+    "alsoUninstall": "Also uninstall <name>{{name}}</name> <id>{{id}}</id>"
+  },
+  "configure": {
+    "title": "Configure {{name}}",
+    "description": "Settings and credentials of version {{version}}, stored by the agent for this plugin only.",
+    "settings": "Settings",
+    "loadingSettings": "Loading settings…",
+    "credentials": "Credentials",
+    "loadingCredentials": "Loading credentials…",
+    "credentialsHint": "A secret goes to the agent once and is never shown again, here or anywhere. The plugin never sees it: the agent adds it only to requests to the hosts listed.",
+    "credentialsOf": "Credentials of {{name}}",
+    "nothing": "This version declares no settings and no credentials.",
+    "saved": "Settings saved"
+  }
+}

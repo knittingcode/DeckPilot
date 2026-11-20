@@ -17,12 +17,14 @@ import { type ModuleFilter, moduleMatches, moduleToggle } from "@/lib/modules"
 import type { ModuleInfo } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { moduleIcon, moduleSettingsPages } from "@/modules"
+import { type TranslationKey, useTranslation } from "@/i18n"
+import { useFormat } from "@/i18n/format"
 
-const FILTERS: { value: ModuleFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "enabled", label: "Enabled" },
-  { value: "disabled", label: "Disabled" },
-  { value: "unavailable", label: "Unavailable" },
+const FILTERS: { value: ModuleFilter; label: TranslationKey }[] = [
+  { value: "all", label: "settings:modules.filter.all" },
+  { value: "enabled", label: "settings:modules.filter.enabled" },
+  { value: "disabled", label: "settings:modules.filter.disabled" },
+  { value: "unavailable", label: "settings:modules.filter.unavailable" },
 ]
 
 /**
@@ -31,6 +33,8 @@ const FILTERS: { value: ModuleFilter; label: string }[] = [
  * DeckPilot does not load external code.
  */
 export function ModulesSettings() {
+  const { t } = useTranslation()
+  const format = useFormat()
   const { modules, setModules, refresh } = useAppContext()
   const [query, setQuery] = useState("")
   const [filter, setFilter] = useState<ModuleFilter>("all")
@@ -44,10 +48,19 @@ export function ModulesSettings() {
         (next) => {
           setModules(next)
           refresh()
-          toast.success(`${module.name} ${enabled ? "enabled" : "disabled"}`)
+          toast.success(
+            enabled
+              ? t("settings:modules.toast.enabled", { module: module.name })
+              : t("settings:modules.toast.disabled", { module: module.name }),
+          )
         },
         (e: unknown) => {
-          toastFailure(`${module.name} was not ${enabled ? "enabled" : "disabled"}`, e)
+          toastFailure(
+            enabled
+              ? t("settings:modules.toast.notEnabled", { module: module.name })
+              : t("settings:modules.toast.notDisabled", { module: module.name }),
+            e,
+          )
         },
       )
       .finally(() => {
@@ -58,17 +71,13 @@ export function ModulesSettings() {
   const count = (value: ModuleFilter) => modules.filter((m) => moduleMatches(m, value, "")).length
   const shown = modules
     .filter((m) => moduleMatches(m, filter, query))
-    .sort((a, b) => a.name.localeCompare(b.name))
+    .sort((a, b) => format.compare(a.name, b.name))
   const withSettings = new Set(moduleSettingsPages(modules).map((page) => page.module.id))
 
   return (
     <>
       <p className="text-sm text-muted-foreground">
-        <span>
-          Disabling a module hides its pages and action types. Actions, workflows and layouts that
-          use it are kept and shown as unavailable until you enable it again. All modules are built
-          into DeckPilot; installing modules from other sources is not supported.
-        </span>
+        <span>{t("settings:modules.intro")}</span>
       </p>
       <div className="grid gap-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -76,8 +85,8 @@ export function ModulesSettings() {
             <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               type="search"
-              placeholder="Search modules"
-              aria-label="Search modules"
+              placeholder={t("settings:modules.search")}
+              aria-label={t("settings:modules.search")}
               className="h-8 pl-8"
               value={query}
               onChange={(e) => {
@@ -93,12 +102,12 @@ export function ModulesSettings() {
             onValueChange={(value) => {
               if (value) setFilter(value as ModuleFilter)
             }}
-            aria-label="Show modules"
+            aria-label={t("settings:modules.show")}
             className="flex-wrap"
           >
             {FILTERS.map((item) => (
               <ToggleGroupItem key={item.value} value={item.value} className="px-2.5">
-                {item.label}
+                {t(item.label)}
                 <span className="text-xs text-muted-foreground tabular-nums">
                   {count(item.value)}
                 </span>
@@ -107,11 +116,11 @@ export function ModulesSettings() {
           </ToggleGroup>
         </div>
         {shown.length === 0 ? (
-          <EmptyState variant="plain" title="No modules found">
-            {query ? "No module matches your search." : "No module is in this state."}
+          <EmptyState variant="plain" title={t("settings:modules.emptyTitle")}>
+            {query ? t("settings:modules.emptySearch") : t("settings:modules.emptyFilter")}
           </EmptyState>
         ) : (
-          <ul className="grid divide-y border-y" aria-label="Modules">
+          <ul className="grid divide-y border-y" aria-label={t("settings:pages.modules.title")}>
             {shown.map((module) => (
               <ModuleItem
                 key={module.id}
@@ -144,6 +153,8 @@ function ModuleItem({
   hasSettings: boolean
   onToggle: (enabled: boolean) => void
 }) {
+  const { t } = useTranslation()
+  const format = useFormat()
   const { openSettings } = useAppContext()
   const [expanded, setExpanded] = useState(false)
   const { allowed, reason } = moduleToggle(module, modules)
@@ -167,14 +178,27 @@ function ModuleItem({
               {module.name}
             </span>
             <span className="text-xs text-muted-foreground">v{module.version}</span>
-            <span className="text-xs text-muted-foreground">· Built-in</span>
-            {!module.supported && <Badge variant="outline">Not available on this system</Badge>}
+            <span className="text-xs text-muted-foreground">· {t("settings:modules.builtIn")}</span>
+            {!module.supported && (
+              <Badge variant="outline">{t("settings:modules.unsupported")}</Badge>
+            )}
           </div>
           <p className="text-caption text-muted-foreground">{module.description}</p>
           <p className="text-xs text-muted-foreground">
-            {module.actionTypes.length} action type{module.actionTypes.length === 1 ? "" : "s"}
-            {module.pages.length > 0 && ` · ${module.pages.map((p) => p.title).join(", ")} page`}
-            {` · ${module.platforms.length === 0 ? "all platforms" : module.platforms.map(osLabel).join(", ")}`}
+            {t("settings:modules.actionTypeCount", { count: module.actionTypes.length })}
+            {module.pages.length > 0 &&
+              ` · ${t("settings:modules.pageCount", {
+                count: module.pages.length,
+                pages: format.list(
+                  module.pages.map((p) => p.title),
+                  "unit",
+                ),
+              })}`}
+            {` · ${
+              module.platforms.length === 0
+                ? t("settings:modules.allPlatforms")
+                : format.list(module.platforms.map(osLabel), "unit")
+            }`}
           </p>
           {reason && (
             <p className="text-xs text-amber-700 dark:text-amber-400" id={`${id}-reason`}>
@@ -185,7 +209,11 @@ function ModuleItem({
         <Switch
           checked={module.enabled}
           disabled={!allowed || busy}
-          aria-label={`${module.enabled ? "Disable" : "Enable"} ${module.name}`}
+          aria-label={
+            module.enabled
+              ? t("settings:modules.disable", { module: module.name })
+              : t("settings:modules.enable", { module: module.name })
+          }
           aria-describedby={reason ? `${id}-reason` : undefined}
           onCheckedChange={onToggle}
         />
@@ -199,7 +227,7 @@ function ModuleItem({
               openSettings(`module:${module.id}`)
             }}
           >
-            <Settings2 /> Settings
+            <Settings2 /> {t("settings:title")}
           </Button>
         )}
         <Button
@@ -213,7 +241,7 @@ function ModuleItem({
           }}
         >
           <ChevronDown className={cn("transition-transform", expanded && "rotate-180")} />
-          {expanded ? "Hide details" : "Details"}
+          {expanded ? t("settings:modules.hideDetails") : t("settings:modules.details")}
         </Button>
       </div>
       {expanded && (
@@ -221,20 +249,20 @@ function ModuleItem({
           id={`${id}-details`}
           className="mt-2 ml-11 grid gap-4 rounded-md bg-muted/50 p-3 text-sm sm:grid-cols-2"
         >
-          <Detail title="Permissions">
+          <Detail title={t("settings:pages.permissions.title")}>
             {module.capabilities.length === 0 ? (
-              <p className="text-muted-foreground">None</p>
+              <p className="text-muted-foreground">{t("settings:shared.none")}</p>
             ) : (
               <ul className="grid gap-0.5">
                 {module.capabilities.map((capability) => (
-                  <li key={capability}>{CAPABILITIES[capability].title}</li>
+                  <li key={capability}>{t(CAPABILITIES[capability].title)}</li>
                 ))}
               </ul>
             )}
           </Detail>
-          <Detail title="Action types">
+          <Detail title={t("settings:modules.actionTypes")}>
             {module.actionTypes.length === 0 ? (
-              <p className="text-muted-foreground">None</p>
+              <p className="text-muted-foreground">{t("settings:shared.none")}</p>
             ) : (
               <ul className="grid gap-0.5">
                 {module.actionTypes.map((type) => (
@@ -246,13 +274,13 @@ function ModuleItem({
               </ul>
             )}
           </Detail>
-          <Detail title="Requires">
+          <Detail title={t("settings:modules.requires")}>
             <ModuleList ids={module.dependencies} modules={modules} />
           </Detail>
-          <Detail title="Required by">
+          <Detail title={t("settings:modules.requiredBy")}>
             <ModuleList ids={dependents.map((m) => m.id)} modules={modules} />
           </Detail>
-          <Detail title="Identifier">
+          <Detail title={t("settings:modules.identifier")}>
             <span className="font-mono text-xs select-text">{module.id}</span>
           </Detail>
         </div>
@@ -271,7 +299,10 @@ function Detail({ title, children }: { title: string; children: React.ReactNode 
 }
 
 function ModuleList({ ids, modules }: { ids: string[]; modules: ModuleInfo[] }) {
-  if (ids.length === 0) return <p className="text-muted-foreground">No other modules</p>
+  const { t } = useTranslation()
+  if (ids.length === 0) {
+    return <p className="text-muted-foreground">{t("settings:modules.noOtherModules")}</p>
+  }
   return (
     <ul className="grid gap-0.5">
       {ids.map((id) => {
@@ -280,7 +311,11 @@ function ModuleList({ ids, modules }: { ids: string[]; modules: ModuleInfo[] }) 
           <li key={id}>
             {other?.name ?? id}{" "}
             <span className="text-xs text-muted-foreground">
-              {!other ? "not installed" : other.enabled ? "enabled" : "disabled"}
+              {!other
+                ? t("settings:modules.state.notInstalled")
+                : other.enabled
+                  ? t("settings:modules.state.enabled")
+                  : t("settings:modules.state.disabled")}
             </span>
           </li>
         )

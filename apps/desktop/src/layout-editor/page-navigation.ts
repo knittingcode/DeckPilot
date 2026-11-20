@@ -2,16 +2,18 @@
 // the device preview (page-nav.tsx).
 
 import { ancestors, page as findPage, pagePosition, topLevelPages } from "@/lib/layout-model"
+import { i18n } from "@/i18n"
 import type { DeviceLayout } from "@/lib/types"
 
 /**
  * The name of a new top-level page: "Page N" after the pages there are,
- * the first such name no page has.
+ * the first such name no page has (in the window's language: the name
+ * is then the user's).
  */
 export function newPageName(layout: DeviceLayout): string {
   const taken = new Set(layout.pages.map((p) => p.name.trim().toLowerCase()))
   for (let n = topLevelPages(layout).length + 1; ; n++) {
-    const name = `Page ${n}`
+    const name = i18n.t("editor:pageNav.newPageName", { number: n })
     if (!taken.has(name.toLowerCase())) return name
   }
 }

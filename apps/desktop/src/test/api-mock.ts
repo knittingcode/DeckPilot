@@ -10,6 +10,12 @@
 import { type Mock, vi } from "vitest"
 
 import type { api as realApi } from "@/lib/api"
+import {
+  errorCode,
+  isBackendError,
+  rawErrorMessage,
+  errorMessage as realErrorMessage,
+} from "@/lib/backend-error"
 
 type Api = typeof realApi
 type Fn = (...args: never[]) => unknown
@@ -36,10 +42,11 @@ export function resetApi() {
   for (const fn of commands.values()) fn.mockReset()
 }
 
-/** Like the real `errorMessage`: errors as the backend reports them. */
+/** Like the real `errorMessage`: backend errors translated by code, others as they are. */
 export function errorMessage(error: unknown): string {
+  if (isBackendError(error)) return realErrorMessage(error)
   return error instanceof Error ? error.message : String(error)
 }
 
 /** The module `@/lib/api` is replaced with. */
-export const apiModule = { api, errorMessage }
+export const apiModule = { api, errorMessage, errorCode, rawErrorMessage }

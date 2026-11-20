@@ -1,5 +1,6 @@
 // Targets offered by the library, the inspector and the context menu.
 
+import { i18n } from "@/i18n"
 import type { BindingTarget, DeviceLayout, Profile } from "@/lib/types"
 
 export interface TargetOption {
@@ -23,6 +24,8 @@ export interface TargetOption {
 }
 
 export interface TargetGroup {
+  /** Stable identity of the group; `label` is in the window's language. */
+  id: "actions" | "workflows" | "navigation" | "workSession"
   label: string
   options: TargetOption[]
 }
@@ -71,7 +74,8 @@ export function targetGroups(
   })
   const groups: TargetGroup[] = [
     {
-      label: "Actions",
+      id: "actions",
+      label: i18n.t("editor:targets.actions"),
       options: profile.actions.map((a) => {
         const why = unavailable(a.actionType)
         return {
@@ -83,18 +87,26 @@ export function targetGroups(
       }),
     },
     {
-      label: "Workflows",
+      id: "workflows",
+      label: i18n.t("editor:targets.workflows"),
       options: profile.workflows.map((w) =>
         option({ type: "workflow", workflow: w.id }, w.name, "workflow"),
       ),
     },
     {
-      label: "Navigation",
+      id: "navigation",
+      label: i18n.t("editor:targets.navigation"),
       options: [
-        option({ type: "back" }, "Back", "navigation"),
+        option({ type: "back" }, i18n.t("editor:targets.back"), "navigation"),
         ...layout.pages
           .filter((p) => p.id !== pageId)
-          .map((p) => option({ type: "openPage", page: p.id }, `Open ${p.name}`, "navigation")),
+          .map((p) =>
+            option(
+              { type: "openPage", page: p.id },
+              i18n.t("editor:targets.openPage", { page: p.name }),
+              "navigation",
+            ),
+          ),
       ],
     },
   ]
@@ -143,11 +155,12 @@ export function gestureOnlyGroups(workSession = true): TargetGroup[] {
   const target: BindingTarget = { type: "stateful", machine: "workSession" }
   return [
     {
-      label: "Work Session",
+      id: "workSession",
+      label: i18n.t("editor:targets.workSession"),
       options: [
         {
           value: encodeTarget(target),
-          label: "Work Session controller",
+          label: i18n.t("editor:targets.workSessionController"),
           target,
           kind: "stateful",
         },

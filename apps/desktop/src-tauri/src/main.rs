@@ -59,7 +59,10 @@ pub(crate) fn create_main_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Resul
     }
     // Also used by the agent's "Open DeckPilot" in a single-window app
     // (macOS), so that path goes through `for_webdriver` too.
-    windows::for_webdriver(WebviewWindowBuilder::from_config(app, &config)?).build()?;
+    windows::appearance(windows::for_webdriver(WebviewWindowBuilder::from_config(
+        app, &config,
+    )?))
+    .build()?;
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(15)).await;
@@ -117,6 +120,9 @@ fn main() {
         .manage(lifecycle::MainPresented::default())
         .manage(commands::portability::PendingImport::default())
         .manage(commands::plugins::PluginEvents::default())
+        .manage(commands::locale::AgentLocale::default())
+        .manage(commands::live_preview::LivePreview::default())
+        .manage(commands::unsaved::UnsavedEdits::default())
         .setup(move |app| {
             // Same location as the agent; `DECKPILOT_DATA_DIR` overrides it.
             let paths = deckpilot_ipc::AgentPaths::resolve()?;
@@ -165,6 +171,7 @@ fn main() {
             Ok(())
         })
         .on_window_event(lifecycle::on_window_event)
+        .on_page_load(lifecycle::on_page_load)
         .invoke_handler(commands::handler())
         .build(tauri::generate_context!())
         .expect("failed to build DeckPilot")

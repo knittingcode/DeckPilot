@@ -83,8 +83,8 @@ describe("toolbar notifications", () => {
       "Deploy finished",
     ])
     // Severity is conveyed in words, not only by color; success is shown as info.
-    expect(within(items[0] as HTMLElement).getByLabelText("error")).toBeInTheDocument()
-    expect(within(items[2] as HTMLElement).getByLabelText("info")).toBeInTheDocument()
+    expect(within(items[0] as HTMLElement).getByLabelText("Error")).toBeInTheDocument()
+    expect(within(items[2] as HTMLElement).getByLabelText("Information")).toBeInTheDocument()
     expect(list.getByText("3 nodes succeeded")).toBeInTheDocument()
 
     await user.keyboard("{Escape}")

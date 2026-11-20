@@ -1,0 +1,981 @@
+{
+  "text": {
+    "mode": {
+      "label": "Tryb tekstu",
+      "wrap": "Zawijaj",
+      "singleLine": "Jedna linia",
+      "autoFit": "Dopasuj automatycznie",
+      "marquee": "Przewijanie"
+    },
+    "mixed": "Różne",
+    "auto": "Auto",
+    "align": {
+      "label": "Wyrównanie tekstu",
+      "left": "Do lewej",
+      "center": "Do środka",
+      "right": "Do prawej"
+    },
+    "maxLines": {
+      "label": "Maksymalna liczba linii"
+    },
+    "overflow": {
+      "label": "Gdy za długi",
+      "ellipsis": "Wielokropek",
+      "clip": "Przytnij"
+    },
+    "minSize": {
+      "label": "Minimalny rozmiar (pt)",
+      "tooLarge": "Minimum jest większe niż preferowany rozmiar; używany jest preferowany rozmiar."
+    },
+    "fit": {
+      "label": "Dopasuj do",
+      "singleLine": "Jednej linii",
+      "multiline": "Kilku linii"
+    },
+    "speed": {
+      "custom": "Szybkość (px/s)"
+    },
+    "pause": {
+      "label": "Pauza na początku i końcu (ms)"
+    },
+    "notice": {
+      "doesNotFit": "Nie mieści się w minimalnym rozmiarze: urządzenie pokazuje go w rozmiarze {{size}} pt, przycięty znakiem „…”. Skróć tytuł, zmniejsz minimalny rozmiar lub dopasuj do kilku linii.",
+      "scrollsReduced": "Przewija się na urządzeniu. Tutaj jest nieruchomy, ponieważ system ogranicza ruch.",
+      "scrolls": "Przewija się na urządzeniu, tak jak tutaj.",
+      "truncatedLines": "Za długi na dostępne linie: ostatnia linia na urządzeniu kończy się znakiem „…”.",
+      "truncatedLine": "Za długi na jedną linię: przycięty na urządzeniu.",
+      "shrunk": "Pokazany w rozmiarze {{size}} pt, aby się zmieścił."
+    },
+    "wholeNumber": "Wpisz liczbę całkowitą od {{min}} do {{max}}."
+  },
+  "appearance": {
+    "appliesTo_one": "Dotyczy {{count}} klawisza",
+    "appliesTo_few": "Dotyczy {{count}} klawiszy",
+    "appliesTo_many": "Dotyczy {{count}} klawiszy",
+    "appliesTo_other": "Dotyczy {{count}} klawisza",
+    "background": "Tło",
+    "textColor": "Kolor tekstu",
+    "contrast": {
+      "good": "Kontrast {{ratio}}:1",
+      "low": "Kontrast {{ratio}}:1 — czytelny tylko przy dużym tekście",
+      "poor": "Kontrast {{ratio}}:1 — trudny do odczytania"
+    }
+  },
+  "color": {
+    "swatches": "{{label}} — próbki",
+    "picker": "{{label}} — wybór koloru",
+    "hex": "{{label}} — wartość szesnastkowa",
+    "swatchTitle": "{{name}} {{value}}",
+    "mixed": "Różne",
+    "default": "Domyślny",
+    "transparent": "Przezroczysty",
+    "transparentTitle": "Przezroczysty: widać wyświetlacz urządzenia",
+    "defaultIs": "Domyślny: {{value}}",
+    "invalid": "Wpisz kolor w formacie #rrggbb.",
+    "black": "Czarny",
+    "graphite": "Grafitowy",
+    "white": "Biały",
+    "red": "Czerwony",
+    "orange": "Pomarańczowy",
+    "amber": "Bursztynowy",
+    "green": "Zielony",
+    "teal": "Morski",
+    "blue": "Niebieski",
+    "indigo": "Indygo",
+    "purple": "Fioletowy",
+    "pink": "Różowy",
+    "swatchButton": "{{label}}: {{value}}"
+  },
+  "icons": {
+    "file": "Plik ikony",
+    "import": "Importuj ikonę",
+    "limits": "{{used}} z {{max}} · PNG lub JPEG, do 2 MiB",
+    "list": "Ikony",
+    "none": "Bez ikony",
+    "entry_one": "{{name}}, używana przez {{count}} klawisz",
+    "entry_few": "{{name}}, używana przez {{count}} klawisze",
+    "entry_many": "{{name}}, używana przez {{count}} klawiszy",
+    "entry_other": "{{name}}, używana przez {{count}} klawisza",
+    "delete": "Usuń {{name}}",
+    "deleteTitle": "Usuń",
+    "inUse_one": "Używana przez {{count}} klawisz; nie można jej usunąć",
+    "inUse_few": "Używana przez {{count}} klawisze; nie można jej usunąć",
+    "inUse_many": "Używana przez {{count}} klawiszy; nie można jej usunąć",
+    "inUse_other": "Używana przez {{count}} klawisza; nie można jej usunąć",
+    "empty": "Ten profil nie ma jeszcze ikon. Importowane obrazy są skalowane do maksymalnie 256 pikseli i zapisywane w profilu.",
+    "fitLabel": "Dopasowanie ikony",
+    "fit": "Dopasuj",
+    "fitHint": "Cała ikona z zachowaniem proporcji",
+    "fill": "Wypełnij",
+    "fillHint": "Rozciągnięta na cały klawisz",
+    "crop": "Przytnij",
+    "cropHint": "Pokrywa klawisz, krawędzie są przycinane",
+    "withFit": "{{name}}: {{fit}}",
+    "defaultName": "Ikona",
+    "tooMany": "Profil może zawierać najwyżej {{max}} ikony. Najpierw usuń nieużywane ikony.",
+    "wrongType": "Wybierz obraz PNG lub JPEG.",
+    "emptyFile": "Plik jest pusty.",
+    "tooLarge": "Obraz jest większy niż 2 MiB.",
+    "tooManyPixels": "Obraz jest większy niż {{max}} × {{max}} pikseli.",
+    "unreadable": "Nie można odczytać pliku.",
+    "loadFailed": "Nie można wczytać ikon: {{detail}}",
+    "importFailed": "Nie zaimportowano „{{name}}”: {{detail}}",
+    "deleteFailed": "Nie usunięto „{{name}}”: {{detail}}",
+    "imported": "Zaimportowano „{{name}}”",
+    "deleted": "Usunięto „{{name}}”",
+    "pickerDefault": "Ikona domyślna",
+    "pickerUseDefault": "Użyj ikony domyślnej"
+  },
+  "library": {
+    "title": "Biblioteka",
+    "dock": "Biblioteka akcji",
+    "hint": "Przeciągnij na element sterujący albo zaznacz element sterujący i wybierz w inspektorze.",
+    "search": "Szukaj w bibliotece",
+    "compatibleOnly": "Tylko zgodne",
+    "showingFits": "Widoczne elementy pasujące do: {{control}}.",
+    "selectControl": "Zaznacz element sterujący, aby zobaczyć, co do niego pasuje.",
+    "empty": "Nie ma jeszcze akcji ani przepływów pracy. Utwórz je w Bibliotece akcji.",
+    "noMatches": "Brak wyników.",
+    "navigation": "Nawigacja",
+    "newSequence": "Nowe: sekwencja",
+    "newCategory": "Nowe: {{category}}",
+    "drag": "Przeciągnij {{name}} na element sterujący",
+    "unavailable": "{{name}}: niedostępne, {{reason}}",
+    "incompatible": "{{name}}: nie pasuje do zaznaczonego elementu sterującego. {{reason}}",
+    "typeTitle": "{{description}} ({{module}})",
+    "newFolder": "Nowy folder",
+    "newFolderDrag": "Przeciągnij Nowy folder na pusty element sterujący",
+    "newFolderTitle": "Upuść na pusty klawisz, aby utworzyć w tym miejscu folder. Kliknij klawisz dwukrotnie, aby go otworzyć.",
+    "multiAction": "Multiakcja",
+    "multiActionDrag": "Przeciągnij Multiakcję na element sterujący",
+    "multiActionTitle": "Uruchamia kilka akcji po kolei, z opóźnieniami między nimi. Upuść ją na klawisz, a następnie dodaj kroki.",
+    "searchFolder": "nowy folder foldery nawigacja",
+    "searchMulti": "nowa multiakcja sekwencja kroki przepływ pracy"
+  },
+  "targets": {
+    "actions": "Akcje",
+    "workflows": "Przepływy pracy",
+    "navigation": "Nawigacja",
+    "back": "Wstecz",
+    "openPage": "Otwórz {{page}}",
+    "workSession": "Sesja pracy",
+    "workSessionController": "Sterowanie sesją pracy"
+  },
+  "drag": {
+    "action": "Akcja",
+    "missingAction": "Brakująca akcja",
+    "workflow": "Przepływ pracy",
+    "openPage": "Otwórz {{page}}",
+    "page": "stronę"
+  },
+  "layoutSwitch": {
+    "defaultName": "Przełącz układ",
+    "changeFailed": "Nie zmieniono miejsca docelowego",
+    "title": "Przełącz układ",
+    "shows": "Pokazuje: <name>{{name}}</name>",
+    "notInProfile": "układ spoza tego profilu",
+    "nothingChosen": "jeszcze nic nie wybrano",
+    "layout": "Układ",
+    "onlyLayouts": "Tylko układy dla {{model}} przypisane do tego profilu.",
+    "page": "Strona",
+    "homePage": "Strona główna",
+    "missingPage": "Brakująca strona (strona główna)",
+    "back": "Wstecz",
+    "shared": "Inne klawisze też uruchamiają „{{action}}”: zmiana w tym miejscu da temu klawiszowi osobną akcję.",
+    "choose": "Wybierz układ",
+    "search": "Szukaj układów",
+    "noMatches": "Żaden układ nie pasuje.",
+    "default": "domyślny",
+    "previousTitle": "Powrót do poprzedniego układu",
+    "previousHint": "Przywraca na tym urządzeniu układ, który był wyświetlany wcześniej w tym profilu. Nic nie robi, gdy takiego układu nie ma. Klawisz Wstecz w folderze wraca natomiast do strony.",
+    "nowBack": "Teraz: powrót do {{layout}}.",
+    "previousLayout": "poprzedniego układu",
+    "nowNone": "Teraz: to urządzenie nie ma poprzedniego układu, więc klawisz nic nie robi."
+  },
+  "liveStates": {
+    "live": "Bieżące wartości z agenta",
+    "inactiveProfile": "Bieżące wartości są widoczne, gdy ten profil jest aktywny",
+    "stoppedStale": "Agent nie działa: wartości nie są aktualne",
+    "stopped": "Agent nie działa: brak bieżących wartości",
+    "disconnected": "Utracono połączenie z agentem: wartości nie są aktualne",
+    "unsupported": "Uruchom ponownie agenta, aby zobaczyć tu bieżące wartości"
+  },
+  "gesture": {
+    "names": {
+      "click": "Pojedyncze kliknięcie",
+      "doubleClick": "Dwukrotne kliknięcie",
+      "longPress": "Długie naciśnięcie"
+    },
+    "timing": {
+      "doubleClickMs": "Czas na dwukrotne kliknięcie",
+      "longPressMs": "Czas długiego naciśnięcia",
+      "wholeNumber": "{{label}}: wartość musi być całkowitą liczbą milisekund.",
+      "range": "{{label}}: wartość musi wynosić od {{min}} do {{max}} ms.",
+      "label": "{{label}} (ms)",
+      "placeholder": "Domyślnie ({{ms}})",
+      "useDefaultLabel": "Użyj domyślnej wartości: {{label}}",
+      "useDefault": "Użyj domyślnej",
+      "usingDefault": "{{min}}–{{max}} ms. Używana jest wartość domyślna tego komputera ({{ms}} ms).",
+      "default": "{{min}}–{{max}} ms. Domyślnie: wartość domyślna tego komputera ({{ms}} ms)."
+    },
+    "unavailable": "Niedostępne: {{reason}}. Pozostaje przypisane i znów zadziała, gdy wtyczka będzie mogła działać.",
+    "clickNote": {
+      "immediate": "Pojedyncze kliknięcie działa od razu po naciśnięciu klawisza.",
+      "onRelease": "Pojedyncze kliknięcie działa po zwolnieniu klawisza przed upływem czasu długiego naciśnięcia, dzięki czemu można odróżnić przytrzymanie.",
+      "afterWindow": "Pojedyncze kliknięcie działa po upływie czasu na dwukrotne kliknięcie ({{ms}} ms) bez drugiego naciśnięcia."
+    },
+    "refused": "Nie przypisano do gestu „{{gesture}}” ({{control}})",
+    "heading": "Gesty",
+    "rawNote": "Ten klawisz działa od razu po naciśnięciu. Dodanie dwukrotnego kliknięcia lub długiego naciśnięcia przełącza go na gesty.",
+    "release": "Zwolnienie",
+    "help": "Pomoc: {{gesture}}",
+    "releaseHint": "Działa bez opóźnienia, gdy klawisz zostanie puszczony. Klawisze z dwukrotnym kliknięciem lub długim naciśnięciem nie mogą z tego korzystać.",
+    "nothing": "Nic",
+    "optionUnavailable": "(niedostępne)",
+    "optionNotHere": "(nie dla tego elementu)",
+    "remove": "Usuń: {{gesture}}",
+    "removeTitle": "Usuń działanie gestu „{{gesture}}”",
+    "empty": {
+      "drop": "Przeciągnij akcję tutaj",
+      "choose": "Wybierz akcję",
+      "assign": "Przypisz akcję do: {{gesture}}",
+      "description": "Upuść na tę kartę akcję, przepływ pracy lub stronę albo naciśnij Enter, aby wybrać.",
+      "chooseDescription": "Naciśnij Enter, aby wybrać akcję, przepływ pracy lub stronę."
+    },
+    "carousel": {
+      "role": "karuzela",
+      "previous": "Poprzedni gest",
+      "next": "Następny gest"
+    },
+    "labelFor": "Etykieta: {{gesture}}",
+    "labelPlaceholder": "Etykieta (opcjonalnie)",
+    "editSteps": "Edytuj kroki ({{count}})",
+    "overrides": {
+      "hide": "Ukryj parametry",
+      "some_one": "Parametry tego gestu ({{count}} nadpisany)",
+      "some_few": "Parametry tego gestu ({{count}} nadpisane)",
+      "some_many": "Parametry tego gestu ({{count}} nadpisanych)",
+      "some_other": "Parametry tego gestu ({{count}} nadpisanego)",
+      "none": "Nadpisz parametry tego gestu",
+      "hint": "Nadpisania dotyczą tylko gestu „{{gesture}}”; sama akcja „{{action}}” pozostaje bez zmian.",
+      "override": "Nadpisz „{{label}}”"
+    },
+    "convert": {
+      "title": "Przełączyć {{control}} na gesty?",
+      "click": "{{control}} działa od razu po naciśnięciu. Kontroler sesji pracy wymaga gestów, więc pojedyncze kliknięcie staje się gestem. Bez dwukrotnego kliknięcia i długiego naciśnięcia nadal działa w chwili naciśnięcia.",
+      "doubleClick": "{{control}} działa od razu po naciśnięciu. Aby dodać gest „{{gesture}}”, pojedyncze kliknięcie staje się gestem: zadziała wtedy po upływie czasu na dwukrotne kliknięcie ({{ms}} ms) bez drugiego naciśnięcia, czyli nieco później niż teraz.",
+      "longPress": "{{control}} działa od razu po naciśnięciu. Aby dodać gest „{{gesture}}”, pojedyncze kliknięcie staje się gestem: zadziała wtedy po zwolnieniu klawisza przed upływem czasu długiego naciśnięcia ({{ms}} ms), czyli nieco później niż teraz.",
+      "release": "Jego przypisanie do zwolnienia („{{target}}”) zostanie usunięte: klawisz z gestami nie może też reagować na zwolnienie.",
+      "untilSaved": "Na urządzeniu nic się nie zmieni, dopóki nie zapiszesz układu.",
+      "confirm": "Przełącz na gesty"
+    }
+  },
+  "variables": {
+    "references": "Odwołania",
+    "unclosed": "Odwołanie nie jest zamknięte: dodaj po nim „{{braces}}”.",
+    "literalBraces": "„{{braces}}” w zwykłym tekście pozostaje bez zmian. Wstaw zmienną, aby użyć odwołania.",
+    "notLive": "Ten agent DeckPilot nie może rozwiązać odwołania <reference>{{reference}}</reference>; zaktualizuj agenta lub użyj stałej wartości.",
+    "resolving": "rozwiązywanie…",
+    "isNow": "<reference>{{reference}}</reference> ma teraz wartość <value>{{value}}</value>",
+    "valuesFor": "Wartości dla: {{scope}}",
+    "unavailable": "Wartości są niedostępne: {{reason}}",
+    "list": "Zmienne",
+    "sensitiveMark": "poufna",
+    "noneFits": "Żadna zmienna nie pasuje do tego pola.",
+    "noMatches": "Brak pasujących zmiennych.",
+    "loading": "Wczytywanie zmiennych…",
+    "chooseToSee": "Wybierz zmienną, aby zobaczyć jej wartość.",
+    "preview": {
+      "notLive": "Niedostępna w tym agencie",
+      "failed": "Nie udało się rozwiązać: {{reason}}",
+      "unknown": "Nieznana",
+      "redacted": "Ukryta (poufna)"
+    },
+    "details": {
+      "label": "Szczegóły zmiennej",
+      "value": "Wartość",
+      "currentValue": "Bieżąca wartość",
+      "source": "Źródło",
+      "type": "Typ",
+      "scope": "Zakres",
+      "owner": "Właściciel",
+      "access": "Dostęp",
+      "editable": "Edytowalna",
+      "readOnly": "Tylko do odczytu",
+      "deprecated": "Przestarzała",
+      "stillWorks": "Nadal działa; użyj <reference>{{reference}}</reference>",
+      "changes": "Zmiany",
+      "dynamic": "Dynamiczna: zależy od kontekstu",
+      "static": "Statyczna",
+      "availability": "Dostępność",
+      "sensitive": "Poufna",
+      "neverShown": "Nigdy nie jest wyświetlana, zapisywana w dzienniku ani eksportowana",
+      "context": "Kontekst rozwiązywania",
+      "resolvedFor": "Rozwiązano dla: {{scope}}"
+    },
+    "insertInto": "Wstaw zmienną do pola „{{field}}”",
+    "insert": "Wstaw zmienną",
+    "forField": "Zmienne dla pola „{{field}}”",
+    "search": "Szukaj zmiennych",
+    "searchPlaceholder": "Szukaj według nazwy, opisu, zakresu, typu lub modułu",
+    "previewContext": "Kontekst podglądu",
+    "reference": "Odwołanie",
+    "chooseAnother": "Wybierz inną zmienną dla pola „{{field}}”",
+    "useFixed": "Użyj stałej wartości"
+  },
+  "shell": {
+    "switchPreset": {
+      "label": "Przełącz na {{layout}}",
+      "description": "Pokazuje {{layout}} na tym urządzeniu; Powrót do poprzedniego układu wraca tutaj."
+    },
+    "drop": {
+      "refused": "Nie można umieścić „{{item}}” w miejscu „{{control}}”. {{reason}}",
+      "refusedAction": "Nie można umieścić akcji w miejscu „{{control}}”. {{reason}}",
+      "refusedThis": "Nie można umieścić tego elementu w miejscu „{{control}}”. {{reason}}",
+      "notPut": "Nie umieszczono „{{item}}” w miejscu „{{control}}”",
+      "notPutAction": "Nie umieszczono akcji w miejscu „{{control}}”",
+      "notPutThis": "Nie umieszczono tego elementu w miejscu „{{control}}”",
+      "notPlaced": "Nie umieszczono. {{reason}}"
+    },
+    "addFailed": "Nie można dodać „{{name}}”",
+    "multiActionFailed": "Nie można utworzyć multiakcji",
+    "gestureDrop": {
+      "title": "Gest przyjmuje akcję, przepływ pracy lub inną stronę",
+      "description": "Przeciągnij jedną z nich z biblioteki na gest."
+    },
+    "noPreviousLayout": "Brak poprzedniego układu",
+    "saved": {
+      "sent": "Zapisano układ i wysłano go do agenta",
+      "saved": "Zapisano układ",
+      "keptNotRun_one": "{{count}} przypisanie zostaje zachowane, ale nie jest uruchamiane",
+      "keptNotRun_few": "{{count}} przypisania zostają zachowane, ale nie są uruchamiane",
+      "keptNotRun_many": "{{count}} przypisań zostaje zachowanych, ale nie są uruchamiane",
+      "keptNotRun_other": "{{count}} przypisania zostaje zachowane, ale nie są uruchamiane",
+      "keptNotRunDetail": "Ich akcja nie może zostać uruchomiona z ich elementu sterującego: {{list}}"
+    },
+    "noControls": "{{model}} nie ma konfigurowalnych elementów sterujących",
+    "folderEmpty": "Ten folder jest pusty",
+    "pageEmpty": "Ta strona jest pusta",
+    "emptyHint": "Przeciągnij akcję, przepływ pracy lub „Nowy folder” z biblioteki na element sterujący albo zaznacz element sterujący i wybierz w inspektorze.",
+    "noBackKey": "Ten folder nie ma przypisania „Wstecz”. Na urządzeniu DeckPilot dodaje je na pierwszym wolnym klawiszu. Aby wybrać klawisz, przeciągnij „Wstecz” z biblioteki na element sterujący.",
+    "multiAction": {
+      "title": "Multiakcja",
+      "description": "Kroki są wykonywane po kolei w agencie po naciśnięciu klawisza. Opóźnienie czeka między dwoma krokami; działającą multiakcję można anulować na pasku stanu."
+    }
+  },
+  "bar": {
+    "label": "Edycja układu",
+    "unsaved": "Niezapisane",
+    "allSaved": "Wszystkie zmiany zapisane",
+    "undo": "Cofnij",
+    "redo": "Ponów",
+    "revert": "Przywróć",
+    "save": "Zapisz"
+  },
+  "live": {
+    "live": "Na żywo na urządzeniu",
+    "suspended": "Urządzenie pokazuje inny układ",
+    "connecting": "Łączenie z urządzeniem…",
+    "disconnected": "Urządzenie pokazuje zapisany układ (agent nie jest połączony)",
+    "unsupported": "Zmiany trafią na urządzenie po zapisaniu (zaktualizuj agenta, aby mieć podgląd na żywo)",
+    "otherProfile": "Zmiany trafią na urządzenie po zapisaniu (działa na nim inny profil)",
+    "refused": "Podgląd na żywo wstrzymany"
+  },
+  "inspector": {
+    "label": "Inspektor",
+    "multiHint": "{{controls}}. Skopiuj, wytnij, wklej, powiel lub wyczyść je razem albo upuść element biblioteki na jeden z nich.",
+    "clearMany_one": "Wyczyść {{count}} element sterujący",
+    "clearMany_few": "Wyczyść {{count}} elementy sterujące",
+    "clearMany_many": "Wyczyść {{count}} elementów sterujących",
+    "clearMany_other": "Wyczyść {{count}} elementu sterującego",
+    "unavailable": "Niedostępne: {{reason}}. Pozostaje przypisane i znów zadziała, gdy wtyczka będzie mogła je uruchomić.",
+    "nothing": "Nic",
+    "optionUnavailable": "{{option}} (niedostępne)",
+    "optionNotHere": "{{option}} (nie dla tego elementu sterującego)",
+    "labelFor": "Etykieta dla: {{trigger}}",
+    "labelPlaceholder": "Etykieta (opcjonalnie)",
+    "clearControl": "Wyczyść element sterujący",
+    "region": "{{control}} – ustawienia",
+    "regionMany_one": "Ustawienia {{count}} elementu sterującego",
+    "regionMany_few": "Ustawienia {{count}} elementów sterujących",
+    "regionMany_many": "Ustawienia {{count}} elementów sterujących",
+    "regionMany_other": "Ustawienia {{count}} elementu sterującego",
+    "deselect": {
+      "key": "Odznacz klawisz",
+      "encoder": "Odznacz pokrętło",
+      "touchZone": "Odznacz strefę dotykową",
+      "many": "Odznacz elementy sterujące"
+    }
+  },
+  "pageNav": {
+    "untitled": "Bez nazwy",
+    "label": "Nawigacja stron",
+    "previous": "Poprzednia strona",
+    "previousTo": "Poprzednia strona: {{page}}",
+    "first": "To jest pierwsza strona",
+    "positionTitle": "{{page}}, strona {{number}} z {{count}}. Przejdź do innej strony",
+    "position": "Strona {{number}} z {{count}}",
+    "next": "Następna strona",
+    "nextTo": "Następna strona: {{page}}",
+    "last": "To jest ostatnia strona",
+    "add": "Dodaj stronę",
+    "addTitle": "Dodaj stronę po ostatniej i pokaż ją",
+    "location": "Położenie strony",
+    "newPageName": "Strona {{number}}",
+    "positionNamed": "Strona {{number}} z {{count}}: {{page}}"
+  },
+  "pageSettings": {
+    "name": "Nazwa strony",
+    "delete": "Usuń stronę",
+    "autoReturn": "Zamknij po użyciu klawisza",
+    "sheetTitle": "Strony"
+  },
+  "deletePage": {
+    "title": "Usunąć „{{page}}”?",
+    "undoable": "Możesz to cofnąć, dopóki układ nie zostanie zapisany.",
+    "controls_one": "{{count}} element sterujący na tej stronie zostanie usunięty razem z nią.",
+    "controls_few": "{{count}} elementy sterujące na tej stronie zostaną usunięte razem z nią.",
+    "controls_many": "{{count}} elementów sterujących na tej stronie zostanie usuniętych razem z nią.",
+    "controls_other": "{{count}} elementu sterującego na tej stronie zostanie usunięte razem z nią.",
+    "openers_one": "{{count}} element sterujący na innych stronach, który ją otwiera, przestanie cokolwiek robić.",
+    "openers_few": "{{count}} elementy sterujące na innych stronach, które ją otwierają, przestaną cokolwiek robić.",
+    "openers_many": "{{count}} elementów sterujących na innych stronach, które ją otwierają, przestanie cokolwiek robić.",
+    "openers_other": "{{count}} elementu sterującego na innych stronach, które ją otwierają, przestanie cokolwiek robić.",
+    "quoted": "„{{name}}”",
+    "insideToFolder_one": "Strona w jej wnętrzu ({{names}}) zostanie zachowana i przeniesiona do „{{folder}}”.",
+    "insideToFolder_few": "Strony w jej wnętrzu ({{names}}) zostaną zachowane i przeniesione do „{{folder}}”.",
+    "insideToFolder_many": "Strony w jej wnętrzu ({{names}}) zostaną zachowane i przeniesione do „{{folder}}”.",
+    "insideToFolder_other": "Strony w jej wnętrzu ({{names}}) zostaną zachowane i przeniesione do „{{folder}}”.",
+    "insideToTop_one": "Strona w jej wnętrzu ({{names}}) zostanie zachowana i przeniesiona na najwyższy poziom.",
+    "insideToTop_few": "Strony w jej wnętrzu ({{names}}) zostaną zachowane i przeniesione na najwyższy poziom.",
+    "insideToTop_many": "Strony w jej wnętrzu ({{names}}) zostaną zachowane i przeniesione na najwyższy poziom.",
+    "insideToTop_other": "Strony w jej wnętrzu ({{names}}) zostaną zachowane i przeniesione na najwyższy poziom.",
+    "empty": "Strona jest pusta i nic jej nie otwiera."
+  },
+  "pageTree": {
+    "label": "Drzewo stron",
+    "unreadable": "Nie można odczytać drzewa stron: {{problem}}",
+    "saveFirst": "Zapisz lub przywróć zmiany, aby zmieniać kolejność, przenosić lub kopiować strony.",
+    "automaticBack": "automatyczne Wstecz",
+    "notMovedUp": "Nie przeniesiono „{{page}}” w górę",
+    "notMovedDown": "Nie przeniesiono „{{page}}” w dół",
+    "moved": {
+      "page": "Przeniesiono „{{page}}” do „{{target}}”",
+      "top": "Przeniesiono „{{page}}” na najwyższy poziom"
+    },
+    "copyFailed": "Nie skopiowano „{{page}}”: {{reason}}"
+  },
+  "canvas": {
+    "controls": "Elementy sterujące: {{model}}",
+    "summaryEntry": "{{trigger}}: {{label}}",
+    "viewport": "Obszar urządzenia",
+    "roleDescription": "obszar roboczy",
+    "viewportHint": "Przeciągnij tło lub przytrzymaj spację i przeciągnij, aby przesunąć urządzenie; przewijanie również je przesuwa. Ctrl lub Cmd z przewijaniem albo gest szczypania zmienia powiększenie. Gdy obszar ma fokus: plus i minus zmieniają powiększenie, 0 pokazuje rzeczywisty rozmiar, 1 dopasowuje urządzenie, strzałki je przesuwają.",
+    "toolbar": "Powiększenie",
+    "zoomIn": "Powiększ",
+    "zoomOut": "Pomniejsz",
+    "fit": "Dopasuj do ekranu",
+    "actualSize": "Rzeczywisty rozmiar (100%)",
+    "zoomLevel": "Powiększenie {{percent}}%",
+    "zoomMenu": "Opcje powiększenia",
+    "percent": "{{percent}}%"
+  },
+  "controlMenu": {
+    "controls_one": "{{count}} element sterujący",
+    "controls_few": "{{count}} elementy sterujące",
+    "controls_many": "{{count}} elementów sterujących",
+    "controls_other": "{{count}} elementu sterującego",
+    "label": "Czynności: {{subject}}",
+    "assign": "Przypisz",
+    "openFolder": "Otwórz „{{folder}}”",
+    "folderTaken": "Najpierw wyczyść element sterujący: ma już przypisaną funkcję",
+    "newFolder": "Nowy folder",
+    "copy": "Kopiuj",
+    "cut": "Wytnij",
+    "paste": "Wklej",
+    "duplicate": "Powiel",
+    "clear": "Wyczyść",
+    "deleteKey": "Del"
+  },
+  "designer": {
+    "noModels": "Brak dostępnych modeli urządzeń",
+    "noLayout": "Brak układu dla {{model}} w tym profilu",
+    "noLayoutHint": "Utwórz go poleceniem „{{newLayout}}” w menu układów na pasku narzędzi lub użyj układu ze strony {{layouts}}. Układy można projektować bez urządzenia."
+  },
+  "chooser": {
+    "shared": "Udostępniony: zmiany dotyczą każdego profilu, który używa tego układu ({{profiles}}).",
+    "deviceShows": "Urządzenie pokazuje {{layout}}.",
+    "open": "Otwórz {{layout}}"
+  },
+  "editing": {
+    "discard": {
+      "title": "Odrzucić niezapisane zmiany?",
+      "description": "Układ otwarty w edytorze ma niezapisane zmiany. Jeśli kontynuujesz, zostaną utracone.",
+      "confirm": "Odrzuć zmiany"
+    },
+    "folderName": "Folder",
+    "folderNameNumbered": "Folder {{number}}",
+    "copied_one": "Skopiowano {{count}} element sterujący",
+    "copied_few": "Skopiowano {{count}} elementy sterujące",
+    "copied_many": "Skopiowano {{count}} elementów sterujących",
+    "copied_other": "Skopiowano {{count}} elementu sterującego",
+    "notPasted_one": "Nie można tu wkleić {{count}} przypisania",
+    "notPasted_few": "Nie można tu wkleić {{count}} przypisań",
+    "notPasted_many": "Nie można tu wkleić {{count}} przypisań",
+    "notPasted_other": "Nie można tu wkleić {{count}} przypisania",
+    "notPastedDetail": "Element sterujący nie obsługuje tego zdarzenia lub brakuje strony docelowej.",
+    "noFreeControl": "Brak wolnego elementu sterującego do powielenia",
+    "folderTaken": "{{control}} ma już przypisaną funkcję",
+    "folderTakenDetail": "Utwórz folder na pustym elemencie sterującym lub najpierw wyczyść ten.",
+    "dropRefused": "{{control}} nie może przyjąć tych przypisań"
+  },
+  "controlName": {
+    "key": "Klawisz {{number}}",
+    "encoder": "Pokrętło {{number}}",
+    "touchZone": "Strefa dotykowa {{number}}"
+  },
+  "triggerName": {
+    "click": "Kliknięcie",
+    "doubleClick": "Dwukrotne kliknięcie",
+    "longPress": "Długie naciśnięcie",
+    "press": "Naciśnięcie",
+    "release": "Zwolnienie",
+    "rotateClockwise": "Obrót w prawo",
+    "rotateCounterClockwise": "Obrót w lewo",
+    "touchTap": "Stuknięcie",
+    "touchLongPress": "Długie naciśnięcie",
+    "touchSwipe": "Przesunięcie"
+  },
+  "targetName": {
+    "missingWorkflow": "Brakujący przepływ pracy",
+    "openPage": "Otwórz „{{page}}”",
+    "missingPage": "brakująca strona"
+  },
+  "layoutHistory": {
+    "push": {
+      "label": "Wstecz wraca tutaj",
+      "detail": "Powrót do poprzedniego układu wraca do układu, który opuścił ten klawisz."
+    },
+    "replace": {
+      "label": "Wstecz pomija ten układ",
+      "detail": "Powrót do poprzedniego układu wraca tam, gdzie urządzenie było przed tym układem."
+    },
+    "clear": {
+      "label": "Wyczyść drogę powrotu",
+      "detail": "Powrót do poprzedniego układu nie będzie potem miał dokąd wrócić."
+    }
+  },
+  "compatibility": {
+    "kindRequired": {
+      "key": "klawisza",
+      "encoder": "pokrętła",
+      "touchZone": "strefy dotykowej"
+    },
+    "kindOn": {
+      "key": "klawiszu",
+      "encoder": "pokrętle",
+      "touchZone": "strefie dotykowej"
+    },
+    "selected": {
+      "key": "Wybrany klawisz urządzenia {{model}}",
+      "encoder": "Wybrane pokrętło urządzenia {{model}}",
+      "touchZone": "Wybrana strefa dotykowa urządzenia {{model}}"
+    },
+    "input": {
+      "press": "naciśnięcie",
+      "release": "zwolnienie",
+      "rotateClockwise": "obrót w prawo",
+      "rotateCounterClockwise": "obrót w lewo",
+      "tap": "stuknięcie",
+      "longTouch": "długie dotknięcie",
+      "swipe": "przesunięcie",
+      "click": "kliknięcie",
+      "doubleClick": "dwukrotne kliknięcie",
+      "longPress": "długie naciśnięcie"
+    },
+    "inputRequired": {
+      "press": "naciśnięcia",
+      "release": "zwolnienia",
+      "rotateClockwise": "obrotu w prawo",
+      "rotateCounterClockwise": "obrotu w lewo",
+      "tap": "stuknięcia",
+      "longTouch": "długiego dotknięcia",
+      "swipe": "przesunięcia",
+      "click": "kliknięcia",
+      "doubleClick": "dwukrotnego kliknięcia",
+      "longPress": "długiego naciśnięcia"
+    },
+    "family": {
+      "press": "naciśnięcia",
+      "turn": "obrotu",
+      "tap": "stuknięcia",
+      "longTouch": "długiego dotknięcia",
+      "swipe": "przesunięcia"
+    },
+    "summary": {
+      "none": "brak akcji",
+      "only": "tylko akcje {{family}}",
+      "several": "akcje {{families}}"
+    },
+    "listAnd": "{{items}} i {{last}}",
+    "listOr": "{{items}} lub {{last}}",
+    "noControl": "Nie można tego umieścić na żadnym elemencie sterującym.",
+    "requiresKind": "Wymaga {{kinds}}.",
+    "requiresInput": "Wymaga {{inputs}} na {{on}}.",
+    "supports": "{{requires}} {{selected}} obsługuje {{summary}}.",
+    "notReacting": "Nie reaguje na {{input}} na {{on}}. Na {{on}} reaguje na {{reacts}}.",
+    "noInput": "{{selected}} nie reaguje na {{input}}.",
+    "noInputSupports": "{{selected}} nie reaguje na {{input}}; obsługuje {{summary}}."
+  },
+  "variableText": {
+    "type": {
+      "string": "tekst",
+      "integer": "liczba",
+      "boolean": "tak/nie",
+      "projectId": "projekt",
+      "profileId": "profil",
+      "resource": "zasób",
+      "json": "JSON",
+      "secretRef": "nazwa poświadczenia",
+      "resourceOfKind": "zasób ({{kind}})"
+    },
+    "scope": {
+      "global": "globalny",
+      "profile": "profil",
+      "project": "projekt",
+      "execution": "uruchomienie"
+    },
+    "group": {
+      "shared": "Współdzielone",
+      "system": "Systemowe",
+      "profile": "Profil",
+      "project": "Projekt",
+      "module": "Moduły",
+      "workflow": "Przepływ pracy",
+      "stepOutput": "Wyjścia kroków"
+    },
+    "system": {
+      "projectId": {
+        "label": "Identyfikator projektu",
+        "description": "Identyfikator projektu w kontekście"
+      },
+      "projectKey": {
+        "label": "Klucz projektu",
+        "description": "Klucz projektu w kontekście"
+      },
+      "projectName": {
+        "label": "Nazwa projektu",
+        "description": "Nazwa projektu w kontekście"
+      },
+      "profileId": {
+        "label": "Identyfikator profilu",
+        "description": "Identyfikator profilu w kontekście"
+      },
+      "profileName": {
+        "label": "Nazwa profilu",
+        "description": "Nazwa profilu w kontekście"
+      },
+      "device": {
+        "label": "Urządzenie",
+        "description": "Urządzenie, którego element sterujący rozpoczął uruchomienie"
+      },
+      "platform": {
+        "label": "Platforma",
+        "description": "System operacyjny tego komputera"
+      },
+      "workflowId": {
+        "label": "Identyfikator przepływu pracy",
+        "description": "Identyfikator uruchomionego przepływu pracy"
+      },
+      "executionId": {
+        "label": "Identyfikator uruchomienia",
+        "description": "Identyfikator tego uruchomienia przepływu pracy"
+      }
+    },
+    "missing": {
+      "unknownVariable": "Nie ma takiej zmiennej.",
+      "noValue": "Nie ustawiono wartości i nie ma wartości domyślnej.",
+      "noProject": "Żaden projekt nie jest aktywny.",
+      "noDevice": "W kontekście nie ma urządzenia.",
+      "noWorkflow": "W kontekście nie ma przepływu pracy.",
+      "noExecution": "W kontekście nie ma uruchomienia.",
+      "noOutput": "Krok jeszcze jej nie wytworzył.",
+      "otherProfile": "Wartość należy do innego profilu."
+    },
+    "status": {
+      "resolved": "Rozwiązana",
+      "redacted": "Ukryta",
+      "redactedDetail": "Wartość jest poufna i nigdy nie jest pokazywana.",
+      "runtime": "Dostępna podczas uruchomienia",
+      "runtimeDetail": "Wartość istnieje tylko podczas działania przepływu pracy.",
+      "missing": "Brak",
+      "typeMismatch": "Niezgodny typ",
+      "typeMismatchDetail": "Wartość ma typ „{{type}}”, który nie pasuje do tego pola.",
+      "permissionDenied": "Brak uprawnień",
+      "permissionDeniedDetail": "Ta akcja nie może jej odczytać.",
+      "unavailable": "Niedostępna",
+      "unavailableDetail": "Moduł {{module}} jest wyłączony lub niezainstalowany. Odwołanie zostaje zachowane.",
+      "invalid": "Nieprawidłowe odwołanie"
+    },
+    "projectRole": "rola {{role}} projektu",
+    "source": {
+      "global": "Wartość globalna",
+      "profile": "Wartość profilu",
+      "project": "Wartość projektu",
+      "execution": "Wartość ustawiona przez uruchomienie",
+      "default": "Wartość domyślna",
+      "system": "Z kontekstu",
+      "stepOutput": "Wyjście kroku „{{node}}”"
+    },
+    "availability": {
+      "available": "Dostępna w tym kontekście",
+      "runtimeOnly": "Tylko podczas działania przepływu pracy",
+      "notInContext": "Niedostępna w tym kontekście",
+      "unavailable": "Jej moduł jest wyłączony lub niezainstalowany"
+    },
+    "context": {
+      "profile": "Profil {{profile}}",
+      "activeProject": "aktywny projekt {{project}}",
+      "theActiveProject": "aktywny projekt",
+      "runProject": "projekt uruchomienia {{run}}",
+      "runProjectLater": "projekt uruchomienia (znany podczas uruchomienia)",
+      "chosenProject": "projekt {{project}} (wybrany dla tego podglądu)",
+      "noProject": "brak projektu",
+      "workflow": "przepływ pracy {{workflow}}",
+      "device": "urządzenie {{device}}"
+    }
+  },
+  "breadcrumbs": {
+    "label": "Ścieżka nawigacji",
+    "hidden": "Ukryte poziomy: {{count}}",
+    "nowShowing": "Wyświetlana strona: {{path}}",
+    "renameHint": "Kliknij dwukrotnie, aby zmienić nazwę"
+  },
+  "preview": {
+    "test": "Testuj akcję",
+    "testHint": "Agent symuluje naciśnięcie na urządzeniu",
+    "single": "Pojedyncze naciśnięcie",
+    "double": "Podwójne naciśnięcie",
+    "long": "Długie naciśnięcie",
+    "configure": "Konfiguruj akcję",
+    "goBack": "Wróć",
+    "removeAssignment": "Usuń przypisanie",
+    "remove": {
+      "title": "Usunąć przypisanie: {{subject}}?",
+      "description": "Akcje, foldery i gesty zostaną usunięte z tej strony wersji roboczej. Możesz to cofnąć, dopóki układ nie zostanie zapisany."
+    },
+    "why": {
+      "noAction": "Brak przypisanej akcji",
+      "oneControl": "Zaznacz jeden element, aby go przetestować",
+      "agentNotRunning": "Agent DeckPilot nie działa",
+      "agentTooOld": "Agent jest zbyt stary, aby symulować naciśnięcia: zaktualizuj go",
+      "disconnected": "Urządzenie nie jest podłączone",
+      "otherProfile": "Urządzenie używa innego profilu: najpierw aktywuj ten",
+      "otherLayout": "Urządzenie pokazuje inny układ: najpierw go przełącz",
+      "otherPage": "Urządzenie pokazuje inną stronę: najpierw ją przełącz"
+    },
+    "ran": {
+      "single": "Zasymulowano pojedyncze naciśnięcie: {{control}}",
+      "double": "Zasymulowano podwójne naciśnięcie: {{control}}",
+      "long": "Zasymulowano długie naciśnięcie: {{control}}"
+    },
+    "ranDetail": "To symulacja: klawisz na urządzeniu nacisnął agent, nie edytor.",
+    "refusedTitle": "Nie naciśnięto: {{control}}",
+    "failedTitle": "Nie udało się zasymulować naciśnięcia: {{control}}",
+    "refused": {
+      "locked": "DeckPilot jest zablokowany. Odblokuj go i spróbuj ponownie.",
+      "wrongProfile": "Urządzenie używa innego profilu. Najpierw aktywuj ten profil.",
+      "wrongLayout": "Urządzenie pokazuje inny układ. Najpierw przełącz je na ten układ.",
+      "wrongPage": "Urządzenie pokazuje inną stronę. Najpierw przełącz je na tę stronę.",
+      "disconnected": "Urządzenie nie jest podłączone.",
+      "control": "Tego elementu nie można nacisnąć na urządzeniu.",
+      "unsupported": "Agent jest zbyt stary, aby symulować naciśnięcia. Zaktualizuj go.",
+      "agentNotRunning": "Agent DeckPilot nie działa.",
+      "settings": "Nie pozwala na to ustawienie na tym komputerze (na przykład uruchamianie poleceń lub uprawnienia wtyczek).",
+      "failed": "Agentowi nie udało się zasymulować naciśnięcia."
+    },
+    "confirm": {
+      "title": "Zasymulować naciśnięcie: {{control}}?",
+      "note": "Te akcje naprawdę zostaną wykonane, tak jakby klawisz naciśnięto na urządzeniu. Twoje ustawienia i uprawnienia nadal obowiązują.",
+      "run": "Uruchom symulację"
+    },
+    "unsaved": {
+      "title": "Układ ma niezapisane zmiany",
+      "description": "Urządzenie działa na zapisanym układzie, a nie na zmianach w edytorze.",
+      "save": "Najpierw zapisz",
+      "saveDetail": "Zapisz zmiany, a potem przetestuj je na urządzeniu",
+      "saved": "Testuj zapisaną wersję",
+      "savedDetail": "Zostaw zmiany niezapisane i naciśnij klawisz w zapisanej postaci",
+      "continue": "Dalej"
+    }
+  },
+  "navigator": {
+    "rename": "Zmień nazwę",
+    "duplicate": "Powiel",
+    "duplicated": "Powielono „{{page}}”",
+    "newPage": "Nowa strona w środku",
+    "expand": "Rozwiń",
+    "collapse": "Zwiń",
+    "rowActions": "Czynności: „{{page}}”",
+    "emptyName": "Strona musi mieć nazwę",
+    "renameHint": "Enter zapisuje, Escape anuluje",
+    "renameFailed": "Nie zmieniono nazwy: {{reason}}",
+    "addInFolder": "Dodaj stronę w tym folderze i pokaż ją",
+    "movedUp": "Przeniesiono „{{page}}” w górę",
+    "movedDown": "Przeniesiono „{{page}}” w dół",
+    "reordered": "Przeniesiono „{{page}}” na nowe miejsce",
+    "notMoved": "Nie przeniesiono „{{page}}”",
+    "dragHint": "Przeciągnij, aby zmienić kolejność tej strony lub przenieść ją do innej strony. Alt+strzałka w górę i Alt+strzałka w dół przesuwają ją wśród sąsiednich stron."
+  },
+  "folderSettings": {
+    "title": "Ustawienia folderu",
+    "autoExit": "Automatyczne wyjście",
+    "exitAfter": "Wyjdź po",
+    "seconds_one": "sekundzie",
+    "seconds_few": "sekundach",
+    "seconds_many": "sekundach",
+    "seconds_other": "sekundy",
+    "invalid": {
+      "whole": "Wpisz całkowitą liczbę sekund.",
+      "range": "Wpisz od {{min}} do {{max}} sekund."
+    },
+    "moveBack": "Przenieś Wstecz na pierwszy klawisz",
+    "noFreeKey": "Każdy klawisz tej strony coś uruchamia. Najpierw zwolnij klawisz, potem przenieś Wstecz."
+  },
+  "systemBack": {
+    "canvasDescription": "Element systemowy: Wstecz, wraca do folderu nadrzędnego",
+    "dropRefused": "Ten klawisz to Wstecz folderu i pozostaje zarezerwowany.",
+    "region": "Wstecz – element systemowy"
+  },
+  "folderControl": {
+    "dropRefused": "Ten klawisz otwiera folder i nie uruchamia niczego innego.",
+    "needsFreeKey": "Folder otwiera się z własnego klawisza: upuść go na wolny klawisz.",
+    "recovered": {
+      "title_one": "Odzyskane gesty ({{count}})",
+      "title_few": "Odzyskane gesty ({{count}})",
+      "title_many": "Odzyskane gesty ({{count}})",
+      "title_other": "Odzyskane gesty ({{count}})",
+      "move": "Przenieś na wolny klawisz",
+      "discard": "Odrzuć",
+      "discardTitle_one": "Odrzucić {{count}} odzyskany gest?",
+      "discardTitle_few": "Odrzucić {{count}} odzyskane gesty?",
+      "discardTitle_many": "Odrzucić {{count}} odzyskanych gestów?",
+      "discardTitle_other": "Odrzucić {{count}} odzyskanego gestu?",
+      "discardDescription": "Zachowano je z {{control}}, gdy stał się klawiszem folderu, i nigdy nie są uruchamiane. Po zapisaniu odrzucenia nie można cofnąć.",
+      "noFreeKey": "Każdy klawisz tej strony coś uruchamia. Najpierw zwolnij klawisz, potem je przenieś."
+    },
+    "recoveredTitle": {
+      "title": "Wcześniejszy tytuł klawisza",
+      "text": "Zanim nazwa folderu stała się tytułem tego klawisza, klawisz miał własny tytuł „{{label}}”.",
+      "use": "Użyj jako nazwy folderu",
+      "discard": "Odrzuć"
+    }
+  },
+  "iconMenu": {
+    "library": "Wybierz z biblioteki ikon…",
+    "import": "Importuj ikonę z pliku…",
+    "paste": "Wklej ikonę ze schowka",
+    "remove": "Usuń ikonę",
+    "pastedName": "Wklejona ikona",
+    "pasteEmpty": "Schowek nie zawiera obrazu.",
+    "pasteFormat": "Obraz w schowku nie jest w formacie PNG ani JPEG.",
+    "pasteDenied": "DeckPilot nie może odczytać schowka. Zezwól na to albo zaimportuj obraz z pliku.",
+    "pasteUnsupported": "Wklejanie obrazów nie jest tu dostępne. Zaimportuj obraz z pliku."
+  },
+  "keyHeader": {
+    "preview": "Podgląd: {{control}}, ikona i tło",
+    "previewTitle": "Ikona i tło",
+    "title": "Tytuł klawisza",
+    "noTitle": "Bez tytułu",
+    "icons": "Ikona i tło",
+    "folderName": "Nazwa folderu"
+  },
+  "title": {
+    "open": "Wygląd tytułu",
+    "popover": "Wygląd tytułu",
+    "show": "Pokazuj tytuł",
+    "reset": "Przywróć domyślny wygląd tytułu",
+    "font": "Czcionka",
+    "size": "Rozmiar (px)",
+    "position": {
+      "label": "Położenie tytułu",
+      "top": "Góra",
+      "middle": "Środek",
+      "bottom": "Dół"
+    },
+    "style": {
+      "label": "Styl tekstu",
+      "bold": "Pogrubienie",
+      "italic": "Kursywa",
+      "underline": "Podkreślenie"
+    }
+  },
+  "keyMenu": {
+    "icon": "Ikona",
+    "background": "Tło",
+    "chooseBackground": "Wybierz tło…",
+    "customColour": "Wybierz własny kolor…",
+    "resetBackground": "Przywróć domyślne tło urządzenia",
+    "backgroundLibrary": "Biblioteka teł"
+  },
+  "assets": {
+    "sources": "Źródło ikon",
+    "deckpilot": "DeckPilot",
+    "mine": "Moje ikony",
+    "plugins": "Wtyczki",
+    "search": "Szukaj ikon",
+    "category": "Kategoria",
+    "allCategories": "Wszystkie kategorie",
+    "categories": {
+      "media": "Multimedia",
+      "video": "Wideo i kamera",
+      "streaming": "Streaming",
+      "communication": "Komunikacja",
+      "devices": "Urządzenia",
+      "development": "Programowanie",
+      "files": "Pliki i foldery",
+      "editing": "Edycja i tekst",
+      "navigation": "Nawigacja i strzałki",
+      "system": "System",
+      "security": "Bezpieczeństwo",
+      "time": "Czas i kalendarz",
+      "weather": "Pogoda i natura",
+      "people": "Ludzie",
+      "business": "Biznes i finanse",
+      "home": "Dom",
+      "travel": "Podróże i miejsca",
+      "shapes": "Kształty i symbole",
+      "gaming": "Gry"
+    },
+    "deckpilotIcons": "Ikony DeckPilot",
+    "pluginIcons": "Ikony wtyczek",
+    "pluginEntry": "{{name}} ({{plugin}})",
+    "pluginDisabledEntry": "{{name}} ({{plugin}}, wyłączona)",
+    "noPluginIcons": "Żadna zainstalowana wtyczka nie dodaje ikon.",
+    "noMatch": "Żadna ikona nie pasuje.",
+    "iconDisabled": "Ikona tego klawisza należy do wyłączonej wtyczki: klawisz nie pokazuje własnej ikony, dopóki wtyczka nie zostanie ponownie włączona.",
+    "iconMissing": "Ikona tego klawisza nie jest tu dostępna (jej wtyczka nie jest zainstalowana): klawisz nie pokazuje własnej ikony, dopóki nie będzie.",
+    "basic": "Podstawowe",
+    "solid": "Kolory jednolite",
+    "customColour": "Własny kolor {{value}}",
+    "chooseCustom": "Własny kolor…",
+    "gradientsTitle": "Gradienty",
+    "gradients": {
+      "midnight": "Północ",
+      "graphite": "Grafit",
+      "ocean": "Ocean",
+      "forest": "Las",
+      "sunset": "Zachód słońca",
+      "ember": "Żar",
+      "berry": "Jagoda",
+      "aurora": "Zorza",
+      "steel": "Stal",
+      "lime": "Limonka"
+    },
+    "images": "Obrazy",
+    "pluginBackgrounds": "Tła wtyczek",
+    "noPluginBackgrounds": "Żadna zainstalowana wtyczka nie dodaje teł.",
+    "backgroundDisabled": "Tło tego klawisza należy do wyłączonej wtyczki: klawisz pokazuje domyślne tło urządzenia, dopóki wtyczka nie zostanie ponownie włączona.",
+    "backgroundMissing": "Tło tego klawisza nie jest tu dostępne (jego wtyczka nie jest zainstalowana): klawisz pokazuje domyślne tło urządzenia, dopóki nie będzie."
+  }
+}

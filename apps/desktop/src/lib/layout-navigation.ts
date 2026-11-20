@@ -12,6 +12,7 @@ import type {
   ParameterValue,
   Usage,
 } from "./types"
+import type { TranslationKey } from "@/i18n"
 
 export const SWITCH_LAYOUT = "deck.switch-layout"
 export const PREVIOUS_LAYOUT = "deck.previous-layout"
@@ -19,21 +20,26 @@ export const PREVIOUS_LAYOUT = "deck.previous-layout"
 /** What Back to previous layout does after a switch. */
 export type LayoutHistory = "push" | "replace" | "clear"
 
-export const HISTORY_CHOICES: { value: LayoutHistory; label: string; detail: string }[] = [
+/** The choices of what Back does: translation keys, resolved with `t` when shown. */
+export const HISTORY_CHOICES: {
+  value: LayoutHistory
+  label: TranslationKey
+  detail: TranslationKey
+}[] = [
   {
     value: "push",
-    label: "Back returns here",
-    detail: "Back to previous layout returns to the layout this key left.",
+    label: "editor:layoutHistory.push.label",
+    detail: "editor:layoutHistory.push.detail",
   },
   {
     value: "replace",
-    label: "Back skips this layout",
-    detail: "Back to previous layout returns to where the device was before this layout.",
+    label: "editor:layoutHistory.replace.label",
+    detail: "editor:layoutHistory.replace.detail",
   },
   {
     value: "clear",
-    label: "Clear the way back",
-    detail: "Back to previous layout has nowhere to go afterwards.",
+    label: "editor:layoutHistory.clear.label",
+    detail: "editor:layoutHistory.clear.detail",
   },
 ]
 

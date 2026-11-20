@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core"
 
+import { errorCode, rawErrorMessage } from "./backend-error"
+
 import type {
   ActionInstance,
   ActionReference,
@@ -10,8 +12,11 @@ import type {
   CatalogEntry,
   CatalogFilter,
   ControlFace,
+  ControlId,
   IconInfo,
+  VisualLibrary,
   LivePreview,
+  MarqueePreview,
   PageChange,
   PageTree,
   CredentialInfo,
@@ -89,6 +94,8 @@ export const api = {
   closeWindow: () => invoke<null>("close_window"),
   showMainWindow: () => invoke<boolean>("show_main_window"),
   titlebarDoubleClick: () => invoke<null>("titlebar_double_click"),
+  /** Right edge of the macOS traffic lights in points; null without overlay controls. */
+  windowControlsInset: () => invoke<number | null>("window_controls_inset"),
   finishSecurityPrompt: () => invoke<null>("finish_security_prompt"),
   lastWorkflowReport: () => invoke<WorkflowReport | null>("last_workflow_report"),
 
@@ -222,6 +229,29 @@ export const api = {
     invoke<null>("delete_action", { profileId, actionId }),
   runAction: (profileId: string, actionId: string) =>
     invoke<ActionResult>("run_action", { profileId, actionId }),
+  /**
+   * Presses `control` of a connected device in the agent as the user would,
+   * while it shows `page` of `layout` in `profile`; `confirmed` after the
+   * user approved a `confirmationRequired` answer.
+   */
+  simulatePress: (
+    device: import("./types").DeviceId,
+    profile: string,
+    layout: string,
+    page: string,
+    control: import("./types").ControlId,
+    kind: import("./types").PressKind,
+    confirmed = false,
+  ) =>
+    invoke<import("./types").SimulatePressResult>("simulate_press", {
+      device,
+      profile,
+      layout,
+      page,
+      control,
+      kind,
+      confirmed,
+    }),
   /** Every place that uses an action, triggers of workflows that run it included. */
   actionReferences: (profileId: string, actionId: string) =>
     invoke<ActionReference[]>("action_references", { profileId, actionId }),
@@ -346,12 +376,58 @@ export const api = {
       keyPixels: keyPixels ?? null,
     }),
   /**
+   * One cycle of the scrolling title of `control` as the device shows it,
+   * drawn `keyPixels` wide (as `previewLayout`); `null` when it does not
+   * scroll (docs/key-text.md).
+   */
+  previewMarquee: (
+    profileId: string,
+    layout: DeviceLayout,
+    pageId: string,
+    control: ControlId,
+    live?: LivePreview | null,
+    keyPixels?: number | null,
+  ) =>
+    invoke<MarqueePreview | null>("preview_marquee", {
+      profileId,
+      layout,
+      pageId,
+      control,
+      projectId: null,
+      live: live ?? null,
+      keyPixels: keyPixels ?? null,
+    }),
+  /**
    * Watches the agent's live states of these actions' keys, replacing the
    * previous watch; none stops. Returns the watch's number, which its
    * `key-states` events carry (layout-editor/use-live-key-states.ts).
    */
   watchKeyStates: (profileId: string, actions: string[]) =>
     invoke<number>("watch_key_states", { profileId, actions }),
+  /**
+   * Begins the live preview of `layoutId` on `device` (IPC protocol 16),
+   * replacing the running one; returns the session's number, which its
+   * `live-preview` events carry (layout-editor/use-live-preview.ts).
+   */
+  livePreviewBegin: (device: import("./types").DeviceId, profileId: string, layoutId: string) =>
+    invoke<number>("live_preview_begin", { device, profileId, layoutId }),
+  /** The editor's latest draft (`revision` grows) and/or its navigation. */
+  livePreviewUpdate: (
+    session: number,
+    update: {
+      revision?: number
+      layout?: DeviceLayout
+      navigation?: import("./types").LiveNavigation
+    },
+  ) =>
+    invoke<boolean>("live_preview_update", {
+      session,
+      revision: update.revision ?? null,
+      layout: update.layout ?? null,
+      navigation: update.navigation ?? null,
+    }),
+  /** Ends the session: the device shows the saved configuration again. */
+  livePreviewEnd: (session: number) => invoke<null>("live_preview_end", { session }),
   pageTree: (layout: DeviceLayout) => invoke<PageTree>("page_tree", { layout }),
   reorderPages: (profileId: string, layoutId: string, order: string[]) =>
     invoke<DeviceLayout>("reorder_pages", { profileId, layoutId, order }),
@@ -371,6 +447,10 @@ export const api = {
     parentId?: string | null,
   ) => invoke<PageChange>("copy_page", { profileId, layoutId, pageId, targetLayoutId, parentId }),
   listIcons: (profileId: string) => invoke<IconInfo[]>("list_icons", { profileId }),
+  /** DeckPilot's icons and gradients, and the installed plugins' assets. */
+  visualLibrary: () => invoke<VisualLibrary>("visual_library"),
+  /** The fonts key titles may use: those built into the renderer. */
+  titleFonts: () => invoke<import("./types").TitleFont[]>("title_fonts"),
   /** `data`: the PNG or JPEG file as base64 (at most 2 MiB). */
   importIcon: (profileId: string, name: string, data: string) =>
     invoke<IconInfo>("import_icon", { profileId, name, data }),
@@ -418,9 +498,14 @@ export const api = {
 /** Backend event carrying the latest {@link AgentConnection}. */
 /** The backend's answer to a sensitive operation without a fresh authentication. */
 export const AUTHENTICATION_REQUIRED = "authentication required"
+/** Its code (`CommandError::AuthenticationRequired`). */
+export const AUTHENTICATION_REQUIRED_CODE = "authenticationRequired"
 
+/** Whether the backend asks for a fresh authentication (by code; the text from older builds). */
 export function isAuthenticationRequired(error: unknown): boolean {
-  return errorMessage(error) === AUTHENTICATION_REQUIRED
+  const code = errorCode(error)
+  if (code !== undefined) return code === AUTHENTICATION_REQUIRED_CODE
+  return rawErrorMessage(error) === AUTHENTICATION_REQUIRED
 }
 
 /** Sent to every window after imported data was written. */
@@ -438,9 +523,9 @@ export const NOTIFICATION_EVENT = "agent-notification"
 /** Backend event carrying the latest {@link UpdateState}. */
 export const UPDATE_STATE_EVENT = "update-state"
 
-/** Normalizes errors thrown by `invoke` (plain strings) and other sources. */
-export function errorMessage(error: unknown): string {
-  if (typeof error === "string") return error
-  if (error instanceof Error) return error.message
-  return "Unexpected error"
-}
+/**
+ * Errors thrown by `invoke` (`{ code, message, params }`, plain strings
+ * from older builds) and other sources, as the user reads them: translated
+ * by code where a translation exists (`src/lib/backend-error.ts`).
+ */
+export { errorCode, errorMessage, rawErrorMessage } from "./backend-error"

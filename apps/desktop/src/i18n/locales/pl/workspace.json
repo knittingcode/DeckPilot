@@ -1,0 +1,494 @@
+{
+  "dashboard": {
+    "title": "Pulpit",
+    "description": "Co działa w tej chwili",
+    "activateFailed": "Nie aktywowano profilu",
+    "updated": {
+      "title": "Zaktualizowano DeckPilot",
+      "description": "Zaktualizowano z wersji {{from}} do {{to}}. Konfiguracja została zachowana."
+    },
+    "updateAvailable": "Dostępna jest wersja {{version}}",
+    "viewUpdate": "Pokaż uaktualnienie",
+    "now": "Teraz",
+    "activeProfile": "Aktywny profil",
+    "activeProfileHint": "Profil działający na urządzeniu.",
+    "chooseProfile": "Wybierz profil",
+    "createProfile": "Utwórz profil",
+    "agent": "Agent w tle",
+    "agentSummary_one": "Wersja {{version}} · {{count}} urządzenie",
+    "agentSummary_few": "Wersja {{version}} · {{count}} urządzenia",
+    "agentSummary_many": "Wersja {{version}} · {{count}} urządzeń",
+    "agentSummary_other": "Wersja {{version}} · {{count}} urządzenia",
+    "noDevice": {
+      "title": "Nie wykryto urządzenia Stream Deck",
+      "description": "Podłącz obsługiwane urządzenie; zostanie wykryte automatycznie."
+    },
+    "inProfile": "W profilu {{profile}}",
+    "counts": {
+      "actions": "Akcje",
+      "workflows": "Przepływy pracy",
+      "layouts": "Układy"
+    }
+  },
+  "profiles": {
+    "new": "Nowy profil",
+    "toast": {
+      "openFailed": "Nie można otworzyć profilu {{profile}} do edycji",
+      "activated": "Profil {{profile}} jest aktywny",
+      "activateFailed": "Nie aktywowano profilu {{profile}}",
+      "deleted": "Usunięto profil"
+    },
+    "all": {
+      "title": "Wszystkie profile",
+      "description": "Aktywny profil działa na urządzeniu. Każdy profil można edytować: wybierz go tutaj lub na pasku narzędzi."
+    },
+    "empty": {
+      "title": "Nie ma jeszcze profili",
+      "body": "Utwórz pierwszy profil, klikając Nowy profil na pasku narzędzi."
+    },
+    "table": {
+      "label": "Profile",
+      "name": "Nazwa",
+      "modified": "Ostatnia zmiana",
+      "status": "Stan",
+      "actions": "Czynności"
+    },
+    "beingEdited": "Edytowany",
+    "editProfile": "Edytuj profil {{profile}}",
+    "runsOnDevice": "Działa na urządzeniu",
+    "active": "Aktywny",
+    "inactive": "Nieaktywny",
+    "makeActive": "Aktywuj",
+    "makeActiveLabel": "Aktywuj profil {{profile}}",
+    "editing": {
+      "description": "Edytowany profil.",
+      "editDetails": "Edytuj szczegóły…",
+      "details": "Szczegóły profilu {{profile}}",
+      "description_label": "Opis",
+      "noDescription": "Brak opisu",
+      "actions": "Akcje",
+      "workflows": "Przepływy pracy",
+      "projects": "Projekty"
+    },
+    "menu": {
+      "more": "Więcej dla profilu {{profile}}",
+      "rename": "Zmień nazwę…",
+      "duplicate": "Duplikuj…",
+      "delete": "Usuń…"
+    },
+    "delete": {
+      "title": "Usunąć profil „{{profile}}”?",
+      "active": "Ten profil jest aktywny na urządzeniu. Jego akcje, przepływy pracy i projekty zostaną usunięte, a urządzenie nie będzie wyświetlać żadnego układu, dopóki nie zostanie aktywowany inny profil. Jego układy zostaną zachowane: pozostaną w Układach, nieużywane przez żaden profil, chyba że używa ich również inny profil.",
+      "inactive": "Jego akcje, przepływy pracy i projekty zostaną usunięte. Tej operacji nie można cofnąć. Jego układy zostaną zachowane: pozostaną w Układach, nieużywane przez żaden profil, chyba że używa ich również inny profil.",
+      "failed": "Nie usunięto profilu {{profile}}"
+    },
+    "form": {
+      "copyName": "{{profile}} (kopia)",
+      "createTitle": "Nowy profil",
+      "renameTitle": "Edytuj profil",
+      "duplicateTitle": "Duplikuj profil",
+      "createFailed": "Nie utworzono profilu",
+      "renameFailed": "Nie zapisano profilu",
+      "duplicateFailed": "Nie zduplikowano profilu",
+      "saved": "Zapisano",
+      "duplicateDescription": "Kopia otrzyma własne akcje, przepływy pracy i projekty oraz niezależne kopie układów. Zmiana jednego profilu nigdy nie zmienia drugiego.",
+      "save": "Zapisz",
+      "name": "Nazwa",
+      "description": "Opis"
+    }
+  },
+  "pluginView": {
+    "gone": {
+      "page": "Widok wtyczki",
+      "title": "Ten widok wtyczki jest niedostępny",
+      "body": "Wtyczka została wyłączona lub odinstalowana albo nie oferuje już tego widoku.",
+      "openEditor": "Otwórz Edytor urządzenia"
+    },
+    "variables": {
+      "title": "Zmienne wtyczki {{plugin}}",
+      "description": "Bieżące wartości publikowane przez wtyczkę w przestrzeni <code>{{namespace}}</code>. Wstaw jedną z nich do akcji lub etykiety klawisza za pomocą {{reference}}."
+    },
+    "actions": {
+      "title": "Akcje wtyczki {{plugin}}"
+    },
+    "settings": {
+      "title": "Ustawienia wtyczki {{plugin}}",
+      "description": "Przechowywane przez agenta tylko dla tej wtyczki. Dostępne także w Ustawienia › Rozszerzenia › Wtyczki."
+    }
+  },
+  "shell": {
+    "unsavedWarning": "Najpierw zapisz lub cofnij zmiany bieżącego układu"
+  },
+  "projects": {
+    "page": {
+      "title": "Projekty",
+      "description": "Projekty tego profilu i ich zasoby na tym komputerze"
+    },
+    "tabs": {
+      "projects": "Projekty",
+      "machine": "Ten komputer"
+    },
+    "option": "{{key}} · {{project}}",
+    "status": {
+      "ok": "Znaleziono",
+      "missing": "Brak",
+      "unbound": "Nie ustawiono na tym komputerze",
+      "unchecked": "Nie sprawdzono",
+      "tooltip": "Aktywny projekt profilu {{profile}}: {{project}}"
+    },
+    "kind": {
+      "directory": "Katalog",
+      "application": "Aplikacja",
+      "terminal": "Terminal",
+      "dockerEnvironment": "Środowisko Docker",
+      "service": "Usługa lokalna",
+      "url": "URL",
+      "other": "Inne"
+    },
+    "switcher": {
+      "failed": "Projekt nie został przełączony",
+      "none": "Ten profil nie ma projektów.",
+      "inactiveProfile": "Projekty można przełączać w profilu aktywnym na urządzeniu.",
+      "previous": "Poprzedni projekt",
+      "next": "Następny projekt",
+      "active": "Aktywny projekt",
+      "title": "Przełącznik projektów",
+      "description": "Przełączenie zmienia tylko projekt, do którego odwołują się akcje. Nic nie jest pobierane, ponownie uruchamiane ani otwierane.",
+      "inactiveWithProject": "Profil {{profile}} nie jest aktywny na urządzeniu. Jego aktywny projekt to {{key}}; zostanie przywrócony po aktywowaniu profilu.",
+      "inactiveNoProject": "Profil {{profile}} nie jest aktywny na urządzeniu. Jego aktywny projekt nie jest ustawiony; zostanie przywrócony po aktywowaniu profilu."
+    },
+    "card": {
+      "label": "Aktywny projekt",
+      "project": "{{key}} · {{project}}",
+      "projectInProfile": "{{key}} · {{project}} w profilu {{profile}}",
+      "none": "Brak",
+      "noActiveProfile": "Aktywuj profil, aby przełączać projekty."
+    },
+    "actions": {
+      "new": "Nowy projekt",
+      "switch": "Przełącz projekt",
+      "selectFailed": "Projekt {{key}} nie został wybrany"
+    },
+    "cycle": {
+      "moveFailed": "Projekt nie został przeniesiony",
+      "title": "Kolejność przełączania",
+      "description": "{{projects}} w cyklu. Przeciągnij, aby zmienić kolejność. Następny i poprzedni projekt są wybierane w tej kolejności.",
+      "descriptionEmpty": "Przeciągnij, aby zmienić kolejność. Następny i poprzedni projekt są wybierane w tej kolejności.",
+      "empty": "Brak projektów w tym profilu",
+      "emptyHint": "Projekty nadają akcjom kontekst, na przykład repozytorium aktywnego projektu."
+    },
+    "default": {
+      "label": "Domyślny projekt",
+      "description": "Wybierany po aktywowaniu profilu, jeśli wcześniej nie wybrano projektu.",
+      "saved": "Zapisano domyślny projekt",
+      "saveFailed": "Domyślny projekt nie został zapisany",
+      "first": "Pierwszy projekt w kolejności"
+    },
+    "item": {
+      "deleted": "Usunięto projekt",
+      "reorder": "Zmień kolejność: {{key}}",
+      "active": "Aktywny",
+      "default": "Domyślny",
+      "resourceStatus": "({{status}})",
+      "edit": "Edytuj {{key}}",
+      "copy": "Kopiuj {{key}} do innego profilu",
+      "copyTooltip": "Kopiuj do innego profilu",
+      "delete": "Usuń {{key}}",
+      "deleteTitle": "Usunąć {{key}}?",
+      "deleteDescription": "Akcje, które odwołują się do jego zasobów przez aktywny projekt, przestaną je odnajdywać, dopóki żaden projekt ich nie zapewni.",
+      "deleteFailed": "Projekt {{key}} nie został usunięty"
+    },
+    "copy": {
+      "title": "Kopiuj {{key}} do innego profilu",
+      "description": "Drugi profil otrzyma własną kopię z tym samym kluczem, nazwą i rolami zasobów. Późniejsze zmiany jednego projektu nie wpływają na drugi.",
+      "submit": "Kopiuj projekt",
+      "done": "Skopiowano {{key}} do profilu {{profile}}",
+      "failed": "Projekt {{key}} nie został skopiowany",
+      "target": "Profil docelowy"
+    },
+    "form": {
+      "incompleteResource": "Każdy zasób wymaga roli i klucza zasobu.",
+      "repeatedRole": "Rola „{{role}}” jest użyta dwa razy.",
+      "saved": "Zapisano projekt",
+      "editTitle": "Edytuj {{key}}",
+      "newTitle": "Nowy projekt",
+      "description": "Zasoby przypisują rolę (na przykład <role>repository</role>) do klucza logicznego, takiego jak <key>shop.repository</key>. Każdy komputer przypisuje klucze do rzeczywistych ścieżek.",
+      "save": "Zapisz",
+      "saveFailed": "Projekt nie został zapisany",
+      "key": "Klucz",
+      "name": "Nazwa",
+      "namePlaceholder": "Sklep internetowy",
+      "resources": "Zasoby",
+      "resource": "Zasób {{number}}",
+      "role": "Rola",
+      "resourceKey": "Klucz zasobu",
+      "removeResource": "Usuń zasób",
+      "addResource": "Dodaj zasób"
+    },
+    "machine": {
+      "title": "Zasoby na tym komputerze",
+      "description": "Zasoby logiczne używane przez projekty, przypisane do ścieżek, aplikacji lub adresów URL na tym komputerze. Te przypisania nigdy nie są częścią profilu.",
+      "add": "Dodaj przypisanie",
+      "empty": "Brak używanych lub przypisanych zasobów",
+      "value": "{{kind}}: {{value}}",
+      "usedBy_one": "Używany w projekcie {{projects}}",
+      "usedBy_few": "Używany w projektach {{projects}}",
+      "usedBy_many": "Używany w projektach {{projects}}",
+      "usedBy_other": "Używany w projektach {{projects}}",
+      "edit": "Edytuj {{key}}",
+      "remove": "Usuń {{key}}",
+      "removeTitle": "Usunąć przypisanie dla {{key}}?",
+      "removeDescription": "Akcje używające tego zasobu nie odnajdą go na tym komputerze, dopóki nie zostanie ponownie przypisany.",
+      "removeConfirm": "Usuń",
+      "removeFailed": "Przypisanie dla {{key}} nie zostało usunięte"
+    },
+    "binding": {
+      "browseFailed": "Nie udało się otworzyć przeglądarki plików",
+      "browseNext": "Zamiast tego wpisz ścieżkę",
+      "editTitle": "Przypisz {{key}}",
+      "newTitle": "Nowe przypisanie",
+      "description": "Zapisywane tylko dla tego komputera.",
+      "saved": "Zapisano przypisanie",
+      "saveFailed": "Przypisanie dla {{key}} nie zostało zapisane",
+      "kind": "Rodzaj",
+      "value": "Wartość",
+      "valuePlaceholder": "Ścieżka, aplikacja, nazwa kontenera…",
+      "browse": "Przeglądaj"
+    }
+  },
+  "workSession": {
+    "checkAgent": "Sprawdź w Ustawienia › Agent w tle, czy agent działa.",
+    "unlockNext": "Odblokuj DeckPilot, jeśli jest zablokowany, i spróbuj ponownie.",
+    "loadFailed": "Nie udało się wczytać sesji pracy",
+    "state": {
+      "idle": {
+        "label": "Brak sesji pracy",
+        "hint": "Kliknij klawisz Sesja pracy, aby ją rozpocząć."
+      },
+      "starting": {
+        "label": "Rozpoczynanie…",
+        "hint": "Trwa przepływ pracy rozpoczęcia. Czas jest liczony, gdy zakończy się powodzeniem. Przytrzymaj klawisz, aby anulować."
+      },
+      "working": {
+        "label": "Praca",
+        "hint": "Aby zakończyć, kliknij klawisz i uruchom sprawdzenie końcowe. Bez przepływu pracy weryfikacji przytrzymaj klawisz."
+      },
+      "verifyingEnd": {
+        "label": "Sprawdzanie…",
+        "hint": "Trwa przepływ pracy weryfikacji; czas jest nadal liczony. Przytrzymaj klawisz, aby anulować sprawdzenie."
+      },
+      "readyToFinish": {
+        "label": "Gotowe do zakończenia",
+        "hint": "Kliknij klawisz, aby zakończyć i zatrzymać licznik czasu. Przytrzymaj go, aby kontynuować pracę."
+      },
+      "stopping": {
+        "label": "Zatrzymywanie…",
+        "hint": "Sesja jest zamykana. Czas zakończenia jest już ustalony."
+      }
+    },
+    "record": {
+      "starting": "Rozpoczynanie",
+      "active": "Aktywna",
+      "stopping": "Zatrzymywanie",
+      "stopped": "Zakończona",
+      "aborted": "Nie rozpoczęła się"
+    },
+    "notice": {
+      "startFailed": {
+        "title": "Sesja pracy nie rozpoczęła się",
+        "next": "Sprawdź przebieg przepływu pracy rozpoczęcia w jego historii, a następnie kliknij klawisz, aby rozpocząć ponownie."
+      },
+      "startInterrupted": {
+        "title": "Rozpoczynanie sesji pracy zostało przerwane",
+        "next": "Przepływ pracy rozpoczęcia mógł zostać wykonany częściowo. Kliknij klawisz, aby rozpocząć ponownie."
+      },
+      "verificationFailed": {
+        "title": "Sprawdzenie końcowe nie powiodło się",
+        "next": "Czas jest nadal liczony. Sprawdź przebieg przepływu pracy weryfikacji, a następnie sprawdź ponownie z klawisza."
+      },
+      "verificationInterrupted": {
+        "title": "Sprawdzenie końcowe zostało przerwane",
+        "next": "Czas jest nadal liczony. Sprawdź ponownie z klawisza."
+      },
+      "notReady": {
+        "title": "Jeszcze nie można zakończyć",
+        "next": "Przepływ pracy weryfikacji odpowiedział „nie”. Czas jest nadal liczony."
+      },
+      "approvalExpired": {
+        "title": "Zgoda na zakończenie wygasła",
+        "next": "Uruchom ponownie sprawdzenie końcowe z klawisza, a następnie kliknij go, aby zakończyć."
+      },
+      "approvalInvalidated": {
+        "title": "Zgoda na zakończenie została wycofana",
+        "next": "Uruchom ponownie sprawdzenie końcowe z klawisza, a następnie kliknij go, aby zakończyć."
+      },
+      "needsReview": {
+        "title": "Przerwa w sesji wymaga przejrzenia",
+        "next": "Jest wliczana. Wyklucz ją w historii sesji, jeśli wtedy nie pracowano."
+      }
+    },
+    "review": {
+      "agentDown": "Agent DeckPilot nie działał",
+      "sleep": "Komputer był uśpiony",
+      "clockBack": "Zegar został cofnięty",
+      "clockForward": "Zegar przeskoczył do przodu"
+    },
+    "verificationIssue": {
+      "missingCanFinish": "Nie ma wyjścia „canFinish”. Dodaj wyjście logiczne o nazwie canFinish.",
+      "canFinishNotBoolean": "Jego wyjście „canFinish” nie jest wartością logiczną. Zmień jego rodzaj na Wartość logiczna.",
+      "detailsNotText": "Jego wyjście „details” nie jest tekstem. Zmień jego rodzaj na Tekst."
+    },
+    "issues": {
+      "quoted": "„{{name}}”",
+      "unfilledInputs_one": "Wymaga wejścia {{names}}, którego sesja pracy nie może podać. Nadaj mu wartość domyślną lub ustaw je jako opcjonalne.",
+      "unfilledInputs_few": "Wymaga wejść {{names}}, których sesja pracy nie może podać. Nadaj im wartości domyślne lub ustaw je jako opcjonalne.",
+      "unfilledInputs_many": "Wymaga wejść {{names}}, których sesja pracy nie może podać. Nadaj im wartości domyślne lub ustaw je jako opcjonalne.",
+      "unfilledInputs_other": "Wymaga wejść {{names}}, których sesja pracy nie może podać. Nadaj im wartości domyślne lub ustaw je jako opcjonalne.",
+      "missingWorkflow": "Ten przepływ pracy już nie istnieje. Wybierz inny lub żaden.",
+      "minutesRange": "Wpisz pełne minuty od {{min}} do {{max}}."
+    },
+    "check": {
+      "noResult": "Brak wyniku",
+      "canFinish": "Można zakończyć",
+      "notReady": "Nie można jeszcze zakończyć",
+      "last": "Ostatnie sprawdzenie końcowe: {{outcome}}",
+      "details": "— {{details}}",
+      "withDetails": "{{outcome}} — {{details}}",
+      "withTime": "{{result}} ({{time}})"
+    },
+    "history": {
+      "title": "Historia",
+      "description": "Sesje przechowywane na tym komputerze, od najnowszej. Przerwy dłuższe niż próg przeglądu są wliczane i oznaczane; wyklucz przerwę, jeśli wtedy nie pracowano.",
+      "loadFailed": "Nie udało się wczytać historii sesji",
+      "empty": "Nie ma jeszcze sesji",
+      "emptyHint": "Sesje pojawią się tutaj, gdy klawisz Sesja pracy rozpocznie pierwszą z nich.",
+      "sessions": "Sesje pracy",
+      "showOlder": "Pokaż starsze sesje",
+      "duration": "Czas trwania {{duration}}",
+      "gapsToReview_one": "{{count}} przerwa do przejrzenia",
+      "gapsToReview_few": "{{count}} przerwy do przejrzenia",
+      "gapsToReview_many": "{{count}} przerw do przejrzenia",
+      "gapsToReview_other": "{{count}} przerwy do przejrzenia",
+      "notice": "Komunikat",
+      "flaggedGaps": "Oznaczone przerwy",
+      "intervals": "Odcinki",
+      "noIntervals": "Brak: licznik czasu nie został uruchomiony (przepływ pracy rozpoczęcia nie powiódł się).",
+      "interval": "{{from}} – {{to}}",
+      "intervalOpen": "{{from}} – teraz",
+      "gapExcluded": "(następująca po nim przerwa jest wykluczona)",
+      "lastCheck": "Ostatnie sprawdzenie końcowe",
+      "transitions": "Przejścia",
+      "gap": {
+        "counted": "Przerwa jest wliczana",
+        "excluded": "Przerwa jest wykluczona",
+        "countFailed": "Przerwa nie została wliczona",
+        "excludeFailed": "Przerwa nie została wykluczona",
+        "statusExcluded": "Wykluczona",
+        "statusCounted": "Wliczona",
+        "statusUnreviewed": "Wliczona, nieprzejrzana",
+        "summary": "{{kind}}: {{span}} ({{duration}})",
+        "includeLabel": "Wlicz przerwę {{span}}",
+        "include": "Wlicz",
+        "excludeLabel": "Wyklucz przerwę {{span}}",
+        "exclude": "Wyklucz",
+        "keepLabel": "Zachowaj przerwę {{span}} jako wliczoną",
+        "keep": "Zachowaj wliczoną"
+      }
+    },
+    "status": {
+      "title": "Bieżąca sesja",
+      "description": "Obsługiwana klawiszem na urządzeniu; ta strona pokazuje tylko jej stan.",
+      "state": "Stan",
+      "project": "Projekt",
+      "started": "Rozpoczęto",
+      "notices": "Komunikaty",
+      "clearFailed": "Komunikaty nie zostały wyczyszczone",
+      "clearNotices": "Wyczyść komunikaty",
+      "elapsed": "Upłynęło"
+    },
+    "page": {
+      "title": "Sesja pracy",
+      "description": "Czas pracy rozpoczynanej i kończonej klawiszem na urządzeniu",
+      "unsupportedTitle": "Sesje pracy wymagają nowszego agenta",
+      "unsupportedDescription": "Działający agent nie obsługuje sesji pracy. Uruchom ponownie agenta w Ustawienia › Agent w tle, aby działał agent zainstalowany z tą aplikacją.",
+      "otherProject": "Projekt innego profilu",
+      "key": {
+        "title": "Klawisz Sesja pracy",
+        "description": "Sesją pracy może sterować dowolny klawisz; nie jest do tego tworzona żadna akcja.",
+        "step1": "Otwórz Edytor urządzenia i wybierz klawisz.",
+        "step2": "W jego gestach wybierz <em>Zmienia się ze stanem</em>, a następnie <em>Sesja pracy</em>.",
+        "step3": "Klawisz pokazuje wtedy stan i czas, który upłynął. Kliknij go, aby rozpocząć; podczas pracy kliknij go, aby uruchomić sprawdzenie końcowe, lub przytrzymaj, jeśli nie ustawiono przepływu pracy weryfikacji; kliknij go ponownie, gdy pokaże Zakończ pracę.",
+        "open": "Otwórz Edytor urządzenia"
+      }
+    },
+    "settings": {
+      "title": "Ustawienia",
+      "description": "Dotyczą sesji rozpoczętych, gdy ten profil jest aktywny. Zapisanie wycofuje zgodę na zakończenie, więc sesja gotowa do zakończenia wymaga nowego sprawdzenia końcowego.",
+      "loadFailed": "Nie udało się wczytać ustawień sesji pracy",
+      "form": "Ustawienia sesji pracy",
+      "saved": "Zapisano ustawienia sesji pracy",
+      "saveFailed": "Ustawienia sesji pracy nie zostały zapisane",
+      "start": {
+        "label": "Przepływ pracy rozpoczęcia",
+        "hint": "Uruchamiany, gdy klawisz rozpoczyna sesję; czas jest liczony po jego powodzeniu. Jeśli się nie powiedzie, sesja się nie rozpocznie."
+      },
+      "verification": {
+        "label": "Przepływ pracy weryfikacji końcowej",
+        "hint": "Musi zwracać canFinish (wartość logiczna): true pozwala zakończyć, false utrzymuje sesję. Opcjonalne wyjście tekstowe details jest pokazywane z wynikiem. Bez tego przepływu przytrzymanie klawisza w trwającej sesji od razu pozwala ją zakończyć."
+      },
+      "unusable": "Przepływy pracy, które nie mogą weryfikować zakończenia",
+      "approval": {
+        "label": "Ważność zgody (minuty)",
+        "hint": "Jak długo pomyślne sprawdzenie końcowe pozwala zakończyć sesję."
+      },
+      "reviewGap": {
+        "label": "Oznaczaj przerwy dłuższe niż (minuty)",
+        "hint": "Dłuższe przerwy (uśpienie, niedziałający agent) są wliczane i oznaczane w historii."
+      },
+      "format": {
+        "label": "Czas na klawiszach",
+        "minutes": "h:mm (odświeżane co minutę)",
+        "seconds": "h:mm:ss (odświeżane co sekundę)"
+      },
+      "gestures": {
+        "title": "Czas gestów",
+        "description": "Czas długiego naciśnięcia i dwukrotnego kliknięcia ustawia się na klawiszu, w edytorze gestów Edytora urządzenia. Klawisze bez własnych ustawień używają wartości domyślnych z Ustawienia › Urządzenia.",
+        "open": "Otwórz Ustawienia › Urządzenia"
+      },
+      "save": "Zapisz ustawienia",
+      "discard": "Odrzuć zmiany",
+      "none": "Brak",
+      "deletedWorkflow": "Usunięty przepływ pracy"
+    }
+  },
+  "http": {
+    "credentials": {
+      "loadFailed": "Nie udało się wczytać danych uwierzytelniających",
+      "loadNext": "Odblokuj DeckPilot i otwórz tę stronę ponownie",
+      "title": "Dane uwierzytelniające",
+      "description": "Tokeny i hasła, których żądania używają według nazwy. Są przechowywane w postaci zaszyfrowanej tylko na tym komputerze: nigdy w przepływie pracy ani w eksporcie i nigdy nie są ponownie pokazywane po zapisaniu.",
+      "empty": "Brak zapisanych danych uwierzytelniających.",
+      "stored": "Zapisane dane uwierzytelniające",
+      "replace": "Zastąp sekret",
+      "delete": "Usuń {{name}}",
+      "deleteTitle": "Usunąć {{name}}?",
+      "deleteDescription": "Żądania, które ich używają, będą kończyć się niepowodzeniem, dopóki dane uwierzytelniające o tej nazwie nie zostaną zapisane ponownie.",
+      "deleteFailed": "Nie usunięto {{name}}",
+      "replaced": "Zastąpiono {{name}}",
+      "replaceFailed": "Nie zastąpiono {{name}}",
+      "newSecret": "Nowy sekret dla {{name}}",
+      "save": "Zapisz",
+      "storedToast": "Zapisano {{name}}",
+      "storeFailed": "Nie zapisano {{name}}",
+      "add": "Dodaj dane uwierzytelniające",
+      "name": "Nazwa",
+      "nameInvalid": "Małe litery, cyfry, „.”, „_” i „-”, zaczynając od litery.",
+      "nameTaken": "Dane uwierzytelniające o tej nazwie już istnieją; zapisanie je zastąpi.",
+      "nameHint": "Nazwa, do której odwołują się akcje, np. w polu Dane uwierzytelniające żądania HTTP.",
+      "descriptionLabel": "Opis",
+      "secret": "Sekret",
+      "secretHint": "Token lub użytkownik:hasło dla uwierzytelniania podstawowego.",
+      "submit": "Zapisz dane uwierzytelniające"
+    }
+  }
+}

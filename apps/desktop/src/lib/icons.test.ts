@@ -4,8 +4,13 @@ import rendererList from "../../../../crates/deckpilot-render/assets/icons.txt?r
 
 import { ACTION_ICONS } from "./icons"
 
-/** The icons the key renderer draws (crates/deckpilot-render/assets/icons.txt). */
-const rendererIcons = rendererList
+/**
+ * The action icons of the key renderer (crates/deckpilot-render/assets/icons.txt,
+ * before the Icon Library's icons, which are drawn from the same font but
+ * offered in the Icon Library, not as action icons).
+ */
+const actionBlock = rendererList.split("# The icon library")[0] ?? ""
+const rendererIcons = actionBlock
   .split("\n")
   .map((line) => line.trim())
   .filter((line) => line && !line.startsWith("#"))

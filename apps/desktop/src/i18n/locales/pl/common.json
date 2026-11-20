@@ -1,0 +1,36 @@
+{
+  "actions": {
+    "back": "Wstecz",
+    "cancel": "Anuluj",
+    "clear": "Wyczyść",
+    "continue": "Kontynuuj",
+    "delete": "Usuń",
+    "ok": "OK",
+    "tryAgain": "Spróbuj ponownie"
+  },
+  "status": {
+    "loading": "Wczytywanie…",
+    "trying": "Ponawianie…",
+    "waiting": "Oczekiwanie…",
+    "working": "Przetwarzanie…"
+  },
+  "duration": {
+    "daysHours": "{{days}} d {{hours}} godz.",
+    "hoursMinutes": "{{hours}} godz. {{minutes}} min",
+    "minutes": "{{minutes}} min",
+    "lessThanMinute": "mniej niż minutę"
+  },
+  "counts": {
+    "projects_one": "{{count}} projekt",
+    "projects_few": "{{count}} projekty",
+    "projects_many": "{{count}} projektów",
+    "projects_other": "{{count}} projektu"
+  },
+  "os": {
+    "linux": "Linux",
+    "macOs": "macOS",
+    "windows": "Windows",
+    "other": "Inny"
+  },
+  "close": "Zamknij"
+}

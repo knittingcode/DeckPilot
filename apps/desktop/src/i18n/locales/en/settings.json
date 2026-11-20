@@ -1,0 +1,521 @@
+{
+  "title": "Settings",
+  "newBadge": "New",
+  "search": {
+    "placeholder": "Search settings",
+    "empty": "No settings found"
+  },
+  "categories": {
+    "general": "General",
+    "hardware": "Hardware",
+    "security": "Security & Data",
+    "extensions": "Extensions",
+    "advanced": "Advanced"
+  },
+  "pages": {
+    "language": {
+      "title": "Language",
+      "description": "The language of DeckPilot on this computer"
+    },
+    "profiles": {
+      "title": "Profiles",
+      "description": "Profiles and the one active on the device"
+    },
+    "updates": {
+      "title": "Updates",
+      "description": "Signed updates from GitHub Releases"
+    },
+    "variables": {
+      "title": "Variables",
+      "description": "Every value actions, workflows and keys can read with {{syntax}}"
+    },
+    "devices": {
+      "title": "Devices",
+      "description": "Connected Stream Decks, supported models, brightness and gesture timing"
+    },
+    "agent": {
+      "title": "Background Agent",
+      "description": "The process that drives your devices and runs actions"
+    },
+    "security": {
+      "title": "Security",
+      "description": "Encryption, unlocking and automatic locking"
+    },
+    "backup": {
+      "title": "Backup & Restore",
+      "description": "Encrypted export and import of your configuration"
+    },
+    "storage": {
+      "title": "Storage",
+      "description": "Where and how the configuration is stored"
+    },
+    "modules": {
+      "title": "Modules",
+      "description": "Features of DeckPilot you can enable or disable"
+    },
+    "permissions": {
+      "title": "Permissions",
+      "description": "What each module is allowed to access"
+    },
+    "diagnostics": {
+      "title": "Logs & Diagnostics",
+      "description": "Logs and technical details for troubleshooting"
+    },
+    "about": {
+      "title": "About",
+      "description": "Version, license and system"
+    },
+    "devDialogs": {
+      "title": "Dialog showcase",
+      "description": "Development only: every dialog template in its states"
+    },
+    "plugins": {
+      "title": "Plugins",
+      "description": "Experimental: installed plugins, their permissions, settings and updates"
+    },
+    "module": {
+      "description": "Settings of the {{module}} module"
+    }
+  },
+  "language": {
+    "sectionTitle": "Language",
+    "sectionDescription": "Applies to every window and profile on this computer, right away.",
+    "system": "System default (recommended)",
+    "systemHint": "System default follows the language order of your operating system. When none of its languages is available, DeckPilot is shown in English."
+  },
+  "shared": {
+    "close": "Close",
+    "done": "Done",
+    "save": "Save",
+    "revert": "Revert",
+    "copy": "Copy",
+    "refresh": "Refresh",
+    "none": "None",
+    "somethingWentWrong": "Something went wrong"
+  },
+  "page": {
+    "profile": "Profile",
+    "activeOnDevice": "Active on the device",
+    "notActiveOnDevice": "Not active on the device"
+  },
+  "window": {
+    "notRegistered": "this window is not registered as {{id}}",
+    "loadFailed": "This window could not load",
+    "loadFailedNext": "Close it and try again",
+    "unknown": "unknown window {{id}}"
+  },
+  "usage": {
+    "none": "Not used in any workflow or layout.",
+    "workflowStep": "Workflow “{{workflow}}”, step {{step}}",
+    "layoutControl": "Layout “{{layout}}”, page “{{page}}”, {{control}}"
+  },
+  "incompatible": {
+    "note": "Not run from this control: {{reason}} It stays assigned but is not run."
+  },
+  "about": {
+    "description": "Stream Deck management for macOS, Windows and Linux. Open source under the Apache License 2.0.",
+    "version": "Version",
+    "development": "(development session)",
+    "previousVersion": "Previous version",
+    "os": "Operating system",
+    "source": "Source code"
+  },
+  "agent": {
+    "refresh": "Refresh status",
+    "statusUnreadable": "The agent status could not be read",
+    "statusUnreadableNext": "Try again; if the agent does not respond, restart it",
+    "status": "Status",
+    "description": "The agent owns device communication and action execution and keeps running when this window is closed.",
+    "process": "Process",
+    "processValue": "PID {{pid}}, started {{time}}",
+    "backend": "Device backend",
+    "stopLabel": "Stop the agent",
+    "stopDescription": "Stopping the agent blanks connected devices until it is started again.",
+    "notStopped": "The agent was not stopped",
+    "stop": "Stop agent",
+    "startup": "Startup",
+    "autostart": "Start the agent when I log in",
+    "autostartUnavailable": "Not available on this computer.",
+    "autostartNeedsAgent": "Start the agent to change this.",
+    "autostartNotOn": "Starting the agent at login was not turned on",
+    "autostartNotOff": "Starting the agent at login was not turned off"
+  },
+  "diagnostics": {
+    "logsTitle": "Logs",
+    "logsDescription": "The agent writes a log of device events, action runs and errors. Logs stay on this computer.",
+    "agentLog": "Agent log",
+    "logWindowFailed": "The log window did not open",
+    "showLog": "Show log…",
+    "title": "Diagnostics",
+    "description": "Include these details when you report a problem. They contain paths on this computer but no configuration content.",
+    "copied": "Diagnostics copied",
+    "notCopied": "The diagnostics were not copied",
+    "copyByHand": "Select the report and copy it by hand",
+    "reportInEnglish": "The report is always in English, so that anyone who helps you can read it."
+  },
+  "moduleSettings": {
+    "saved": "{{module}} settings saved",
+    "notSaved": "{{module}} settings were not saved"
+  },
+  "permissions": {
+    "intro": "Every module declares what it may access. A disabled module has no access. To withdraw a permission, disable the module under <page>Modules</page>.",
+    "unused": "No module uses this permission.",
+    "granted": "Granted",
+    "disabled": "Disabled"
+  },
+  "storage": {
+    "title": "Configuration database",
+    "description": "Profiles, projects, actions, workflows and layouts are stored on this computer only, in an encrypted SQLite database. How it is unlocked is set under <page>Security</page>.",
+    "location": "Location",
+    "encryption": "Encryption",
+    "agentData": "Agent data",
+    "contents": "Contents",
+    "contentsValue": "{{profiles}}, {{bindings}} of this computer",
+    "profiles_one": "{{count}} profile",
+    "profiles_other": "{{count}} profiles",
+    "bindings_one": "{{count}} resource binding",
+    "bindings_other": "{{count}} resource bindings"
+  },
+  "migrationNotes": {
+    "title": "Data upgrade notes",
+    "description": "Upgrading the database changed the following stored data. Review the affected items.",
+    "deletedProfile": "a deleted profile",
+    "profile": "Profile {{profile}}"
+  },
+  "modules": {
+    "filter": {
+      "all": "All",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "unavailable": "Unavailable"
+    },
+    "toast": {
+      "enabled": "{{module}} enabled",
+      "disabled": "{{module}} disabled",
+      "notEnabled": "{{module}} was not enabled",
+      "notDisabled": "{{module}} was not disabled"
+    },
+    "intro": "Disabling a module hides its pages and action types. Actions, workflows and layouts that use it are kept and shown as unavailable until you enable it again. All modules are built into DeckPilot; installing modules from other sources is not supported.",
+    "search": "Search modules",
+    "show": "Show modules",
+    "emptyTitle": "No modules found",
+    "emptySearch": "No module matches your search.",
+    "emptyFilter": "No module is in this state.",
+    "builtIn": "Built-in",
+    "unsupported": "Not available on this system",
+    "actionTypeCount_one": "{{count}} action type",
+    "actionTypeCount_other": "{{count}} action types",
+    "pageCount_one": "{{pages}} page",
+    "pageCount_other": "{{pages}} pages",
+    "allPlatforms": "all platforms",
+    "enable": "Enable {{module}}",
+    "disable": "Disable {{module}}",
+    "details": "Details",
+    "hideDetails": "Hide details",
+    "actionTypes": "Action types",
+    "requires": "Requires",
+    "requiredBy": "Required by",
+    "identifier": "Identifier",
+    "noOtherModules": "No other modules",
+    "state": {
+      "notInstalled": "not installed",
+      "enabled": "enabled",
+      "disabled": "disabled"
+    },
+    "toggle": {
+      "requiredBy_one": "Required by {{modules}}. Disable it first.",
+      "requiredBy_other": "Required by {{modules}}. Disable them first.",
+      "unsupported": "Not available on this operating system.",
+      "notInstalled_one": "Requires {{modules}}, which is not installed.",
+      "notInstalled_other": "Requires {{modules}}, which are not installed.",
+      "requires_one": "Requires {{modules}}. Enable it first.",
+      "requires_other": "Requires {{modules}}. Enable them first."
+    }
+  },
+  "backup": {
+    "windowFailed": "The window did not open",
+    "intro": "Move profiles, projects, actions, workflows, layouts, module and application settings to another computer in an encrypted file — and keep one as your backup. Paths and other settings of this computer, keys and passwords are not included.",
+    "export": "Export",
+    "exportDescription": "Saves the configuration to an encrypted file protected by a password you choose.",
+    "exportEllipsis": "Export…",
+    "import": "Import",
+    "importDescription": "Reads an encrypted export; you review what changes before anything is applied.",
+    "importEllipsis": "Import…"
+  },
+  "updates": {
+    "mode": {
+      "notifyOnly": "Notify me",
+      "notifyOnlyDescription": "Show that an update is available.",
+      "downloadAndAsk": "Download, then ask",
+      "downloadAndAskDescription": "Download in the background and install after you confirm.",
+      "installWhenIdle": "Install when idle",
+      "installWhenIdleDescription": "Install automatically after ten minutes without device input. Not recommended until updates have been tested on your system."
+    },
+    "channel": {
+      "stable": "Stable",
+      "stableDescription": "Only stable releases.",
+      "prerelease": "Pre-releases",
+      "prereleaseDescription": "Also alpha, beta and release-candidate builds, which may have unfinished features or bugs. You move on to the stable release once it is newer; switching back to Stable never installs an older version."
+    },
+    "checkInternet": "Check your internet connection and try again",
+    "checkFailed": "Checking for updates failed",
+    "check": "Check for updates",
+    "notAvailable": "Updates are not available in this build",
+    "preferencesNotSaved": "The update settings were not saved",
+    "checking": "Checking for updates…",
+    "lastChecked": "Last checked {{time}}",
+    "notChecked": "Not checked yet",
+    "introSelfUpdate": "Updates come from GitHub Releases and are installed only if their signature verifies. Your configuration is never uploaded.",
+    "introExternal": "{{deliveredBy}}. DeckPilot does not download or install updates itself in this installation. Your configuration is never uploaded.",
+    "introNeverUploaded": "Your configuration is never uploaded.",
+    "versionAvailable": "Version {{version}} is available",
+    "upToDate": "DeckPilot is up to date.",
+    "versionValue": "Version {{version}}",
+    "usePackageManager": "Update with your package manager.",
+    "released": "Released {{date}}",
+    "notDownloaded": "The update was not downloaded",
+    "download": "Download",
+    "notInstalled": "The update was not installed",
+    "installAndRestart": "Install and restart",
+    "downloadProgress": "Download progress",
+    "downloading": "Downloading…",
+    "installExplanation": "Installing stops the background agent after its current task, releases the devices, installs, and restarts DeckPilot with the new agent.",
+    "readyInstallExplanation": "Downloaded and verified. Installing stops the background agent after its current task, releases the devices, installs, and restarts DeckPilot with the new agent.",
+    "preferences": "Preferences",
+    "modeLabel": "When an update is available",
+    "channelLabel": "Update channel",
+    "automatic": "Check automatically",
+    "automaticDescription": "While DeckPilot is open.",
+    "interval": "Check every",
+    "hours_one": "{{count}} hour",
+    "hours_other": "{{count}} hours",
+    "days_one": "{{count}} day",
+    "days_other": "{{count}} days",
+    "installation": "This installation",
+    "releaseChannel": "Release channel",
+    "installedFrom": "Installed from",
+    "override": {
+      "badge": "Development override",
+      "title": "Simulated installation",
+      "description": "This debug build behaves as if installed from {{channel}} (set by {{variable}}). Release builds ignore the override."
+    },
+    "restartAfterExternal": "After an update is installed, quit and reopen DeckPilot. If the background agent still runs the previous version, DeckPilot offers to restart it.",
+    "packageManager": "Update DeckPilot with your package manager:",
+    "command": "Update command",
+    "commandCopied": "Command copied",
+    "commandNotCopied": "The command was not copied",
+    "copyByHand": "Select it and copy it by hand",
+    "details": "Details: {{detail}}",
+    "releaseChannelName": {
+      "stable": "Stable",
+      "beta": "Beta (pre-release)",
+      "alpha": "Alpha (pre-release)"
+    },
+    "distribution": {
+      "channel": {
+        "github": "GitHub Releases",
+        "homebrew": "Homebrew",
+        "winget": "WinGet",
+        "apt": "APT repository",
+        "flathub": "Flathub",
+        "macAppStore": "Mac App Store",
+        "microsoftStore": "Microsoft Store"
+      },
+      "by": {
+        "github": "GitHub Releases",
+        "homebrew": "Homebrew",
+        "winget": "WinGet",
+        "apt": "APT",
+        "flathub": "Flathub",
+        "macAppStore": "the Mac App Store",
+        "microsoftStore": "the Microsoft Store"
+      },
+      "format": {
+        "app": ".dmg / .app",
+        "msi": "MSI",
+        "nsis": "NSIS installer",
+        "deb": ".deb",
+        "rpm": ".rpm",
+        "appimage": "AppImage",
+        "flatpak": "Flatpak",
+        "masPkg": "App Store package",
+        "msix": "MSIX",
+        "another": "another"
+      },
+      "provider": {
+        "githubRelease": "DeckPilot installs updates from GitHub Releases",
+        "externalPackageManager": "Your package manager",
+        "storeManaged": "The store",
+        "none": "Not available in this build"
+      },
+      "storeDelivers": "Delivered by {{provider}}",
+      "packageManagerOf": "Your package manager ({{provider}})",
+      "deliveredBy": "Updates are delivered by {{provider}}",
+      "installedWithFormat": "{{channel}} ({{format}})",
+      "selfBuilt": "Development or self-built version (no update key)",
+      "developmentBuild": "Development build",
+      "explanation": {
+        "noKey": "Development and self-built versions have no update signing key. Official releases check for updates automatically.",
+        "unknownFormat": "DeckPilot cannot tell which package this copy was installed from (for example a development build run from its build folder), so it does not update itself. Install an official release to get updates.",
+        "formatMismatch": "This build was made as a {{compiled}} package but is installed as {{bundled}}, so it does not update itself: an update could replace it with the wrong package. Reinstall DeckPilot from where you got it.",
+        "notUpdatable": "GitHub updates cannot install {{format}} packages on this platform, so this copy does not update itself. Install DeckPilot from the releases page to get updates.",
+        "other": "Updates are not available in this build: {{reason}}."
+      }
+    },
+    "error": {
+      "failed": "The update failed",
+      "problem": "Update problem",
+      "untrustedUrl": "Update refused: unexpected download address",
+      "signature": "Update refused: the signature did not verify",
+      "otherFormat": "Update refused: different package format",
+      "incomplete": "The last update did not complete",
+      "agentNotRunning": "Updated, but the background agent is not running"
+    }
+  },
+  "updateWindow": {
+    "ready": "Downloaded and verified. Installing restarts DeckPilot and its background agent.",
+    "installing": "Installing…",
+    "statusUnreadable": "The update status could not be read",
+    "checkNow": "Check now",
+    "checkingShort": "Checking…",
+    "titleVersion": "DeckPilot {{version}}",
+    "title": "DeckPilot update",
+    "installed": "Installed: {{version}}",
+    "installedNoUpdates": "Installed: {{version}}. Updates are not available in this build.",
+    "installedFrom": "Installed: {{version}} from {{channel}}",
+    "versionNotice": "Version {{version}} is available; update with your package manager.",
+    "sizeUnknown": "Size unknown",
+    "signature": "Updates are installed only if their signature verifies. Your configuration stays encrypted and is never uploaded."
+  },
+  "logs": {
+    "unreadable": "The agent log could not be read",
+    "unreadableNext": "The agent may not have written a log yet; start it and try again",
+    "title": "Background agent log",
+    "empty": "No log in {{directory}} yet.",
+    "truncated_one": "Showing the last {{count}} line.",
+    "truncated_other": "Showing the last {{count}} lines.",
+    "lines": "Log lines"
+  },
+  "workflowSummary": {
+    "status": {
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "skipped": "Skipped"
+    },
+    "removedAction": "Removed action",
+    "title": "Workflow summary",
+    "finishedWithProblems": "Finished with problems",
+    "finished": "Finished",
+    "stepCount_one": "{{count}} step",
+    "stepCount_other": "{{count}} steps",
+    "none": "No workflow has run since the agent started.",
+    "activeProject": "Active project",
+    "failedSteps": "Failed steps",
+    "allSteps": "All steps",
+    "steps": "Steps"
+  },
+  "portability": {
+    "fileType": "DeckPilot configuration",
+    "profilesUnreadable": "The profiles could not be loaded",
+    "closeAndRetry": "Close the window and try again",
+    "count": {
+      "profiles_one": "{{count}} profile",
+      "profiles_other": "{{count}} profiles",
+      "moduleSettings_one": "{{count}} module setting",
+      "moduleSettings_other": "{{count}} module settings",
+      "actions_one": "{{count}} action",
+      "actions_other": "{{count}} actions",
+      "workflows_one": "{{count}} workflow",
+      "workflows_other": "{{count}} workflows",
+      "projects_one": "{{count}} project",
+      "projects_other": "{{count}} projects",
+      "layouts_one": "{{count}} layout",
+      "layouts_other": "{{count}} layouts",
+      "values_one": "{{count}} value",
+      "values_other": "{{count}} values",
+      "globalValues_one": "{{count}} global value",
+      "globalValues_other": "{{count}} global values"
+    },
+    "export": {
+      "title": "Export configuration",
+      "purpose": "export your configuration",
+      "failed": "The configuration was not exported",
+      "doneTitle": "Configuration exported",
+      "doneDescription": "{{profiles}} and {{modules}}, encrypted with your export password.",
+      "keepFile": "Keep the file and its password; you need both to import it. This file is your backup: the key of this computer is not.",
+      "description": "The file is encrypted with a password of its own, independent of how DeckPilot is protected on this computer.",
+      "action": "Choose file and export",
+      "encrypting": "Encrypting…",
+      "noProfiles": "There are no profiles yet.",
+      "includeModules": "Include module settings",
+      "includeSettings": "Include application settings (updates)",
+      "excluded": "Paths and other settings of this computer, keys, passwords and the security settings are never included."
+    },
+    "import": {
+      "title": "Import configuration",
+      "chooseDescription": "Choose a DeckPilot export (.deckpilot). Nothing is changed until you have reviewed its contents.",
+      "chooseFailed": "The file could not be chosen",
+      "chooseFile": "Choose file…",
+      "openFailed": "The file could not be opened",
+      "openFailedNext": "Check the export password and that the file is a DeckPilot export",
+      "showContents": "Show contents",
+      "decrypting": "Decrypting…",
+      "password": "Export password",
+      "nothingYet": "Nothing is changed yet: you see what the file contains first.",
+      "resolution": {
+        "keepBoth": "Import as a copy",
+        "replace": "Replace the local profile",
+        "skip": "Skip"
+      },
+      "reviewTitle": "Review the import",
+      "reviewDescription": "Exported by DeckPilot {{version}} on {{date}}. Imported workflows do not run and imported profiles are not activated.",
+      "failed": "Nothing was imported",
+      "importing": "Importing…",
+      "mode": "How to import",
+      "merge": "Add to my configuration",
+      "replace": "Replace my profiles",
+      "removedTitle": "These local profiles will be removed",
+      "removedDescription": "{{profiles}}. The resources set up on this computer are kept.",
+      "alreadyHere": "Already here as “{{name}}”",
+      "resolutionLabel": "What to do with {{profile}}",
+      "sameName": "A different local profile has the same name; both are kept.",
+      "applyModules": "Apply module settings",
+      "incompatible": "incompatible",
+      "applySettings": "Apply application settings ({{content}})",
+      "settingsUpdates": "updates",
+      "settingsGlobalValues": "global shared variable values",
+      "unknownTypesTitle": "Some actions need modules this DeckPilot does not have",
+      "unknownTypesDescription": "{{types}}. They are imported and shown as unavailable.",
+      "missingTitle": "Resources to set up on this computer",
+      "missingDescription": "{{resources}}. You can map them after the import."
+    },
+    "variables": {
+      "title": "Shared variables",
+      "new": "New: {{names}}.",
+      "existing": "Already here, kept as they are: {{names}}.",
+      "values": "{{values}} for profiles and projects. Sensitive values are never exported.",
+      "valuesWithGlobal": "{{values}} for profiles and projects, {{global}} with the application settings. Sensitive values are never exported.",
+      "incompatibleTitle": "Some shared variables have another type here",
+      "incompatibleDescription": "{{names}}. Their values are not imported; the variables here are kept."
+    },
+    "done": {
+      "imported_one": "{{count}} profile imported",
+      "imported_other": "{{count}} profiles imported",
+      "replaced_one": "{{count}} replaced",
+      "replaced_other": "{{count}} replaced",
+      "skipped_one": "{{count}} skipped",
+      "skipped_other": "{{count}} skipped",
+      "title": "Import complete",
+      "description": "{{outcome}}.",
+      "mapResources": "Map resources now",
+      "renamed": "Imported as copies: {{profiles}}.",
+      "settings": "Application settings applied: {{settings}}.",
+      "variablesCreated": "Shared variables: {{names}} created, {{values}} set.",
+      "variables": "Shared variables: {{values}} set.",
+      "skippedValues": "Shared variable values not imported",
+      "skippedValuesList": "Values not imported",
+      "setUp": "Set up these resources on this computer",
+      "usedBy": "— used by {{profiles}}"
+    }
+  }
+}

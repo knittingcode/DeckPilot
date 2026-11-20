@@ -40,6 +40,9 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# The operating system's preferred languages, for the app's language
+# (docs/i18n.md).
+sys-locale = "0.3"
 tauri.workspace = true
 tauri-plugin-dialog = "2"
 # The Tauri updater of GitHub builds (feature `self-update`).

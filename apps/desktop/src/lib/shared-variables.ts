@@ -1,6 +1,8 @@
 // Pure helpers of the Shared Variables settings page: key rules, value
 // drafts, labels. The rules mirror deckpilot_core::variables (VariableKey,
-// VariableDefinition::check_value); the store checks again on save.
+// VariableDefinition::check_value); the store checks again on save. Texts
+// are in the window's language, read when used (components that show them
+// re-render with `useTranslation`).
 
 import type {
   CatalogEntry,
@@ -15,6 +17,7 @@ import type {
   VariableValue,
 } from "./types"
 import { controlLabel } from "./layout-model"
+import { type TranslationKey, i18n } from "@/i18n"
 import { describeTrigger } from "@/workflow-builder/trigger-model"
 
 export const RESERVED_NAMESPACES = ["steps", "system", "workflow"]
@@ -24,39 +27,54 @@ const SEGMENT = /^[a-z][A-Za-z0-9_]{0,31}$/
 /** What is wrong with a new key, or `null`. */
 export function keyProblem(key: string, existing: string[]): string | null {
   const trimmed = key.trim()
-  if (!trimmed) return "Enter a key."
+  if (!trimmed) return i18n.t("workflows:sharedVariables.keyRule.empty")
   const segments = trimmed.split(".")
   if (segments.length < 2 || segments.length > MAX_SEGMENTS) {
-    return "Use 2 to 4 parts separated by dots, e.g. paths.root."
+    return i18n.t("workflows:sharedVariables.keyRule.parts")
   }
   if (!segments.every((s) => SEGMENT.test(s))) {
-    return "Each part starts with a lowercase letter and has at most 32 letters, digits or _."
+    return i18n.t("workflows:sharedVariables.keyRule.part")
   }
   const [namespace = ""] = segments
-  if (RESERVED_NAMESPACES.includes(namespace)) return `“${namespace}” is reserved.`
-  if (existing.includes(trimmed)) return "A variable with this key exists."
+  if (RESERVED_NAMESPACES.includes(namespace))
+    return i18n.t("workflows:sharedVariables.keyRule.reserved", { namespace })
+  if (existing.includes(trimmed)) return i18n.t("workflows:sharedVariables.keyRule.exists")
   return null
 }
 
-export const VALUE_TYPES: { type: VariableType["type"]; label: string }[] = [
-  { type: "string", label: "Text" },
-  { type: "integer", label: "Integer" },
-  { type: "boolean", label: "Yes/no" },
-  { type: "projectId", label: "Project" },
-  { type: "profileId", label: "Profile" },
-  { type: "resource", label: "Resource" },
-  { type: "json", label: "JSON" },
-  { type: "secretRef", label: "Stored credential" },
+/** `{ ...fields, label }` whose `label` is `key` in the window's language, read when used. */
+function labelled<T extends object>(
+  fields: T,
+  key: TranslationKey,
+): T & { readonly label: string } {
+  return Object.defineProperty({ ...fields }, "label", {
+    enumerable: true,
+    get: () => i18n.t(key),
+  }) as T & { readonly label: string }
+}
+
+export const VALUE_TYPES: { type: VariableType["type"]; readonly label: string }[] = [
+  labelled({ type: "string" as const }, "workflows:sharedVariables.valueType.string"),
+  labelled({ type: "integer" as const }, "workflows:sharedVariables.valueType.integer"),
+  labelled({ type: "boolean" as const }, "workflows:sharedVariables.valueType.boolean"),
+  labelled({ type: "projectId" as const }, "workflows:sharedVariables.valueType.projectId"),
+  labelled({ type: "profileId" as const }, "workflows:sharedVariables.valueType.profileId"),
+  labelled({ type: "resource" as const }, "workflows:sharedVariables.valueType.resource"),
+  labelled({ type: "json" as const }, "workflows:sharedVariables.valueType.json"),
+  labelled({ type: "secretRef" as const }, "workflows:sharedVariables.valueType.secretRef"),
 ]
 
-export const RESOURCE_KINDS: { kind: ResourceKind; label: string }[] = [
-  { kind: "directory", label: "Directory" },
-  { kind: "application", label: "Application" },
-  { kind: "terminal", label: "Terminal" },
-  { kind: "dockerEnvironment", label: "Docker environment" },
-  { kind: "service", label: "Service" },
-  { kind: "url", label: "URL" },
-  { kind: "other", label: "Other" },
+export const RESOURCE_KINDS: { kind: ResourceKind; readonly label: string }[] = [
+  labelled({ kind: "directory" as const }, "workflows:sharedVariables.kind.directory"),
+  labelled({ kind: "application" as const }, "workflows:sharedVariables.kind.application"),
+  labelled({ kind: "terminal" as const }, "workflows:sharedVariables.kind.terminal"),
+  labelled(
+    { kind: "dockerEnvironment" as const },
+    "workflows:sharedVariables.kind.dockerEnvironment",
+  ),
+  labelled({ kind: "service" as const }, "workflows:sharedVariables.kind.service"),
+  labelled({ kind: "url" as const }, "workflows:sharedVariables.kind.url"),
+  labelled({ kind: "other" as const }, "workflows:sharedVariables.kind.other"),
 ]
 
 export function typeLabel(type: VariableType): string {
@@ -67,12 +85,35 @@ export function typeLabel(type: VariableType): string {
   return label
 }
 
+const SCOPE_TEXT = {
+  global: {
+    label: "workflows:sharedVariables.scope.global",
+    hint: "workflows:sharedVariables.scope.globalHint",
+  },
+  profile: {
+    label: "workflows:sharedVariables.scope.profile",
+    hint: "workflows:sharedVariables.scope.profileHint",
+  },
+  project: {
+    label: "workflows:sharedVariables.scope.project",
+    hint: "workflows:sharedVariables.scope.projectHint",
+  },
+} as const satisfies Record<string, { label: TranslationKey; hint: TranslationKey }>
+
 /** Scopes whose values are stored; execution values exist only during a run. */
-export const STORED_SCOPES: { scope: VariableScope; label: string; hint: string }[] = [
-  { scope: "global", label: "Global", hint: "One value for every profile" },
-  { scope: "profile", label: "Profile", hint: "A value per profile" },
-  { scope: "project", label: "Project", hint: "A value per project" },
-]
+export const STORED_SCOPES: {
+  scope: VariableScope
+  readonly label: string
+  readonly hint: string
+}[] = (["global", "profile", "project"] as const).map((scope) => ({
+  scope,
+  get label() {
+    return i18n.t(SCOPE_TEXT[scope].label)
+  },
+  get hint() {
+    return i18n.t(SCOPE_TEXT[scope].hint)
+  },
+}))
 
 /**
  * A value being edited, as text. `mode` tells resources whether `text` is a
@@ -117,20 +158,26 @@ export function parseValue(type: VariableType, draft: ValueDraft): Parsed {
       return { value: { type: "string", value: text } }
     case "integer": {
       const trimmed = text.trim()
-      if (!/^-?\d+$/.test(trimmed)) return { error: "Enter a whole number." }
+      if (!/^-?\d+$/.test(trimmed))
+        return { error: i18n.t("workflows:sharedVariables.parse.wholeNumber") }
       const number = Number(trimmed)
-      if (!Number.isSafeInteger(number)) return { error: "The number is too large." }
+      if (!Number.isSafeInteger(number))
+        return { error: i18n.t("workflows:sharedVariables.parse.tooLarge") }
       return { value: { type: "integer", value: number } }
     }
     case "boolean":
       return { value: { type: "boolean", value: text === "true" } }
     case "projectId":
-      return text ? { value: { type: "projectId", value: text } } : { error: "Choose a project." }
+      return text
+        ? { value: { type: "projectId", value: text } }
+        : { error: i18n.t("workflows:sharedVariables.parse.project") }
     case "profileId":
-      return text ? { value: { type: "profileId", value: text } } : { error: "Choose a profile." }
+      return text
+        ? { value: { type: "profileId", value: text } }
+        : { error: i18n.t("workflows:sharedVariables.parse.profile") }
     case "resource": {
       const trimmed = text.trim()
-      if (!trimmed) return { error: "Enter a resource key or a project role." }
+      if (!trimmed) return { error: i18n.t("workflows:sharedVariables.parse.resource") }
       return {
         value: {
           type: "resource",
@@ -145,12 +192,12 @@ export function parseValue(type: VariableType, draft: ValueDraft): Parsed {
       try {
         return { value: { type: "json", value: JSON.parse(text) as unknown } }
       } catch {
-        return { error: "Enter valid JSON." }
+        return { error: i18n.t("workflows:sharedVariables.parse.json") }
       }
     case "secretRef":
       return text
         ? { value: { type: "secretRef", value: text } }
-        : { error: "Choose a stored credential." }
+        : { error: i18n.t("workflows:sharedVariables.parse.credential") }
   }
 }
 
@@ -161,30 +208,37 @@ export function formatValue(
   projects: Project[],
   profiles: ProfileSummary[],
 ): string {
-  if (definition.sensitive) return "Redacted"
-  if (!value) return "Not set"
+  if (definition.sensitive) return i18n.t("workflows:sharedVariables.shown.redacted")
+  if (!value) return i18n.t("workflows:sharedVariables.notSet")
   switch (value.type) {
     case "string":
-      return value.value === "" ? "(empty)" : value.value
+      return value.value === "" ? i18n.t("workflows:sharedVariables.shown.empty") : value.value
     case "integer":
       return String(value.value)
     case "boolean":
-      return value.value ? "Yes" : "No"
+      return value.value
+        ? i18n.t("workflows:sharedVariables.shown.yes")
+        : i18n.t("workflows:sharedVariables.shown.no")
     case "projectId": {
       const project = projects.find((p) => p.id === value.value)
-      return project ? `${project.key} — ${project.name}` : "Unknown project"
+      return project
+        ? `${project.key} — ${project.name}`
+        : i18n.t("workflows:sharedVariables.shown.unknownProject")
     }
     case "profileId":
-      return profiles.find((p) => p.id === value.value)?.name ?? "Unknown profile"
+      return (
+        profiles.find((p) => p.id === value.value)?.name ??
+        i18n.t("workflows:sharedVariables.shown.unknownProfile")
+      )
     case "resource":
       return value.value.type === "fixed"
-        ? `Resource ${value.value.key}`
-        : `Project role ${value.value.role}`
+        ? i18n.t("workflows:sharedVariables.shown.resource", { key: value.value.key })
+        : i18n.t("workflows:sharedVariables.shown.projectRole", { role: value.value.role })
     case "json":
       return JSON.stringify(value.value)
     case "secretRef":
       // The name of the credential, never its secret.
-      return `Credential ${value.value}`
+      return i18n.t("workflows:sharedVariables.shown.credential", { name: value.value })
   }
 }
 
@@ -214,15 +268,21 @@ export function sameScope(a: ScopeKey, b: ScopeKey): boolean {
 export function scopeLabel(scope: ScopeKey, projects: Project[], profiles: ProfileSummary[]) {
   switch (scope.kind) {
     case "global":
-      return "Global"
+      return i18n.t("workflows:sharedVariables.slot.global")
     case "profile":
-      return `Profile ${profiles.find((p) => p.id === scope.profile)?.name ?? ""}`.trim()
+      return i18n
+        .t("workflows:sharedVariables.slot.profile", {
+          name: profiles.find((p) => p.id === scope.profile)?.name ?? "",
+        })
+        .trim()
     case "project": {
       const project = projects.find((p) => p.id === scope.project)
-      return project ? `Project ${project.key}` : "Project"
+      return project
+        ? i18n.t("workflows:sharedVariables.slot.project", { key: project.key })
+        : i18n.t("workflows:sharedVariables.slot.anyProject")
     }
     case "execution":
-      return "During a run"
+      return i18n.t("workflows:sharedVariables.slot.execution")
   }
 }
 
@@ -237,16 +297,49 @@ export function describeVariableReference(reference: VariableReference): string 
   const text = (() => {
     switch (use.type) {
       case "action":
-        return `Action “${ownerName}”${where}`
+        return i18n.t("workflows:sharedVariables.reference.action", { owner: ownerName }) + where
       case "workflow":
-        return `Workflow “${ownerName}”${use.node ? `, node ${use.node}` : ""}${where}`
+        return (
+          (use.node
+            ? i18n.t("workflows:sharedVariables.reference.workflowNode", {
+                owner: ownerName,
+                node: use.node,
+              })
+            : i18n.t("workflows:sharedVariables.reference.workflow", { owner: ownerName })) + where
+        )
       case "binding":
-        return `Layout “${ownerName}”, ${controlLabel(use.control)}${where}`
+        return (
+          i18n.t("workflows:sharedVariables.reference.binding", {
+            owner: ownerName,
+            control: controlLabel(use.control),
+          }) + where
+        )
       case "trigger":
-        return `Workflow “${ownerName}” starts by trigger: ${describeTrigger(use.kind)}`
+        return i18n.t("workflows:sharedVariables.reference.trigger", {
+          owner: ownerName,
+          trigger: describeTrigger(use.kind),
+        })
     }
   })()
   return `${profileName}: ${text}`
+}
+
+/**
+ * A fallback catalog entry whose label and description are read in the
+ * window's language when used; the reference itself is never translated.
+ */
+function systemVariable(
+  fields: Omit<CatalogEntry, "label" | "description">,
+  label: TranslationKey,
+  description?: TranslationKey,
+): CatalogEntry {
+  const entry = labelled(fields, label)
+  return description
+    ? Object.defineProperty(entry, "description", {
+        enumerable: true,
+        get: () => i18n.t(description),
+      })
+    : entry
 }
 
 /**
@@ -254,80 +347,98 @@ export function describeVariableReference(reference: VariableReference): string 
  * §6), shown when the agent cannot list them (older agent, not running).
  */
 export const SYSTEM_VARIABLES: CatalogEntry[] = [
-  {
-    reference: "system.project.current.id",
-    label: "Current project",
-    description: "The run's project inside a run, the active project for a key press.",
-    group: "system",
-    valueType: { type: "projectId" },
-    dynamic: true,
-    availability: "available",
-  },
-  {
-    reference: "system.project.current.key",
-    label: "Current project key",
-    group: "system",
-    valueType: { type: "string" },
-    dynamic: true,
-    availability: "available",
-  },
-  {
-    reference: "system.project.current.name",
-    label: "Current project name",
-    group: "system",
-    valueType: { type: "string" },
-    dynamic: true,
-    availability: "available",
-  },
-  {
-    reference: "system.profile.current.id",
-    label: "Current profile",
-    group: "system",
-    valueType: { type: "profileId" },
-    dynamic: true,
-    availability: "available",
-  },
-  {
-    reference: "system.profile.current.name",
-    label: "Current profile name",
-    group: "system",
-    valueType: { type: "string" },
-    dynamic: true,
-    availability: "available",
-  },
-  {
-    reference: "system.device.current.id",
-    label: "Device",
-    description: "The device whose control started the action (model#serial).",
-    group: "system",
-    valueType: { type: "string" },
-    dynamic: true,
-    availability: "available",
-  },
-  {
-    reference: "system.platform",
-    label: "Platform",
-    description: "linux, macOs, windows or other.",
-    group: "system",
-    valueType: { type: "string" },
-    availability: "available",
-  },
-  {
-    reference: "workflow.id",
-    label: "Workflow",
-    description: "The running workflow.",
-    group: "workflow",
-    valueType: { type: "string" },
-    dynamic: true,
-    availability: "runtimeOnly",
-  },
-  {
-    reference: "workflow.execution.id",
-    label: "Run",
-    description: "The current run of the workflow.",
-    group: "workflow",
-    valueType: { type: "string" },
-    dynamic: true,
-    availability: "runtimeOnly",
-  },
+  systemVariable(
+    {
+      reference: "system.project.current.id",
+      group: "system",
+      valueType: { type: "projectId" },
+      dynamic: true,
+      availability: "available",
+    },
+    "workflows:systemVariables.projectId.label",
+    "workflows:systemVariables.projectId.description",
+  ),
+  systemVariable(
+    {
+      reference: "system.project.current.key",
+      group: "system",
+      valueType: { type: "string" },
+      dynamic: true,
+      availability: "available",
+    },
+    "workflows:systemVariables.projectKey.label",
+  ),
+  systemVariable(
+    {
+      reference: "system.project.current.name",
+      group: "system",
+      valueType: { type: "string" },
+      dynamic: true,
+      availability: "available",
+    },
+    "workflows:systemVariables.projectName.label",
+  ),
+  systemVariable(
+    {
+      reference: "system.profile.current.id",
+      group: "system",
+      valueType: { type: "profileId" },
+      dynamic: true,
+      availability: "available",
+    },
+    "workflows:systemVariables.profileId.label",
+  ),
+  systemVariable(
+    {
+      reference: "system.profile.current.name",
+      group: "system",
+      valueType: { type: "string" },
+      dynamic: true,
+      availability: "available",
+    },
+    "workflows:systemVariables.profileName.label",
+  ),
+  systemVariable(
+    {
+      reference: "system.device.current.id",
+      group: "system",
+      valueType: { type: "string" },
+      dynamic: true,
+      availability: "available",
+    },
+    "workflows:systemVariables.device.label",
+    "workflows:systemVariables.device.description",
+  ),
+  systemVariable(
+    {
+      reference: "system.platform",
+      group: "system",
+      valueType: { type: "string" },
+      availability: "available",
+    },
+    "workflows:systemVariables.platform.label",
+    "workflows:systemVariables.platform.description",
+  ),
+  systemVariable(
+    {
+      reference: "workflow.id",
+      group: "workflow",
+      valueType: { type: "string" },
+      dynamic: true,
+      availability: "runtimeOnly",
+    },
+    "workflows:systemVariables.workflow.label",
+    "workflows:systemVariables.workflow.description",
+  ),
+  systemVariable(
+    {
+      reference: "workflow.execution.id",
+      group: "workflow",
+      valueType: { type: "string" },
+      dynamic: true,
+      availability: "runtimeOnly",
+    },
+    "workflows:systemVariables.execution.label",
+    "workflows:systemVariables.execution.description",
+  ),
 ]

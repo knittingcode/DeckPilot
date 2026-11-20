@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
+
+import { i18n } from "@/i18n"
 
 import { deviceModel } from "@/test/fixtures"
 
@@ -206,3 +208,30 @@ function requireCaps(model: DeviceModel, control: typeof key | typeof dial | typ
   if (!found) throw new Error("no such control")
   return found
 }
+
+describe("compatibility texts in Polish", () => {
+  afterEach(async () => {
+    await i18n.changeLanguage("en")
+  })
+
+  it("read as Polish sentences", async () => {
+    await i18n.changeLanguage("pl")
+    expect(whyNotOnControl(dialOnly, mk2, key)).toBe(
+      "Wymaga pokrętła. Wybrany klawisz urządzenia Stream Deck MK.2 obsługuje tylko akcje naciśnięcia.",
+    )
+    expect(whyNotOnControl(stepper, plus, zone)).toBe(
+      "Wymaga klawisza lub pokrętła. Wybrana strefa dotykowa urządzenia Stream Deck + obsługuje akcje stuknięcia, długiego dotknięcia i przesunięcia.",
+    )
+    expect(whyNotOnControl(dialPress, stiffDials, dial)).toBe(
+      "Wymaga naciśnięcia na pokrętle. Wybrane pokrętło urządzenia Knob Box obsługuje tylko akcje obrotu.",
+    )
+    expect(whyNotForTrigger(stepper, plus, dial, { type: "doubleClick" })).toBe(
+      "Nie reaguje na dwukrotne kliknięcie na pokrętle. Na pokrętle reaguje na naciśnięcie, obrót w prawo, obrót w lewo i kliknięcie.",
+    )
+    expect(
+      whyNotForTrigger({ controls: { encoder: ["press"] } }, stiffDials, dial, { type: "press" }),
+    ).toBe(
+      "Wybrane pokrętło urządzenia Knob Box nie reaguje na naciśnięcie; obsługuje tylko akcje obrotu.",
+    )
+  })
+})

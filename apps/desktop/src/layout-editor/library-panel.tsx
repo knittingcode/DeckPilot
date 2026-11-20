@@ -15,6 +15,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
+import { useTranslation } from "@/i18n"
 import type { ActionType } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -56,6 +57,7 @@ const ENTRY =
 const DISABLED_ENTRY = "grid min-w-0 gap-0.5 rounded-md px-1 py-1 text-sm text-muted-foreground"
 
 function LibraryEntry({ option }: { option: TargetOption }) {
+  const { t } = useTranslation()
   const source: DragSource = { type: "target", target: option.target }
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `library:${option.value}`,
@@ -77,7 +79,10 @@ function LibraryEntry({ option }: { option: TargetOption }) {
     return (
       <li
         className={DISABLED_ENTRY}
-        aria-label={`${option.label}: unavailable, ${option.unavailable}`}
+        aria-label={t("editor:library.unavailable", {
+          name: option.label,
+          reason: option.unavailable,
+        })}
         aria-disabled
         data-compatibility="unavailable"
       >
@@ -99,7 +104,7 @@ function LibraryEntry({ option }: { option: TargetOption }) {
       className={cn(ENTRY, isDragging && "opacity-60")}
       {...attributes}
       {...listeners}
-      aria-label={`Drag ${option.label} onto a control`}
+      aria-label={t("editor:library.drag", { name: option.label })}
     >
       <EntryIcon>
         <OptionIcon option={option} />
@@ -124,10 +129,11 @@ function IncompatibleEntry({
   reason: string
   icon: ReactNode
 }) {
+  const { t } = useTranslation()
   return (
     <li
       className={DISABLED_ENTRY}
-      aria-label={`${label}: not for the selected control. ${reason}`}
+      aria-label={t("editor:library.incompatible", { name: label, reason })}
       aria-disabled
       data-compatibility="incompatible"
     >
@@ -150,6 +156,7 @@ export const NEW_FOLDER_DRAG_ID = "library:new-folder"
  * open page and makes the control open it.
  */
 function NewFolderEntry() {
+  const { t } = useTranslation()
   const source: DragSource = { type: "newFolder" }
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: NEW_FOLDER_DRAG_ID,
@@ -161,13 +168,13 @@ function NewFolderEntry() {
       className={cn(ENTRY, isDragging && "opacity-60")}
       {...attributes}
       {...listeners}
-      aria-label="Drag New folder onto an empty control"
-      title="Drop on an empty key to create a folder there. Double-click the key to enter it."
+      aria-label={t("editor:library.newFolderDrag")}
+      title={t("editor:library.newFolderTitle")}
     >
       <EntryIcon>
         <FolderPlus aria-hidden />
       </EntryIcon>
-      <span className="min-w-0 flex-1 truncate">New folder</span>
+      <span className="min-w-0 flex-1 truncate">{t("editor:library.newFolder")}</span>
     </li>
   )
 }
@@ -180,6 +187,7 @@ export const NEW_MULTI_ACTION_DRAG_ID = "library:new-multi-action"
  * step workflow, binds it and opens its steps.
  */
 function NewMultiActionEntry() {
+  const { t } = useTranslation()
   const source: DragSource = { type: "newMultiAction" }
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: NEW_MULTI_ACTION_DRAG_ID,
@@ -191,13 +199,13 @@ function NewMultiActionEntry() {
       className={cn(ENTRY, isDragging && "opacity-60")}
       {...attributes}
       {...listeners}
-      aria-label="Drag Multi Action onto a control"
-      title="Runs several actions in order, with delays between them. Drop it on a key, then add its steps."
+      aria-label={t("editor:library.multiActionDrag")}
+      title={t("editor:library.multiActionTitle")}
     >
       <EntryIcon>
         <ListPlus aria-hidden />
       </EntryIcon>
-      <span className="min-w-0 flex-1 truncate">Multi Action</span>
+      <span className="min-w-0 flex-1 truncate">{t("editor:library.multiAction")}</span>
     </li>
   )
 }
@@ -207,6 +215,7 @@ function NewMultiActionEntry() {
  * settings is created (or the one that exists is reused) and bound.
  */
 function CatalogItem({ entry, incompatible }: { entry: CatalogEntry; incompatible?: string }) {
+  const { t } = useTranslation()
   const source: DragSource = { type: "actionType", actionType: entry.type.id }
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: catalogDragId(entry.type.id),
@@ -228,8 +237,11 @@ function CatalogItem({ entry, incompatible }: { entry: CatalogEntry; incompatibl
       className={cn(ENTRY, isDragging && "opacity-60")}
       {...attributes}
       {...listeners}
-      aria-label={`Drag ${entry.type.name} onto a control`}
-      title={`${entry.type.description} (${entry.module})`}
+      aria-label={t("editor:library.drag", { name: entry.type.name })}
+      title={t("editor:library.typeTitle", {
+        description: entry.type.description,
+        module: entry.module,
+      })}
     >
       <EntryIcon>
         <ActionIcon name={entry.type.node?.icon} />
@@ -255,6 +267,7 @@ export interface PresetEntry {
 }
 
 function PresetItem({ entry, incompatible }: { entry: PresetEntry; incompatible?: string }) {
+  const { t } = useTranslation()
   const source: DragSource = { type: "actionType", actionType: entry.type.id, preset: entry.preset }
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: presetDragId(entry.key),
@@ -271,7 +284,7 @@ function PresetItem({ entry, incompatible }: { entry: PresetEntry; incompatible?
       className={cn(ENTRY, isDragging && "opacity-60")}
       {...attributes}
       {...listeners}
-      aria-label={`Drag ${entry.label} onto a control`}
+      aria-label={t("editor:library.drag", { name: entry.label })}
       title={entry.description}
     >
       <EntryIcon>{icon}</EntryIcon>
@@ -358,6 +371,7 @@ export function LibraryPanel({
     catalog: (type: ActionType) => string | null
   }
 }) {
+  const { t } = useTranslation()
   const [query, setQuery] = useState("")
   const [compatibleOnly, setCompatibleOnlyState] = useState(loadCompatibleOnly)
   const setCompatibleOnly = (on: boolean) => {
@@ -378,7 +392,7 @@ export function LibraryPanel({
           matches(`${o.label} ${group.label}`, needle) && !(hiding && o.incompatible !== undefined),
       ),
     }))
-    .filter((group) => group.options.length > 0 || (group.label === "Navigation" && !searching))
+    .filter((group) => group.options.length > 0 || (group.id === "navigation" && !searching))
   const types = filterCatalog(catalog, query)
     .map((group) => ({
       ...group,
@@ -395,10 +409,19 @@ export function LibraryPanel({
     if (!types.some((group) => group.label === category))
       types.push({ label: category, entries: [] })
   }
-  const folder = !searching || matches("new folder folders navigation", needle)
+  // Found by the English words too, whatever the language.
+  const folder =
+    !searching ||
+    matches(`new folder folders navigation ${t("editor:library.searchFolder")}`, needle)
   const multi =
-    multiAction && (!searching || matches("new multi action sequence steps workflow", needle))
-  const hasItems = groups.some((g) => g.label !== "Navigation")
+    multiAction &&
+    (!searching ||
+      matches(
+        `new multi action sequence steps workflow ${t("editor:library.searchMulti")}`,
+        needle,
+      ))
+  const hasItems = groups.some((g) => g.id !== "navigation")
+  const navigation = shown.find((group) => group.id === "navigation")
   // A search shows what it found, whatever is folded.
   const isOpen = (id: string) => searching || !closed.has(id)
   const toggle = (id: string) => {
@@ -411,14 +434,14 @@ export function LibraryPanel({
   }
   const nothing = searching && shown.length === 0 && types.length === 0 && !folder && !multi
 
-  const hint = "Drag onto a control, or select a control and choose in the inspector."
+  const hint = t("editor:library.hint")
   const content = (
     <>
       <Input
         type="search"
         className="h-8"
-        placeholder="Search the library"
-        aria-label="Search the library"
+        placeholder={t("editor:library.search")}
+        aria-label={t("editor:library.search")}
         value={query}
         onChange={(event) => {
           setQuery(event.target.value)
@@ -434,33 +457,33 @@ export function LibraryPanel({
               onCheckedChange={setCompatibleOnly}
             />
             <Label htmlFor="library-compatible-only" className="text-xs font-normal">
-              Compatible only
+              {t("editor:library.compatibleOnly")}
             </Label>
           </div>
           <p className="text-xs text-muted-foreground">
             {compatibility.control
-              ? `Showing what fits ${compatibility.control}.`
-              : "Select a control to see what fits it."}
+              ? t("editor:library.showingFits", { control: compatibility.control })
+              : t("editor:library.selectControl")}
           </p>
         </div>
       )}
       <div className={cn("grid gap-2", variant === "card" && "max-h-[28rem] overflow-y-auto")}>
         {!hasItems && !searching && catalog.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            No actions or workflows yet. Create them in the Action Library.
-          </p>
+          <p className="text-sm text-muted-foreground">{t("editor:library.empty")}</p>
         )}
-        {nothing && <p className="text-sm text-muted-foreground">Nothing matches.</p>}
+        {nothing && (
+          <p className="text-sm text-muted-foreground">{t("editor:library.noMatches")}</p>
+        )}
         {shown
-          .filter((group) => group.label !== "Navigation")
+          .filter((group) => group.id !== "navigation")
           .map((group) => (
             <Section
-              key={group.label}
+              key={group.id}
               label={group.label}
               count={group.options.length}
-              open={isOpen(group.label)}
+              open={isOpen(group.id)}
               onToggle={() => {
-                toggle(group.label)
+                toggle(group.id)
               }}
             >
               {group.options.map((option) => (
@@ -468,44 +491,39 @@ export function LibraryPanel({
               ))}
             </Section>
           ))}
-        {(folder || shown.some((group) => group.label === "Navigation")) && (
+        {(folder || navigation) && (
           <Section
-            label="Navigation"
-            count={
-              (shown.find((group) => group.label === "Navigation")?.options.length ?? 0) +
-              (folder ? 1 : 0)
-            }
-            open={isOpen("Navigation")}
+            label={t("editor:library.navigation")}
+            count={(navigation?.options.length ?? 0) + (folder ? 1 : 0)}
+            open={isOpen("navigation")}
             onToggle={() => {
-              toggle("Navigation")
+              toggle("navigation")
             }}
           >
             {folder && <NewFolderEntry />}
-            {shown
-              .find((group) => group.label === "Navigation")
-              ?.options.map((option) => (
-                <LibraryEntry key={option.value} option={option} />
-              ))}
+            {navigation?.options.map((option) => (
+              <LibraryEntry key={option.value} option={option} />
+            ))}
           </Section>
         )}
         {multi && (
           <Section
-            label="New: Sequence"
+            label={t("editor:library.newSequence")}
             count={1}
-            open={isOpen("New: Sequence")}
+            open={isOpen("new:sequence")}
             onToggle={() => {
-              toggle("New: Sequence")
+              toggle("new:sequence")
             }}
           >
             <NewMultiActionEntry />
           </Section>
         )}
         {types.map((group) => {
-          const id = `New: ${group.label}`
+          const id = `new:${group.label}`
           return (
             <Section
               key={id}
-              label={id}
+              label={t("editor:library.newCategory", { category: group.label })}
               count={group.entries.length + presetsOf(group.label).length}
               open={isOpen(id)}
               onToggle={() => {
@@ -535,7 +553,7 @@ export function LibraryPanel({
   return (
     <Card className="h-fit">
       <CardHeader>
-        <CardTitle className="text-sm">Library</CardTitle>
+        <CardTitle className="text-sm">{t("editor:library.title")}</CardTitle>
         <CardDescription>{hint}</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3">{content}</CardContent>

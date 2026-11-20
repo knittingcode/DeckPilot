@@ -2,6 +2,8 @@
 // notice, `migration.tsx`). Never a value: the agent's reasons name
 // settings by key and credentials by id.
 
+import { i18n } from "@/i18n"
+
 import type { ModuleMigration } from "./types"
 
 export type MigrationTone = "moving" | "waiting" | "builtin" | "moved" | "unavailable"
@@ -14,57 +16,62 @@ export interface MigrationStatus {
   text: string
 }
 
-/** What a migration means for the user. */
+/** What a migration means for the user, in the window's language. */
 export function migrationStatus(m: ModuleMigration): MigrationStatus {
   const plugin = m.pluginName ? `${m.pluginName} (${m.plugin})` : m.plugin
+  const module = m.moduleName
   switch (m.phase) {
     case "pending":
     case "installed":
     case "settingsCopied":
       return {
         tone: "moving",
-        label: "Moving to a plugin",
-        text: `${m.moduleName} is moving to the plugin ${plugin}. The built-in keeps running its actions until the move is done.`,
+        label: i18n.t("plugins:migration.status.moving.label"),
+        text: i18n.t("plugins:migration.status.moving.text", { module, plugin }),
       }
     case "awaitingConsent":
       return {
         tone: "waiting",
-        label: "Waiting for your consent",
-        text: `${m.moduleName} can move to the plugin ${plugin} once you allow what the plugin needs. Until then the built-in keeps running its actions.`,
+        label: i18n.t("plugins:migration.status.waiting.label"),
+        text: i18n.t("plugins:migration.status.waiting.text", { module, plugin }),
       }
     case "cutOver":
       if (m.route === "pluginWithdrawn") {
         return {
           tone: "unavailable",
-          label: "Actions unavailable",
-          text: `${m.moduleName}'s actions run in ${plugin}, which is not available: ${m.routeReason ?? "it was removed"}.`,
+          label: i18n.t("plugins:migration.status.unavailable.label"),
+          text: i18n.t("plugins:migration.status.unavailable.text", {
+            module,
+            plugin,
+            reason: m.routeReason ?? i18n.t("plugins:migration.status.unavailable.removed"),
+          }),
         }
       }
       return {
         tone: "moved",
-        label: "Moved to a plugin",
-        text: `${m.moduleName}'s actions run in the plugin ${plugin}; your actions keep working unchanged.`,
+        label: i18n.t("plugins:migration.status.moved.label"),
+        text: i18n.t("plugins:migration.status.moved.text", { module, plugin }),
       }
     case "failed":
       return {
         tone: "builtin",
-        label: "Staying built-in",
+        label: i18n.t("plugins:migration.status.builtin.label"),
         text:
           m.attempts >= m.maxAttempts
-            ? `The move to ${plugin} failed ${String(m.attempts)} times; DeckPilot tries again only when you press Retry. The built-in keeps running its actions.`
-            : `The move to ${plugin} failed; DeckPilot tries again at its next start. The built-in keeps running its actions.`,
+            ? i18n.t("plugins:migration.status.failed.textFinal", { plugin, count: m.attempts })
+            : i18n.t("plugins:migration.status.failed.text", { plugin }),
       }
     case "notEligible":
       return {
         tone: "builtin",
-        label: "Staying built-in",
-        text: `${m.moduleName} stays built-in on this computer; its actions keep working.`,
+        label: i18n.t("plugins:migration.status.builtin.label"),
+        text: i18n.t("plugins:migration.status.notEligible.text", { module }),
       }
     case "other":
       return {
         tone: "builtin",
-        label: "Unknown state",
-        text: `The agent reports a state this app does not know; ${m.moduleName}'s actions are unchanged.`,
+        label: i18n.t("plugins:migration.status.other.label"),
+        text: i18n.t("plugins:migration.status.other.text", { module }),
       }
   }
 }

@@ -2,11 +2,12 @@
 import "@testing-library/jest-dom/vitest"
 
 import { DndContext } from "@dnd-kit/core"
-import { cleanup, render, screen } from "@testing-library/react"
+import { act, cleanup, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { DeviceCanvas } from "./device-canvas"
+import { i18n } from "@/i18n"
 import type { ControlId, DeviceModel } from "@/lib/types"
 import { DEVICE_MODELS } from "@/test/fixtures"
 
@@ -140,8 +141,10 @@ describe("DeviceCanvas", () => {
     const canvas = screen.getByRole("group", { name: "Stream Deck MK.2 controls" })
     expect(canvas.style.getPropertyValue("--key")).toBe("88px")
     // In whole pixels, so every key (and its image) starts on a pixel
-    // boundary and is not resampled: 0.35 and 0.2 keys, rounded.
-    expect(canvas.style.padding).toBe("31px")
+    // boundary and is not resampled: 0.08 keys of room for the selection
+    // ring (no enclosure padding) and 0.2 keys of gap, rounded.
+    expect(canvas.style.padding).toBe("7px")
+    expect(canvas.className).not.toMatch(/\b(bg-|border|rounded|shadow)/)
     expect(document.querySelector<HTMLElement>("[data-slot=device-keys]")?.style.gap).toBe("18px")
     cleanup()
     // Without a size: the size step, as before.
@@ -170,16 +173,46 @@ describe("DeviceCanvas", () => {
     }
     const plain = key([])
     const selected = key([{ kind: "key", index: 0 }])
-    // A ring (a shadow) for selection, an outline for keyboard focus.
-    expect(selected).toContain("ring-device-selected")
-    expect(plain).not.toContain("ring-device-selected")
+    // One border in every state; selection changes only its colour.
+    expect(plain).toContain("border-(length:--key-border)")
+    expect(selected).toContain("border-(length:--key-border)")
+    expect(plain).toContain("border-device-key-border")
+    expect(selected).toContain("border-device-selected")
+    expect(selected).not.toContain("border-device-key-border")
     expect(plain).toContain("focus-visible:outline-device-focus")
     // Everything that sizes the key is the same.
     const sizing = (classes: string[]) =>
-      classes.filter((c) => /^(border|border-\d|w-|h-|size-|aspect-|p-|m-|rounded)/.test(c))
+      classes.filter((c) =>
+        /^(border(-\d|-x|-y|-t|-b|-l|-r)?$|border-\(length|w-|h-|size-|aspect-|p-|m-|rounded)/.test(
+          c,
+        ),
+      )
     expect(sizing(selected)).toEqual(sizing(plain))
     expect(sizing(plain)).toContain("aspect-square")
-    expect(selected.filter((c) => c.startsWith("border-") && /\d$/.test(c))).toEqual([])
+    // What differs is colour only: no ring, glow, scale or wider border.
+    const added = selected.filter((c) => !plain.includes(c))
+    expect(added).toEqual(["border-device-selected"])
+    expect([...plain, ...selected].some((c) => /^(ring|shadow|scale|border-[2-8]$)/.test(c))).toBe(
+      false,
+    )
+  })
+
+  it("scales the border with the key, in whole pixels", () => {
+    for (const [size, border] of [
+      [102, "6px"],
+      [88, "5px"],
+      [72, "4px"],
+      [24, "2px"],
+    ] as const) {
+      render(
+        <DndContext>
+          <DeviceCanvas model={DEVICE_MODELS.plus} keySize={size} />
+        </DndContext>,
+      )
+      const canvas = screen.getByRole("group", { name: "Stream Deck + controls" })
+      expect(canvas.style.getPropertyValue("--key-border")).toBe(border)
+      cleanup()
+    }
   })
 
   it("draws the device's key image edge to edge, and neutral empty keys", () => {
@@ -198,5 +231,28 @@ describe("DeviceCanvas", () => {
     const empty = screen.getByRole("button", { name: "Key 2" })
     expect(empty.querySelector("[data-face=empty]")).toBeInTheDocument()
     expect(empty).toHaveTextContent("")
+  })
+})
+
+describe("DeviceCanvas in Polish", () => {
+  afterEach(async () => {
+    await act(async () => {
+      await i18n.changeLanguage("en")
+    })
+  })
+
+  it("names the controls in the window's language and follows a switch", async () => {
+    renderCanvas(plus)
+    expect(screen.getByRole("button", { name: "Key 1" })).toHaveAttribute("data-control", "key:0")
+    await act(async () => {
+      await i18n.changeLanguage("pl")
+    })
+    expect(screen.getAllByRole("button", { name: /^Klawisz \d+$/ })).toHaveLength(8)
+    expect(screen.getAllByRole("button", { name: /^Pokrętło \d+$/ })).toHaveLength(4)
+    expect(screen.getAllByRole("button", { name: /^Strefa dotykowa \d+$/ })).toHaveLength(4)
+    const dial = screen.getByRole("button", { name: "Pokrętło 2" })
+    expect(dial).toHaveAttribute("aria-label", "Pokrętło 2")
+    expect(dial).toHaveAttribute("data-control", "encoder:1")
+    expect(screen.queryByRole("button", { name: /^Key \d+$/ })).not.toBeInTheDocument()
   })
 })

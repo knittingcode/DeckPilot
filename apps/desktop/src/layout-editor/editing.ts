@@ -3,6 +3,9 @@
 // from the device model's controls; no geometry is hard-coded.
 
 import { keyTimings, setKeyTimings } from "@/components/gesture-editor/model"
+import { i18n } from "@/i18n"
+import { DEFAULT_AUTO_EXIT, RESERVED_BACK, isSystemBack } from "@/lib/folder-back"
+import { brokenFolderControl, isFolderControl, pressFolderControl } from "@/lib/folder-control"
 import {
   bindableTriggers,
   bindingsFor,
@@ -195,6 +198,11 @@ function placeBindings(
   bindings: ControlBindings,
   timings?: ControlTimings,
 ): { layout: DeviceLayout; skipped: number } {
+  // The folder's system Back is the agent's, and a folder key only opens
+  // its folder: nothing is put on them.
+  if (isSystemBack(model, layout, pageId, control) || isFolderControl(layout, pageId, control)) {
+    return { layout, skipped: bindings.length }
+  }
   const supported = bindableTriggers(model, control)
   let next = setKeyTimings(clearControls(layout, pageId, [control]), pageId, control, timings)
   let skipped = 0
@@ -224,6 +232,10 @@ export function assignTarget(
   if (!targetFits(layout, pageId, target)) return layout
   let next = layout
   for (const control of controls) {
+    // Folder keys only open their folder (`lib/folder-control.ts`).
+    if (isSystemBack(model, next, pageId, control) || isFolderControl(next, pageId, control)) {
+      continue
+    }
     const trigger = defaultTrigger(
       model,
       next,
@@ -234,15 +246,40 @@ export function assignTarget(
     if (!trigger) continue
     // Replacing a binding keeps how the key looks.
     const replaced = bindingsFor(next, pageId, control).find((b) => sameTrigger(b.trigger, trigger))
-    next = setBinding(next, pageId, {
+    const candidate = setBinding(next, pageId, {
       control,
       trigger,
       target,
       label: null,
       ...(replaced?.appearance ? { appearance: replaced.appearance } : {}),
     })
+    // A folder opens from a key of its own: never next to what a key runs.
+    if (brokenFolderControl(candidate, pageId, control)) continue
+    next = pressFolderControl(candidate, pageId, control)
   }
   return next
+}
+
+/**
+ * Whether assigning `target` to `control` is refused because the key would
+ * open a folder next to what it already runs (a folder opens from a key
+ * of its own, `lib/folder-control.ts`).
+ */
+export function opensFolderBesides(
+  model: DeviceModel,
+  layout: DeviceLayout,
+  pageId: string,
+  control: ControlId,
+  target: BindingTarget,
+): boolean {
+  if (target.type !== "openPage" || isFree(layout, pageId, control)) return false
+  const trigger = defaultTrigger(model, layout, pageId, control)
+  if (!trigger) return false
+  return brokenFolderControl(
+    setBinding(layout, pageId, { control, trigger, target, label: null }),
+    pageId,
+    control,
+  )
 }
 
 /** The page a control opens with its press, click (or first) binding, if any. */
@@ -364,6 +401,9 @@ export function moveControl(
   to: ControlId,
 ): DeviceLayout | null {
   if (sameControl(from, to)) return layout
+  if (isSystemBack(model, layout, pageId, from) || isSystemBack(model, layout, pageId, to)) {
+    return null
+  }
   const source = strip(bindingsFor(layout, pageId, from))
   const dest = strip(bindingsFor(layout, pageId, to))
   const fits = (control: ControlId, bindings: ControlBindings) => {
@@ -405,6 +445,7 @@ export function duplicateControls(
         (c) =>
           c.kind === source.kind &&
           !sources.some((s) => sameControl(s, c)) &&
+          !isSystemBack(model, next, pageId, c) &&
           bindingsFor(next, pageId, c).length === 0,
       )
     if (!free) continue
@@ -467,7 +508,12 @@ export function dropOnControl(
   ) {
     return null
   }
+  if (isSystemBack(model, layout, pageId, over)) return null
   if (source.type === "control") return moveControl(model, layout, pageId, source.control, over)
+  // A library entry never goes on a folder key: it stays a folder key; a
+  // folder never goes next to what a key runs.
+  if (isFolderControl(layout, pageId, over)) return null
+  if (opensFolderBesides(model, layout, pageId, over, source.target)) return null
   if (!targetFits(layout, pageId, source.target)) return null
   return assignTarget(model, layout, pageId, [over], source.target, accepts)
 }
@@ -475,13 +521,18 @@ export function dropOnControl(
 // ---------------------------------------------------------------------------
 // Folders
 
-/** A page name no page of the layout has: "Folder", "Folder 2", … */
+/**
+ * A page name no page of the layout has: "Folder", "Folder 2", … (in the
+ * window's language: the name is then the user's).
+ */
 export function freeFolderName(layout: DeviceLayout): string {
   const taken = new Set(layout.pages.map((p) => p.name.trim().toLowerCase()))
-  if (!taken.has("folder")) return "Folder"
+  const first = i18n.t("editor:editing.folderName")
+  if (!taken.has(first.toLowerCase())) return first
   let n = 2
-  while (taken.has(`folder ${n}`)) n += 1
-  return `Folder ${n}`
+  const numbered = (number: number) => i18n.t("editor:editing.folderNameNumbered", { number })
+  while (taken.has(numbered(n).toLowerCase())) n += 1
+  return numbered(n)
 }
 
 /** Whether a control has no binding on the page. */
@@ -503,14 +554,31 @@ export function createFolder(
   control: ControlId,
   id: string,
 ): DeviceLayout | null {
-  if (!findPage(layout, pageId) || findPage(layout, id) || !isFree(layout, pageId, control)) {
+  if (
+    !findPage(layout, pageId) ||
+    findPage(layout, id) ||
+    !isFree(layout, pageId, control) ||
+    isSystemBack(model, layout, pageId, control)
+  ) {
     return null
   }
   const trigger = defaultTrigger(model, layout, pageId, control)
   if (!trigger) return null
   const withPage: DeviceLayout = {
     ...layout,
-    pages: [...layout.pages, { id, name: freeFolderName(layout), parent: pageId, bindings: [] }],
+    // A new folder has the protected Back on its first key, and Auto Exit
+    // stored switched off (docs/data-model.md).
+    pages: [
+      ...layout.pages,
+      {
+        id,
+        name: freeFolderName(layout),
+        parent: pageId,
+        bindings: [],
+        back: { ...RESERVED_BACK },
+        autoExit: { ...DEFAULT_AUTO_EXIT },
+      },
+    ],
   }
   return setBinding(withPage, pageId, {
     control,
@@ -575,31 +643,30 @@ export function boundControls(layout: DeviceLayout, pageId: string): Set<string>
   return new Set(findPage(layout, pageId)?.bindings.map((b) => controlKey(b.control)) ?? [])
 }
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`
-
-/** What goes with a deleted page, in sentences, for the confirmation. */
+/**
+ * What goes with a deleted page, in sentences, for the confirmation (in
+ * the window's language; the dialog that shows them re-renders with it).
+ */
 export function deletionNotes(deletion: PageDeletion): string[] {
   const notes: string[] = []
   const { controls, openers, inside } = deletion
-  if (controls > 0) {
-    notes.push(
-      `${plural(controls, "control")} on it ${controls === 1 ? "is" : "are"} deleted with it.`,
-    )
-  }
-  if (openers > 0) {
-    notes.push(
-      `${plural(openers, "control")} on other pages that ${openers === 1 ? "opens" : "open"} it will do nothing afterwards.`,
-    )
-  }
+  if (controls > 0) notes.push(i18n.t("editor:deletePage.controls", { count: controls }))
+  if (openers > 0) notes.push(i18n.t("editor:deletePage.openers", { count: openers }))
   if (inside.length > 0) {
-    const names = inside.map((name) => `“${name || "Untitled"}”`).join(", ")
-    const where = deletion.folder ? `to “${deletion.folder}”` : "to the top level"
+    const untitled = i18n.t("editor:pageNav.untitled")
+    const names = inside
+      .map((name) => i18n.t("editor:deletePage.quoted", { name: name || untitled }))
+      .join(", ")
     notes.push(
-      inside.length === 1
-        ? `The page inside it (${names}) is kept and moves ${where}.`
-        : `The pages inside it (${names}) are kept and move ${where}.`,
+      deletion.folder
+        ? i18n.t("editor:deletePage.insideToFolder", {
+            count: inside.length,
+            names,
+            folder: deletion.folder,
+          })
+        : i18n.t("editor:deletePage.insideToTop", { count: inside.length, names }),
     )
   }
-  if (notes.length === 0) notes.push("The page is empty and nothing opens it.")
+  if (notes.length === 0) notes.push(i18n.t("editor:deletePage.empty"))
   return notes
 }

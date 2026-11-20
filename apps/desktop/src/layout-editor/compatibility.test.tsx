@@ -376,19 +376,16 @@ describe("the inspector", { timeout: 20_000 }, () => {
     expect(within(listbox).getByRole("option", { name: "Room volume" })).not.toHaveAttribute(
       "data-disabled",
     )
-    expect(
-      within(listbox).getByRole("option", { name: "Mute mic (not on this control)" }),
-    ).toHaveAttribute("data-disabled")
-    expect(
-      within(listbox).getByRole("option", { name: "Write log (not on this control)" }),
-    ).toHaveAttribute("data-disabled")
+    // What cannot run from it is not offered (no disabled entries).
+    expect(within(listbox).queryByRole("option", { name: /Mute mic/ })).toBeNull()
+    expect(within(listbox).queryByRole("option", { name: /Write log/ })).toBeNull()
   })
 
   it("offers a dial's press gestures only to actions that react to them", async () => {
     const user = renderEditor(plus)
     await user.click(control("Dial 1"))
     // Next page reacts to a press of a dial but not to a double click.
-    await user.click(screen.getByRole("combobox", { name: "Double click" }))
+    await user.click(screen.getByRole("combobox", { name: "Assign an action to: Double click" }))
     const listbox = screen.getByRole("listbox")
     expect(
       within(listbox).getByRole("option", { name: "Forward (not on this control)" }),
@@ -407,7 +404,9 @@ describe("saving", { timeout: 20_000 }, () => {
       ),
     )
     const user = renderEditor(plus)
-    await user.type(screen.getByRole("textbox", { name: "Layout name" }), " 2")
+    // Any change: a new page, then back to the first.
+    await user.click(screen.getByRole("button", { name: "Add page" }))
+    await user.click(screen.getByRole("button", { name: "Previous page" }))
     await user.click(screen.getByRole("button", { name: "Save" }))
     expect(
       await screen.findByText(
@@ -434,7 +433,9 @@ describe("saving", { timeout: 20_000 }, () => {
       }),
     )
     const user = renderEditor(plus)
-    await user.type(screen.getByRole("textbox", { name: "Layout name" }), " 2")
+    // Any change: a new page, then back to the first.
+    await user.click(screen.getByRole("button", { name: "Add page" }))
+    await user.click(screen.getByRole("button", { name: "Previous page" }))
     await user.click(screen.getByRole("button", { name: "Save" }))
     await waitFor(() => {
       expect(toast.warning).toHaveBeenCalledWith("1 binding is kept but not run", {

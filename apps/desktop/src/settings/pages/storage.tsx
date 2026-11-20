@@ -4,48 +4,53 @@ import { Property, PropertyList, SettingsSection } from "@/components/settings-l
 import { useAsync } from "@/hooks/use-async"
 import { api } from "@/lib/api"
 import { useAppContext } from "@/lib/app-context"
+import { Trans, useTranslation } from "@/i18n"
 
 export function StorageSettings() {
+  const { t } = useTranslation()
   const { revision, agent, openSettings } = useAppContext()
   const { state } = useAsync(() => api.getOverview(), String(revision))
   return (
     <>
       <SettingsSection
-        title="Configuration database"
+        title={t("settings:storage.title")}
         description={
-          <>
-            Profiles, projects, actions, workflows and layouts are stored on this computer only, in
-            an encrypted SQLite database. How it is unlocked is set under{" "}
-            <button
-              type="button"
-              className="text-primary underline-offset-2 hover:underline"
-              onClick={() => {
-                openSettings("security")
-              }}
-            >
-              Security
-            </button>
-            .
-          </>
+          <Trans
+            i18nKey="settings:storage.description"
+            components={{
+              page: (
+                <button
+                  type="button"
+                  className="text-primary underline-offset-2 hover:underline"
+                  onClick={() => {
+                    openSettings("security")
+                  }}
+                />
+              ),
+            }}
+          />
         }
       >
         {state.status === "loading" && <Loading />}
         {state.status === "error" && <ErrorNotice error={state.error} />}
         {state.status === "ready" && (
           <PropertyList className="border-t pt-3">
-            <Property label="Location" mono>
+            <Property label={t("settings:storage.location")} mono>
               {state.data.databasePath}
             </Property>
-            <Property label="Encryption">SQLCipher (AES-256)</Property>
+            <Property label={t("settings:storage.encryption")}>SQLCipher (AES-256)</Property>
             {agent?.status && (
-              <Property label="Agent data" mono>
+              <Property label={t("settings:storage.agentData")} mono>
                 {agent.status.dataDir}
               </Property>
             )}
-            <Property label="Contents">
-              {state.data.profileCount} profile{state.data.profileCount === 1 ? "" : "s"},{" "}
-              {state.data.resourceBindingCount} resource binding
-              {state.data.resourceBindingCount === 1 ? "" : "s"} of this computer
+            <Property label={t("settings:storage.contents")}>
+              {t("settings:storage.contentsValue", {
+                profiles: t("settings:storage.profiles", { count: state.data.profileCount }),
+                bindings: t("settings:storage.bindings", {
+                  count: state.data.resourceBindingCount,
+                }),
+              })}
             </Property>
           </PropertyList>
         )}

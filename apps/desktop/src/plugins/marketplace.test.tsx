@@ -387,13 +387,10 @@ describe("install", () => {
     const dialog = screen.getByRole("dialog")
     await user.click(within(dialog).getByRole("button", { name: "Allow all 2" }))
     await user.click(within(dialog).getByRole("button", { name: "Install" }))
-    expect(await within(dialog).findByText("The version was withdrawn")).toBeInTheDocument()
-    expect(within(dialog).getByText("the version was revoked")).toBeInTheDocument()
-    expect(
-      within(dialog).getByText(
-        "The registry withdrew this version; choose another one or uninstall it.",
-      ),
-    ).toBeInTheDocument()
+    // Title, the agent's message and the hint, as one inline error.
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "The version was withdrawn: the version was revoked The registry withdrew this version; choose another one or uninstall it.",
+    )
   })
 
   it("installs a local package file after confirmation, granting nothing, then shows its permissions", async () => {
@@ -459,8 +456,7 @@ describe("install", () => {
     const dialog = screen.getByRole("dialog")
     await user.click(within(dialog).getByRole("button", { name: "Allow all 5" }))
     await user.click(within(dialog).getByRole("button", { name: "Install" }))
-    expect(await within(dialog).findByText(title)).toBeInTheDocument()
-    expect(within(dialog).getByText("details")).toBeInTheDocument()
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(`${title}: details`)
     // The dialog stays open: nothing was installed.
     expect(within(dialog).getByRole("button", { name: "Install" })).toBeEnabled()
   })

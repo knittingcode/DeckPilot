@@ -1,0 +1,924 @@
+{
+  "page": {
+    "title": "Przepływy pracy",
+    "description": "Łącz akcje w przepływy pracy",
+    "switcher": "Przepływ pracy",
+    "stepsMark": " · kroki",
+    "new": "Nowy przepływ pracy",
+    "newSteps": "Nowy przepływ krokowy",
+    "defaultName": "Nowy przepływ pracy",
+    "stepsIntro": "Przepływ krokowy wykonuje swoje akcje po kolei. Można go później otworzyć w edytorze grafu.",
+    "stepsHint": "Ten przepływ pracy wykonuje swoje kroki po kolei. Otwórz go w edytorze grafu, aby dodać rozgałęzienia, kroki równoległe i pętle; kroki zostaną zachowane.",
+    "convertFailed": "Nie można otworzyć przepływu pracy w edytorze grafu",
+    "openInGraph": "Otwórz w edytorze grafu"
+  },
+  "steps": {
+    "condition": {
+      "always": "Zawsze",
+      "previousSucceeded": "Jeśli poprzedni krok się powiódł",
+      "previousFailed": "Jeśli poprzedni krok się nie powiódł",
+      "whileProject": "Gdy aktywny jest projekt {{project}}"
+    },
+    "onFailure": {
+      "stop": "W razie błędu: zatrzymaj przepływ pracy",
+      "continue": "W razie błędu: kontynuuj"
+    },
+    "toast": {
+      "delayFailed": "Nie dodano opóźnienia",
+      "saved": "Zapisano przepływ pracy",
+      "duplicated": "Powielono przepływ pracy",
+      "duplicateFailed": "Nie powielono przepływu pracy",
+      "deleted": "Usunięto przepływ pracy",
+      "deleteFailed": "Nie usunięto przepływu pracy"
+    },
+    "run": "Uruchom przepływ pracy",
+    "runNamed": "Uruchom „{{name}}”",
+    "runShort": "Uruchom",
+    "description": "Kroki są wykonywane po kolei w agencie. Każdy krok korzysta z akcji z tego profilu.",
+    "name": "Nazwa",
+    "namePlaceholder": "Początek pracy",
+    "descriptionLabel": "Opis",
+    "optional": "Opcjonalnie",
+    "steps": "Kroki",
+    "empty": "Dodaj akcje poniżej.",
+    "actionToAdd": "Akcja do dodania",
+    "chooseAction": "Wybierz akcję",
+    "unavailableWhy": " (niedostępna: {{reason}})",
+    "unavailableMark": " (niedostępna)",
+    "addStep": "Dodaj krok",
+    "addDelay": "Dodaj opóźnienie",
+    "save": "Zapisz",
+    "copyName": "{{name}} (kopia)",
+    "duplicate": "Powiel",
+    "deleteTitle": "Usunąć „{{name}}”?",
+    "deleteDescription": "Przepływ pracy zostanie usunięty z tego profilu.",
+    "lastRun": "Ostatnie uruchomienie: {{state}}",
+    "usedIn": "Używany w",
+    "drag": "Przeciągnij krok {{number}}",
+    "actionOf": "Akcja kroku {{number}}",
+    "missingAction": "Brak akcji",
+    "moveUp": "Przenieś w górę",
+    "moveDown": "Przenieś w dół",
+    "remove": "Usuń krok {{number}}",
+    "unavailableStep": "Niedostępna: {{reason}}. Krok pozostaje w przepływie pracy i zostanie znowu wykonany, gdy wtyczka będzie mogła działać.",
+    "conditionOf": "Warunek kroku {{number}}",
+    "onFailureOf": "Postępowanie w razie błędu kroku {{number}}",
+    "hideParameters": "Ukryj parametry",
+    "showParameters": "Zastąp parametry dla tego kroku",
+    "override": "Zastąp „{{parameter}}”",
+    "delay": "Opóźnienie",
+    "delayOf": "Opóźnienie kroku {{number}} w milisekundach",
+    "ms": "ms",
+    "validation": {
+      "name": "Wprowadź nazwę.",
+      "chooseAction": "Krok {{step}}: wybierz akcję.",
+      "noPrevious": "Krok {{step}}: nie ma poprzedniego kroku."
+    }
+  },
+  "variablesTable": {
+    "search": "Szukaj zmiennych",
+    "owner": "Właściciel",
+    "type": "Typ",
+    "scope": "Zakres",
+    "filter": {
+      "owner": "Filtr właściciela",
+      "type": "Filtr typu",
+      "scope": "Filtr zakresu"
+    },
+    "any": {
+      "owner": "Dowolny właściciel",
+      "type": "Dowolny typ",
+      "scope": "Dowolny zakres"
+    },
+    "toast": {
+      "copied": "Skopiowano odwołanie",
+      "copyFailed": "Nie skopiowano odwołania"
+    },
+    "valuesUnavailable": "Wartości są niedostępne: {{reason}}",
+    "notLive": "Agent nie działa lub jest w zbyt starej wersji: zmienne modułów i bieżące wartości nie są wyświetlane.",
+    "noMatch": "Żadna zmienna nie pasuje.",
+    "label": "Zmienne",
+    "variable": "Zmienna",
+    "currentValue": "Bieżąca wartość",
+    "access": "Dostęp",
+    "actions": "Akcje",
+    "redacted": "Ukryta (poufna)",
+    "aliases": "Dostępna także jako {{aliases}} (przestarzałe)",
+    "editable": "Edytowalna",
+    "readOnly": "Tylko do odczytu",
+    "sensitive": "Poufna",
+    "usedTimes_one": "Użyta {{count}} raz",
+    "usedTimes_few": "Użyta {{count}} razy",
+    "usedTimes_many": "Użyta {{count}} razy",
+    "usedTimes_other": "Użyta {{count}} razy",
+    "used_one": "Użyta {{count}}×",
+    "used_few": "Użyta {{count}}×",
+    "used_many": "Użyta {{count}}×",
+    "used_other": "Użyta {{count}}×",
+    "copy": "Kopiuj {{reference}}",
+    "edit": "Edytuj {{reference}}"
+  },
+  "sharedVariables": {
+    "intro": "Każda wartość, którą mogą odczytać akcje, przepływy pracy i klawisze. Wstaw ją za pomocą {{syntax}}. W przypadku zmiennych współdzielonych wartość ustawiona dla projektu ma pierwszeństwo przed wartością profilu, a ta przed wartością globalną.",
+    "title": "Zmienne",
+    "new": "Nowa zmienna",
+    "empty": {
+      "title": "Nie ma jeszcze zmiennych współdzielonych",
+      "description": "Utwórz zmienną, aby używać tej samej wartości w wielu akcjach i przepływach pracy."
+    },
+    "chooseProject": "Wybierz projekt",
+    "chooseProfile": "Wybierz profil",
+    "noCredentials": "Brak zachowanych poświadczeń. Najpierw dodaj je w sekcji Bezpieczeństwo; sekret pozostaje tam.",
+    "chooseCredential": "Wybierz zachowane poświadczenie",
+    "referenceKind": "{{label}}: rodzaj odwołania",
+    "resourceKey": "Klucz zasobu",
+    "projectRole": "Rola w projekcie",
+    "scopeRequired": "Wybierz co najmniej jeden zakres.",
+    "toast": {
+      "saved": "Zapisano zmienną",
+      "created": "Utworzono zmienną",
+      "deleted": "Usunięto zmienną",
+      "valueSaved": "Zapisano wartość",
+      "valueCleared": "Wyczyszczono wartość"
+    },
+    "declaredBy": "Zadeklarowana przez moduł {{module}}",
+    "key": "Klucz",
+    "keyPlaceholder": "klucz",
+    "referencedAs": "Odwołanie: {{reference}}",
+    "referencedAsFixed": "Odwołanie: {{reference}}; klucza nie można zmienić.",
+    "label": "Etykieta",
+    "optional": "Opcjonalnie",
+    "description": "Opis",
+    "type": "Typ",
+    "secretRefHint": "Przechowuje nazwę zachowanego poświadczenia. Sekret pozostaje w magazynie poświadczeń i nigdy nie jest tu wyświetlany.",
+    "resourceKind": "Rodzaj zasobu",
+    "anyKind": "Dowolny rodzaj",
+    "scopes": "Zakresy",
+    "sensitive": "Poufna",
+    "sensitiveHint": "Wartości nie są już nigdy wyświetlane, ani w dziennikach, ani w historii.",
+    "defaultToggle": "Wartość domyślna, używana tam, gdzie żaden zakres nie ma wartości",
+    "defaultValue": "Wartość domyślna",
+    "save": "Zapisz",
+    "create": "Utwórz zmienną",
+    "deleteTitle": "Usunąć „{{reference}}”?",
+    "deleteDescription": "Zmienna i wszystkie jej wartości zostaną usunięte. Tej operacji nie można cofnąć.",
+    "usedIn": "Używana w",
+    "notUsed": "Nie jest używana przez żadną akcję ani przepływ pracy.",
+    "usages": "Użycia",
+    "removeReferences": "Usuń te odwołania przed usunięciem zmiennej.",
+    "values": "Wartości",
+    "noSlots": "Żaden zakres nie pozwala tu na wartość.",
+    "noProfile": "Wybierz profil, aby ustawić wartości profilu i projektów.",
+    "redacted": "Ustawiona (ukryta)",
+    "notSet": "Nieustawiona",
+    "change": "Zmień",
+    "set": "Ustaw",
+    "changeNamed": "Zmień: {{name}}",
+    "setNamed": "Ustaw: {{name}}",
+    "clearNamed": "Wyczyść: {{name}}",
+    "valueFor": "Wartość dla: {{name}}",
+    "saveValue": "Zapisz wartość",
+    "keyRule": {
+      "empty": "Wprowadź klucz.",
+      "parts": "Użyj od 2 do 4 części oddzielonych kropkami, np. paths.root.",
+      "part": "Każda część zaczyna się małą literą i ma najwyżej 32 litery, cyfry lub znaki _.",
+      "reserved": "Przestrzeń „{{namespace}}” jest zarezerwowana.",
+      "exists": "Zmienna z tym kluczem już istnieje."
+    },
+    "valueType": {
+      "string": "Tekst",
+      "integer": "Liczba całkowita",
+      "boolean": "Tak/nie",
+      "projectId": "Projekt",
+      "profileId": "Profil",
+      "resource": "Zasób",
+      "json": "JSON",
+      "secretRef": "Zapisane poświadczenie"
+    },
+    "kind": {
+      "directory": "Katalog",
+      "application": "Aplikacja",
+      "terminal": "Terminal",
+      "dockerEnvironment": "Środowisko Docker",
+      "service": "Usługa",
+      "url": "URL",
+      "other": "Inny"
+    },
+    "scope": {
+      "global": "Globalny",
+      "globalHint": "Jedna wartość dla wszystkich profili",
+      "profile": "Profil",
+      "profileHint": "Osobna wartość dla każdego profilu",
+      "project": "Projekt",
+      "projectHint": "Osobna wartość dla każdego projektu"
+    },
+    "parse": {
+      "wholeNumber": "Wprowadź liczbę całkowitą.",
+      "tooLarge": "Liczba jest za duża.",
+      "project": "Wybierz projekt.",
+      "profile": "Wybierz profil.",
+      "resource": "Wprowadź klucz zasobu lub rolę projektu.",
+      "json": "Wprowadź prawidłowy JSON.",
+      "credential": "Wybierz zapisane poświadczenie."
+    },
+    "shown": {
+      "redacted": "Ukryta",
+      "empty": "(pusta)",
+      "yes": "Tak",
+      "no": "Nie",
+      "unknownProject": "Nieznany projekt",
+      "unknownProfile": "Nieznany profil",
+      "resource": "Zasób {{key}}",
+      "projectRole": "Rola projektu {{role}}",
+      "credential": "Poświadczenie {{name}}"
+    },
+    "slot": {
+      "global": "Globalnie",
+      "profile": "Profil {{name}}",
+      "project": "Projekt {{key}}",
+      "anyProject": "Projekt",
+      "execution": "Podczas uruchomienia"
+    },
+    "reference": {
+      "action": "Akcja „{{owner}}”",
+      "workflow": "Przepływ pracy „{{owner}}”",
+      "workflowNode": "Przepływ pracy „{{owner}}”, węzeł {{node}}",
+      "binding": "Układ „{{owner}}”, {{control}}",
+      "trigger": "Przepływ pracy „{{owner}}” uruchamiany wyzwalaczem: {{trigger}}"
+    }
+  },
+  "builder": {
+    "flowGroup": "Przebieg",
+    "toast": {
+      "saved": "Zapisano przepływ pracy",
+      "saveFailed": "Nie zapisano przepływu pracy",
+      "tooManyNodes_one": "Przepływ pracy może mieć najwyżej {{count}} węzeł",
+      "tooManyNodes_few": "Przepływ pracy może mieć najwyżej {{count}} węzły",
+      "tooManyNodes_many": "Przepływ pracy może mieć najwyżej {{count}} węzłów",
+      "tooManyNodes_other": "Przepływ pracy może mieć najwyżej {{count}} węzła",
+      "actionCreated": "Utworzono akcję „{{name}}”",
+      "actionCreatedHint": "Skonfiguruj ją w Bibliotece akcji lub nadpisz parametry tutaj.",
+      "actionFailed": "Nie utworzono akcji",
+      "actionFailedHint": "{{error}} Możesz ją zamiast tego utworzyć w Bibliotece akcji.",
+      "duplicated": "Powielono przepływ pracy",
+      "duplicateFailed": "Nie powielono przepływu pracy",
+      "deleted": "Usunięto przepływ pracy",
+      "deleteFailed": "Nie usunięto przepływu pracy"
+    },
+    "save": {
+      "label": "Zapisz",
+      "noChanges": "Brak niezapisanych zmian",
+      "fixProblems_one": "Rozwiąż {{count}} problem, aby zapisać",
+      "fixProblems_few": "Rozwiąż {{count}} problemy, aby zapisać",
+      "fixProblems_many": "Rozwiąż {{count}} problemów, aby zapisać",
+      "fixProblems_other": "Rozwiąż {{count}} problemu, aby zapisać",
+      "needsName": "Nadaj nazwę przepływowi pracy"
+    },
+    "run": {
+      "label": "Uruchom przepływ pracy",
+      "cancel": "Anuluj uruchomienie",
+      "cancelHint": "Zatrzymaj przed następnym węzłem",
+      "saveFirst": "Najpierw zapisz; uruchamia się w agencie dla aktywnego profilu",
+      "inAgent": "Uruchom „{{name}}” w agencie",
+      "hint": "Uruchamia się w agencie dla aktywnego profilu"
+    },
+    "problems_one": "{{count}} problem",
+    "problems_few": "{{count}} problemy",
+    "problems_many": "{{count}} problemów",
+    "problems_other": "{{count}} problemu",
+    "noProblems": "Brak problemów",
+    "problemsTooltip": "Problemy w otwartym przepływie pracy; nie można go zapisać, dopóki nie zostaną rozwiązane",
+    "showCatalog": "Pokaż węzły",
+    "hideCatalog": "Ukryj węzły",
+    "showInspector": "Pokaż inspektor",
+    "hideInspector": "Ukryj inspektor",
+    "edit": "Edycja",
+    "undo": "Cofnij",
+    "redo": "Przywróć",
+    "arrange": "Uporządkuj węzły",
+    "unsaved": "Niezapisane zmiany",
+    "saved": "Zapisano",
+    "catalog": "Katalog węzłów",
+    "inspector": "Inspektor",
+    "panel": {
+      "title": "Przepływ pracy",
+      "name": "Nazwa",
+      "description": "Opis",
+      "nodeProblems_one": "{{count}} problem w węzłach; zaznacz węzeł, aby go zobaczyć.",
+      "nodeProblems_few": "{{count}} problemy w węzłach; zaznacz węzeł, aby je zobaczyć.",
+      "nodeProblems_many": "{{count}} problemów w węzłach; zaznacz węzeł, aby je zobaczyć.",
+      "nodeProblems_other": "{{count}} problemu w węzłach; zaznacz węzeł, aby je zobaczyć.",
+      "selected_one": "Zaznaczono {{count}} węzeł. Kopiuj za pomocą {{shortcut}}, usuń za pomocą ⌫.",
+      "selected_few": "Zaznaczono {{count}} węzły. Kopiuj za pomocą {{shortcut}}, usuń za pomocą ⌫.",
+      "selected_many": "Zaznaczono {{count}} węzłów. Kopiuj za pomocą {{shortcut}}, usuń za pomocą ⌫.",
+      "selected_other": "Zaznaczono {{count}} węzła. Kopiuj za pomocą {{shortcut}}, usuń za pomocą ⌫.",
+      "converted": "Przekształcono z kroków",
+      "convertedHint": "Przejrzyj te różnice, a następnie zapisz. Kroki zostają zachowane.",
+      "copyName": "{{name}} (kopia)",
+      "duplicate": "Powiel",
+      "inUse": "Używany przez układ lub inny przepływ pracy",
+      "deleteTitle": "Usunąć „{{name}}”?",
+      "deleteDescription": "Przepływ pracy i jego graf zostaną usunięte z tego profilu."
+    }
+  },
+  "catalog": {
+    "search": "Szukaj węzłów",
+    "list": "Węzły",
+    "empty": "Brak pasujących węzłów",
+    "unavailableEntry": "{{title}} — niedostępne: {{reason}}",
+    "unavailable": "Niedostępne: {{reason}}",
+    "addHint": "{{title}} — przeciągnij na płótno lub kliknij, aby dodać"
+  },
+  "node": {
+    "title": {
+      "trigger": "Start",
+      "action": "Akcja",
+      "condition": "Warunek",
+      "parallel": "Równolegle",
+      "join": "Złączenie",
+      "loop": "Pętla",
+      "call": "Podprzepływ",
+      "output": "Wyjścia",
+      "setVariable": "Ustaw zmienną",
+      "delay": "Opóźnienie",
+      "stop": "Zatrzymaj"
+    },
+    "description": {
+      "trigger": "Miejsce, w którym zaczyna się przepływ pracy.",
+      "action": "Uruchamia akcję tego profilu.",
+      "condition": "Kontynuuje gałęzią Tak lub Nie.",
+      "parallel": "Uruchamia połączone gałęzie jednocześnie.",
+      "join": "Czeka na wszystkie przychodzące gałęzie, a następnie kontynuuje.",
+      "loop": "Uruchamia inny przepływ pracy określoną liczbę razy.",
+      "call": "Uruchamia raz inny przepływ pracy z danymi wejściowymi i używa jego wyjść.",
+      "output": "Ustawia wyjścia tego przepływu pracy dla węzła, który go wywołuje.",
+      "setVariable": "Przypisuje zmienne tego uruchomienia dla kolejnych węzłów.",
+      "delay": "Czeka przed kontynuowaniem.",
+      "stop": "Kończy przepływ pracy pomyślnie."
+    },
+    "port": {
+      "out": "Dalej",
+      "error": "Przy błędzie",
+      "true": "Tak",
+      "false": "Nie"
+    },
+    "missingAction": "Brakująca akcja",
+    "actionGone": "Akcja już nie istnieje",
+    "missingWorkflow": "Brakujący przepływ pracy",
+    "loopDetail": "{{workflow}} × {{times}}",
+    "noOutputs": "Nie ustawia wyjść",
+    "noVariables": "Nie ustawia zmiennych",
+    "variableOutput": "Zmienna · {{label}}",
+    "predicate": {
+      "equals": "{{output}} = „{{value}}”",
+      "notEmpty": "{{output}} jest ustawione",
+      "succeeded": "{{node}} zakończył się powodzeniem",
+      "activeProject": "projekt to {{key}}"
+    },
+    "duration": {
+      "ms": "{{value}} ms",
+      "seconds": "{{value}} s",
+      "minutes": "{{minutes}} min",
+      "minutesSeconds": "{{minutes}} min {{seconds}} s"
+    },
+    "run": {
+      "attempt": "Próba {{attempt}}",
+      "running": "Trwa",
+      "succeeded": "Powodzenie",
+      "failed": "Niepowodzenie",
+      "skipped": "Pominięto",
+      "cancelled": "Anulowano"
+    },
+    "problems_one": "{{count}} problem",
+    "problems_few": "{{count}} problemy",
+    "problems_many": "{{count}} problemów",
+    "problems_other": "{{count}} problemu",
+    "warning": "Ostrzeżenie"
+  },
+  "inspector": {
+    "problems": "Problemy",
+    "deleteNode": "Usuń węzeł",
+    "label": "Etykieta",
+    "labelPlaceholder": "Domyślny tytuł",
+    "nodeId": "Identyfikator węzła",
+    "nodeIdHint": "Służy do odwoływania się do wyjść tego węzła.",
+    "workflow": "Przepływ pracy",
+    "parameters": "Parametry",
+    "source": "Źródło: {{label}}",
+    "value": "Wartość",
+    "mode": {
+      "action": "Wartość akcji",
+      "fixed": "Wartość dla tego węzła",
+      "mapped": "Z wcześniejszych węzłów lub zmiennych"
+    },
+    "loop": {
+      "times": "Liczba razy",
+      "timesHint": "Od 1 do {{max}}"
+    },
+    "delay": {
+      "seconds": "Sekundy",
+      "hint_one": "{{duration}}; najwyżej {{count}} minuta",
+      "hint_few": "{{duration}}; najwyżej {{count}} minuty",
+      "hint_many": "{{duration}}; najwyżej {{count}} minut",
+      "hint_other": "{{duration}}; najwyżej {{count}} minuty"
+    },
+    "failure": {
+      "title": "W razie niepowodzenia",
+      "whenAction": "Gdy akcja się nie powiedzie",
+      "actionHint": "Połączone wyjście „Przy błędzie” zawsze obsługuje niepowodzenie.",
+      "whenCall": "Gdy podprzepływ się nie powiedzie",
+      "callHint": "Połączone wyjście „Przy błędzie” zawsze obsługuje niepowodzenie. Podprzepływy nie są ponawiane.",
+      "stop": "Zatrzymaj przepływ pracy",
+      "continue": "Kontynuuj wyjściem Dalej",
+      "retries": "Ponowienia",
+      "retriesHint": "Najwyżej {{max}}",
+      "notRetrySafe": "Ponawianie nie jest bezpieczne",
+      "backoff": "Odstęp (ms)",
+      "backoffHint": "Podwaja się za każdym razem",
+      "timeout": "Limit czasu (sekundy)",
+      "timeoutCancellable": "Domyślnie {{duration}}. Zatrzymuje się natychmiast po anulowaniu uruchomienia lub upływie czasu.",
+      "timeoutNotCancellable": "Domyślnie {{duration}}. Nie można przerwać: kończy działanie, zanim anulowanie lub limit czasu zacznie obowiązywać, a spóźniony wynik jest odrzucany.",
+      "callTimeoutHint": "Domyślnie {{duration}}. Anulowanie uruchomienia lub upływ limitu czasu zatrzymuje również podprzepływ."
+    },
+    "condition": {
+      "check": "Sprawdź",
+      "succeeded": "Węzeł zakończył się powodzeniem",
+      "equals": "Wyjście jest równe",
+      "notEmpty": "Wyjście jest ustawione",
+      "activeProject": "Aktywny projekt to",
+      "node": "Węzeł",
+      "output": "Wyjście",
+      "project": "Projekt",
+      "chooseProject": "Wybierz projekt",
+      "hint": "Tak i Nie prowadzą do różnych węzłów; połącz je na płótnie."
+    },
+    "valueRow": {
+      "required": "wymagane",
+      "sensitive": "poufne",
+      "none": "Brak wartości",
+      "needsValue": "Wymaga wartości."
+    },
+    "call": {
+      "hint": "Uruchamia się raz, w kontekście projektu tego uruchomienia; to uruchomienie czeka na niego.",
+      "gone": "Przepływ pracy już nie istnieje",
+      "inputs": "Dane wejściowe",
+      "noInputs": "{{name}} nie deklaruje danych wejściowych. Dane wejściowe deklaruje się w jego panelu przepływu pracy.",
+      "usesDefault": "Używa wartości domyślnej „{{value}}”.",
+      "notSet": "Nie ustawiono; przepływ pracy nie otrzymuje wartości.",
+      "unknownInput": "<code>{{key}}</code> nie jest już daną wejściową przepływu {{workflow}}.",
+      "remove": "Usuń",
+      "noOutputs": "{{name}} nie zwraca wyjść.",
+      "outputs": "Wyjścia podprzepływu"
+    },
+    "output": {
+      "none": "Ten przepływ pracy nie deklaruje wyjść. Zadeklaruj je w panelu przepływu pracy (kliknij tło płótna).",
+      "notSet": "Nieustawiane przez ten węzeł.",
+      "hint": "Węzeł, który wywołuje ten przepływ pracy, otrzymuje te wartości. Gdy działa kilka węzłów Wyjścia, wygrywa ten, który zakończy się później."
+    },
+    "variables": {
+      "title": "Zmienne",
+      "none": "Ten przepływ pracy nie deklaruje zmiennych. Zadeklaruj je w panelu przepływu pracy (kliknij tło płótna).",
+      "notChanged": "Niezmieniane przez ten węzeł.",
+      "hint": "Kolejne węzły odczytują nowe wartości jako „Zmienna · …”. Zmienne istnieją przez jedno uruchomienie; podprzepływ otrzymuje je tylko przez swoje dane wejściowe."
+    },
+    "projectScope": {
+      "label": "Może zmieniać aktywny projekt",
+      "application": "Gdy uruchomienie kończy się na innym projekcie, staje się on aktywnym projektem DeckPilot — chyba że aktywny projekt zmienił się w trakcie uruchomienia.",
+      "execution": "Wybory projektu pozostają w każdym uruchomieniu: wpływają na kolejne węzły, nigdy na aktywny projekt DeckPilot ani na inne uruchomienia.",
+      "atStart": "Uruchomienia używają projektu aktywnego w chwili ich rozpoczęcia."
+    },
+    "docs": {
+      "title": "Informacje o tym węźle",
+      "version": "wersja {{version}}",
+      "module": "moduł {{name}}",
+      "effect": {
+        "readOnly": "Tylko odczyt",
+        "opens": "Otwiera coś",
+        "modifies": "Wprowadza zmiany"
+      },
+      "retrySafe": "Można bezpiecznie ponawiać",
+      "notRetrySafe": "Ponawianie nie jest bezpieczne",
+      "idempotent": "Idempotentny",
+      "cancellable": "Można przerwać",
+      "notCancellable": "Nie można przerwać",
+      "selectsProject": "Wybiera projekt",
+      "permissions": "Uprawnienia jego modułu",
+      "inputs": "Dane wejściowe",
+      "outputs": "Wyjścia",
+      "optional": "(opcjonalne)",
+      "sometimes": "(czasami)",
+      "sensitiveHint": "Dostępne tylko dla kolejnych węzłów",
+      "notKept": "nie jest zachowywane w historii",
+      "kind": {
+        "text": "tekst",
+        "integer": "liczba",
+        "boolean": "tak/nie",
+        "choice": "wybór",
+        "resource": "zasób",
+        "project": "projekt",
+        "lines": "lista",
+        "pairs": "wiersze",
+        "code": "kod",
+        "credential": "dane uwierzytelniające"
+      }
+    }
+  },
+  "validation": {
+    "connection": {
+      "missingNodes": "oba węzły muszą istnieć",
+      "self": "węzeł nie może połączyć się sam ze sobą",
+      "noOutput": "to wyjście nie istnieje",
+      "intoStart": "do węzła startowego nie można niczego podłączyć",
+      "exists": "to połączenie już istnieje",
+      "oneTarget": "wyjście łączy się z jednym węzłem; rozgałęź za pomocą węzła Równolegle lub Warunek",
+      "oneIncoming": "tylko węzeł Złączenie może mieć kilka połączeń przychodzących",
+      "cycle": "powstałaby pętla zwrotna; do powtarzania użyj węzła Pętla"
+    }
+  },
+  "run": {
+    "attempts_one": "{{count}} próba",
+    "attempts_few": "{{count}} próby",
+    "attempts_many": "{{count}} prób",
+    "attempts_other": "{{count}} próby",
+    "state": {
+      "running": "W toku",
+      "succeeded": "Powodzenie",
+      "failed": "Niepowodzenie",
+      "cancelled": "Anulowano",
+      "interrupted": "Przerwano"
+    },
+    "status": {
+      "running": "w toku",
+      "succeeded": "zakończony pomyślnie",
+      "failed": "nieudany",
+      "skipped": "pominięty",
+      "cancelled": "anulowany"
+    },
+    "summary": {
+      "running_one": "W toku · {{completed}} z {{count}} węzła",
+      "running_few": "W toku · {{completed}} z {{count}} węzłów",
+      "running_many": "W toku · {{completed}} z {{count}} węzłów",
+      "running_other": "W toku · {{completed}} z {{count}} węzła",
+      "finished": "{{state}} · {{duration}}"
+    },
+    "project": {
+      "applied": "Przełączono DeckPilot na {{project}}",
+      "keptInRun": "Praca nad {{project}} w ramach uruchomienia",
+      "notAppliedTo": "Nie przełączono na {{project}}: {{reason}}",
+      "notApplied": "Nie przełączono projektu: {{reason}}",
+      "none": "brak projektu"
+    },
+    "blocked": {
+      "new": "Zapisz przepływ pracy, aby go uruchomić",
+      "dirty": "Zapisz zmiany, aby uruchomić przepływ pracy",
+      "agent": "Agent nie działa. Uruchom go w Ustawieniach › Agent",
+      "profile": "Przepływy pracy działają dla aktywnego profilu. Aktywuj profil „{{profile}}”, aby uruchomić ten przepływ"
+    },
+    "error": {
+      "actionFailed": "Akcja zgłosiła niepowodzenie.",
+      "timeout": "Węzeł działał dłużej, niż pozwala jego limit czasu.",
+      "cancelled": "Uruchomienie zostało anulowane w trakcie działania węzła.",
+      "mapping": "Nie udało się ustalić wejścia na podstawie wcześniejszych wyjść.",
+      "parallelContext": "Akcja zmieniająca kontekst nie może działać w gałęzi równoległej.",
+      "loopFailed": "Uruchomienie przepływu w pętli nie powiodło się.",
+      "unavailable": "Akcja lub jej moduł są niedostępne.",
+      "other": "Węzeł nie powiódł się.",
+      "transient": "Błąd przejściowy: ponowne uruchomienie lub zasady ponawiania mogą pomóc.",
+      "permanent": "Błąd trwały: ponowne uruchomienie nie pomoże bez wprowadzenia zmian."
+    },
+    "timeline": {
+      "label": "Oś czasu wykonania",
+      "started": "start po {{time}}",
+      "startedAbout": "start po około {{time}}",
+      "runningFor": "działa od {{time}}",
+      "took": "czas: {{time}}",
+      "parallel": "równolegle",
+      "row": "{{node}}: {{description}}",
+      "lane": "Tor {{lane}}"
+    },
+    "details": {
+      "title": "Szczegóły uruchomienia",
+      "loading": "Wczytywanie raportów węzłów…",
+      "waiting": "Oczekiwanie na start pierwszego węzła.",
+      "empty": "To uruchomienie nie wykonało żadnych węzłów.",
+      "metrics": "Wskaźniki",
+      "elapsed": "Upłynęło",
+      "total": "Łącznie",
+      "nodeTime": "Czas węzłów",
+      "upToParallel_one": "do {{count}} równolegle",
+      "upToParallel_few": "do {{count}} równolegle",
+      "upToParallel_many": "do {{count}} równolegle",
+      "upToParallel_other": "do {{count}} równolegle",
+      "retried": "Ponowione",
+      "nodes_one": "{{count}} węzeł",
+      "nodes_few": "{{count}} węzły",
+      "nodes_many": "{{count}} węzłów",
+      "nodes_other": "{{count}} węzła",
+      "slowest": "Najwolniejsze węzły",
+      "failures": "Niepowodzenia",
+      "timeline": "Oś czasu",
+      "choose": "Wybierz węzeł na osi czasu, aby zobaczyć jego ponowienia, błąd i wyjścia."
+    },
+    "retries": {
+      "title": "Ponowienia",
+      "waitedTotal": "łączne oczekiwanie: {{time}}",
+      "attempt": "Próba {{attempt}} po oczekiwaniu {{time}}",
+      "historyOnly": "Historia uruchomień przechowuje tylko ostatnią próbę; wcześniejsze próby i czasy oczekiwania są widoczne tylko podczas obserwowania uruchomienia na żywo."
+    },
+    "outputs": {
+      "title": "Wyjścia",
+      "none": "Akcja nie deklaruje żadnych wyjść.",
+      "shortened": "Skrócony podgląd",
+      "sensitive": "nie przechowano (poufne)",
+      "missing": "nie wygenerowano",
+      "declaredOnly": "Widoczne są tylko zadeklarowane wyjścia; poufne wyjścia trafiają do kolejnych węzłów, ale nigdy nie są przechowywane."
+    },
+    "node": {
+      "details": "Szczegóły: {{node}}",
+      "result": "Wynik",
+      "started": "Start",
+      "startedAt": "{{time}} od początku uruchomienia",
+      "startedAbout": "około {{time}} od początku uruchomienia",
+      "duration": "Czas trwania",
+      "failure": "Błąd"
+    },
+    "history": {
+      "title": "Uruchomienia",
+      "hide": "Ukryj na kanwie",
+      "clear": "Wyczyść historię",
+      "clearTitle": "Wyczyścić historię uruchomień tego przepływu pracy?",
+      "clearDescription": "Zakończone uruchomienia zostaną usunięte. Nie ma to wpływu na działające przepływy pracy.",
+      "problem": "Nie udało się wczytać wcześniejszych uruchomień: {{problem}} Zostaną wczytane ponownie po ponownym połączeniu agenta.",
+      "empty": "Brak uruchomień. Pojawią się tu uruchomienia rozpoczęte w aplikacji, ze Stream Decka lub gdy aplikacja była zamknięta.",
+      "progress": "Postęp",
+      "cancel": "Anuluj uruchomienie rozpoczęte {{time}}"
+    },
+    "report": {
+      "title": "Uruchomienie",
+      "running": "W toku",
+      "runningAttempt": "W toku, próba {{attempt}}",
+      "attempts": "Próby",
+      "retryWaits": "czasy oczekiwania w Szczegółach uruchomienia",
+      "after": "po {{time}}",
+      "retryable": "Ponowne uruchomienie może pomóc.",
+      "declaredOnly": "Zapisywane są tylko wyjścia zadeklarowane przez akcję."
+    },
+    "toast": {
+      "cancelFailed": "Nie anulowano uruchomienia",
+      "clearFailed": "Nie wyczyszczono historii uruchomień",
+      "startFailed": "Nie uruchomiono przepływu „{{workflow}}”"
+    }
+  },
+  "triggers": {
+    "title": "Wyzwalacze",
+    "paused": "Wstrzymane",
+    "pausedSummary": "Wstrzymane · {{triggers}}",
+    "description": "Uruchamiaj ten przepływ pracy według harmonogramu lub gdy coś się wydarzy, gdy DeckPilot jest odblokowany, a ten profil jest aktywny. Uruchomienie jest pomijane, dopóki trwa poprzednie; pominięte terminy nie są nadrabiane.",
+    "group": "Wyzwalacz {{index}}: {{trigger}}",
+    "remove": "Usuń wyzwalacz {{index}}",
+    "repeats": "Powtarzanie wyzwalacza {{index}}",
+    "minutes": "Minuty wyzwalacza {{index}}",
+    "time": "Godzina wyzwalacza {{index}}",
+    "eventSelect": "Zdarzenie wyzwalacza {{index}}",
+    "weekdays": "Dni tygodnia",
+    "intervalBefore": "Co",
+    "intervalAfter_one": "minutę",
+    "intervalAfter_few": "minuty",
+    "intervalAfter_many": "minut",
+    "intervalAfter_other": "minuty",
+    "at": "O",
+    "localTime": "czasu lokalnego",
+    "addSchedule": "Harmonogram",
+    "addEvent": "Zdarzenie",
+    "every": {
+      "interval": "W odstępach",
+      "daily": "Codziennie",
+      "weekly": "W wybrane dni tygodnia"
+    },
+    "schedule": {
+      "interval_one": "Co minutę",
+      "interval_few": "Co {{count}} minuty",
+      "interval_many": "Co {{count}} minut",
+      "interval_other": "Co {{count}} minuty",
+      "daily": "Codziennie o {{time}}",
+      "weekly": "{{days}} o {{time}}",
+      "noDays": "Brak dni"
+    },
+    "weekday": {
+      "mon": "pon.",
+      "tue": "wt.",
+      "wed": "śr.",
+      "thu": "czw.",
+      "fri": "pt.",
+      "sat": "sob.",
+      "sun": "niedz."
+    },
+    "event": {
+      "agentStarted": "Uruchomiono DeckPilot",
+      "profileActivated": "Aktywowano profil",
+      "projectChanged": "Zmieniono aktywny projekt",
+      "deviceConnected": "Podłączono Stream Deck",
+      "deviceDisconnected": "Odłączono Stream Deck"
+    },
+    "field": {
+      "firedAt": "Data i godzina",
+      "profileName": "Nazwa profilu",
+      "projectKey": "Klucz projektu",
+      "projectName": "Nazwa projektu",
+      "previousProjectKey": "Klucz poprzedniego projektu",
+      "deviceId": "Numer seryjny urządzenia",
+      "deviceModel": "Model urządzenia"
+    },
+    "input": {
+      "required": "wymagane",
+      "source": "Wartość {{input}} dla wyzwalacza {{index}}",
+      "fixedValue": "Stała wartość {{input}} dla wyzwalacza {{index}}",
+      "noValue": "Brak wartości",
+      "default": "Domyślna",
+      "defaultValue": "Domyślna ({{value}})",
+      "fixed": "Stała wartość",
+      "needsValue": "Wymaga wartości."
+    },
+    "startedBy": {
+      "app": "Uruchomiono w aplikacji",
+      "device": "Uruchomiono ze Stream Decka",
+      "schedule": "Uruchomiono według harmonogramu",
+      "scheduleDetail": "Uruchomiono według harmonogramu ({{detail}})",
+      "event": "Uruchomiono przez zdarzenie",
+      "eventDetail": "Uruchomiono przez zdarzenie ({{detail}})",
+      "automatic": "Uruchomiono automatycznie"
+    }
+  },
+  "mapping": {
+    "label": "Mapowanie",
+    "type": {
+      "output": "Jedno wyjście",
+      "variable": "Jedna zmienna",
+      "template": "Tekst z wyjściami i zmiennymi"
+    },
+    "chooseOutput": "Wybierz wyjście",
+    "noOutputs": "Brak wcześniejszych wyjść",
+    "missingOutput": "{{output}} (brak)",
+    "variable": "Zmienna",
+    "variablePart": "Zmienna {{index}}",
+    "textPart": "Tekst {{index}}",
+    "default": "Wartość domyślna",
+    "defaultPlaceholder": "Wartość domyślna, gdy brak wyjścia",
+    "parts": "Części",
+    "emptyParts": "Dodaj tekst i wyjścia, aby utworzyć wartość.",
+    "removePart": "Usuń część",
+    "addText": "Tekst",
+    "addOutput": "Wyjście",
+    "addVariable": "Zmienna",
+    "preview": "Podgląd",
+    "previewPrefix": "Podgląd:",
+    "previewEmpty": "pusty",
+    "variableOption": "Zmienna · {{name}}",
+    "inputs": "Wejścia",
+    "kind": {
+      "text": "tekst",
+      "integer": "liczba",
+      "boolean": "tak/nie",
+      "path": "ścieżka",
+      "url": "URL",
+      "projectKey": "klucz projektu"
+    },
+    "fit": {
+      "lines": "Każdy wiersz wartości staje się jednym elementem; spacje nie dzielą wartości.",
+      "pairs": "Każdy wiersz musi zawierać nazwę i wartość rozdzielone znakiem „{{separator}}”.",
+      "credential": "Wartość musi być nazwą poświadczenia zapisanego na tym komputerze.",
+      "integer": "W chwili działania węzła wartość musi być liczbą całkowitą.",
+      "boolean": "W chwili działania węzła wartość musi wynosić „true” lub „false”.",
+      "choice": "Wartość musi być jedną z: {{options}}.",
+      "project": "Wartość musi być kluczem projektu tego profilu.",
+      "resource": "Zasoby nie mogą pochodzić z wcześniejszych węzłów."
+    },
+    "problem": {
+      "noSharedVariable": "nie ma zmiennej współdzielonej „{{name}}”",
+      "variableType": "{{reference}} to wartość typu {{type}}, a parametr oczekuje {{expected}}",
+      "defaultType": "wartość domyślna jest typu {{type}}, a parametr oczekuje {{expected}}",
+      "notText": "{{reference}} to wartość typu {{type}} i nie może być częścią tekstu",
+      "noVariable": "nie ma zmiennej „{{name}}”",
+      "noNode": "nie ma węzła „{{node}}”",
+      "notBefore": "węzeł „{{node}}” nie działa przed tym węzłem",
+      "noOutput": "węzeł „{{node}}” nie ma wyjścia „{{output}}”"
+    }
+  },
+  "variables": {
+    "title": "Zmienne",
+    "description": "Wartości dla jednego uruchomienia. Zmieniają je węzły „Ustaw zmienną”; kolejne węzły odczytują je jako „Zmienna · …”.",
+    "group": "Zmienna {{key}}",
+    "key": "Klucz zmiennej",
+    "type": "Typ zmiennej",
+    "remove": "Usuń zmienną {{key}}",
+    "label": "Etykieta zmiennej",
+    "initial": "Wartość początkowa zmiennej",
+    "initialPlaceholder": "Wartość początkowa (opcjonalnie)",
+    "add": "Dodaj zmienną",
+    "system": {
+      "projectId": "Bieżący projekt",
+      "projectKey": "Klucz bieżącego projektu",
+      "projectName": "Nazwa bieżącego projektu",
+      "profileId": "Bieżący profil",
+      "profileName": "Nazwa bieżącego profilu",
+      "deviceId": "Urządzenie, które rozpoczęło uruchomienie",
+      "platform": "System operacyjny",
+      "workflowId": "Ten przepływ pracy",
+      "executionId": "To uruchomienie"
+    },
+    "problem": {
+      "empty": "Wprowadź odwołanie, np. shared.paths.root",
+      "notStep": "„{{reference}}” nie ma postaci steps.<node>.output.<key>",
+      "notShared": "„{{reference}}” nie ma postaci shared.<namespace>.<name>",
+      "reserved": "przestrzeń nazw „{{namespace}}” jest zarezerwowana",
+      "unknown": "„{{reference}}” nie jest odwołaniem; użyj shared.…, system.…, workflow.… lub steps.…"
+    },
+    "expects": {
+      "integer": "liczby całkowitej",
+      "boolean": "wartości true lub false",
+      "choice": "jednej z dostępnych opcji",
+      "resource": "zasobu",
+      "project": "projektu",
+      "credential": "poświadczenia",
+      "text": "tekstu"
+    },
+    "picker": {
+      "field": "Zmienna",
+      "label": "Wybierz zmienną dla pola {{field}}"
+    }
+  },
+  "interface": {
+    "title": "Wejścia i wyjścia",
+    "inputs": "Wejścia",
+    "inputsDescription": "Wartości, które węzeł „Podprzepływ” przekazuje do tego przepływu pracy. Węzły odczytują je z węzła startowego.",
+    "outputs": "Wyjścia",
+    "outputsDescription": "Wartości, które ten przepływ pracy zwraca do węzła „Podprzepływ”; ustawiają je węzły „Wyjście”.",
+    "labelPlaceholder": "Etykieta",
+    "sensitiveNotKept": "Poufne: nie przechowywane w historii",
+    "input": {
+      "group": "Wejście {{key}}",
+      "key": "Klucz wejścia",
+      "type": "Typ wejścia",
+      "remove": "Usuń wejście {{key}}",
+      "label": "Etykieta wejścia",
+      "default": "Wartość domyślna wejścia",
+      "requiredNoDefault": "Wymagane: bez wartości domyślnej",
+      "defaultPlaceholder": "Wartość domyślna (opcjonalnie)",
+      "required": "Wymagane",
+      "sensitive": "Poufne",
+      "add": "Dodaj wejście"
+    },
+    "output": {
+      "group": "Wyjście {{key}}",
+      "key": "Klucz wyjścia",
+      "type": "Typ wyjścia",
+      "remove": "Usuń wyjście {{key}}",
+      "label": "Etykieta wyjścia",
+      "add": "Dodaj wyjście"
+    }
+  },
+  "catalogScope": {
+    "global": "Globalny",
+    "profile": "Profil",
+    "project": "Projekt",
+    "execution": "Uruchomienie",
+    "machine": "Ten komputer",
+    "device": "Urządzenie",
+    "workflow": "Przepływ pracy",
+    "workSession": "Sesja pracy"
+  },
+  "systemVariables": {
+    "projectId": {
+      "label": "Bieżący projekt",
+      "description": "Projekt uruchomienia podczas uruchomienia, aktywny projekt przy naciśnięciu klawisza."
+    },
+    "projectKey": {
+      "label": "Klucz bieżącego projektu"
+    },
+    "projectName": {
+      "label": "Nazwa bieżącego projektu"
+    },
+    "profileId": {
+      "label": "Bieżący profil"
+    },
+    "profileName": {
+      "label": "Nazwa bieżącego profilu"
+    },
+    "device": {
+      "label": "Urządzenie",
+      "description": "Urządzenie, którego element sterujący uruchomił akcję (model#numer seryjny)."
+    },
+    "platform": {
+      "label": "Platforma",
+      "description": "linux, macOs, windows lub other."
+    },
+    "workflow": {
+      "label": "Przepływ pracy",
+      "description": "Uruchomiony przepływ pracy."
+    },
+    "execution": {
+      "label": "Uruchomienie",
+      "description": "Bieżące uruchomienie przepływu pracy."
+    }
+  }
+}

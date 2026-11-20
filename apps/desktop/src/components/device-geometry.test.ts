@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest"
 
 import { DEVICE_MODELS } from "@/test/fixtures"
 
-import { KEY_SIZE, deviceGeometry, deviceSize, gridWidth, keySize } from "./device-geometry"
+import {
+  KEY_SIZE,
+  deviceGeometry,
+  deviceSize,
+  gridWidth,
+  keyBorderPixels,
+  keySize,
+} from "./device-geometry"
 
 describe("device geometry", () => {
   it("comes from the model's capabilities", () => {
@@ -20,6 +27,10 @@ describe("device geometry", () => {
     expect(plus.width).toBeLessThan(mk2.width)
     expect(plus.height).toBeGreaterThan(mk2.height)
     expect(gridWidth(deviceGeometry(DEVICE_MODELS.xl))).toBeCloseTo(8 + 7 * 0.2)
+  })
+
+  it("gives every control one border, in whole pixels and never under 2", () => {
+    expect([24, 40, 72, 88, 102, 104].map(keyBorderPixels)).toEqual([2, 2, 4, 5, 6, 6])
   })
 
   it("scales the keys with the space, within limits", () => {
@@ -69,14 +80,62 @@ async function stylesheet(): Promise<string> {
   return fs.readFileSync(new URL("../index.css", import.meta.url), "utf8")
 }
 
+describe("workspace tokens", () => {
+  const block = (css: string, selector: string) => {
+    const start = css.indexOf(`${selector} {`)
+    return css.slice(start, css.indexOf("\n}", start))
+  }
+  const tokens = [
+    "workspace",
+    "workspace-foreground",
+    "workspace-muted",
+    "workspace-border",
+    "workspace-input",
+    "workspace-selection",
+    "workspace-focus",
+  ]
+
+  it("are defined once for both themes and usable as colours", async () => {
+    const css = await stylesheet()
+    for (const token of tokens) {
+      expect(block(css, ":root"), `--${token} in :root`).toMatch(new RegExp(`--${token}: `))
+      expect(block(css, "@theme inline"), `--color-${token}`).toContain(
+        `--color-${token}: var(--${token});`,
+      )
+    }
+  })
+
+  it("are the app's own dark surface, with a blue selection in the workspace", async () => {
+    const css = await stylesheet()
+    const root = block(css, ":root")
+    // The app is permanently dark: the workspace is its base surface.
+    for (const [token, value] of [
+      ["workspace", "background"],
+      ["workspace-foreground", "foreground"],
+      ["workspace-muted", "muted-foreground"],
+      ["workspace-border", "border"],
+      ["workspace-input", "input"],
+    ])
+      expect(root).toContain(`--${token}: var(--${value});`)
+    const scope = block(css, ".workspace-scope")
+    expect(scope).toContain("--device-selected: var(--workspace-selection);")
+    expect(scope).toContain("--device-focus: var(--workspace-focus);")
+  })
+
+  it("form one dark palette: no light theme and no theme blocks", async () => {
+    const css = await stylesheet()
+    expect(css).not.toMatch(/^\.dark \{/m)
+    expect(css).not.toContain("prefers-color-scheme")
+    expect(block(css, ":root")).toContain("--background: #111111;")
+  })
+})
+
 describe("device tokens", () => {
   const block = (css: string, selector: string) => {
     const start = css.indexOf(`${selector} {`)
     return css.slice(start, css.indexOf("\n}", start))
   }
   const tokens = [
-    "device-body",
-    "device-body-border",
     "device-strip",
     "device-key",
     "device-key-border",
@@ -90,14 +149,32 @@ describe("device tokens", () => {
     "device-drop",
   ]
 
-  it("are defined for the light and the dark theme and usable as colours", async () => {
+  it("are defined once and usable as colours; no device enclosure is drawn", async () => {
     const css = await stylesheet()
+    expect(css).not.toContain("--device-body")
     for (const token of tokens) {
       expect(block(css, ":root"), `--${token} in :root`).toMatch(new RegExp(`--${token}: `))
-      expect(block(css, ".dark"), `--${token} in .dark`).toMatch(new RegExp(`--${token}: `))
       expect(block(css, "@theme inline"), `--color-${token}`).toContain(
         `--color-${token}: var(--${token});`,
       )
     }
+  })
+})
+
+describe("inspector curtain", () => {
+  it("is a masked progressive blur, hidden until scrolled, with a tint fallback", async () => {
+    const css = await stylesheet()
+    const rule = css.slice(css.indexOf(".inspector-curtain {"))
+    expect(rule).toMatch(/pointer-events: none/)
+    expect(rule).toMatch(/opacity: 0/)
+    expect(css).toMatch(/\[data-scrolled\] > \.inspector-curtain \{\s*opacity: 1/)
+    // Strongest at the divider, fading out: three masked blur layers.
+    for (const blur of ["12px", "6px", "2px"]) {
+      expect(css).toContain(`backdrop-filter: blur(${blur})`)
+    }
+    expect(css).toMatch(/mask-image: linear-gradient\(to bottom, #000 0%/)
+    // Without backdrop blur: the tint alone.
+    expect(css).toMatch(/@supports not \(\(backdrop-filter/)
+    expect(css).toMatch(/prefers-reduced-motion[\s\S]*\.inspector-curtain \{\s*transition: none/)
   })
 })

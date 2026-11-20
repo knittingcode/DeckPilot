@@ -10,39 +10,52 @@
  * plugin API 1.4); the declaration only decides what the app's own toolbar
  * shows and gives the plugin no data.
  */
-export type ToolbarContext = "none" | "device" | "profile" | "device+profile"
+export type PluginToolbarContext = "none" | "device" | "profile" | "device+profile"
 
-export const TOOLBAR_CONTEXTS: readonly ToolbarContext[] = [
+/**
+ * A view's context: one a plugin view may declare, or the Device Editor's
+ * own, which adds the layout selector. Plugins cannot declare that one: the
+ * layout selector edits the app's layouts.
+ */
+export type ToolbarContext = PluginToolbarContext | "device+profile+layout"
+
+/** The contexts plugin views may declare. */
+export const TOOLBAR_CONTEXTS: readonly PluginToolbarContext[] = [
   "none",
   "device",
   "profile",
   "device+profile",
 ]
 
-/** `value` as a context; anything else (absent, unknown, malformed) is `none`. */
-export function toolbarContext(value: unknown): ToolbarContext {
+/** `value` as a plugin view's context; anything else (absent, unknown, malformed) is `none`. */
+export function toolbarContext(value: unknown): PluginToolbarContext {
   return (TOOLBAR_CONTEXTS as readonly unknown[]).includes(value)
-    ? (value as ToolbarContext)
+    ? (value as PluginToolbarContext)
     : "none"
 }
 
 export function showsDevice(context: ToolbarContext): boolean {
-  return context === "device" || context === "device+profile"
+  return context === "device" || context === "device+profile" || showsLayout(context)
 }
 
 export function showsProfile(context: ToolbarContext): boolean {
-  return context === "profile" || context === "device+profile"
+  return context === "profile" || context === "device+profile" || showsLayout(context)
+}
+
+/** The Device Editor only: the layout of the device's model in the profile. */
+export function showsLayout(context: ToolbarContext): boolean {
+  return context === "device+profile+layout"
 }
 
 /**
- * The contexts of the core pages. The device editor works on a device of a
- * profile; the Action Library and Workflows on the profile being edited.
+ * The contexts of the core pages. The device editor works on a layout of a
+ * device in a profile; the Action Library and Workflows on the profile being edited.
  * The dashboard (the active profile and every device), the Layouts page
  * (every profile's layouts, with its own filter) and the Marketplace work
  * on neither.
  */
 export const CORE_PAGE_CONTEXTS = {
-  designer: "device+profile",
+  designer: "device+profile+layout",
   actions: "profile",
   workflows: "profile",
   dashboard: "none",

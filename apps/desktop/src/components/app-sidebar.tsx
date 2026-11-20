@@ -17,12 +17,14 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
+import { type TranslationKey, useTranslation } from "@/i18n"
 import { type PageId, useAppContext } from "@/lib/app-context"
 import { moduleNavigation } from "@/modules"
 
 interface NavGroup {
-  label: string
-  items: { id: PageId; label: string; icon: LucideIcon }[]
+  id: "workspace" | "configure"
+  label: TranslationKey
+  items: { id: PageId; label: TranslationKey; icon: LucideIcon }[]
 }
 
 /**
@@ -32,18 +34,20 @@ interface NavGroup {
  */
 const RAIL_GROUPS: NavGroup[] = [
   {
-    label: "Workspace",
+    id: "workspace",
+    label: "navigation:rail.workspace",
     items: [
-      { id: "designer", label: "Device Editor", icon: LayoutGrid },
-      { id: "layouts", label: "Layouts", icon: LayoutTemplate },
-      { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+      { id: "designer", label: "navigation:pages.designer", icon: LayoutGrid },
+      { id: "layouts", label: "navigation:pages.layouts", icon: LayoutTemplate },
+      { id: "dashboard", label: "navigation:pages.dashboard", icon: LayoutDashboard },
     ],
   },
   {
-    label: "Configure",
+    id: "configure",
+    label: "navigation:rail.configure",
     items: [
-      { id: "actions", label: "Action Library", icon: Library },
-      { id: "workflows", label: "Workflows", icon: ListOrdered },
+      { id: "actions", label: "navigation:pages.actions", icon: Library },
+      { id: "workflows", label: "navigation:pages.workflows", icon: ListOrdered },
     ],
   },
 ]
@@ -62,16 +66,23 @@ export function AppSidebar({
   current: PageId | null
   onNavigate: (page: PageId) => void
 }) {
+  const { t } = useTranslation()
   const { modules } = useAppContext()
+  // Module pages are named by their module (its manifest), not translated here.
   const fromModules = moduleNavigation(modules)
-  const groups = RAIL_GROUPS.map((group) =>
-    group.label === "Configure" ? { ...group, items: [...group.items, ...fromModules] } : group,
-  )
+  const groups = RAIL_GROUPS.map((group) => {
+    const items = group.items.map((item) => ({ ...item, label: t(item.label) }))
+    return {
+      id: group.id,
+      label: t(group.label),
+      items: group.id === "configure" ? [...items, ...fromModules] : items,
+    }
+  })
   return (
-    <Sidebar collapsible="icon" aria-label="Workspace">
+    <Sidebar collapsible="icon" aria-label={t("navigation:rail.label")}>
       <SidebarContent>
         {groups.map((group) => (
-          <SidebarGroup key={group.label}>
+          <SidebarGroup key={group.id}>
             <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>

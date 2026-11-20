@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event"
 import { useCallback, useEffect, useState } from "react"
 
+import { i18n } from "@/i18n"
 import { api } from "@/lib/api"
 import { failureMessage } from "@/lib/failure"
 import type { ElapsedFormat, WorkSessionSnapshot } from "@/lib/types"
@@ -42,9 +43,9 @@ export function useWorkSession() {
             : {
                 status: "error",
                 error: failureMessage(
-                  "The work session could not be loaded",
+                  i18n.t("workspace:workSession.loadFailed"),
                   error,
-                  "Check that the agent is running in Settings › Agent.",
+                  i18n.t("workspace:workSession.checkAgent"),
                 ),
               },
         )

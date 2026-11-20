@@ -196,7 +196,7 @@ pub fn apply_import<R: tauri::Runtime>(
 ) -> CommandResult<ImportSummary> {
     let content = pending
         .take(token)
-        .ok_or_else(|| CommandError::Invalid("preview the import again".into()))?;
+        .ok_or_else(|| CommandError::invalid("previewAgain", "preview the import again"))?;
     let summary = {
         let store = state.store()?;
         let (changes, summary) = {

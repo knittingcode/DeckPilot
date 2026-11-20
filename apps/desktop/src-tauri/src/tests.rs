@@ -93,7 +93,20 @@ impl Harness {
         self.ok("unlock", json!({ "password": PASSWORD }));
     }
 
+    /// The command's answer; a `CommandError` as its English message (the
+    /// payload's `message`), other errors (plugin refusals) as they are.
     fn call(&self, cmd: &str, args: Value) -> Result<Value, Value> {
+        self.call_raw(cmd, args).map_err(|error| {
+            if error["code"].is_string() && error.get("reason").is_none() {
+                error["message"].clone()
+            } else {
+                error
+            }
+        })
+    }
+
+    /// The command's answer with errors exactly as the frontend gets them.
+    fn call_raw(&self, cmd: &str, args: Value) -> Result<Value, Value> {
         let request = InvokeRequest {
             cmd: cmd.into(),
             callback: CallbackFn(0),
@@ -1270,7 +1283,28 @@ fn the_configuration_is_locked_without_the_password() {
         h.error("unlock", json!({ "password": "not the password" })),
         "the password is not correct"
     );
+    // The frontend gets stable codes it translates, with the English text.
+    assert_eq!(
+        h.call_raw("list_profiles", json!({})).unwrap_err(),
+        json!({ "code": "locked", "message": "the configuration is locked" })
+    );
+    assert_eq!(
+        h.call_raw("unlock", json!({ "password": "not the password" }))
+            .unwrap_err(),
+        json!({
+            "code": "invalid.passwordIncorrect",
+            "message": "the password is not correct"
+        })
+    );
     h.unlock();
+    assert_eq!(
+        h.call_raw("create_profile", json!({ "name": " ", "description": "" }))
+            .unwrap_err(),
+        json!({
+            "code": "invalid.profileNameEmpty",
+            "message": "profile name must not be empty"
+        })
+    );
     assert_eq!(
         h.ok("list_profiles", json!({}))["profiles"][0]["id"],
         json!(profile)
@@ -2418,6 +2452,148 @@ fn png_base64(width: u32, height: u32, color: [u8; 3]) -> String {
     base64::engine::general_purpose::STANDARD.encode(png)
 }
 
+/// Text appearances are saved with the binding, checked, and previewed
+/// with how the title comes out on the device; a scrolling title has its
+/// frames (`docs/key-text.md`).
+#[test]
+#[allow(clippy::too_many_lines)] // One flow from saving to the frames.
+fn text_appearances_are_saved_reported_and_scrolled() {
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    let action = log_action(&h, &profile_id, "Hello", "hi");
+    let mut layout = h.ok(
+        "create_layout",
+        json!({ "profileId": profile_id, "modelId": "elgato.streamdeck.mk2", "name": "Main", "generate": false }),
+    );
+    let page = layout["homePage"].clone();
+    let binding = |label: &str, text: Value| {
+        json!([{
+            "control": { "kind": "key", "index": 0 },
+            "trigger": { "type": "press" },
+            "target": { "type": "action", "action": action["id"] },
+            "label": label,
+            "appearance": { "text": text },
+        }])
+    };
+    // Out-of-range values are refused when saving.
+    for bad in [
+        json!({ "mode": "autoFit", "minSize": 2 }),
+        json!({ "mode": "wrap", "maxLines": 0 }),
+        json!({ "mode": "marquee", "speed": 9999 }),
+    ] {
+        layout["pages"][0]["bindings"] = binding("Deploy", bad.clone());
+        let error = h
+            .call(
+                "save_layout",
+                json!({ "profileId": profile_id, "layout": layout }),
+            )
+            .unwrap_err();
+        assert!(error.as_str().is_some(), "{bad}: {error}");
+    }
+    // A text appearance that sets nothing is not stored.
+    layout["pages"][0]["bindings"] = binding("Deploy", json!({}));
+    let saved = h.ok(
+        "save_layout",
+        json!({ "profileId": profile_id, "layout": layout }),
+    );
+    assert!(saved["pages"][0]["bindings"][0].get("appearance").is_none());
+
+    let preview = |layout: &Value, key_pixels: Value| {
+        h.ok(
+            "preview_layout",
+            json!({ "profileId": profile_id, "layout": layout, "pageId": page, "projectId": null,
+                "render": true, "keyPixels": key_pixels }),
+        )
+    };
+    // The default: wrapped, reported at the device's size.
+    let plain = preview(&saved, Value::Null);
+    assert_eq!(plain[0]["text"]["mode"], "wrap");
+    assert_eq!(plain[0]["text"]["fits"], true);
+    assert_eq!(plain[0]["text"]["lines"], 1);
+    // Keys without a title have no report; without `render` none either.
+    assert!(plain[1].get("text").is_none());
+    let unrendered = h.ok(
+        "preview_layout",
+        json!({ "profileId": profile_id, "layout": saved, "pageId": page, "projectId": null }),
+    );
+    assert!(unrendered[0].get("text").is_none());
+
+    // Auto fit that cannot fit at its minimum says so, at any preview size.
+    layout["pages"][0]["bindings"] = binding(
+        "Supercalifragilisticexpialidoc",
+        json!({ "mode": "autoFit", "size": 14, "minSize": 10 }),
+    );
+    let saved = h.ok(
+        "save_layout",
+        json!({ "profileId": profile_id, "layout": layout }),
+    );
+    assert_eq!(
+        saved["pages"][0]["bindings"][0]["appearance"]["text"],
+        json!({ "mode": "autoFit", "size": 14, "minSize": 10 })
+    );
+    for key_pixels in [Value::Null, json!(144)] {
+        let failed = preview(&saved, key_pixels);
+        assert_eq!(failed[0]["text"]["fits"], false);
+        assert_eq!(failed[0]["text"]["truncated"], true);
+        assert_eq!(failed[0]["text"]["fontSize"], 10.0);
+    }
+    // No frames for a title that does not scroll.
+    let frames = |layout: &Value| {
+        h.ok(
+            "preview_marquee",
+            json!({ "profileId": profile_id, "layout": layout, "pageId": page,
+                "control": { "kind": "key", "index": 0 }, "projectId": null, "keyPixels": 144 }),
+        )
+    };
+    assert_eq!(frames(&saved), Value::Null);
+
+    // A marquee title wider than the key scrolls: reported, and one cycle
+    // of frames at most 15 a second, pauses as single frames.
+    layout["pages"][0]["bindings"] = binding(
+        "Deploy the staging environment",
+        json!({ "mode": "marquee", "speed": 30, "pause": 800 }),
+    );
+    let saved = h.ok(
+        "save_layout",
+        json!({ "profileId": profile_id, "layout": layout }),
+    );
+    let report = &preview(&saved, Value::Null)[0]["text"];
+    assert_eq!(report["needsScroll"], true);
+    assert_eq!(report["fits"], true);
+    let scrolling = frames(&saved);
+    let list = scrolling["frames"].as_array().unwrap();
+    assert!(list.len() > 10, "{}", list.len());
+    let durations: Vec<u64> = list
+        .iter()
+        .map(|frame| frame["durationMs"].as_u64().unwrap())
+        .collect();
+    assert!(durations[0] >= 800, "the start pause: {durations:?}");
+    assert!(
+        *durations.last().unwrap() >= 700,
+        "the end pause: {durations:?}"
+    );
+    assert!(
+        durations[1..durations.len() - 1].iter().all(|ms| *ms >= 66),
+        "{durations:?}"
+    );
+    let total: u64 = durations.iter().sum();
+    let cycle = scrolling["cycleMs"].as_u64().unwrap();
+    assert!(
+        total.abs_diff(cycle) <= u64::try_from(list.len()).unwrap(),
+        "{total} {cycle}"
+    );
+    // Each frame differs from the one before (unchanged ones are merged).
+    for pair in list.windows(2) {
+        assert_ne!(pair[0]["image"], pair[1]["image"]);
+    }
+    assert!(
+        list[0]["image"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,")
+    );
+}
+
 #[test]
 #[allow(clippy::too_many_lines)] // One flow from import to deletion.
 fn icons_are_imported_shown_previewed_and_deleted() {
@@ -2507,6 +2683,35 @@ fn icons_are_imported_shown_previewed_and_deleted() {
     assert_eq!(
         saved["pages"][0]["bindings"][0]["appearance"]["fontSize"],
         "large"
+    );
+
+    // Title typography: only the renderer's fonts; kept as written.
+    let fonts = h.ok("title_fonts", json!({}));
+    assert_eq!(fonts, json!([{ "id": "inter", "name": "Inter" }]));
+    let mut typed = saved.clone();
+    typed["pages"][0]["bindings"] = binding(json!({ "fontFamily": "comic-sans" }));
+    let error = h
+        .call(
+            "save_layout",
+            json!({ "profileId": profile_id, "layout": typed }),
+        )
+        .unwrap_err();
+    assert!(error.as_str().unwrap().contains("comic-sans"), "{error}");
+    typed["pages"][0]["bindings"] = binding(json!({
+        "fontFamily": "inter", "bold": true, "italic": false, "underline": true
+    }));
+    let styled = h.ok(
+        "save_layout",
+        json!({ "profileId": profile_id, "layout": typed }),
+    );
+    assert_eq!(
+        styled["pages"][0]["bindings"][0]["appearance"],
+        json!({ "fontFamily": "inter", "bold": true, "italic": false, "underline": true })
+    );
+    // Back to the key with the icon, for the rest of the test.
+    let saved = h.ok(
+        "save_layout",
+        json!({ "profileId": profile_id, "layout": saved }),
     );
 
     // The preview carries the appearance, and on request the key image.
@@ -2655,8 +2860,14 @@ fn pages_are_ordered_moved_and_copied() {
     assert_eq!(node(git)["parent"], tools);
     assert_eq!(node(git)["depth"], 2);
     assert_eq!(node(git)["stored"], false);
-    assert_eq!(node(git)["automaticBack"]["index"], 0);
-    assert_eq!(tree["warnings"].as_array().unwrap().len(), 1);
+    // Saving gave the folders without a Back setting the reserved Back
+    // (their first key is free): the protected key, no automatic one, no
+    // warning.
+    assert_eq!(saved["pages"][2]["back"], json!({ "position": "reserved" }));
+    assert_eq!(node(git)["automaticBack"], Value::Null);
+    assert_eq!(node(git)["systemBack"]["index"], 0);
+    assert_eq!(tree["pages"][0]["systemBack"], Value::Null);
+    assert_eq!(tree["warnings"].as_array().unwrap().len(), 0);
 
     let layout_id = saved["id"].clone();
     // Reordering needs every page once and stores the tree.
@@ -3394,6 +3605,16 @@ fn shared_variables_are_managed_without_revealing_secrets() {
 }
 
 /// The plugin commands' refusal as the frontend receives it.
+/// The arguments of `answer_plugin_dialog` as the plugin dialog host sends
+/// them.
+fn plugin_dialog_answer() -> Value {
+    json!({
+        "dialog": "0123456789abcdef",
+        "plugin": "example.hello",
+        "answer": { "outcome": "confirmed", "values": { "name": "Ada", "count": 3 } },
+    })
+}
+
 fn plugin_refusal(h: &Harness, cmd: &str, args: Value) -> (String, String) {
     let error = h.call(cmd, args).expect_err(cmd);
     (
@@ -3483,6 +3704,10 @@ fn plugin_lifecycle_commands() -> Vec<(&'static str, Value)> {
             json!({ "plugin": "example.hello", "keep": { "credentials": true } }),
         ),
         ("list_known_plugins", json!({})),
+        (
+            "restore_bundled_plugin",
+            json!({ "plugin": "deckpilot.notifications" }),
+        ),
         ("get_plugin_settings", json!({ "plugin": "example.hello" })),
         (
             "set_plugin_settings",
@@ -3538,6 +3763,13 @@ fn plugin_commands_refuse_unless_the_agent_answers_plugin_requests() {
     // No agent: typed, and nothing is sent anywhere.
     let (reason, _) = plugin_refusal(&h, "get_plugin_runtime", json!({}));
     assert_eq!(reason, "agentNotRunning");
+    let (reason, _) = plugin_refusal(&h, "answer_plugin_dialog", plugin_dialog_answer());
+    assert_eq!(reason, "agentNotRunning");
+    // A malformed answer never reaches the agent: the agent's own reasons
+    // (`timeout`, `pluginStopped`) are not the app's to give.
+    let mut forged = plugin_dialog_answer();
+    forged["answer"] = json!({ "outcome": "cancelled", "reason": "timeout" });
+    assert!(h.call("answer_plugin_dialog", forged).is_err());
     for (cmd, args) in &commands {
         assert_eq!(
             plugin_refusal(&h, cmd, args.clone()).0,
@@ -3566,6 +3798,13 @@ fn plugin_commands_refuse_unless_the_agent_answers_plugin_requests() {
     // fails nothing.
     h.ok("watch_plugin_events", json!({}));
     h.ok("watch_plugin_events", json!({}));
+    // So does the main window's plugin dialog host, mounted or not.
+    h.ok("plugin_dialogs_ready", json!({ "ready": true }));
+    h.ok("plugin_dialogs_ready", json!({ "ready": false }));
+    // An answer to a dialog the agent does not show: it is gone, and the
+    // app takes it down.
+    let (reason, message) = plugin_refusal(&h, "answer_plugin_dialog", plugin_dialog_answer());
+    assert_eq!(reason, "dialogClosed", "{message}");
 
     // A locked app refuses before it asks the agent.
     h.ok("lock", json!({}));
@@ -4010,4 +4249,95 @@ fn invalid_plugin_actions_are_refused_when_saved_like_built_in_ones() {
         json!({ "profileId": profile_id,
                 "workflow": workflow(json!({ "count": { "type": "integer", "value": 2 } })) }),
     );
+}
+
+/// The editor's interactive preview (`docs/editor-navigation-and-simulation.md`):
+/// the catalog says which action types navigate and how, and each preview
+/// face says what pressing it does to the view, the automatic Back key
+/// included, without running anything.
+#[test]
+fn previews_and_the_catalog_carry_editor_navigation() {
+    let h = Harness::new();
+    let types = h.ok("list_action_types", json!({}));
+    let navigation = |id: &str| {
+        types
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"] == id)
+            .unwrap()
+            .get("editorNavigation")
+            .cloned()
+    };
+    assert_eq!(
+        navigation("deck.next-page"),
+        Some(json!({ "operation": "page.next" }))
+    );
+    assert_eq!(
+        navigation("deck.previous-page"),
+        Some(json!({ "operation": "page.previous" }))
+    );
+    assert_eq!(
+        navigation("deck.switch-layout"),
+        Some(
+            json!({ "operation": "layout.switch", "targetParameter": "layout", "pageParameter": "page" })
+        )
+    );
+    assert_eq!(
+        navigation("deck.previous-layout"),
+        Some(json!({ "operation": "layout.back" }))
+    );
+    assert_eq!(navigation("general.log"), None);
+
+    let profile_id = new_profile(&h, "Work");
+    let next = h.ok(
+        "create_action",
+        json!({ "profileId": profile_id, "action": {
+            "name": "Next", "actionType": "deck.next-page", "parameters": {} } }),
+    );
+    let mut main = h.ok(
+        "create_layout",
+        json!({ "profileId": profile_id, "modelId": "elgato.streamdeck.mk2", "name": "Main", "generate": false }),
+    );
+    let home = main["homePage"].clone();
+    let tools = "11111111-1111-4111-8111-111111111111";
+    main["pages"][0]["bindings"] = json!([
+        { "control": { "kind": "key", "index": 1 }, "trigger": { "type": "press" },
+          "target": { "type": "openPage", "page": tools } },
+        { "control": { "kind": "key", "index": 2 }, "trigger": { "type": "press" },
+          "target": { "type": "action", "action": next["id"] } }
+    ]);
+    // Tools is a folder page without a Back key: saving gives it the
+    // reserved, protected Back on its first key, which is no binding of
+    // the layout.
+    main["pages"].as_array_mut().unwrap().push(json!({
+        "id": tools, "name": "Tools", "parent": home, "bindings": [] }));
+    let saved = h.ok(
+        "save_layout",
+        json!({ "profileId": profile_id, "layout": main }),
+    );
+    let faces = |page: &Value| {
+        h.ok(
+            "preview_layout",
+            json!({ "profileId": profile_id, "layout": saved, "pageId": page, "projectId": null }),
+        )
+    };
+    let on_home = faces(&home);
+    assert_eq!(
+        on_home[1]["navigation"],
+        json!({ "operation": "folder.open", "page": tools })
+    );
+    assert_eq!(
+        on_home[2]["navigation"],
+        json!({ "operation": "page.next" })
+    );
+    assert!(on_home[0].get("navigation").is_none());
+    let in_tools = faces(&json!(tools));
+    assert_eq!(in_tools[0]["face"]["style"], "back");
+    assert_eq!(in_tools[0]["face"]["symbol"], "folder-back");
+    assert_eq!(
+        in_tools[0]["navigation"],
+        json!({ "operation": "folder.back", "automatic": true, "system": true })
+    );
+    assert!(in_tools[1].get("navigation").is_none());
 }

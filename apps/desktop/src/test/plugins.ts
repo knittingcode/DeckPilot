@@ -206,6 +206,8 @@ export interface FakeOptions {
   helloStateReason?: string
   /** Its health as the agent reports it. */
   helloHealth?: PluginHealth
+  /** Where it came from (default the registry); `bundled` for DeckPilot's own. */
+  helloOrigin?: PluginSummary["origin"]
   /** Adds a required setting without a default (`city`) to its manifest. */
   helloRequiresCity?: boolean
   /** Settings values saved for `acme.hello-weather`. */
@@ -398,7 +400,7 @@ export function createFakePluginClient(options: FakeOptions = {}): FakePluginCli
       state: options.helloState ?? "enabled",
       ...(options.helloStateReason ? { stateReason: options.helloStateReason } : {}),
       ...(options.helloHealth ? { health: options.helloHealth } : {}),
-      origin: { type: "registry", registry: "/tmp/registry" },
+      origin: options.helloOrigin ?? { type: "registry", registry: "/tmp/registry" },
       grants: new Map([["network:api.open-meteo.com", "granted"]]),
     })
   }
@@ -846,6 +848,34 @@ export function createFakePluginClient(options: FakeOptions = {}): FakePluginCli
         if (d && !keep?.credentials) d.credentials.clear()
         const k = known.get(id)
         if (k) known.set(id, { ...k, installed: false })
+      }),
+    ),
+    // A known plugin marked `restorable` comes back from the bundle with its
+    // permissions granted; a broken bundled one is repaired in place.
+    restoreBundledPlugin: vi.fn((id: string) =>
+      Promise.resolve().then(() => {
+        const existing = installed.get(id)
+        if (existing) {
+          if (existing.state !== "broken" || existing.origin.type !== "bundled") {
+            refuse("alreadyInstalled", `${id} is installed (${existing.state}) and not broken`)
+          }
+          existing.state = "enabled"
+          delete existing.stateReason
+          return details(existing)
+        }
+        const k = known.get(id)
+        if (!k?.restorable) refuse("notBundled", `${id} is not a plugin bundled with DeckPilot`)
+        const p: Installed = {
+          id,
+          version: k.lastVersion,
+          state: "enabled",
+          origin: { type: "bundled" },
+          grants: new Map(),
+        }
+        for (const g of declared(p)) p.grants.set(g.key, "granted")
+        installed.set(id, p)
+        remember(p)
+        return details(p)
       }),
     ),
     planInstall: vi.fn((id: string, v: string | undefined, optional: string[]) =>

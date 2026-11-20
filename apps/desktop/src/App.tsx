@@ -17,6 +17,7 @@ import { AppStatusBar } from "@/components/status-bar"
 import { ExecutionSync } from "@/components/execution-sync"
 import { CoreStatusItems } from "@/components/status-sources"
 import { SecurityGate } from "@/components/security-gate"
+import { DialogProvider } from "@/components/dialogs/dialog-service"
 import { SettingsSidebar } from "@/components/settings-sidebar"
 import { ErrorNotice, Loading } from "@/components/page"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
@@ -40,6 +41,7 @@ import {
   type ToolbarContext,
   corePageContext,
   showsDevice,
+  showsLayout,
   showsProfile,
   toolbarContext,
 } from "@/lib/toolbar-context"
@@ -53,7 +55,8 @@ import { findSettingsPage } from "@/settings/registry"
 import { SettingsView } from "@/settings/settings-view"
 import { resolveEditingProfile, useAppData } from "@/shell/app-data"
 import { EditorSelectionProvider } from "@/shell/editor-selection"
-import { UNSAVED_WARNING } from "@/shell/editor-selection-context"
+import { unsavedWarning } from "@/shell/editor-selection-context"
+import { reportUnsaved, useUnsavedGuards } from "@/shell/unsaved-guards"
 import {
   PluginNavigationContext,
   navigationKey,
@@ -61,7 +64,7 @@ import {
   pluginViewPage,
   usePluginNavigation,
 } from "@/shell/plugin-navigation"
-import { DeviceSelector, ProfileSelector, ToolbarEnd } from "@/shell/toolbar"
+import { DeviceSelector, LayoutSelector, ProfileSelector, ToolbarEnd } from "@/shell/toolbar"
 import { ViewActiveContext } from "@/shell/view-activity"
 
 type View = React.LazyExoticComponent<() => React.JSX.Element>
@@ -105,6 +108,14 @@ const PAGE_TITLES: Partial<Record<CorePageId, string>> = {
 
 const DEFAULT_VIEW = PAGES.designer as View
 
+/**
+ * Shows plugin dialogs (plugin API 1.5) in builds with plugins; loaded on
+ * first use, and absent from other builds.
+ */
+const PLUGIN_DIALOG_HOST = MARKETPLACE
+  ? lazy(() => import("@/plugins/dialog-host").then((m) => ({ default: m.PluginDialogHost })))
+  : null
+
 /** The view of a plugin's toolbar entry (`plugin-view/<plugin>/<entry>`). */
 const PLUGIN_VIEW: View = lazy(() =>
   import("@/pages/plugin-view").then((m) => ({ default: m.PluginViewPage })),
@@ -142,7 +153,7 @@ function Studio() {
   const dirtyRef = useRef(false)
   const acceptEditing = useCallback(() => {
     if (!dirtyRef.current) return true
-    toast.warning(UNSAVED_WARNING)
+    toast.warning(unsavedWarning())
     return false
   }, [dirtyRef])
   const data = useAppData({ acceptEditing })
@@ -162,6 +173,13 @@ function Studio() {
     [modules],
   )
   const navigation = useNavigation(exists)
+  // Leaving the device editor, closing the window or quitting asks over
+  // unsaved layout edits.
+  const markClean = useCallback(() => {
+    if (dirtyRef.current) reportUnsaved(false)
+    dirtyRef.current = false
+  }, [dirtyRef])
+  const navigate = useUnsavedGuards(dirtyRef, navigation.location, navigation.navigate, markClean)
   const [titlebar] = useState(() => new TitlebarStore())
   // Where a hidden workspace page's toolbar contributions wait.
   const [parked] = useState(() => new TitlebarStore())
@@ -223,14 +241,14 @@ function Studio() {
       setAgent: data.setAgent,
       updates: data.updates,
       setUpdates: data.setUpdates,
-      navigate: navigation.navigate,
+      navigate,
       openSettings: navigation.openSettings,
       closeSettings: navigation.closeSettings,
       modules,
       setModules: data.setModules,
       ...(data.pluginModules.length > 0 ? { pluginModules: data.pluginModules } : {}),
     }
-  }, [data, modules, navigation])
+  }, [data, modules, navigation, navigate])
 
   if (!context) {
     return (
@@ -288,6 +306,7 @@ function Studio() {
       <>
         {showsDevice(viewContext) && <DeviceSelector onChosen={openEditor} />}
         {showsProfile(viewContext) && <ProfileSelector />}
+        {showsLayout(viewContext) && <LayoutSelector />}
       </>
     ) : undefined
   return (
@@ -340,7 +359,7 @@ function Studio() {
                     onScroll={(event) => {
                       if (!inSettings) workspaceScroll.current = event.currentTarget.scrollTop
                     }}
-                    className={cn("min-h-0 overflow-y-auto", inSettings && "hidden")}
+                    className={cn("relative min-h-0 overflow-y-auto", inSettings && "hidden")}
                   >
                     <TitlebarContext value={inSettings ? parked : titlebar}>
                       <ViewActiveContext value={!inSettings}>
@@ -358,7 +377,7 @@ function Studio() {
                   {settingsPage !== null && (
                     <SidebarInset data-view="settings" className="min-h-0 flex-row overflow-hidden">
                       <SettingsSidebar current={settingsPage} />
-                      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+                      <div className="relative min-h-0 min-w-0 flex-1 overflow-y-auto">
                         <Suspense fallback={<PageLoading />}>
                           <SettingsView key={settingsPage} id={settingsPage} />
                         </Suspense>
@@ -386,7 +405,15 @@ export function App() {
     <ThemeProvider>
       <TooltipProvider>
         <SecurityGate>
-          <Studio />
+          {/* Only while unlocked: no app dialog can appear over the locked state. */}
+          <DialogProvider>
+            <Studio />
+            {PLUGIN_DIALOG_HOST && (
+              <Suspense fallback={null}>
+                <PLUGIN_DIALOG_HOST />
+              </Suspense>
+            )}
+          </DialogProvider>
         </SecurityGate>
         <Toaster position="bottom-right" />
       </TooltipProvider>

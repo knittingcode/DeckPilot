@@ -1,0 +1,203 @@
+{
+  "menu": {
+    "choose": "Choose a layout",
+    "placeholder": "Layout",
+    "selector": "Layout: {{layout}}",
+    "selectorDefault": "Layout: {{layout}}, default",
+    "profileLayouts": "Layouts of this profile",
+    "noneForModel": "No layouts for {{model}} yet",
+    "noneForDevice": "No layouts for this device yet",
+    "forModel": "Layouts for {{model}}",
+    "forDevice": "Layouts for this device",
+    "defaultMark": "default",
+    "sharedProfiles_one": "shared · {{count}} profile",
+    "sharedProfiles_other": "shared · {{count}} profiles",
+    "onDevice": "Shown on the device",
+    "otherLayouts": "Other layouts for {{model}}",
+    "useLayout": "Use {{layout}} in this profile",
+    "unused": "Not used by any profile",
+    "usedBy": "Used by {{profiles}}",
+    "use": "Use in this profile",
+    "otherModels": "Layouts for other models",
+    "notForDevice": "Not for this device",
+    "madeFor": "Made for {{model}}; choose that device to edit it",
+    "anotherModel": "another model",
+    "manageGroup": "Manage layouts",
+    "new": "New layout…",
+    "duplicate": "Duplicate layout…",
+    "rename": "Rename layout…",
+    "defaultHint": "The profile's layout for {{model}}: devices of the model show it",
+    "isDefault": "Default for this model",
+    "setDefault": "Set as default",
+    "delete": "Delete layout…",
+    "manage": "Manage layouts…",
+    "toast": {
+      "assigned": "{{layout}} is used in this profile",
+      "assignFailed": "“{{layout}}” was not added to this profile",
+      "madeDefault": "{{layout}} is used for {{model}}",
+      "defaultFailed": "“{{layout}}” was not made the default"
+    }
+  },
+  "open": {
+    "title": "Use “{{layout}}” in {{profile}}?",
+    "titleThisProfile": "Use “{{layout}}” in this profile?",
+    "description": "No profile uses this layout yet. It is added to the layouts of {{profile}} and opens in the Device Editor.",
+    "descriptionThisProfile": "No profile uses this layout yet. It is added to the layouts of this profile and opens in the Device Editor.",
+    "confirm": "Use in {{profile}}",
+    "confirmThisProfile": "Use in this profile",
+    "failed": "“{{layout}}” was not added to {{profile}}",
+    "failedThisProfile": "“{{layout}}” was not added to this profile"
+  },
+  "profileLayouts": {
+    "title": "Layouts",
+    "description": "The layouts this profile uses, in its order. Each device shows the default layout of its model; Switch layout keys show the others. Other profiles may use the same layouts.",
+    "empty": "No layouts assigned to this profile.",
+    "listLabel": "Layouts of the profile",
+    "toast": {
+      "orderSaved": "Order saved",
+      "assigned": "{{layout}} assigned",
+      "defaultChanged": "Default layout for {{model}} changed",
+      "removed": "Layout removed from the profile; the layout is kept"
+    },
+    "defaultFor": "Default for {{model}}",
+    "editsApply": "Edits apply to {{profiles}} too",
+    "alsoIn": "Also in {{profiles}}",
+    "makeDefault": "Make default for {{model}}",
+    "moveUp": "Move {{layout}} up",
+    "moveDown": "Move {{layout}} down",
+    "open": "Open {{layout}}",
+    "openTitle": "Open in the Device Editor",
+    "removeLabel": "Remove {{layout}} from the profile",
+    "remove": {
+      "title": "Remove “{{layout}}” from this profile?",
+      "description": "The layout itself is kept, with its pages and keys, and stays available to other profiles and in Layouts.",
+      "confirm": "Remove"
+    },
+    "compatibility": {
+      "ownOnly": "Own model only",
+      "fits": "fits {{fits}}",
+      "misses": "misses {{misses}}",
+      "fitsMisses": "fits {{fits}}, misses {{misses}}",
+      "unknown": "Other models unknown",
+      "label": "Compatibility: {{lines}}"
+    },
+    "unavailable": {
+      "label_one": "{{count}} key unavailable",
+      "label_other": "{{count}} keys unavailable",
+      "detail_one": "{{count}} key unavailable in this profile: {{items}}",
+      "detail_other": "{{count}} keys unavailable in this profile: {{items}}",
+      "heading": "Cannot run in this profile:"
+    },
+    "assign": {
+      "button": "Assign layout",
+      "allAssigned": "Every layout is assigned",
+      "notInProfile": "Layouts not in this profile",
+      "unknownModel": "{{model}}: unknown model, cannot be assigned",
+      "fitsOf_one": "{{model}} · fits {{fits}} of {{count}} other model",
+      "fitsOf_other": "{{model}} · fits {{fits}} of {{count}} other models"
+    }
+  },
+  "page": {
+    "description": "Layouts stored once and assigned to any number of profiles",
+    "new": "New layout",
+    "search": "Search",
+    "empty": {
+      "title": "No layouts yet",
+      "body": "A layout holds the pages and keys of a device; assign it to any number of profiles."
+    },
+    "searchPlaceholder": "Search layouts",
+    "noMatches": "No layouts match.",
+    "table": {
+      "name": "Name",
+      "device": "Device",
+      "contents": "Pages / keys",
+      "usedBy": "Used by",
+      "compatibility": "Compatibility",
+      "actions": "Actions"
+    },
+    "rename": {
+      "title": "Rename layout",
+      "label": "Layout name",
+      "confirm": "Rename"
+    },
+    "duplicate": {
+      "title": "Duplicate layout",
+      "description": "An independent copy with its own pages; its keys run the same Action Library actions.",
+      "label": "Name of the copy",
+      "confirm": "Duplicate",
+      "copyName": "{{layout}} copy"
+    },
+    "toast": {
+      "renamed": "Layout renamed",
+      "duplicated": "Layout duplicated",
+      "assigned": "Assigned to {{profile}}",
+      "unassigned": "Removed from {{profile}}; the layout is kept",
+      "deleted": "Layout deleted",
+      "created": "Layout created"
+    },
+    "contents": "{{pages}} · {{keys}}",
+    "pages_one": "{{count}} page",
+    "pages_other": "{{count}} pages",
+    "keys_one": "{{count}} key",
+    "keys_other": "{{count}} keys",
+    "openLabel": "Open {{layout}} in the Device Editor",
+    "unknownModel": "Its device model is unknown",
+    "openTooltip": "Open in Device Editor",
+    "more": "More actions for {{layout}}",
+    "menu": {
+      "rename": "Rename…",
+      "duplicate": "Duplicate…",
+      "delete": "Delete…"
+    },
+    "notUsed": "Not used",
+    "profilesUsing": "Profiles using {{layout}}",
+    "defaultOf": "Default layout of {{profile}} for {{model}}",
+    "assignTooltip": "Assign to profiles",
+    "unknownModelAssign": "Its device model is unknown, so it cannot be assigned to more profiles.",
+    "delete": {
+      "title": "Delete “{{layout}}”?",
+      "unused": "No profile uses this layout. Its pages and keys are deleted.",
+      "usedBy_one": "This profile uses the layout:",
+      "usedBy_other": "These profiles use the layout:",
+      "listLabel": "Profiles using the layout",
+      "defaultEntry": "{{profile}} (default layout)",
+      "fallback_one": "It falls back to its other layouts. The profile itself is not deleted.",
+      "fallback_other": "They fall back to their other layouts. The profiles themselves are not deleted."
+    },
+    "create": {
+      "title": "New layout",
+      "description": "An empty layout for one device model.",
+      "submit": "Create",
+      "name": "Name",
+      "model": "Device model",
+      "choose": "Choose",
+      "experimental": "(experimental)",
+      "profile": "Assign to profile",
+      "noProfile": "No profile (unassigned)"
+    }
+  },
+  "management": {
+    "duplicateTitle": "Duplicate “{{layout}}”",
+    "duplicateDescription": "The copy is added to this profile. The original stays as it is.",
+    "copyName": "{{layout}} (copy)",
+    "duplicateFailed": "“{{layout}}” was not duplicated",
+    "renameTitle": "Rename “{{layout}}”",
+    "renameShared": "The layout is shared: every profile using it shows the new name.",
+    "renameFailed": "“{{layout}}” was not renamed",
+    "deleteShared": "Other profiles use this layout too, so it cannot be deleted here. Remove it from this profile in Settings › Profiles, or delete it for every profile on the Layouts page.",
+    "deleteOwn": "The layout and its pages are removed. Actions and workflows stay in the library.",
+    "deleting": "Deleting…",
+    "deleteFailed": "“{{layout}}” was not deleted",
+    "deleteFailedHint": "A layout other profiles use is deleted on the Layouts page, or removed from this profile in Settings › Profiles",
+    "newTitle": "New layout for {{model}}",
+    "newPlaceholder": "{{model}} layout",
+    "createFailed": "“{{layout}}” was not created",
+    "generate": "Place the profile's actions and workflows on the keys"
+  },
+  "compatibility": {
+    "unknownModel": "Unknown model",
+    "notInCatalog": "This device model is not in the catalog",
+    "line": "{{model}}: {{explanation}}",
+    "unknown": "unknown"
+  }
+}

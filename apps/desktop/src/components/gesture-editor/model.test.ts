@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 
 import {
   clearControls,
@@ -7,10 +7,13 @@ import {
   moveControl,
   pasteControls,
 } from "@/layout-editor/editing"
+import { i18n } from "@/i18n"
 import { bindingsFor, defaultTrigger } from "@/lib/layout-model"
 import type { ControlId, DeviceLayout, DeviceModel } from "@/lib/types"
 
 import {
+  GESTURE_LABELS,
+  TIMING_LIMITS,
   clickTiming,
   controlIssues,
   convertToGestures,
@@ -209,5 +212,23 @@ describe("editing keeps gestures", () => {
     const cleared = clearControls(gestureKey, "home", [key(0)])
     expect(cleared.pages[0]?.bindings).toEqual([])
     expect(cleared.pages[0]?.gestures).toEqual([])
+  })
+})
+
+describe("gesture names and timing messages in Polish", () => {
+  afterEach(async () => {
+    await i18n.changeLanguage("en")
+  })
+
+  it("follow the window's language when read", async () => {
+    expect(GESTURE_LABELS.longPress).toBe("Long press")
+    await i18n.changeLanguage("pl")
+    expect(GESTURE_LABELS.click).toBe("Pojedyncze kliknięcie")
+    expect(GESTURE_LABELS.doubleClick).toBe("Dwukrotne kliknięcie")
+    expect(TIMING_LIMITS.longPressMs.label).toBe("Czas długiego naciśnięcia")
+    expect(timingError("doubleClickMs", "149")).toBe(
+      "Czas na dwukrotne kliknięcie: wartość musi wynosić od 150 do 1000 ms.",
+    )
+    expect(timingError("longPressMs", "700.5")).toMatch(/całkowitą liczbą milisekund/)
   })
 })

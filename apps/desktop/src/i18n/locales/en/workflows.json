@@ -1,0 +1,894 @@
+{
+  "page": {
+    "title": "Workflows",
+    "description": "Connect actions into workflows",
+    "switcher": "Workflow",
+    "stepsMark": " · steps",
+    "new": "New workflow",
+    "newSteps": "New step workflow",
+    "defaultName": "New workflow",
+    "stepsIntro": "A step workflow runs its actions in order. It can be opened in the graph editor later.",
+    "stepsHint": "This workflow runs its steps in order. Open it in the graph editor to add branches, parallel steps and loops; the steps are kept.",
+    "convertFailed": "The workflow could not be opened in the graph editor",
+    "openInGraph": "Open in graph editor"
+  },
+  "steps": {
+    "condition": {
+      "always": "Always",
+      "previousSucceeded": "If the previous step succeeded",
+      "previousFailed": "If the previous step failed",
+      "whileProject": "While {{project}} is active"
+    },
+    "onFailure": {
+      "stop": "On failure: stop the workflow",
+      "continue": "On failure: continue"
+    },
+    "toast": {
+      "delayFailed": "The delay was not added",
+      "saved": "Workflow saved",
+      "duplicated": "Workflow duplicated",
+      "duplicateFailed": "The workflow was not duplicated",
+      "deleted": "Workflow deleted",
+      "deleteFailed": "The workflow was not deleted"
+    },
+    "run": "Run workflow",
+    "runNamed": "Run “{{name}}”",
+    "runShort": "Run",
+    "description": "Steps run in order in the agent. Each step uses an action from this profile.",
+    "name": "Name",
+    "namePlaceholder": "Start Work",
+    "descriptionLabel": "Description",
+    "optional": "Optional",
+    "steps": "Steps",
+    "empty": "Add actions below.",
+    "actionToAdd": "Action to add",
+    "chooseAction": "Choose an action",
+    "unavailableWhy": " (unavailable: {{reason}})",
+    "unavailableMark": " (unavailable)",
+    "addStep": "Add step",
+    "addDelay": "Add delay",
+    "save": "Save",
+    "copyName": "{{name}} (copy)",
+    "duplicate": "Duplicate",
+    "deleteTitle": "Delete “{{name}}”?",
+    "deleteDescription": "The workflow is removed from this profile.",
+    "lastRun": "Last run: {{state}}",
+    "usedIn": "Used in",
+    "drag": "Drag step {{number}}",
+    "actionOf": "Action of step {{number}}",
+    "missingAction": "Missing action",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "remove": "Remove step {{number}}",
+    "unavailableStep": "Unavailable: {{reason}}. The step stays in the workflow and runs again once the plugin can.",
+    "conditionOf": "Condition of step {{number}}",
+    "onFailureOf": "On failure of step {{number}}",
+    "hideParameters": "Hide parameters",
+    "showParameters": "Override parameters for this step",
+    "override": "Override “{{parameter}}”",
+    "delay": "Delay",
+    "delayOf": "Delay of step {{number}} in milliseconds",
+    "ms": "ms",
+    "validation": {
+      "name": "Enter a name.",
+      "chooseAction": "Step {{step}}: choose an action.",
+      "noPrevious": "Step {{step}}: there is no previous step."
+    }
+  },
+  "variablesTable": {
+    "search": "Search variables",
+    "owner": "Owner",
+    "type": "Type",
+    "scope": "Scope",
+    "filter": {
+      "owner": "Owner filter",
+      "type": "Type filter",
+      "scope": "Scope filter"
+    },
+    "any": {
+      "owner": "Any owner",
+      "type": "Any type",
+      "scope": "Any scope"
+    },
+    "toast": {
+      "copied": "Reference copied",
+      "copyFailed": "The reference was not copied"
+    },
+    "valuesUnavailable": "Values are not available: {{reason}}",
+    "notLive": "The agent is not running or too old: module variables and current values are not shown.",
+    "noMatch": "No variables match.",
+    "label": "Variables",
+    "variable": "Variable",
+    "currentValue": "Current value",
+    "access": "Access",
+    "actions": "Actions",
+    "redacted": "Redacted (sensitive)",
+    "aliases": "Also readable as {{aliases}} (deprecated)",
+    "editable": "Editable",
+    "readOnly": "Read-only",
+    "sensitive": "Sensitive",
+    "usedTimes_one": "Used {{count}} time",
+    "usedTimes_other": "Used {{count}} times",
+    "used_one": "Used {{count}}×",
+    "used_other": "Used {{count}}×",
+    "copy": "Copy {{reference}}",
+    "edit": "Edit {{reference}}"
+  },
+  "sharedVariables": {
+    "intro": "Every value actions, workflows and keys can read. Insert one with {{syntax}}. For shared variables, a value set for a project wins over the profile's, which wins over the global one.",
+    "title": "Variables",
+    "new": "New variable",
+    "empty": {
+      "title": "No shared variables yet",
+      "description": "Create one to use the same value in several actions and workflows."
+    },
+    "chooseProject": "Choose a project",
+    "chooseProfile": "Choose a profile",
+    "noCredentials": "No stored credentials. Add one under Security first; the secret stays there.",
+    "chooseCredential": "Choose a stored credential",
+    "referenceKind": "{{label}}: kind of reference",
+    "resourceKey": "Resource key",
+    "projectRole": "Project role",
+    "scopeRequired": "Choose at least one scope.",
+    "toast": {
+      "saved": "Variable saved",
+      "created": "Variable created",
+      "deleted": "Variable deleted",
+      "valueSaved": "Value saved",
+      "valueCleared": "Value cleared"
+    },
+    "declaredBy": "Declared by the {{module}} module",
+    "key": "Key",
+    "keyPlaceholder": "key",
+    "referencedAs": "Referenced as {{reference}}",
+    "referencedAsFixed": "Referenced as {{reference}}; the key cannot change.",
+    "label": "Label",
+    "optional": "Optional",
+    "description": "Description",
+    "type": "Type",
+    "secretRefHint": "Holds the name of a stored credential. The secret stays in the credential store and is never shown here.",
+    "resourceKind": "Resource kind",
+    "anyKind": "Any kind",
+    "scopes": "Scopes",
+    "sensitive": "Sensitive",
+    "sensitiveHint": "Values are never shown again, in logs or in history.",
+    "defaultToggle": "Default value, used where no scope has one",
+    "defaultValue": "Default value",
+    "save": "Save",
+    "create": "Create variable",
+    "deleteTitle": "Delete “{{reference}}”?",
+    "deleteDescription": "The variable and all its values are removed. This cannot be undone.",
+    "usedIn": "Used in",
+    "notUsed": "Not used by any action or workflow.",
+    "usages": "Usages",
+    "removeReferences": "Remove these references before deleting the variable.",
+    "values": "Values",
+    "noSlots": "No scope allows a value here.",
+    "noProfile": "Choose a profile to set profile and project values.",
+    "redacted": "Set (redacted)",
+    "notSet": "Not set",
+    "change": "Change",
+    "set": "Set",
+    "changeNamed": "Change {{name}}",
+    "setNamed": "Set {{name}}",
+    "clearNamed": "Clear {{name}}",
+    "valueFor": "Value for {{name}}",
+    "saveValue": "Save value",
+    "keyRule": {
+      "empty": "Enter a key.",
+      "parts": "Use 2 to 4 parts separated by dots, e.g. paths.root.",
+      "part": "Each part starts with a lowercase letter and has at most 32 letters, digits or _.",
+      "reserved": "“{{namespace}}” is reserved.",
+      "exists": "A variable with this key exists."
+    },
+    "valueType": {
+      "string": "Text",
+      "integer": "Integer",
+      "boolean": "Yes/no",
+      "projectId": "Project",
+      "profileId": "Profile",
+      "resource": "Resource",
+      "json": "JSON",
+      "secretRef": "Stored credential"
+    },
+    "kind": {
+      "directory": "Directory",
+      "application": "Application",
+      "terminal": "Terminal",
+      "dockerEnvironment": "Docker environment",
+      "service": "Service",
+      "url": "URL",
+      "other": "Other"
+    },
+    "scope": {
+      "global": "Global",
+      "globalHint": "One value for every profile",
+      "profile": "Profile",
+      "profileHint": "A value per profile",
+      "project": "Project",
+      "projectHint": "A value per project"
+    },
+    "parse": {
+      "wholeNumber": "Enter a whole number.",
+      "tooLarge": "The number is too large.",
+      "project": "Choose a project.",
+      "profile": "Choose a profile.",
+      "resource": "Enter a resource key or a project role.",
+      "json": "Enter valid JSON.",
+      "credential": "Choose a stored credential."
+    },
+    "shown": {
+      "redacted": "Redacted",
+      "empty": "(empty)",
+      "yes": "Yes",
+      "no": "No",
+      "unknownProject": "Unknown project",
+      "unknownProfile": "Unknown profile",
+      "resource": "Resource {{key}}",
+      "projectRole": "Project role {{role}}",
+      "credential": "Credential {{name}}"
+    },
+    "slot": {
+      "global": "Global",
+      "profile": "Profile {{name}}",
+      "project": "Project {{key}}",
+      "anyProject": "Project",
+      "execution": "During a run"
+    },
+    "reference": {
+      "action": "Action “{{owner}}”",
+      "workflow": "Workflow “{{owner}}”",
+      "workflowNode": "Workflow “{{owner}}”, node {{node}}",
+      "binding": "Layout “{{owner}}”, {{control}}",
+      "trigger": "Workflow “{{owner}}” starts by trigger: {{trigger}}"
+    }
+  },
+  "builder": {
+    "flowGroup": "Flow",
+    "toast": {
+      "saved": "Workflow saved",
+      "saveFailed": "The workflow was not saved",
+      "tooManyNodes_one": "A workflow can have at most {{count}} node",
+      "tooManyNodes_other": "A workflow can have at most {{count}} nodes",
+      "actionCreated": "Action “{{name}}” created",
+      "actionCreatedHint": "Configure it in the Action Library or override parameters here.",
+      "actionFailed": "The action was not created",
+      "actionFailedHint": "{{error}} You can create it in the Action Library instead.",
+      "duplicated": "Workflow duplicated",
+      "duplicateFailed": "The workflow was not duplicated",
+      "deleted": "Workflow deleted",
+      "deleteFailed": "The workflow was not deleted"
+    },
+    "save": {
+      "label": "Save",
+      "noChanges": "No unsaved changes",
+      "fixProblems_one": "Fix {{count}} problem to save",
+      "fixProblems_other": "Fix {{count}} problems to save",
+      "needsName": "Give the workflow a name"
+    },
+    "run": {
+      "label": "Run workflow",
+      "cancel": "Cancel run",
+      "cancelHint": "Stop before the next node",
+      "saveFirst": "Save first; runs in the agent for the active profile",
+      "inAgent": "Run “{{name}}” in the agent",
+      "hint": "Runs in the agent for the active profile"
+    },
+    "problems_one": "{{count}} problem",
+    "problems_other": "{{count}} problems",
+    "noProblems": "No problems",
+    "problemsTooltip": "Problems in the open workflow; it cannot be saved until they are fixed",
+    "showCatalog": "Show nodes",
+    "hideCatalog": "Hide nodes",
+    "showInspector": "Show inspector",
+    "hideInspector": "Hide inspector",
+    "edit": "Edit",
+    "undo": "Undo",
+    "redo": "Redo",
+    "arrange": "Arrange nodes",
+    "unsaved": "Unsaved changes",
+    "saved": "Saved",
+    "catalog": "Node catalog",
+    "inspector": "Inspector",
+    "panel": {
+      "title": "Workflow",
+      "name": "Name",
+      "description": "Description",
+      "nodeProblems_one": "{{count}} problem on nodes; select a node to see it.",
+      "nodeProblems_other": "{{count}} problems on nodes; select a node to see it.",
+      "selected_one": "{{count}} node selected. Copy with {{shortcut}}, delete with ⌫.",
+      "selected_other": "{{count}} nodes selected. Copy with {{shortcut}}, delete with ⌫.",
+      "converted": "Converted from steps",
+      "convertedHint": "Review these differences, then save. The steps are kept.",
+      "copyName": "{{name}} (copy)",
+      "duplicate": "Duplicate",
+      "inUse": "Used by a layout or another workflow",
+      "deleteTitle": "Delete “{{name}}”?",
+      "deleteDescription": "The workflow and its graph are removed from this profile."
+    }
+  },
+  "catalog": {
+    "search": "Search nodes",
+    "list": "Nodes",
+    "empty": "No matching nodes",
+    "unavailableEntry": "{{title}} — unavailable: {{reason}}",
+    "unavailable": "Unavailable: {{reason}}",
+    "addHint": "{{title}} — drag onto the canvas or click to add"
+  },
+  "node": {
+    "title": {
+      "trigger": "Start",
+      "action": "Action",
+      "condition": "Condition",
+      "parallel": "Parallel",
+      "join": "Join",
+      "loop": "Loop",
+      "call": "Sub-workflow",
+      "output": "Outputs",
+      "setVariable": "Set variable",
+      "delay": "Delay",
+      "stop": "Stop"
+    },
+    "description": {
+      "trigger": "Where the workflow starts.",
+      "action": "Runs an action of this profile.",
+      "condition": "Continues with Yes or No.",
+      "parallel": "Runs the connected branches at the same time.",
+      "join": "Waits for every incoming branch, then continues.",
+      "loop": "Runs another workflow a fixed number of times.",
+      "call": "Runs another workflow once with inputs and uses its outputs.",
+      "output": "Sets this workflow's outputs for the node that calls it.",
+      "setVariable": "Assigns variables of this run for the nodes after it.",
+      "delay": "Waits before continuing.",
+      "stop": "Ends the workflow successfully."
+    },
+    "port": {
+      "out": "Next",
+      "error": "On error",
+      "true": "Yes",
+      "false": "No"
+    },
+    "missingAction": "Missing action",
+    "actionGone": "The action no longer exists",
+    "missingWorkflow": "Missing workflow",
+    "loopDetail": "{{workflow}} × {{times}}",
+    "noOutputs": "Sets no outputs",
+    "noVariables": "Sets no variables",
+    "variableOutput": "Variable · {{label}}",
+    "predicate": {
+      "equals": "{{output}} = “{{value}}”",
+      "notEmpty": "{{output}} is set",
+      "succeeded": "{{node}} succeeded",
+      "activeProject": "project is {{key}}"
+    },
+    "duration": {
+      "ms": "{{value}} ms",
+      "seconds": "{{value}} s",
+      "minutes": "{{minutes}} min",
+      "minutesSeconds": "{{minutes}} min {{seconds}} s"
+    },
+    "run": {
+      "attempt": "Attempt {{attempt}}",
+      "running": "Running",
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "skipped": "Skipped",
+      "cancelled": "Cancelled"
+    },
+    "problems_one": "{{count}} problem",
+    "problems_other": "{{count}} problems",
+    "warning": "Warning"
+  },
+  "inspector": {
+    "problems": "Problems",
+    "deleteNode": "Delete node",
+    "label": "Label",
+    "labelPlaceholder": "Default title",
+    "nodeId": "Node id",
+    "nodeIdHint": "Used to refer to this node's outputs.",
+    "workflow": "Workflow",
+    "parameters": "Parameters",
+    "source": "{{label}} source",
+    "value": "Value",
+    "mode": {
+      "action": "Action’s value",
+      "fixed": "Value for this node",
+      "mapped": "From earlier nodes or variables"
+    },
+    "loop": {
+      "times": "Times",
+      "timesHint": "1 to {{max}}"
+    },
+    "delay": {
+      "seconds": "Seconds",
+      "hint_one": "{{duration}}; at most {{count}} minute",
+      "hint_other": "{{duration}}; at most {{count}} minutes"
+    },
+    "failure": {
+      "title": "On failure",
+      "whenAction": "When the action fails",
+      "actionHint": "A connected “On error” output always handles the failure.",
+      "whenCall": "When the sub-workflow fails",
+      "callHint": "A connected “On error” output always handles the failure. Sub-workflows are not retried.",
+      "stop": "Stop the workflow",
+      "continue": "Continue with Next",
+      "retries": "Retries",
+      "retriesHint": "Up to {{max}}",
+      "notRetrySafe": "Not safe to repeat",
+      "backoff": "Wait between (ms)",
+      "backoffHint": "Doubles each time",
+      "timeout": "Timeout (seconds)",
+      "timeoutCancellable": "Default {{duration}}. Stops at once when the run is cancelled or the time is up.",
+      "timeoutNotCancellable": "Default {{duration}}. Cannot be interrupted: it finishes before a cancellation or timeout takes effect, and a late result is discarded.",
+      "callTimeoutHint": "Default {{duration}}. Cancelling the run or reaching the timeout stops the sub-workflow too."
+    },
+    "condition": {
+      "check": "Check",
+      "succeeded": "A node succeeded",
+      "equals": "An output equals",
+      "notEmpty": "An output is set",
+      "activeProject": "The active project is",
+      "node": "Node",
+      "output": "Output",
+      "project": "Project",
+      "chooseProject": "Choose a project",
+      "hint": "Yes and No continue with different nodes; connect them on the canvas."
+    },
+    "valueRow": {
+      "required": "required",
+      "sensitive": "sensitive",
+      "none": "No value",
+      "needsValue": "Needs a value."
+    },
+    "call": {
+      "hint": "Runs once, with this run's project context; this run waits for it.",
+      "gone": "The workflow no longer exists",
+      "inputs": "Inputs",
+      "noInputs": "{{name}} declares no inputs. Inputs are declared in its workflow panel.",
+      "usesDefault": "Uses the default “{{value}}”.",
+      "notSet": "Not set; the workflow gets no value.",
+      "unknownInput": "<code>{{key}}</code> is no longer an input of {{workflow}}.",
+      "remove": "Remove",
+      "noOutputs": "{{name}} returns no outputs.",
+      "outputs": "Sub-workflow outputs"
+    },
+    "output": {
+      "none": "This workflow declares no outputs. Declare them in the workflow panel (click the canvas background).",
+      "notSet": "Not set by this node.",
+      "hint": "The node that calls this workflow gets these values. When several Output nodes run, the one that finishes later wins."
+    },
+    "variables": {
+      "title": "Variables",
+      "none": "This workflow declares no variables. Declare them in the workflow panel (click the canvas background).",
+      "notChanged": "Not changed by this node.",
+      "hint": "Nodes after this one read the new values as “Variable · …”. Variables last for one run; a sub-workflow gets them only through its inputs."
+    },
+    "projectScope": {
+      "label": "May change the active project",
+      "application": "When a run ends on another project, it becomes DeckPilot’s active project — unless the active project changed during the run.",
+      "execution": "Project selections stay in each run: they affect the nodes after them, never DeckPilot’s active project or other runs.",
+      "atStart": "Runs use the active project of the moment they start."
+    },
+    "docs": {
+      "title": "About this node",
+      "version": "version {{version}}",
+      "module": "{{name}} module",
+      "effect": {
+        "readOnly": "Read-only",
+        "opens": "Opens something",
+        "modifies": "Changes things"
+      },
+      "retrySafe": "Retry-safe",
+      "notRetrySafe": "Not retry-safe",
+      "idempotent": "Idempotent",
+      "cancellable": "Can be interrupted",
+      "notCancellable": "Cannot be interrupted",
+      "selectsProject": "Selects a project",
+      "permissions": "Permissions of its module",
+      "inputs": "Inputs",
+      "outputs": "Outputs",
+      "optional": "(optional)",
+      "sometimes": "(sometimes)",
+      "sensitiveHint": "Available to later nodes only",
+      "notKept": "not kept in history",
+      "kind": {
+        "text": "text",
+        "integer": "number",
+        "boolean": "yes/no",
+        "choice": "choice",
+        "resource": "resource",
+        "project": "project",
+        "lines": "list",
+        "pairs": "rows",
+        "code": "code",
+        "credential": "credential"
+      }
+    }
+  },
+  "validation": {
+    "connection": {
+      "missingNodes": "both nodes must exist",
+      "self": "a node cannot connect to itself",
+      "noOutput": "this output does not exist",
+      "intoStart": "nothing can connect into the start node",
+      "exists": "the connection exists already",
+      "oneTarget": "an output connects to one node; branch with a Parallel or Condition node",
+      "oneIncoming": "only a Join node can have several incoming connections",
+      "cycle": "this would create a cycle; use a Loop node to repeat"
+    }
+  },
+  "run": {
+    "attempts_one": "{{count}} attempt",
+    "attempts_other": "{{count}} attempts",
+    "state": {
+      "running": "Running",
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "interrupted": "Interrupted"
+    },
+    "status": {
+      "running": "running",
+      "succeeded": "succeeded",
+      "failed": "failed",
+      "skipped": "skipped",
+      "cancelled": "cancelled"
+    },
+    "summary": {
+      "running_one": "Running · {{completed}} of {{count}} node",
+      "running_other": "Running · {{completed}} of {{count}} nodes",
+      "finished": "{{state}} · {{duration}}"
+    },
+    "project": {
+      "applied": "Switched DeckPilot to {{project}}",
+      "keptInRun": "Worked on {{project}} within the run",
+      "notAppliedTo": "Did not switch to {{project}}: {{reason}}",
+      "notApplied": "Did not switch the project: {{reason}}",
+      "none": "no project"
+    },
+    "blocked": {
+      "new": "Save the workflow to run it",
+      "dirty": "Save your changes to run the workflow",
+      "agent": "The agent is not running. Start it in Settings › Agent",
+      "profile": "Workflows run for the active profile. Make “{{profile}}” active to run this one"
+    },
+    "error": {
+      "actionFailed": "The action reported a failure.",
+      "timeout": "The node took longer than its timeout.",
+      "cancelled": "The run was cancelled while the node ran.",
+      "mapping": "An input could not be resolved from earlier outputs.",
+      "parallelContext": "A context-changing action cannot run in a parallel branch.",
+      "loopFailed": "A run of the looped workflow failed.",
+      "unavailable": "The action or its module is not available.",
+      "other": "The node failed.",
+      "transient": "Transient: running it again, or a retry policy, may help.",
+      "permanent": "Not transient: running it again will not help without a change."
+    },
+    "timeline": {
+      "label": "Execution timeline",
+      "started": "started {{time}} in",
+      "startedAbout": "started about {{time}} in",
+      "runningFor": "running for {{time}}",
+      "took": "took {{time}}",
+      "parallel": "in parallel",
+      "row": "{{node}}: {{description}}",
+      "lane": "Lane {{lane}}"
+    },
+    "details": {
+      "title": "Run details",
+      "loading": "Loading node reports…",
+      "waiting": "Waiting for the first node to start.",
+      "empty": "This run did not run any nodes.",
+      "metrics": "Metrics",
+      "elapsed": "Elapsed",
+      "total": "Total",
+      "nodeTime": "Node time",
+      "upToParallel_one": "up to {{count}} in parallel",
+      "upToParallel_other": "up to {{count}} in parallel",
+      "retried": "Retried",
+      "nodes_one": "{{count}} node",
+      "nodes_other": "{{count}} nodes",
+      "slowest": "Slowest nodes",
+      "failures": "Failures",
+      "timeline": "Timeline",
+      "choose": "Choose a node on the timeline to see its retries, failure and outputs."
+    },
+    "retries": {
+      "title": "Retries",
+      "waitedTotal": "waited {{time}} in total",
+      "attempt": "Attempt {{attempt}} after waiting {{time}}",
+      "historyOnly": "Run history keeps only the final attempt; earlier attempts and their waits are shown only while a run is watched live."
+    },
+    "outputs": {
+      "title": "Outputs",
+      "none": "The action declares no outputs.",
+      "shortened": "Shortened preview",
+      "sensitive": "not kept (sensitive)",
+      "missing": "not produced",
+      "declaredOnly": "Only declared outputs are shown; sensitive outputs reach later nodes but are never kept."
+    },
+    "node": {
+      "details": "{{node}} details",
+      "result": "Result",
+      "started": "Started",
+      "startedAt": "{{time}} into the run",
+      "startedAbout": "about {{time}} into the run",
+      "duration": "Duration",
+      "failure": "Failure"
+    },
+    "history": {
+      "title": "Runs",
+      "hide": "Hide on canvas",
+      "clear": "Clear history",
+      "clearTitle": "Clear the run history of this workflow?",
+      "clearDescription": "Finished runs are deleted. Running workflows are not affected.",
+      "problem": "Earlier runs could not be loaded: {{problem}} They load again when the agent reconnects.",
+      "empty": "No runs yet. Runs started here, from a Stream Deck or while the app was closed appear here.",
+      "progress": "Progress",
+      "cancel": "Cancel the run started {{time}}"
+    },
+    "report": {
+      "title": "Run",
+      "running": "Running",
+      "runningAttempt": "Running, attempt {{attempt}}",
+      "attempts": "Attempts",
+      "retryWaits": "retry waits under Run details",
+      "after": "after {{time}}",
+      "retryable": "Running it again may help.",
+      "declaredOnly": "Only outputs the action declares are recorded."
+    },
+    "toast": {
+      "cancelFailed": "The run was not cancelled",
+      "clearFailed": "The run history was not cleared",
+      "startFailed": "“{{workflow}}” did not start"
+    }
+  },
+  "triggers": {
+    "title": "Triggers",
+    "paused": "Paused",
+    "pausedSummary": "Paused · {{triggers}}",
+    "description": "Start this workflow on a schedule or when something happens, while DeckPilot is unlocked and this profile is active. A run is skipped while the previous one still runs; missed times are not made up.",
+    "group": "Trigger {{index}}: {{trigger}}",
+    "remove": "Remove trigger {{index}}",
+    "repeats": "Trigger {{index}} repeats",
+    "minutes": "Trigger {{index}} minutes",
+    "time": "Trigger {{index}} time",
+    "eventSelect": "Trigger {{index}} event",
+    "weekdays": "Weekdays",
+    "intervalBefore": "Every",
+    "intervalAfter_one": "minute",
+    "intervalAfter_other": "minutes",
+    "at": "At",
+    "localTime": "local time",
+    "addSchedule": "Schedule",
+    "addEvent": "Event",
+    "every": {
+      "interval": "At an interval",
+      "daily": "Every day",
+      "weekly": "On weekdays"
+    },
+    "schedule": {
+      "interval_one": "Every minute",
+      "interval_other": "Every {{count}} minutes",
+      "daily": "Daily at {{time}}",
+      "weekly": "{{days}} at {{time}}",
+      "noDays": "No days"
+    },
+    "weekday": {
+      "mon": "Mon",
+      "tue": "Tue",
+      "wed": "Wed",
+      "thu": "Thu",
+      "fri": "Fri",
+      "sat": "Sat",
+      "sun": "Sun"
+    },
+    "event": {
+      "agentStarted": "DeckPilot started",
+      "profileActivated": "Profile activated",
+      "projectChanged": "Active project changed",
+      "deviceConnected": "Stream Deck connected",
+      "deviceDisconnected": "Stream Deck disconnected"
+    },
+    "field": {
+      "firedAt": "Date and time",
+      "profileName": "Profile name",
+      "projectKey": "Project key",
+      "projectName": "Project name",
+      "previousProjectKey": "Previous project key",
+      "deviceId": "Device serial",
+      "deviceModel": "Device model"
+    },
+    "input": {
+      "required": "required",
+      "source": "Trigger {{index}} {{input}} value",
+      "fixedValue": "Trigger {{index}} {{input}} fixed value",
+      "noValue": "No value",
+      "default": "Default",
+      "defaultValue": "Default ({{value}})",
+      "fixed": "Fixed value",
+      "needsValue": "Needs a value."
+    },
+    "startedBy": {
+      "app": "Started in the app",
+      "device": "Started from a Stream Deck",
+      "schedule": "Started by a schedule",
+      "scheduleDetail": "Started by a schedule ({{detail}})",
+      "event": "Started by an event",
+      "eventDetail": "Started by an event ({{detail}})",
+      "automatic": "Started automatically"
+    }
+  },
+  "mapping": {
+    "label": "Mapping",
+    "type": {
+      "output": "One output",
+      "variable": "One variable",
+      "template": "Text with outputs and variables"
+    },
+    "chooseOutput": "Choose an output",
+    "noOutputs": "No earlier outputs",
+    "missingOutput": "{{output}} (missing)",
+    "variable": "Variable",
+    "variablePart": "Variable {{index}}",
+    "textPart": "Text {{index}}",
+    "default": "Default value",
+    "defaultPlaceholder": "Default when the output is missing",
+    "parts": "Parts",
+    "emptyParts": "Add text and outputs to compose the value.",
+    "removePart": "Remove part",
+    "addText": "Text",
+    "addOutput": "Output",
+    "addVariable": "Variable",
+    "preview": "Preview",
+    "previewPrefix": "Preview:",
+    "previewEmpty": "empty",
+    "variableOption": "Variable · {{name}}",
+    "inputs": "Inputs",
+    "kind": {
+      "text": "text",
+      "integer": "number",
+      "boolean": "yes/no",
+      "path": "path",
+      "url": "URL",
+      "projectKey": "project key"
+    },
+    "fit": {
+      "lines": "Each line of the value becomes one item; nothing is split on spaces.",
+      "pairs": "Each line must be a name and a value separated by “{{separator}}”.",
+      "credential": "The value must be the name of a credential stored on this computer.",
+      "integer": "The value must be a whole number when the node runs.",
+      "boolean": "The value must be “true” or “false” when the node runs.",
+      "choice": "The value must be one of: {{options}}.",
+      "project": "The value must be a project key of this profile.",
+      "resource": "Resources cannot come from earlier nodes."
+    },
+    "problem": {
+      "noSharedVariable": "there is no shared variable “{{name}}”",
+      "variableType": "{{reference}} is a {{type}} value, the parameter expects {{expected}}",
+      "defaultType": "the default is a {{type}} value, the parameter expects {{expected}}",
+      "notText": "{{reference}} is a {{type}} value and cannot be part of text",
+      "noVariable": "there is no variable “{{name}}”",
+      "noNode": "there is no node “{{node}}”",
+      "notBefore": "“{{node}}” does not run before this node",
+      "noOutput": "“{{node}}” has no output “{{output}}”"
+    }
+  },
+  "variables": {
+    "title": "Variables",
+    "description": "Values for one run. Set variable nodes change them; later nodes read them as “Variable · …”.",
+    "group": "Variable {{key}}",
+    "key": "Variable key",
+    "type": "Variable type",
+    "remove": "Remove variable {{key}}",
+    "label": "Variable label",
+    "initial": "Variable initial value",
+    "initialPlaceholder": "Initial value (optional)",
+    "add": "Add variable",
+    "system": {
+      "projectId": "Current project",
+      "projectKey": "Current project key",
+      "projectName": "Current project name",
+      "profileId": "Current profile",
+      "profileName": "Current profile name",
+      "deviceId": "Device that started the run",
+      "platform": "Operating system",
+      "workflowId": "This workflow",
+      "executionId": "This run"
+    },
+    "problem": {
+      "empty": "Enter a reference, e.g. shared.paths.root",
+      "notStep": "“{{reference}}” is not steps.<node>.output.<key>",
+      "notShared": "“{{reference}}” is not shared.<namespace>.<name>",
+      "reserved": "the namespace “{{namespace}}” is reserved",
+      "unknown": "“{{reference}}” is not a reference; use shared.…, system.…, workflow.… or steps.…"
+    },
+    "expects": {
+      "integer": "a whole number",
+      "boolean": "true or false",
+      "choice": "one of its choices",
+      "resource": "a resource",
+      "project": "a project",
+      "credential": "a credential",
+      "text": "text"
+    },
+    "picker": {
+      "field": "Variable",
+      "label": "Choose a variable for {{field}}"
+    }
+  },
+  "interface": {
+    "title": "Inputs and outputs",
+    "inputs": "Inputs",
+    "inputsDescription": "Values a Sub-workflow node gives this workflow. Nodes read them from the start node.",
+    "outputs": "Outputs",
+    "outputsDescription": "Values this workflow returns to a Sub-workflow node; Output nodes set them.",
+    "labelPlaceholder": "Label",
+    "sensitiveNotKept": "Sensitive: not kept in history",
+    "input": {
+      "group": "Input {{key}}",
+      "key": "Input key",
+      "type": "Input type",
+      "remove": "Remove input {{key}}",
+      "label": "Input label",
+      "default": "Input default",
+      "requiredNoDefault": "Required: no default",
+      "defaultPlaceholder": "Default (optional)",
+      "required": "Required",
+      "sensitive": "Sensitive",
+      "add": "Add input"
+    },
+    "output": {
+      "group": "Output {{key}}",
+      "key": "Output key",
+      "type": "Output type",
+      "remove": "Remove output {{key}}",
+      "label": "Output label",
+      "add": "Add output"
+    }
+  },
+  "catalogScope": {
+    "global": "Global",
+    "profile": "Profile",
+    "project": "Project",
+    "execution": "Run",
+    "machine": "This computer",
+    "device": "Device",
+    "workflow": "Workflow",
+    "workSession": "Work session"
+  },
+  "systemVariables": {
+    "projectId": {
+      "label": "Current project",
+      "description": "The run's project inside a run, the active project for a key press."
+    },
+    "projectKey": {
+      "label": "Current project key"
+    },
+    "projectName": {
+      "label": "Current project name"
+    },
+    "profileId": {
+      "label": "Current profile"
+    },
+    "profileName": {
+      "label": "Current profile name"
+    },
+    "device": {
+      "label": "Device",
+      "description": "The device whose control started the action (model#serial)."
+    },
+    "platform": {
+      "label": "Platform",
+      "description": "linux, macOs, windows or other."
+    },
+    "workflow": {
+      "label": "Workflow",
+      "description": "The running workflow."
+    },
+    "execution": {
+      "label": "Run",
+      "description": "The current run of the workflow."
+    }
+  }
+}

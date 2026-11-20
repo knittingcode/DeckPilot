@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
+import { Trans, useTranslation } from "@/i18n"
 import { api } from "@/lib/api"
 import { failureMessage, toastFailure } from "@/lib/failure"
 import { creatableTypes } from "@/lib/modules"
@@ -91,10 +92,11 @@ export function ActionEditor({
   onChangeType?: () => void
   onOpenReference?: (reference: ActionReference) => void
 }) {
+  const { t } = useTranslation()
   // Types a new action can have: not deprecated, and (plugin actions)
   // available now.
   const offered = (m: ModuleInfo | undefined) =>
-    creatableTypes(m?.actionTypes ?? []).filter((t) => !m || !pluginTypeUnavailable(m, t.id))
+    creatableTypes(m?.actionTypes ?? []).filter((type) => !m || !pluginTypeUnavailable(m, type.id))
   const projectsEnabled = modules.some((m) => m.id === "projects" && m.enabled)
   const usable = modules.filter((m) => m.enabled && m.supported && offered(m).length > 0)
   const chosenType = action?.actionType ?? initialType
@@ -114,7 +116,7 @@ export function ActionEditor({
     return types.length === 1 ? (types[0]?.id ?? "") : ""
   }
   const [typeId, setTypeId] = useState(chosenType ?? onlyType(module))
-  const type = types.find((t) => t.id === typeId)
+  const type = types.find((candidate) => candidate.id === typeId)
   const [name, setName] = useState(action?.name ?? "")
   const [description, setDescription] = useState(action?.description ?? "")
   const [icon, setIcon] = useState<string | null>(action?.icon ?? null)
@@ -144,11 +146,14 @@ export function ActionEditor({
       const saved = action
         ? await api.updateAction(profileId, { ...action, ...fields })
         : await api.createAction(profileId, { ...fields, actionType: type.id })
-      toast.success(action ? "Action saved" : "Action created")
+      toast.success(action ? t("actions:editor.toast.saved") : t("actions:editor.toast.created"))
       onSaved(saved)
     } catch (e) {
       setError(
-        failureMessage(action ? "The action was not saved" : "The action was not created", e),
+        failureMessage(
+          action ? t("actions:editor.failure.notSaved") : t("actions:editor.failure.notCreated"),
+          e,
+        ),
       )
     }
   }
@@ -156,11 +161,15 @@ export function ActionEditor({
   const duplicate = async () => {
     if (!action) return
     try {
-      const copy = await api.duplicateAction(profileId, action.id, `${action.name} (copy)`)
-      toast.success("Action duplicated")
+      const copy = await api.duplicateAction(
+        profileId,
+        action.id,
+        t("actions:editor.copyName", { name: action.name }),
+      )
+      toast.success(t("actions:editor.toast.duplicated"))
       onSaved(copy)
     } catch (e) {
-      toastFailure(`“${action.name}” was not duplicated`, e)
+      toastFailure(t("actions:editor.failure.notDuplicated", { name: action.name }), e)
     }
   }
 
@@ -169,7 +178,11 @@ export function ActionEditor({
     try {
       setResult(await api.runAction(profileId, action.id))
     } catch (e) {
-      toastFailure(`“${action.name}” did not run`, e, "Check that the agent is running")
+      toastFailure(
+        t("actions:editor.failure.didNotRun", { name: action.name }),
+        e,
+        t("actions:editor.failure.checkAgent"),
+      )
     }
   }
 
@@ -179,41 +192,47 @@ export function ActionEditor({
       {unavailable && (
         <Alert>
           <Ban />
-          <AlertTitle>Unavailable</AlertTitle>
+          <AlertTitle>{t("actions:editor.unavailable.title")}</AlertTitle>
           <AlertDescription>
             {availability?.reason
               ? action
-                ? `${availability.reason}. The action is kept; it can be edited and run again once the plugin can run (Settings › Plugins).`
-                : `${availability.reason}. Choose another action type.`
+                ? t("actions:editor.unavailable.pluginKept", { reason: availability.reason })
+                : t("actions:editor.unavailable.pluginNew", { reason: availability.reason })
               : owner
-                ? `The ${owner.name} module is disabled. Enable it in Settings to edit or run this action; it is kept until then.`
-                : `No installed module provides “${action?.actionType ?? ""}”. The action is kept but cannot run.`}
+                ? t("actions:editor.unavailable.moduleDisabled", { module: owner.name })
+                : t("actions:editor.unavailable.noModule", { type: action?.actionType ?? "" })}
           </AlertDescription>
         </Alert>
       )}
       {chosenType ? (
         <div className="flex items-start justify-between gap-2">
           <p className="text-sm text-muted-foreground">
-            {owner?.name ?? "Unknown module"} › {type?.name ?? chosenType}
+            {owner?.name ?? t("actions:editor.unknownModule")} › {type?.name ?? chosenType}
             {type && <span className="block text-xs">{type.description}</span>}
             {legacy && (
               <span className="block text-xs" data-testid="legacy-alias">
-                Deprecated type: {owner?.name ?? "the module"} moved to the plugin{" "}
-                {legacy.pluginName}, which runs it as <code>{legacy.target}</code>. Your action
-                keeps working; new actions use the plugin's type.
+                <Trans
+                  i18nKey="actions:editor.legacy"
+                  values={{
+                    module: owner?.name ?? t("actions:editor.theModule"),
+                    plugin: legacy.pluginName,
+                    target: legacy.target,
+                  }}
+                  components={{ target: <code /> }}
+                />
               </span>
             )}
           </p>
           {!action && onChangeType && (
             <Button type="button" size="sm" variant="outline" onClick={onChangeType}>
-              Change type
+              {t("actions:editor.changeType")}
             </Button>
           )}
         </div>
       ) : (
         <div className="grid items-start gap-4 sm:grid-cols-2">
           <div className="grid gap-2">
-            <Label htmlFor="action-module">Module</Label>
+            <Label htmlFor="action-module">{t("actions:editor.module")}</Label>
             <Select
               value={moduleId}
               onValueChange={(id) => {
@@ -223,14 +242,14 @@ export function ActionEditor({
                 setTypeId(next)
                 setValues(
                   valuesFor(
-                    chosen?.actionTypes.find((t) => t.id === next),
+                    chosen?.actionTypes.find((candidate) => candidate.id === next),
                     null,
                   ),
                 )
               }}
             >
               <SelectTrigger id="action-module" className="w-full">
-                <SelectValue placeholder="Choose a module" />
+                <SelectValue placeholder={t("actions:editor.chooseModule")} />
               </SelectTrigger>
               <SelectContent>
                 {usable.map((m) => (
@@ -243,7 +262,7 @@ export function ActionEditor({
             {module && <p className="text-xs text-muted-foreground">{module.description}</p>}
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="action-type">Action type</Label>
+            <Label htmlFor="action-type">{t("actions:editor.actionType")}</Label>
             <Select
               value={typeId}
               disabled={!module}
@@ -251,26 +270,30 @@ export function ActionEditor({
                 setTypeId(id)
                 setValues(
                   valuesFor(
-                    types.find((t) => t.id === id),
+                    types.find((candidate) => candidate.id === id),
                     null,
                   ),
                 )
               }}
             >
               <SelectTrigger id="action-type" className="w-full">
-                <SelectValue placeholder={module ? "Choose a type" : "Choose a module first"} />
+                <SelectValue
+                  placeholder={
+                    module ? t("actions:editor.chooseType") : t("actions:editor.chooseModuleFirst")
+                  }
+                />
               </SelectTrigger>
               <SelectContent>
-                {offered(module).map((t) => (
-                  <SelectItem key={t.id} value={t.id}>
-                    {t.name}
+                {offered(module).map((candidate) => (
+                  <SelectItem key={candidate.id} value={candidate.id}>
+                    {candidate.name}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
             {type && <p className="text-xs text-muted-foreground">{type.description}</p>}
             {submitted && !type && (
-              <p className="text-xs text-destructive">Choose an action type.</p>
+              <p className="text-xs text-destructive">{t("actions:editor.typeRequired")}</p>
             )}
           </div>
         </div>
@@ -278,7 +301,7 @@ export function ActionEditor({
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="grid gap-2">
-          <Label htmlFor="action-name">Name</Label>
+          <Label htmlFor="action-name">{t("actions:editor.name")}</Label>
           <Input
             id="action-name"
             value={name}
@@ -286,18 +309,20 @@ export function ActionEditor({
             onChange={(e) => {
               setName(e.target.value)
             }}
-            placeholder="Open Terminal"
+            placeholder={t("actions:editor.namePlaceholder")}
           />
-          {submitted && nameMissing && <p className="text-xs text-destructive">Enter a name.</p>}
+          {submitted && nameMissing && (
+            <p className="text-xs text-destructive">{t("actions:editor.nameRequired")}</p>
+          )}
         </div>
         <div className="grid gap-2">
-          <Label htmlFor="action-icon">Icon</Label>
+          <Label htmlFor="action-icon">{t("actions:editor.icon")}</Label>
           <IconPicker id="action-icon" value={icon} onChange={setIcon} />
         </div>
       </div>
 
       <div className="grid gap-2">
-        <Label htmlFor="action-label">Key label</Label>
+        <Label htmlFor="action-label">{t("actions:editor.keyLabel")}</Label>
         <Input
           id="action-label"
           value={label}
@@ -305,18 +330,21 @@ export function ActionEditor({
           onChange={(e) => {
             setLabel(e.target.value)
           }}
-          placeholder="Defaults to the name"
+          placeholder={t("actions:editor.keyLabelPlaceholder")}
         />
         {/* Project placeholders come with the Projects module. */}
         {projectsEnabled && (
           <p className="text-xs text-muted-foreground">
-            Use {"{project.key}"} or {"{project.name}"} to show the active project on the key.
+            {t("actions:editor.projectPlaceholders", {
+              key: "{project.key}",
+              name: "{project.name}",
+            })}
           </p>
         )}
       </div>
 
       <div className="grid gap-2">
-        <Label htmlFor="action-description">Description</Label>
+        <Label htmlFor="action-description">{t("actions:editor.description")}</Label>
         <Textarea
           id="action-description"
           value={description}
@@ -324,19 +352,15 @@ export function ActionEditor({
           onChange={(e) => {
             setDescription(e.target.value)
           }}
-          placeholder="Optional"
+          placeholder={t("actions:editor.optional")}
         />
       </div>
 
       {type?.node?.effect === "modifies" && (
         <Alert>
           <TriangleAlert />
-          <AlertTitle>This action changes things</AlertTitle>
-          <AlertDescription>
-            Running it changes state on this computer or elsewhere (for example a command, a request
-            or containers). Some modules only allow that after it is turned on in their settings on
-            each computer.
-          </AlertDescription>
+          <AlertTitle>{t("actions:editor.modifies.title")}</AlertTitle>
+          <AlertDescription>{t("actions:editor.modifies.body")}</AlertDescription>
         </Alert>
       )}
       {type && type.parameters.length > 0 && (
@@ -356,7 +380,9 @@ export function ActionEditor({
                   }}
                 />
                 {submitted && missing.includes(spec.key) && (
-                  <p className="text-xs text-destructive">{spec.label} is required.</p>
+                  <p className="text-xs text-destructive">
+                    {t("actions:editor.parameterRequired", { label: spec.label })}
+                  </p>
                 )}
               </div>
             ))}
@@ -366,7 +392,7 @@ export function ActionEditor({
 
       <div className="flex flex-wrap gap-2">
         <Button type="submit" disabled={unavailable}>
-          <Save /> {action ? "Save" : "Create action"}
+          <Save /> {action ? t("actions:editor.save") : t("actions:editor.create")}
         </Button>
         {action && (
           <>
@@ -376,16 +402,16 @@ export function ActionEditor({
               disabled={unavailable}
               onClick={() => void duplicate()}
             >
-              <Copy /> Duplicate
+              <Copy /> {t("actions:editor.duplicate")}
             </Button>
             <Button
               type="button"
               variant="outline"
               disabled={!canRun || unavailable}
-              title={canRun ? undefined : "Runs in the agent for the active profile"}
+              title={canRun ? undefined : t("actions:editor.runHint")}
               onClick={() => void run()}
             >
-              <Play /> Run
+              <Play /> {t("actions:editor.run")}
             </Button>
             <Button
               type="button"
@@ -394,7 +420,7 @@ export function ActionEditor({
                 setDeleting(true)
               }}
             >
-              <Trash2 /> Delete
+              <Trash2 /> {t("common:actions.delete")}
             </Button>
             {deleting && (
               <DeleteActionDialog
@@ -408,7 +434,7 @@ export function ActionEditor({
                 }}
                 onDeleted={() => {
                   setDeleting(false)
-                  toast.success("Action deleted")
+                  toast.success(t("actions:editor.toast.deleted"))
                   onDeleted()
                 }}
               />
@@ -441,13 +467,10 @@ export function ActionEditor({
         <>
           <Separator />
           <div className="grid gap-2">
-            <h3 className="text-sm font-medium">Used in</h3>
+            <h3 className="text-sm font-medium">{t("actions:editor.usedIn")}</h3>
             <ReferenceList references={references} onOpen={onOpenReference} />
             {references.length > 0 && (
-              <p className="text-xs text-muted-foreground">
-                To delete the action, choose for each reference whether it uses another action or is
-                unbound.
-              </p>
+              <p className="text-xs text-muted-foreground">{t("actions:editor.deleteHint")}</p>
             )}
           </div>
         </>

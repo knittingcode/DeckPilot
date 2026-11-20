@@ -62,6 +62,8 @@ pub struct AppState {
     authorized_at: Mutex<Option<Instant>>,
     /// The layout editor's watch of live key states.
     pub key_watch: crate::commands::key_states::KeyStateWatch,
+    /// The plugin visual assets the editor's previews draw.
+    pub visual_assets: crate::commands::assets::VisualAssets,
 }
 
 /// What the agent reported about the database's protection.
@@ -120,6 +122,7 @@ impl AppState {
             presence,
             authorized_at: Mutex::new(None),
             key_watch: crate::commands::key_states::KeyStateWatch::default(),
+            visual_assets: crate::commands::assets::VisualAssets::default(),
         })
     }
 
@@ -280,9 +283,11 @@ impl AppState {
         let name = modules
             .manifest(id)
             .map_or_else(|| id.to_string(), |m| m.name.clone());
-        Err(CommandError::Invalid(format!(
-            "the {name} module is disabled"
-        )))
+        Err(CommandError::invalid_with(
+            "moduleDisabled",
+            format!("the {name} module is disabled"),
+            [("module", name.into())],
+        ))
     }
 }
 

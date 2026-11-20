@@ -25,8 +25,9 @@ pub fn set_resource_binding(
 ) -> CommandResult<MachineConfig> {
     let value = value.trim();
     if value.is_empty() {
-        return Err(CommandError::Invalid(
-            "resource value must not be empty".into(),
+        return Err(CommandError::invalid(
+            "resourceValueEmpty",
+            "resource value must not be empty",
         ));
     }
     let store = state.store()?;

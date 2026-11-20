@@ -1,6 +1,7 @@
 import { FolderKanban } from "lucide-react"
 
 import { useStatusItem } from "@/hooks/use-status"
+import { useTranslation } from "@/i18n"
 import { useAppContext } from "@/lib/app-context"
 
 /**
@@ -9,6 +10,7 @@ import { useAppContext } from "@/lib/app-context"
  * profile. Hidden while there is none.
  */
 export function ActiveProjectStatus() {
+  const { t } = useTranslation()
   const { agent, navigate } = useAppContext()
   const project = agent?.running ? agent.status?.activeProject : null
   const profile = agent?.status?.activeProfile
@@ -21,7 +23,10 @@ export function ActiveProjectStatus() {
           priority: 70,
           icon: FolderKanban,
           label: project.key,
-          tooltip: `Active project of ${profile.name}: ${project.name}`,
+          tooltip: t("workspace:projects.status.tooltip", {
+            profile: profile.name,
+            project: project.name,
+          }),
           onSelect: () => {
             navigate("projects/projects")
           },

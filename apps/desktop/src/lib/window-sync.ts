@@ -1,7 +1,7 @@
 /**
  * Keeps the app's windows in step. The main window and the settings window
  * each hold their own copy of the shared state (profiles, modules, the
- * profile being edited, the theme); a change in one is announced to the
+ * profile being edited, the language); a change in one is announced to the
  * others with a Tauri event, which every window of the app receives. A
  * window ignores its own announcements.
  *
@@ -15,8 +15,8 @@ import { emit, listen } from "@tauri-apps/api/event"
 export const DATA_CHANGED_EVENT = "deckpilot://data-changed"
 /** Another profile is being edited (payload: `EditingChanged`). */
 export const EDITING_PROFILE_EVENT = "deckpilot://editing-profile"
-/** The theme preference changed (payload: `ThemeChanged`). */
-export const THEME_EVENT = "deckpilot://theme"
+/** The language preference changed (payload: `LanguageChanged`). */
+export const LANGUAGE_EVENT = "deckpilot://language"
 
 interface Announcement {
   /** The window that sent it. */
@@ -32,7 +32,8 @@ export interface EditingChanged extends Announcement {
   id: string
 }
 
-export interface ThemeChanged extends Announcement {
+export interface LanguageChanged extends Announcement {
+  /** The new preference (`LanguagePreference`): `system`, `en` or `pl`. */
   preference: string
 }
 
@@ -47,7 +48,7 @@ export function inTauri() {
 export interface Announcements {
   [DATA_CHANGED_EVENT]: DataChanged
   [EDITING_PROFILE_EVENT]: EditingChanged
-  [THEME_EVENT]: ThemeChanged
+  [LANGUAGE_EVENT]: LanguageChanged
 }
 
 export type AnnouncementName = keyof Announcements

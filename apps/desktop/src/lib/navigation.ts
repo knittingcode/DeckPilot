@@ -30,7 +30,7 @@ export const HISTORY_LIMIT = 50
 
 /** The device editor: what the main window shows first. */
 export const DEFAULT_WORKSPACE_PAGE = "designer"
-export const DEFAULT_SETTINGS_PAGE = "appearance"
+export const DEFAULT_SETTINGS_PAGE = "profiles"
 
 export function initialNavigation(
   location: Location = { mode: "workspace", page: DEFAULT_WORKSPACE_PAGE },

@@ -109,8 +109,9 @@ pub fn set_shared_variable_value(
     value: VariableValue,
 ) -> CommandResult<()> {
     if matches!(scope, ScopeKey::Execution { .. }) {
-        return Err(CommandError::Invalid(
-            "execution values exist only during a run".into(),
+        return Err(CommandError::invalid(
+            "executionValueOnlyInRun",
+            "execution values exist only during a run",
         ));
     }
     state

@@ -11,11 +11,12 @@ import { useEffect, useRef, useState } from "react"
 
 import { Button } from "@/components/ui/button"
 import { useStatus, useStatusItem } from "@/hooks/use-status"
+import { i18n, useTranslation } from "@/i18n"
 import { useAppContext } from "@/lib/app-context"
 import { formatTimestamp } from "@/lib/format"
 import { useSecurity } from "@/lib/security-context"
 import {
-  AGENT_LABEL,
+  agentLabel,
   agentState,
   deviceSummary,
   formatDuration,
@@ -35,31 +36,35 @@ function Detail({ title, children }: { title: string; children: React.ReactNode 
 }
 
 function AgentDetail() {
+  const { t } = useTranslation()
   const { agent, openSettings } = useAppContext()
   const status = agent?.status
   const state = agentState(agent)
   // Read when the popover opens; the uptime does not tick.
   const [now] = useState(() => Date.now() / 1000)
   return (
-    <Detail title="Background agent">
+    <Detail title={t("devices:agent.title")}>
       <dl className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-1 text-sm">
-        <dt className="text-muted-foreground">Connection</dt>
-        <dd>{AGENT_LABEL[state]}</dd>
+        <dt className="text-muted-foreground">{t("devices:agent.connection")}</dt>
+        <dd>{agentLabel(state)}</dd>
         {status && (
           <>
-            <dt className="text-muted-foreground">Version</dt>
+            <dt className="text-muted-foreground">{t("devices:agent.version")}</dt>
             <dd>
-              {status.version} (protocol {status.protocol})
+              {t("devices:agent.versionValue", {
+                version: status.version,
+                protocol: status.protocol,
+              })}
             </dd>
-            <dt className="text-muted-foreground">Running for</dt>
-            <dd title={`Started ${formatTimestamp(status.startedAt)}`}>
+            <dt className="text-muted-foreground">{t("devices:agent.runningFor")}</dt>
+            <dd title={t("devices:agent.startedAt", { time: formatTimestamp(status.startedAt) })}>
               {formatDuration(now - status.startedAt)}
             </dd>
           </>
         )}
         {agent?.compatibility && agent.compatibility.type !== "compatible" && (
           <>
-            <dt className="text-muted-foreground">App version</dt>
+            <dt className="text-muted-foreground">{t("devices:agent.appVersion")}</dt>
             <dd>{agent.compatibility.app}</dd>
           </>
         )}
@@ -72,7 +77,7 @@ function AgentDetail() {
             openSettings("agent")
           }}
         >
-          Agent settings
+          {t("devices:agent.settings")}
         </Button>
         <Button
           size="sm"
@@ -81,7 +86,7 @@ function AgentDetail() {
             openSettings("diagnostics")
           }}
         >
-          Logs & diagnostics
+          {t("devices:agent.diagnostics")}
         </Button>
       </div>
     </Detail>
@@ -89,13 +94,14 @@ function AgentDetail() {
 }
 
 function DevicesDetail() {
+  const { t } = useTranslation()
   const { agent, openSettings } = useAppContext()
   const devices = agent?.status?.devices ?? []
   return (
-    <Detail title="Devices">
+    <Detail title={t("devices:detail.title")}>
       {devices.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          {agent?.running ? "No Stream Deck detected." : "The agent is not running."}
+          {agent?.running ? t("devices:detail.noneDetected") : t("devices:detail.agentStopped")}
         </p>
       ) : (
         <ul className="grid gap-1.5 text-sm">
@@ -113,12 +119,18 @@ function DevicesDetail() {
                 <span className="font-medium">{device.modelName}</span>
                 {device.source === "mock" && (
                   <span className="rounded border px-1 text-[0.6875rem] text-muted-foreground">
-                    Simulated
+                    {t("devices:detail.simulated")}
                   </span>
                 )}
               </span>
               <span className="pl-3 text-xs text-muted-foreground">
-                {device.id.serial} · {device.state === "connected" ? "Connected" : "Disconnected"}
+                {t("devices:detail.serialState", {
+                  serial: device.id.serial,
+                  state:
+                    device.state === "connected"
+                      ? t("devices:detail.connected")
+                      : t("devices:detail.disconnected"),
+                })}
               </span>
             </li>
           ))}
@@ -132,7 +144,7 @@ function DevicesDetail() {
           openSettings("devices")
         }}
       >
-        Device settings
+        {t("devices:detail.settings")}
       </Button>
     </Detail>
   )
@@ -143,6 +155,7 @@ function DevicesDetail() {
  * background operations. Renders nothing.
  */
 export function CoreStatusItems() {
+  const { t } = useTranslation()
   const { agent, updates, openSettings, navigate } = useAppContext()
   const state = agentState(agent)
   const devices = agent?.status?.devices ?? []
@@ -153,7 +166,7 @@ export function CoreStatusItems() {
     placement: "left",
     priority: 100,
     icon: state === "incompatible" ? TriangleAlert : Server,
-    label: state === "running" ? "Agent" : AGENT_LABEL[state],
+    label: state === "running" ? t("devices:agent.short") : agentLabel(state),
     tone:
       state === "running"
         ? "positive"
@@ -162,7 +175,7 @@ export function CoreStatusItems() {
           : state === "stopped"
             ? "danger"
             : "warning",
-    tooltip: AGENT_LABEL[state],
+    tooltip: agentLabel(state),
     progress: state === "connecting" ? true : undefined,
     detail: AgentDetail,
   })
@@ -175,7 +188,7 @@ export function CoreStatusItems() {
           priority: 90,
           icon: MonitorSmartphone,
           label: deviceSummary(devices),
-          tooltip: "Connected Stream Deck devices",
+          tooltip: t("devices:detail.tooltip"),
           detail: DevicesDetail,
         }
       : null,
@@ -190,7 +203,7 @@ export function CoreStatusItems() {
           priority: 60,
           icon: UserRound,
           label: profile.name,
-          tooltip: "Profile active on the device",
+          tooltip: t("devices:activeProfileTooltip"),
           onSelect: () => {
             navigate("profiles")
           },
@@ -206,7 +219,7 @@ export function CoreStatusItems() {
           placement: "right",
           priority: 85,
           icon: update.progress === undefined ? Download : RefreshCw,
-          tooltip: "Open update settings",
+          tooltip: t("notifications:update.openSettings"),
           onSelect: () => {
             openSettings("updates")
           },
@@ -225,6 +238,9 @@ export function CoreStatusItems() {
   )
 }
 
+// The events below become notifications in the language of the moment
+// they happen (`i18n.t`); a later change of language does not repeat them.
+
 /** Agent stopped, version mismatch, device disconnected. */
 function AgentEvents({ agent }: { agent: AgentConnection | null }) {
   const stores = useStatus()
@@ -238,8 +254,8 @@ function AgentEvents({ agent }: { agent: AgentConnection | null }) {
       notifications.notify({
         key: "agent.stopped",
         severity: "warning",
-        title: "The background agent stopped",
-        message: "Devices are blank until it is started again.",
+        title: i18n.t("notifications:agent.stopped.title"),
+        message: i18n.t("notifications:agent.stopped.message"),
       })
     }
     const compatibility = agent.compatibility
@@ -253,9 +269,12 @@ function AgentEvents({ agent }: { agent: AgentConnection | null }) {
         severity: "warning",
         title:
           compatibility.type === "otherDistribution"
-            ? "The agent belongs to another installation"
-            : "Agent and app versions differ",
-        message: `Agent ${compatibility.agent}, app ${compatibility.app}.`,
+            ? i18n.t("notifications:agent.otherInstallation")
+            : i18n.t("notifications:agent.versionsDiffer"),
+        message: i18n.t("notifications:agent.versions", {
+          agent: compatibility.agent,
+          app: compatibility.app,
+        }),
       })
     }
     const now = new Map((agent.status?.devices ?? []).map((d) => [d.id.serial, d]))
@@ -265,8 +284,11 @@ function AgentEvents({ agent }: { agent: AgentConnection | null }) {
         notifications.notify({
           key: `device.${device.id.serial}.disconnected`,
           severity: "warning",
-          title: `${device.modelName} disconnected`,
-          message: device.source === "mock" ? "Simulated device" : `Serial ${device.id.serial}`,
+          title: i18n.t("notifications:device.disconnected", { model: device.modelName }),
+          message:
+            device.source === "mock"
+              ? i18n.t("notifications:device.simulated")
+              : i18n.t("notifications:device.serial", { serial: device.id.serial }),
         })
       }
     }
@@ -288,14 +310,14 @@ function UpdateEvents({ updates }: { updates: UpdateState | null }) {
       notifications.notify({
         key: `update.available.${version}`,
         severity: "info",
-        title: `DeckPilot ${version} is available`,
+        title: i18n.t("notifications:update.availableTitle", { version }),
       })
     }
     if (updates.error && updates.error !== before?.error) {
       notifications.notify({
         key: "update.failed",
         severity: "error",
-        title: "Update failed",
+        title: i18n.t("notifications:update.failed"),
         message: summary(updates.error),
       })
     }
@@ -307,20 +329,28 @@ function UpdateEvents({ updates }: { updates: UpdateState | null }) {
       operations.start({
         id: "update.download",
         kind: "update",
-        title: `Downloading DeckPilot ${version ?? "update"}`,
+        title: version
+          ? i18n.t("notifications:update.downloadingTitle", { version })
+          : i18n.t("notifications:update.downloadingUpdate"),
       })
       operations.update("update.download", { progress: percent })
     } else if (before?.phase === "downloading") {
-      operations.finish("update.download", updates.error ? { error: "Download failed" } : {})
+      operations.finish(
+        "update.download",
+        updates.error ? { error: i18n.t("notifications:update.downloadFailed") } : {},
+      )
     }
     if (updates.phase === "installing") {
       operations.start({
         id: "update.install",
         kind: "update",
-        title: "Installing the update",
+        title: i18n.t("notifications:update.installingTitle"),
       })
     } else if (before?.phase === "installing") {
-      operations.finish("update.install", updates.error ? { error: "Installation failed" } : {})
+      operations.finish(
+        "update.install",
+        updates.error ? { error: i18n.t("notifications:update.installFailed") } : {},
+      )
     }
   }, [updates, stores])
   return null
@@ -366,7 +396,7 @@ function SecurityEvents() {
       stores.notifications.notify({
         key: "security.problem",
         severity: "warning",
-        title: "Security needs your attention",
+        title: i18n.t("notifications:security.attention"),
         message: summary(problem),
       })
     }
@@ -374,8 +404,8 @@ function SecurityEvents() {
       stores.notifications.notify({
         key: "security.unencrypted-copy",
         severity: "warning",
-        title: "An unencrypted copy of the configuration remains",
-        message: "Remove it under Settings → Security.",
+        title: i18n.t("notifications:security.unencryptedCopy.title"),
+        message: i18n.t("notifications:security.unencryptedCopy.message"),
       })
     }
   }, [problem, legacy, stores])

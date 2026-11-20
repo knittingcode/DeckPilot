@@ -4,6 +4,7 @@
  * Module nodes come from the module registry (`ModuleInfo.actionTypes`) and
  * the profile's actions of those types; the editor knows no module.
  */
+import { type TranslationKey, i18n } from "@/i18n"
 import { creatableTypes } from "@/lib/modules"
 import { pluginTypeUnavailable } from "@/lib/plugin-actions"
 import type { ActionInstance, ActionType, GraphNodeKind, ModuleInfo } from "@/lib/types"
@@ -33,7 +34,41 @@ export interface CatalogGroup {
   unavailableTypes?: { type: ActionType; reason: string }[]
 }
 
-export const FLOW_TITLE: Record<NodeType, string> = {
+/** Translation keys of the flow nodes' titles (`t(FLOW_TITLE[type])`). */
+export const FLOW_TITLE: Record<NodeType, TranslationKey> = {
+  trigger: "workflows:node.title.trigger",
+  action: "workflows:node.title.action",
+  condition: "workflows:node.title.condition",
+  parallel: "workflows:node.title.parallel",
+  join: "workflows:node.title.join",
+  loop: "workflows:node.title.loop",
+  call: "workflows:node.title.call",
+  output: "workflows:node.title.output",
+  setVariable: "workflows:node.title.setVariable",
+  delay: "workflows:node.title.delay",
+  stop: "workflows:node.title.stop",
+}
+
+/** Translation keys of the flow nodes' descriptions. */
+export const FLOW_DESCRIPTION: Record<NodeType, TranslationKey> = {
+  trigger: "workflows:node.description.trigger",
+  action: "workflows:node.description.action",
+  condition: "workflows:node.description.condition",
+  parallel: "workflows:node.description.parallel",
+  join: "workflows:node.description.join",
+  loop: "workflows:node.description.loop",
+  call: "workflows:node.description.call",
+  output: "workflows:node.description.output",
+  setVariable: "workflows:node.description.setVariable",
+  delay: "workflows:node.description.delay",
+  stop: "workflows:node.description.stop",
+}
+
+/**
+ * Names node ids are derived from: English, so ids stay readable ASCII
+ * whatever the interface language (the id is not translated).
+ */
+const FLOW_NAME: Record<NodeType, string> = {
   trigger: "Start",
   action: "Action",
   condition: "Condition",
@@ -47,21 +82,10 @@ export const FLOW_TITLE: Record<NodeType, string> = {
   stop: "Stop",
 }
 
-export const FLOW_DESCRIPTION: Record<NodeType, string> = {
-  trigger: "Where the workflow starts.",
-  action: "Runs an action of this profile.",
-  condition: "Continues with Yes or No.",
-  parallel: "Runs the connected branches at the same time.",
-  join: "Waits for every incoming branch, then continues.",
-  loop: "Runs another workflow a fixed number of times.",
-  call: "Runs another workflow once with inputs and uses its outputs.",
-  output: "Sets this workflow's outputs for the node that calls it.",
-  setVariable: "Assigns variables of this run for the nodes after it.",
-  delay: "Waits before continuing.",
-  stop: "Ends the workflow successfully.",
-}
-
-/** Built-in nodes. A loop or sub-workflow needs another workflow to run. */
+/**
+ * Built-in nodes, titled in the current language (callers re-render on a
+ * language change). A loop or sub-workflow needs another workflow to run.
+ */
 export function flowEntries(otherWorkflow: string | undefined): CatalogEntry[] {
   const kinds: GraphNodeKind[] = [
     { type: "condition", predicate: { type: "succeeded", node: "start" } },
@@ -80,10 +104,10 @@ export function flowEntries(otherWorkflow: string | undefined): CatalogEntry[] {
   ]
   return kinds.map((kind) => ({
     key: `flow:${kind.type}`,
-    title: FLOW_TITLE[kind.type],
-    description: FLOW_DESCRIPTION[kind.type],
+    title: i18n.t(FLOW_TITLE[kind.type]),
+    description: i18n.t(FLOW_DESCRIPTION[kind.type]),
     icon: kind.type,
-    name: FLOW_TITLE[kind.type],
+    name: FLOW_NAME[kind.type],
     kind,
   }))
 }

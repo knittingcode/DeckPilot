@@ -1,6 +1,7 @@
 import { Loader2 } from "lucide-react"
 import { useState } from "react"
 
+import { useTranslation } from "@/i18n"
 import type { LiveExecution } from "@/lib/executions"
 
 import { formatMs } from "./describe"
@@ -43,24 +44,30 @@ export function RunDebugger({
   /** Title and declared outputs of a node of the workflow. */
   info: (node: string) => NodeInfo
 }) {
+  const { t } = useTranslation()
   const [chosen, setChosen] = useState<string | null>(null)
   const state = debugState(run)
   const title = (node: string) => info(node).title
   return (
-    <section className="grid gap-3 border-t px-4 py-3" aria-label="Run details">
-      <h3 className="text-xs font-medium text-muted-foreground uppercase">Run details</h3>
+    <section
+      className="grid gap-3 border-t px-4 py-3"
+      aria-label={t("workflows:run.details.title")}
+    >
+      <h3 className="text-xs font-medium text-muted-foreground uppercase">
+        {t("workflows:run.details.title")}
+      </h3>
       {state.type === "loading" && (
         <p className="flex items-center gap-1.5 text-xs text-muted-foreground" role="status">
-          <Loader2 className="size-3.5 animate-spin" /> Loading node reports…
+          <Loader2 className="size-3.5 animate-spin" /> {t("workflows:run.details.loading")}
         </p>
       )}
       {state.type === "waiting" && (
         <p className="text-xs text-muted-foreground" role="status">
-          Waiting for the first node to start.
+          {t("workflows:run.details.waiting")}
         </p>
       )}
       {state.type === "empty" && (
-        <p className="text-xs text-muted-foreground">This run did not run any nodes.</p>
+        <p className="text-xs text-muted-foreground">{t("workflows:run.details.empty")}</p>
       )}
       {state.type === "ready" && (
         <Report
@@ -91,6 +98,7 @@ function Report({
   chosen: string | null
   onChoose: (node: string) => void
 }) {
+  const { t } = useTranslation()
   const timeline = buildTimeline(run, now, title)
   const metrics = runMetrics(run, timeline, now)
   const failures = runFailures(run, title)
@@ -99,26 +107,29 @@ function Report({
     timeline.rows.find((r) => r.node === failures[0]?.node)
   return (
     <>
-      <Section title="Metrics">
+      <Section title={t("workflows:run.details.metrics")}>
         <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-xs">
-          <dt className="text-muted-foreground">{run.state === "running" ? "Elapsed" : "Total"}</dt>
+          <dt className="text-muted-foreground">
+            {run.state === "running"
+              ? t("workflows:run.details.elapsed")
+              : t("workflows:run.details.total")}
+          </dt>
           <dd>{formatMs(metrics.totalMs)}</dd>
-          <dt className="text-muted-foreground">Node time</dt>
+          <dt className="text-muted-foreground">{t("workflows:run.details.nodeTime")}</dt>
           <dd>
             {formatMs(metrics.nodeTimeMs)}
-            {metrics.maxParallel > 1 && ` · up to ${metrics.maxParallel} in parallel`}
+            {metrics.maxParallel > 1 &&
+              ` · ${t("workflows:run.details.upToParallel", { count: metrics.maxParallel })}`}
           </dd>
           {metrics.retriedNodes > 0 && (
             <>
-              <dt className="text-muted-foreground">Retried</dt>
-              <dd>
-                {metrics.retriedNodes} {metrics.retriedNodes === 1 ? "node" : "nodes"}
-              </dd>
+              <dt className="text-muted-foreground">{t("workflows:run.details.retried")}</dt>
+              <dd>{t("workflows:run.details.nodes", { count: metrics.retriedNodes })}</dd>
             </>
           )}
         </dl>
         {metrics.slowest.length > 0 && (
-          <ol className="grid gap-0.5 text-xs" aria-label="Slowest nodes">
+          <ol className="grid gap-0.5 text-xs" aria-label={t("workflows:run.details.slowest")}>
             {metrics.slowest.map((row) => (
               <li key={row.node} className="flex gap-2">
                 <button
@@ -140,7 +151,7 @@ function Report({
       </Section>
 
       {failures.length > 0 && (
-        <Section title="Failures">
+        <Section title={t("workflows:run.details.failures")}>
           <ul className="grid gap-1">
             {failures.map((failure) => (
               <li key={failure.node}>
@@ -165,16 +176,14 @@ function Report({
         </Section>
       )}
 
-      <Section title="Timeline">
+      <Section title={t("workflows:run.details.timeline")}>
         <RunTimeline timeline={timeline} selected={selected?.node ?? null} onSelect={onChoose} />
       </Section>
 
       {selected ? (
         <RunNodeDetails run={run} row={selected} declared={info(selected.node).declared} />
       ) : (
-        <p className="text-xs text-muted-foreground">
-          Choose a node on the timeline to see its retries, failure and outputs.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("workflows:run.details.choose")}</p>
       )}
     </>
   )

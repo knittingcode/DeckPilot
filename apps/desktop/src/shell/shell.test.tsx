@@ -153,7 +153,7 @@ describe("main window shell", { timeout: 20_000 }, () => {
     const canvas = screen.getByRole("group", { name: /controls$/ })
     expect(main).toContainElement(canvas)
     // The inspector follows the device in the editor's main column.
-    const inspector = within(main as HTMLElement).getByText("Control")
+    const inspector = within(main as HTMLElement).getByRole("region", { name: "Inspector" })
     expect(canvas.compareDocumentPosition(inspector) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     )
@@ -164,10 +164,12 @@ describe("main window shell", { timeout: 20_000 }, () => {
   it("orders the toolbar: selectors, page, then notifications and settings", async () => {
     const { toolbar } = await renderShell()
     const leading = toolbar.querySelector("[data-slot='titlebar-leading']") as HTMLElement
+    await layoutShown("Work Plus")
     const buttons = within(leading).getAllByRole("button")
     expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual([
       "Device: Stream Deck +, connected",
       "Profile: Work, active on the device",
+      "Layout: Work Plus, default",
     ])
     const app = within(toolbar).getByRole("group", { name: "App" })
     expect(
@@ -184,43 +186,75 @@ describe("main window shell", { timeout: 20_000 }, () => {
 
   it("chooses the device for the editor: connected ones and models not connected", async () => {
     const { user } = await renderShell()
-    expect(screen.getByRole("textbox", { name: "Layout name" })).toHaveValue("Work Plus")
+    expect(await layoutShown("Work Plus")).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: /^Device:/ }))
     const menu = screen.getByRole("menu")
     expect(within(menu).getByText("Connected · PLUS-1")).toBeInTheDocument()
     const mk2Item = within(menu).getByRole("menuitem", { name: /Stream Deck MK\.2/ })
     expect(mk2Item).toHaveTextContent("Not connected")
     await user.click(mk2Item)
-    await waitFor(() => {
-      expect(screen.getByRole("textbox", { name: "Layout name" })).toHaveValue("Work MK.2")
-    })
+    expect(await layoutShown("Work MK.2")).toBeInTheDocument()
     expect(
       screen.getByRole("button", { name: "Device: Stream Deck MK.2, not connected" }),
     ).toBeInTheDocument()
     expect(localStorage.getItem("deckpilot.editor.model")).toBe(mk2.id)
   })
 
-  it("switches the profile from the toolbar, but not over unsaved changes", async () => {
+  it("switches the profile from the toolbar, asking before unsaved changes are lost", async () => {
     const { user } = await renderShell()
     await user.click(screen.getByRole("button", { name: /^Profile:/ }))
     await user.click(screen.getByRole("menuitem", { name: /Home/ }))
-    await waitFor(() => {
-      expect(screen.getByRole("textbox", { name: "Layout name" })).toHaveValue("Home Plus")
-    })
+    expect(await layoutShown("Home Plus")).toBeInTheDocument()
     expect(localStorage.getItem("deckpilot.editingProfile")).toBe("home")
 
-    // An unsaved change keeps the profile.
-    const name = screen.getByRole("textbox", { name: "Layout name" })
-    await user.type(name, " edited")
+    // An unsaved change: switching asks first, and cancelling keeps it.
+    await user.click(screen.getByRole("button", { name: "Add page" }))
+    expect(screen.getByText("Unsaved")).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: /^Profile:/ }))
     await user.click(screen.getByRole("menuitem", { name: /Work/ }))
-    expect(toast.warning).toHaveBeenCalledWith("Save or revert the current layout first")
-    expect(screen.getByRole("textbox", { name: "Layout name" })).toHaveValue("Home Plus edited")
-    // And the device likewise.
+    let confirm = await screen.findByRole("alertdialog", { name: "Discard unsaved changes?" })
+    await user.click(within(confirm).getByRole("button", { name: "Cancel" }))
+    await waitFor(() => {
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
+    })
+    expect(await layoutShown("Home Plus")).toBeInTheDocument()
+    expect(screen.getByText("Unsaved")).toBeInTheDocument()
+    // The device likewise.
     await user.click(screen.getByRole("button", { name: /^Device:/ }))
     await user.click(screen.getByRole("menuitem", { name: /Stream Deck MK\.2/ }))
-    expect(toast.warning).toHaveBeenCalledTimes(2)
-    expect(screen.getByRole("textbox", { name: "Layout name" })).toHaveValue("Home Plus edited")
+    confirm = await screen.findByRole("alertdialog", { name: "Discard unsaved changes?" })
+    await user.click(within(confirm).getByRole("button", { name: "Cancel" }))
+    await waitFor(() => {
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
+    })
+    expect(screen.getByRole("button", { name: /^Device: Stream Deck \+/ })).toBeInTheDocument()
+    expect(screen.getByText("Unsaved")).toBeInTheDocument()
+    // Discarding switches.
+    await user.click(screen.getByRole("button", { name: /^Profile:/ }))
+    await user.click(screen.getByRole("menuitem", { name: /Work/ }))
+    confirm = await screen.findByRole("alertdialog", { name: "Discard unsaved changes?" })
+    await user.click(within(confirm).getByRole("button", { name: "Discard changes" }))
+    expect(await layoutShown("Work Plus")).toBeInTheDocument()
+    expect(screen.queryByText("Unsaved")).not.toBeInTheDocument()
+    expect(toast.warning).not.toHaveBeenCalled()
+  })
+
+  it("switches the layout from the toolbar's layout selector", async () => {
+    const { user, toolbar } = await renderShell()
+    await user.click(await layoutShown("Work Plus"))
+    const menu = await screen.findByRole("menu")
+    // The profile's Plus layout; its MK.2 layout is for another model.
+    expect(
+      within(within(menu).getByRole("group", { name: "Layouts for other models" })).getByRole(
+        "menuitem",
+        { name: /Work MK\.2/ },
+      ),
+    ).toHaveAttribute("aria-disabled", "true")
+    await user.keyboard("{Escape}")
+    // Choosing the device revalidates: the MK.2 layout is the one now.
+    await user.click(within(toolbar).getByRole("button", { name: /^Device:/ }))
+    await user.click(screen.getByRole("menuitem", { name: /Stream Deck MK\.2/ }))
+    expect(await layoutShown("Work MK.2")).toBeInTheDocument()
   })
 
   it("opens the settings inside the main window, never in a window of their own", async () => {
@@ -231,15 +265,16 @@ describe("main window shell", { timeout: 20_000 }, () => {
 
     const nav = await screen.findByRole("generic", { name: "Settings" })
     expect(nav).toHaveAttribute("data-slot", "sidebar")
-    for (const name of ["Appearance", "Profiles", "Updates", "Devices", "Background Agent"]) {
+    for (const name of ["Profiles", "Updates", "Devices", "Background Agent"]) {
       expect(within(nav).getByRole("button", { name })).toBeInTheDocument()
     }
-    expect(within(nav).getByRole("button", { name: "Appearance" })).toHaveAttribute(
+    expect(within(nav).getByRole("button", { name: "Profiles" })).toHaveAttribute(
       "aria-current",
       "page",
     )
+    // The default page (Profiles) has loaded.
     expect(
-      await screen.findByText(/System follows the light or dark/, undefined, { timeout: 5000 }),
+      await screen.findByRole("heading", { name: "Profiles" }, { timeout: 5000 }),
     ).toBeInTheDocument()
     // One navigation: the toolbar stays, the gear shows where we are, the
     // rail leads back; no back, forward or "Back to DeckPilot" anywhere.
@@ -265,8 +300,7 @@ describe("main window shell", { timeout: 20_000 }, () => {
   it("returns to the editor from the settings, the Marketplace and other pages, as it was", async () => {
     const { user, toolbar } = await renderShell()
     // An unsaved change in the editor: proof that it is the same editor later.
-    const name = screen.getByRole("textbox", { name: "Layout name" })
-    await user.type(name, " edited")
+    await user.click(screen.getByRole("button", { name: "Add page" }))
 
     await user.click(gearOf(toolbar))
     const nav = await screen.findByRole("generic", { name: "Settings" })
@@ -280,14 +314,25 @@ describe("main window shell", { timeout: 20_000 }, () => {
     // unsaved change as they were.
     await user.click(screen.getByRole("button", { name: "Device Editor" }))
     expect(await screen.findByRole("heading", { name: "Device Editor" })).toBeInTheDocument()
-    expect(screen.getByRole("textbox", { name: "Layout name" })).toHaveValue("Work Plus edited")
+    expect(await layoutShown("Work Plus")).toBeInTheDocument()
+    expect(screen.getByText("Unsaved")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /^Device: Stream Deck \+/ })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /^Profile: Work/ })).toBeInTheDocument()
     expect(screen.queryByRole("generic", { name: "Settings" })).not.toBeInTheDocument()
     expect(gearOf(toolbar)).toHaveAttribute("aria-pressed", "false")
 
-    // From another workspace page, too.
+    // From another workspace page, too; leaving the editor asks first over
+    // the unsaved change (staying keeps it).
     await user.click(screen.getByRole("button", { name: "Workflows" }))
+    const ask = await screen.findByRole("alertdialog", { name: "Discard unsaved changes?" })
+    await user.click(within(ask).getByRole("button", { name: "Cancel" }))
+    expect(screen.getByText("Unsaved")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Workflows" }))
+    await user.click(
+      within(
+        await screen.findByRole("alertdialog", { name: "Discard unsaved changes?" }),
+      ).getByRole("button", { name: "Discard changes" }),
+    )
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Workflows" })).toHaveAttribute(
         "aria-current",
@@ -360,14 +405,15 @@ describe("main window shell", { timeout: 20_000 }, () => {
     expect(await screen.findByRole("heading", { name: "Device Editor" })).toBeInTheDocument()
   })
 
-  it("switches the theme from the settings without leaving the window", async () => {
+  it("is always dark and offers no theme setting", async () => {
     const { user, toolbar } = await renderShell()
-    await user.click(gearOf(toolbar))
-    const dark = await screen.findByRole("radio", { name: "Dark" }, { timeout: 5000 })
-    await user.click(dark)
     expect(document.documentElement).toHaveClass("dark")
-    await user.click(screen.getByRole("radio", { name: "Light" }))
-    expect(document.documentElement).not.toHaveClass("dark")
+    await user.click(gearOf(toolbar))
+    await screen.findByRole("button", { name: "Profiles" }, { timeout: 5000 })
+    expect(screen.queryByRole("button", { name: "Appearance" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("radio", { name: "Light" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("radio", { name: "Dark" })).not.toBeInTheDocument()
+    expect(document.documentElement).toHaveClass("dark")
     expect(api.openWindow).not.toHaveBeenCalled()
   })
 
@@ -439,6 +485,13 @@ describe("main window shell", { timeout: 20_000 }, () => {
   })
 })
 
+/** The toolbar's layout selector once it shows `name`. */
+function layoutShown(name: string) {
+  return screen.findByRole("button", {
+    name: new RegExp(`^Layout: ${name.replace(/[.+]/g, "\\$&")}`),
+  })
+}
+
 /** The toolbar's selectors, by their accessible names; empty when hidden. */
 function selectorsOf(toolbar: HTMLElement): string[] {
   const leading = toolbar.querySelector<HTMLElement>("[data-slot='titlebar-leading']")
@@ -455,7 +508,7 @@ describe("context-aware toolbar", { timeout: 20_000 }, () => {
     expect(within(toolbar).queryByRole("heading")).not.toBeInTheDocument()
     expect(within(toolbar).queryByText("Device Editor")).not.toBeInTheDocument()
     expect(within(toolbar).queryByText(/Assign actions to the controls/)).not.toBeInTheDocument()
-    expect(toolbar).toHaveAttribute("data-context", "device+profile")
+    expect(toolbar).toHaveAttribute("data-context", "device+profile+layout")
     // The order: room for the window controls, the selectors, the page's
     // (empty) context, the app's commands.
     const slots = [...toolbar.children].map(
@@ -477,11 +530,13 @@ describe("context-aware toolbar", { timeout: 20_000 }, () => {
     expect(screen.getByRole("heading", { name: "Device Editor" })).toHaveClass("sr-only")
   })
 
-  it("shows the device and profile selectors in the editor, not in the settings", async () => {
+  it("shows the device, profile and layout selectors in the editor, not in the settings", async () => {
     const { user, toolbar } = await renderShell()
+    await layoutShown("Work Plus")
     expect(selectorsOf(toolbar)).toEqual([
       "Device: Stream Deck +, connected",
       "Profile: Work, active on the device",
+      "Layout: Work Plus, default",
     ])
     await user.click(gearOf(toolbar))
     const nav = await screen.findByRole("generic", { name: "Settings" })
@@ -511,6 +566,7 @@ describe("context-aware toolbar", { timeout: 20_000 }, () => {
       expect(selectorsOf(toolbar)).toEqual([
         "Device: Stream Deck +, connected",
         "Profile: Work, active on the device",
+        "Layout: Work Plus, default",
       ])
     })
   })
@@ -533,9 +589,7 @@ describe("context-aware toolbar", { timeout: 20_000 }, () => {
     const { user, toolbar } = await renderShell()
     await user.click(screen.getByRole("button", { name: /^Device:/ }))
     await user.click(screen.getByRole("menuitem", { name: /Stream Deck MK\.2/ }))
-    await waitFor(() => {
-      expect(screen.getByRole("textbox", { name: "Layout name" })).toHaveValue("Work MK.2")
-    })
+    expect(await layoutShown("Work MK.2")).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Key 3" }))
     expect(screen.getByRole("button", { name: "Key 3" })).toHaveAttribute("aria-pressed", "true")
     const agentCalls = api.agentStatus.mock.calls.length
@@ -549,11 +603,12 @@ describe("context-aware toolbar", { timeout: 20_000 }, () => {
     })
     await user.click(screen.getByRole("button", { name: "Device Editor" }))
     await screen.findByRole("group", { name: /controls$/ })
-    expect(screen.getByRole("textbox", { name: "Layout name" })).toHaveValue("Work MK.2")
+    expect(await layoutShown("Work MK.2")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Key 3" })).toHaveAttribute("aria-pressed", "true")
     expect(selectorsOf(toolbar)).toEqual([
       "Device: Stream Deck MK.2, not connected",
       "Profile: Work, active on the device",
+      "Layout: Work MK.2, default",
     ])
     // Hiding the selectors connected nothing again.
     expect(api.agentStatus.mock.calls.length).toBeLessThanOrEqual(agentCalls + 1)
@@ -613,11 +668,12 @@ describe("main window with plugins", { timeout: 20_000 }, () => {
     expect(selectorsOf(toolbar)).toEqual([])
     await user.click(screen.getByRole("button", { name: "Device Editor" }))
     await screen.findByRole("group", { name: /controls$/ })
+    expect(await layoutShown("Work Plus")).toBeInTheDocument()
     expect(selectorsOf(toolbar)).toEqual([
       "Device: Stream Deck +, connected",
       "Profile: Work, active on the device",
+      "Layout: Work Plus, default",
     ])
-    expect(screen.getByRole("textbox", { name: "Layout name" })).toHaveValue("Work Plus")
     expect(screen.getByRole("button", { name: "Key 2" })).toHaveAttribute("aria-pressed", "true")
   })
 

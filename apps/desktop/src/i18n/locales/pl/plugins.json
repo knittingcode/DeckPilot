@@ -1,0 +1,393 @@
+{
+  "errors": {
+    "unexpected": "Nieoczekiwany błąd",
+    "sentence": "{{title}}: {{message}}",
+    "sentenceWithHint": "{{title}}: {{message}} {{hint}}",
+    "title": {
+      "agentNotRunning": "Agent nie jest uruchomiony",
+      "agentTooOld": "Uruchomiony agent jest zbyt stary",
+      "communication": "DeckPilot nie mógł połączyć się z agentem",
+      "noDialog": "Okno wyboru pliku jest niedostępne",
+      "pluginsUnavailable": "Wtyczki nie są dostępne w agencie",
+      "platformUnsupported": "Wtyczek nie można uruchamiać na tej platformie",
+      "locked": "DeckPilot jest zablokowany",
+      "notInstalled": "Wtyczka nie jest zainstalowana",
+      "unknownPlugin": "Rejestr nie oferuje tej wtyczki lub wersji",
+      "storeUnavailable": "Nie można otworzyć bazy danych wtyczek",
+      "alreadyInstalled": "Wtyczka jest już zainstalowana",
+      "consentRequired": "Brak zgody",
+      "unknownPermission": "Uprawnienia wtyczki się zmieniły",
+      "registryUnavailable": "Rejestr jest niedostępny",
+      "revoked": "Ta wersja została wycofana",
+      "incompatible": "Niezgodna z tą wersją DeckPilot",
+      "invalidPackage": "Pakiet został odrzucony",
+      "unsupportedRuntime": "Nieobsługiwany rodzaj wtyczki",
+      "invalidState": "Niemożliwe w obecnym stanie wtyczki",
+      "notEnabled": "Wtyczka nie jest włączona",
+      "hostFailed": "Host wtyczki uległ awarii",
+      "broken": "Pliki wtyczki zostały zmodyfikowane",
+      "busy": "Wtyczka jest zajęta",
+      "invalidParameters": "Nieprawidłowe parametry",
+      "invalidData": "Wartości nie pasują do tego, co deklaruje wtyczka",
+      "unknownMigration": "Nie ma takiej migracji modułu",
+      "answerTooLarge": "Odpowiedź agenta jest zbyt duża",
+      "requiredBy": "Inne wtyczki potrzebują tej wtyczki",
+      "dependency": "Nie można zainstalować jej zależności",
+      "planChanged": "Plan instalacji się zmienił",
+      "notBundled": "To nie jest jedna z własnych wtyczek DeckPilot",
+      "notPinned": "Ta wersja DeckPilot nie zawiera tej wtyczki",
+      "failed": "Żądanie się nie powiodło"
+    },
+    "hint": {
+      "agentNotRunning": "Uruchom agenta w Ustawienia › Agent w tle, a następnie spróbuj ponownie.",
+      "agentTooOld": "Uruchom ponownie agenta w Ustawienia › Agent w tle, aby działał agent z tego wydania.",
+      "pluginsUnavailable": "Wtyczki wymagają agenta zbudowanego z funkcją `plugins` i uruchomionego bez --disable-plugins.",
+      "platformUnsupported": "Wtyczki można tu instalować i przeglądać, ale uruchamiać tylko tam, gdzie piaskownica wtyczek jest zweryfikowana: w systemach macOS, Linux i Windows.",
+      "locked": "Odblokuj DeckPilot, a następnie spróbuj ponownie.",
+      "storeUnavailable": "Nie można otworzyć bazy danych wtyczek bieżącym kluczem (np. po zmianie hasła, gdy agent był zablokowany).",
+      "consentRequired": "Wyraź zgodę na każde uprawnienie deklarowane przez wtyczkę.",
+      "unknownPermission": "Wczytaj wtyczkę ponownie; jej uprawnienia się zmieniły.",
+      "registryUnavailable": "Sprawdź rejestr używany przez agenta, a następnie spróbuj ponownie.",
+      "revoked": "Rejestr wycofał tę wersję; wybierz inną albo ją odinstaluj.",
+      "incompatible": "Ta wersja DeckPilot nie może jej uruchomić; uaktualnij DeckPilot lub wybierz inną wersję.",
+      "invalidPackage": "Można instalować tylko pliki pakietów, których bajty są przypięte w zweryfikowanym rejestrze.",
+      "unsupportedRuntime": "Można instalować tylko wtyczki WebAssembly (ABI 1).",
+      "invalidState": "Wczytaj listę ponownie; wtyczka zmieniła się w międzyczasie.",
+      "notEnabled": "Najpierw włącz wtyczkę.",
+      "hostFailed": "Host wtyczki uległ awarii lub wstrzymuje działanie po awariach; spróbuj ponownie później.",
+      "broken": "Jej zainstalowane pliki nie zgadzają się już z zapisem; przywróć poprzednią wersję lub ją odinstaluj.",
+      "alreadyInstalled": "Zamiast tego ją uaktualnij.",
+      "busy": "Poczekaj, aż zakończą się jej uruchomione akcje, a następnie spróbuj ponownie.",
+      "requiredBy": "Wyłącz wtyczki, które jej potrzebują — razem z nią lub wcześniej.",
+      "dependency": "Wtyczka potrzebuje wtyczek lub wersji, których nie można tu zainstalować.",
+      "planChanged": "Przejrzyj nowy plan i potwierdź go ponownie.",
+      "notBundled": "Przywrócić można tylko wtyczki dostarczane z DeckPilot; inne zainstaluj z Marketplace.",
+      "notPinned": "Zainstaluj wydanie DeckPilot, które ją zawiera, a następnie ją przywróć.",
+      "answerTooLarge": "Część odpowiedzi nie mieści się w jednej wiadomości do aplikacji, nawet w częściach (na przykład bardzo duże ustawienia wtyczki); poproś wydawcę wtyczki o skrócenie jej manifestu."
+    }
+  },
+  "list": {
+    "and": "{{items}} i {{last}}"
+  },
+  "storage": {
+    "usage": "Użyto {{used}} z {{quota}} ({{keys}})",
+    "keys_one": "{{used}} z {{count}} klucza",
+    "keys_few": "{{used}} z {{count}} kluczy",
+    "keys_many": "{{used}} z {{count}} kluczy",
+    "keys_other": "{{used}} z {{count}} klucza"
+  },
+  "state": {
+    "installing": "Instalowanie",
+    "disabled": "Wyłączona",
+    "enabled": "Włączona",
+    "updating": "Uaktualnianie",
+    "rollingBack": "Przywracanie poprzedniej wersji",
+    "uninstalling": "Odinstalowywanie",
+    "broken": "Uszkodzona",
+    "quarantined": "W kwarantannie"
+  },
+  "credentials": {
+    "problem": {
+      "empty": "Wprowadź sekret.",
+      "lineBreaks": "Sekret nie może zawierać podziałów wiersza.",
+      "tooLong": "Sekret jest dłuższy niż 16 KiB."
+    },
+    "stored": "Zapisano: {{label}}",
+    "removed": "Usunięto: {{label}}",
+    "set": "Ustawiono",
+    "setButton": "Ustaw…",
+    "replace": "Zastąp…",
+    "setNamed": "Ustaw: {{label}}",
+    "replaceNamed": "Zastąp: {{label}}",
+    "remove": "Usuń",
+    "removeNamed": "Usuń: {{label}}",
+    "removeAsk": "Usunąć: {{label}}?",
+    "removeConfirm": "Usunąć przechowywane poświadczenie „{{label}}”? Wtyczka nie będzie mogła go potem używać.",
+    "keep": "Zachowaj",
+    "setupUrl": "Gdzie je uzyskać:",
+    "notGranted": "Jego uprawnienie nie zostało przyznane: przechowywany sekret nie będzie używany, dopóki go nie przyznasz.",
+    "inputLabel": "{{label}} dla wtyczki {{plugin}}",
+    "store": "Zapisz",
+    "storing": "Zapisywanie…",
+    "userOrigin": "serwera z ustawienia „{{setting}}”, gdy na niego zezwolisz",
+    "noHost": "żadnego hosta",
+    "sentTo": "Wysyłane tylko do: {{targets}}.",
+    "sentToSchemes": "Wysyłane tylko do: {{targets}} ({{schemes}}).",
+    "storedAt": "Zapisano {{time}}."
+  },
+  "settings": {
+    "on": "Włączone",
+    "off": "Wyłączone",
+    "missing": {
+      "title": "Brakuje wymaganych ustawień",
+      "text_one": "{{settings}}: brak wartości i wartości domyślnej. Wtyczka działa bez tego ustawienia, a jej akcje mogą kończyć się niepowodzeniem, dopóki nie zostanie ustawione.",
+      "text_few": "{{settings}}: brak wartości i wartości domyślnych. Wtyczka działa bez tych ustawień, a jej akcje mogą kończyć się niepowodzeniem, dopóki nie zostaną ustawione.",
+      "text_many": "{{settings}}: brak wartości i wartości domyślnych. Wtyczka działa bez tych ustawień, a jej akcje mogą kończyć się niepowodzeniem, dopóki nie zostaną ustawione.",
+      "text_other": "{{settings}}: brak wartości i wartości domyślnych. Wtyczka działa bez tych ustawień, a jej akcje mogą kończyć się niepowodzeniem, dopóki nie zostaną ustawione."
+    },
+    "notSecret": "Ustawienia nie są tajne. Nigdy nie wpisuj tu hasła ani tokenu; miejscem na sekrety są poświadczenia wtyczki poniżej.",
+    "save": "Zapisz ustawienia",
+    "saving": "Zapisywanie…",
+    "defaultChoice": "Domyślnie ({{value}})",
+    "notSet": "Nie ustawiono",
+    "unsupported": "Ustawień typu „{{kind}}” nie można tu zmieniać.",
+    "limit": {
+      "min": "co najmniej {{min}}",
+      "max": "najwyżej {{max}}",
+      "length_one": "do {{count}} znaku",
+      "length_few": "do {{count}} znaków",
+      "length_many": "do {{count}} znaków",
+      "length_other": "do {{count}} znaku"
+    },
+    "limits": "Zakres: {{limits}}.",
+    "missingBadge": "Brak",
+    "defaultBadge": "Domyślne",
+    "resetNamed": "Przywróć wartość domyślną: {{label}}",
+    "reset": "Przywróć domyślne",
+    "defaultIs": "Domyślnie: {{value}}.",
+    "noDefault": "Brak wartości domyślnej."
+  },
+  "dialog": {
+    "requestedBy": "Prośba od: <name>{{name}}</name>",
+    "required": "(wymagane)",
+    "onePerLine": "Jedna wartość w wierszu",
+    "choosePlaceholder": "Wybierz…",
+    "tooLong": "Odpowiedź jest zbyt długa. Skróć tekst i spróbuj ponownie.",
+    "error": {
+      "maxCharacters_one": "Najwyżej {{count}} znak.",
+      "maxCharacters_few": "Najwyżej {{count}} znaki.",
+      "maxCharacters_many": "Najwyżej {{count}} znaków.",
+      "maxCharacters_other": "Najwyżej {{count}} znaku.",
+      "wholeNumber": "Wprowadź liczbę całkowitą.",
+      "atLeast": "Co najmniej {{min}}.",
+      "atMost": "Najwyżej {{max}}.",
+      "chooseOption": "Wybierz jedną z opcji.",
+      "maxLines_one": "Najwyżej {{count}} wiersz.",
+      "maxLines_few": "Najwyżej {{count}} wiersze.",
+      "maxLines_many": "Najwyżej {{count}} wierszy.",
+      "maxLines_other": "Najwyżej {{count}} wiersza.",
+      "lineLength_one": "Każdy wiersz może mieć najwyżej {{count}} znak.",
+      "lineLength_few": "Każdy wiersz może mieć najwyżej {{count}} znaki.",
+      "lineLength_many": "Każdy wiersz może mieć najwyżej {{count}} znaków.",
+      "lineLength_other": "Każdy wiersz może mieć najwyżej {{count}} znaku."
+    }
+  },
+  "origins": {
+    "quoted": "„{{name}}”",
+    "consent": {
+      "thisServer": "ten serwer",
+      "ask": "Zezwolić wtyczce {{plugin}} na wysyłanie danych do {{server}}?",
+      "askWithSecrets_one": "Zezwolić wtyczce {{plugin}} na wysyłanie danych i Twojego sekretu {{secrets}} do {{server}}?",
+      "askWithSecrets_few": "Zezwolić wtyczce {{plugin}} na wysyłanie danych i Twoich sekretów {{secrets}} do {{server}}?",
+      "askWithSecrets_many": "Zezwolić wtyczce {{plugin}} na wysyłanie danych i Twoich sekretów {{secrets}} do {{server}}?",
+      "askWithSecrets_other": "Zezwolić wtyczce {{plugin}} na wysyłanie danych i Twoich sekretów {{secrets}} do {{server}}?",
+      "requests": "Żądania ({{methods}}) trafiają dokładnie do tego serwera i nigdzie indziej.",
+      "requestsPath": "Żądania ({{methods}}) trafiają dokładnie do tego serwera i tej ścieżki, nigdzie indziej.",
+      "pages": "Może też otwierać w przeglądarce strony {{server}}, w akcjach, które uruchomisz."
+    },
+    "title": "Wprowadzane serwery",
+    "intro": "Wtyczka łączy się z serwerem z tych ustawień dopiero wtedy, gdy zezwolisz na dokładnie ten serwer. Zmiana ustawienia kończy zgodę; DeckPilot zapyta wtedy ponownie.",
+    "list": "Serwery wtyczki {{name}}",
+    "status": {
+      "invalid": "Nieprawidłowy",
+      "declared": "Zadeklarowany",
+      "slotNotGranted": "Brak uprawnienia",
+      "needsConsent": "Wymaga Twojej zgody",
+      "granted": "Dozwolony"
+    },
+    "privateNetwork": "Sieć prywatna",
+    "revokeNamed": "Odbierz: {{label}}",
+    "revoked": "{{label}}: odebrano zgodę",
+    "unset": "Nie ustawiono serwera, więc wtyczka nie łączy się przez to ustawienie z żadnym serwerem.",
+    "invalid": "To ustawienie nie zawiera serwera, którego ta wtyczka może używać.",
+    "invalidBecause": "Problem z ustawieniem: {{problem}}.",
+    "declared": "Host deklarowany przez wtyczkę, dozwolony podczas jej instalacji.",
+    "slotNotGranted": "Uprawnienie wtyczki do łączenia się z wprowadzonym przez Ciebie serwerem nie zostało przyznane. Najpierw przyznaj „{{permission}}”; do tego czasu nic nie trafi do tego serwera.",
+    "grantedPlain": "Dozwolony.",
+    "grantedAt": "Dozwolony {{time}}.",
+    "grantedPrivate": "Dozwolony w Twojej sieci prywatnej.",
+    "grantedPrivateAt": "Dozwolony {{time}} w Twojej sieci prywatnej.",
+    "secretsSent_one": "Jest tam wysyłany sekret {{secrets}}.",
+    "secretsSent_few": "Są tam wysyłane sekrety {{secrets}}.",
+    "secretsSent_many": "Są tam wysyłane sekrety {{secrets}}.",
+    "secretsSent_other": "Są tam wysyłane sekrety {{secrets}}.",
+    "allowAsk": "Zezwolić na {{server}}?",
+    "alsoPrivate": "Zezwól również w mojej sieci prywatnej",
+    "privateRequired": "Wymagane: to lokalna nazwa lub adres.",
+    "privateOptional": "Tylko jeśli nazwa serwera wskazuje na adres w Twojej sieci.",
+    "neverLocal": "Ten komputer i adresy link-local nigdy nie są osiągalne.",
+    "privateNotAllowed": "Ten serwer znajduje się w sieci prywatnej, na co ustawienie tej wtyczki nie pozwala.",
+    "allowed": "{{label}}: zezwolono na {{server}}",
+    "allowing": "Zezwalanie…"
+  },
+  "dependencies": {
+    "state": {
+      "installed": "Zainstalowana {{version}}",
+      "available": "Dostępna",
+      "installedOff": "Zainstalowana {{version}}, wyłączona",
+      "off": "Wyłączona",
+      "wrongVersion": "Zainstalowana {{version}}; wymagana {{needed}}",
+      "otherVersion": "Zainstalowana w innej wersji; wymagana {{needed}}",
+      "notInDeckPilot": "Niedostępna w tej wersji DeckPilot",
+      "notInstalled": "Niezainstalowana",
+      "unusable": "Zainstalowana, ale nie można jej używać"
+    },
+    "title": "Zależności",
+    "titleOfVersion": "Zależności wersji {{version}}",
+    "requires": "Wymaga",
+    "optional": "Integracje opcjonalne",
+    "optionalHint": "Integracje opcjonalne nigdy nie są instalowane samoczynnie; bez nich niedostępne są tylko akcje, które z nich korzystają.",
+    "builtIn": "Wbudowany",
+    "optionalBadge": "Opcjonalna",
+    "usedByActions": "Używana przez: <code>{{actions}}</code>",
+    "usedBy": "Używana przez",
+    "dependentOptional": "opcjonalnie {{version}}",
+    "dependentRequires": "wymaga {{version}}",
+    "off": "Wyłączona"
+  },
+  "migration": {
+    "status": {
+      "moving": {
+        "label": "Przenoszenie do wtyczki",
+        "text": "Moduł {{module}} jest przenoszony do wtyczki {{plugin}}. Do zakończenia przenoszenia jego akcje nadal wykonuje moduł wbudowany."
+      },
+      "waiting": {
+        "label": "Oczekuje na Twoją zgodę",
+        "text": "Moduł {{module}} może zostać przeniesiony do wtyczki {{plugin}}, gdy zezwolisz na to, czego wtyczka potrzebuje. Do tego czasu jego akcje nadal wykonuje moduł wbudowany."
+      },
+      "unavailable": {
+        "label": "Akcje niedostępne",
+        "text": "Akcje modułu {{module}} działają we wtyczce {{plugin}}, która jest niedostępna: {{reason}}.",
+        "removed": "została usunięta"
+      },
+      "moved": {
+        "label": "Przeniesiono do wtyczki",
+        "text": "Akcje modułu {{module}} działają we wtyczce {{plugin}}; Twoje akcje działają bez zmian."
+      },
+      "builtin": {
+        "label": "Pozostaje wbudowany"
+      },
+      "failed": {
+        "textFinal_one": "Przenoszenie do wtyczki {{plugin}} nie powiodło się {{count}} raz; DeckPilot spróbuje ponownie dopiero po kliknięciu Ponów. Akcje nadal wykonuje moduł wbudowany.",
+        "textFinal_few": "Przenoszenie do wtyczki {{plugin}} nie powiodło się {{count}} razy; DeckPilot spróbuje ponownie dopiero po kliknięciu Ponów. Akcje nadal wykonuje moduł wbudowany.",
+        "textFinal_many": "Przenoszenie do wtyczki {{plugin}} nie powiodło się {{count}} razy; DeckPilot spróbuje ponownie dopiero po kliknięciu Ponów. Akcje nadal wykonuje moduł wbudowany.",
+        "textFinal_other": "Przenoszenie do wtyczki {{plugin}} nie powiodło się {{count}} razy; DeckPilot spróbuje ponownie dopiero po kliknięciu Ponów. Akcje nadal wykonuje moduł wbudowany.",
+        "text": "Przenoszenie do wtyczki {{plugin}} nie powiodło się; DeckPilot spróbuje ponownie przy następnym uruchomieniu. Akcje nadal wykonuje moduł wbudowany."
+      },
+      "notEligible": {
+        "text": "Moduł {{module}} pozostaje na tym komputerze wbudowany; jego akcje nadal działają."
+      },
+      "other": {
+        "label": "Nieznany stan",
+        "text": "Agent zgłasza stan, którego ta aplikacja nie zna; akcje modułu {{module}} pozostają bez zmian."
+      }
+    },
+    "fromSetting": "Z ustawienia",
+    "notice": {
+      "title": "Moduły wbudowane przenoszone do wtyczek",
+      "text": "Niektóre moduły wbudowane są zastępowane wtyczkami dostarczanymi z DeckPilot. Twoje akcje, klawisze i przepływy pracy zachowują swoje typy akcji i nadal działają; nic nie zostaje usunięte.",
+      "list": "Migracje modułów",
+      "attempts_one": "{{attempts}} z {{count}} automatycznej próby",
+      "attempts_few": "{{attempts}} z {{count}} automatycznych prób",
+      "attempts_many": "{{attempts}} z {{count}} automatycznych prób",
+      "attempts_other": "{{attempts}} z {{count}} automatycznej próby",
+      "reason": "Przyczyna:",
+      "review": "Przejrzyj…",
+      "retry": "Ponów",
+      "askAgain": "Zapytaj ponownie",
+      "retryNamed": "Ponów: {{module}}",
+      "askAgainNamed": "Zapytaj ponownie: {{module}}"
+    },
+    "import": {
+      "label": "Co zostanie zaimportowane",
+      "credential": "Przechowywane poświadczenie",
+      "slot": "Do miejsca we wtyczce",
+      "sentTo": "Wysyłane tylko do",
+      "allowedServer": "serwera, na który zezwolisz w {{setting}}",
+      "declaredHosts": "hostów deklarowanych przez wtyczkę"
+    },
+    "origin": {
+      "label": "Serwer",
+      "server": "Serwer",
+      "requests": "Żądania",
+      "anyMethod": "dowolna metoda",
+      "requestsServer": "{{methods}}, dokładnie do tego serwera",
+      "requestsPath": "{{methods}}, dokładnie do tego serwera i tej ścieżki",
+      "secrets": "Wysyłane tam sekrety",
+      "pages": "Otwierane strony",
+      "pagesOf": "serwera {{server}}, w akcjach, które uruchomisz"
+    },
+    "item": {
+      "privateNetwork": "Łączenie z {{server}} w Twojej sieci prywatnej",
+      "connect": "Łączenie z {{server}}",
+      "credential": "Używanie przechowywanego poświadczenia {{credential}}"
+    },
+    "dialog": {
+      "title": "Akcje modułu {{module}} działają teraz jako wtyczka",
+      "description": "Wtyczka {{plugin}} zastępuje wbudowany moduł {{module}}. Nie otrzymuje niczego, czego moduł wbudowany nie używał, a poniższe elementy — tylko za Twoją zgodą. Dopóki nie zezwolisz na każdy element, Twoje akcje nadal wykonuje moduł wbudowany.",
+      "declined": "{{module}} pozostaje modułem wbudowanym; możesz zapytać ponownie później.",
+      "allAllowed": "Zezwolono na wszystkie elementy.",
+      "undecided": "Elementy oczekujące na Twoją decyzję: {{undecided}} z {{total}}.",
+      "notNow": "Nie teraz",
+      "confirm": "Potwierdź",
+      "never": "Poświadczenia i dostęp do Twojej sieci lokalnej nigdy nie są przyznawane automatycznie. Przechowywane poświadczenia pozostają na miejscu; wtyczka otrzymuje kopię we własnym miejscu.",
+      "nothing": "Nic nie oczekuje na Twoją zgodę.",
+      "list": "O co prosi wtyczka",
+      "decision": "Decyzja: {{key}}",
+      "dontAllow": "Nie zezwalaj"
+    }
+  },
+  "plan": {
+    "label": "Plan instalacji",
+    "intro": "Sprawdź, co ta wtyczka może robić. Zaznacz każde uprawnienie, aby wyrazić na nie zgodę.",
+    "introMore_one": "Potrzebuje {{count}} dodatkowej wtyczki, instalowanej najpierw. Każda wtyczka otrzymuje tylko uprawnienia, które jej tu przyznasz.",
+    "introMore_few": "Potrzebuje {{count}} dodatkowych wtyczek, instalowanych najpierw. Każda wtyczka otrzymuje tylko uprawnienia, które jej tu przyznasz.",
+    "introMore_many": "Potrzebuje {{count}} dodatkowych wtyczek, instalowanych najpierw. Każda wtyczka otrzymuje tylko uprawnienia, które jej tu przyznasz.",
+    "introMore_other": "Potrzebuje {{count}} dodatkowej wtyczki, instalowanej najpierw. Każda wtyczka otrzymuje tylko uprawnienia, które jej tu przyznasz.",
+    "planning": "Ponowne planowanie…",
+    "noConsent": "Żadne uprawnienie nie wymaga Twojej zgody.",
+    "installCount": "Zainstaluj ({{number}})",
+    "installing": "Instalowanie…",
+    "checked": "Każdy pakiet został pobrany i sprawdzony z podpisanym rejestrem; nic nie zostanie zainstalowane przed Twoim potwierdzeniem. Jeśli jeden z kroków się nie powiedzie, wykonane zmiany zostaną cofnięte.",
+    "requested": "Żądana",
+    "neededBecause": "Potrzebna, ponieważ: {{reasons}}",
+    "allowNamed": "Zezwól wtyczce {{name}}: {{title}}",
+    "alsoInstall": "Zainstaluj też <name>{{name}}</name> <id>{{id}}</id>",
+    "withoutIt": "Bez niej te akcje są niedostępne: <code>{{actions}}</code>",
+    "blocked": "Tego planu nie można jeszcze zainstalować",
+    "installedOff": "Na tym komputerze nie można uruchamiać wtyczek: zostaną zainstalowane jako wyłączone.",
+    "action": {
+      "install": "Instalacja",
+      "update": "Aktualizacja",
+      "enable": "Włączenie",
+      "keep": "Już zainstalowana",
+      "builtin": "Wbudowany",
+      "enableBuiltin": "Wbudowany, wyłączony"
+    }
+  },
+  "removal": {
+    "turnOffTitle": "Wyłączyć {{name}}?",
+    "turnOff": "Wyłącz",
+    "turnOffCount": "Wyłącz ({{number}})",
+    "uninstallCount": "Odinstaluj ({{number}})",
+    "dependents": "Inne wtyczki jej potrzebują. Zostaną wyłączone razem z nią; nic więcej nie zostanie odinstalowane, chyba że zaznaczysz to poniżej.",
+    "review": "Sprawdź, co to zmieni.",
+    "alsoOff": "Wyłączone również",
+    "unavailable": "Akcje, które staną się niedostępne",
+    "optionalIntegration": "jej integracja opcjonalna",
+    "orphans": "Zainstalowane tylko dla niej",
+    "alsoUninstall": "Odinstaluj też <name>{{name}}</name> <id>{{id}}</id>"
+  },
+  "configure": {
+    "title": "Konfiguruj {{name}}",
+    "description": "Ustawienia i poświadczenia wersji {{version}}, przechowywane przez agenta tylko dla tej wtyczki.",
+    "settings": "Ustawienia",
+    "loadingSettings": "Wczytywanie ustawień…",
+    "credentials": "Poświadczenia",
+    "loadingCredentials": "Wczytywanie poświadczeń…",
+    "credentialsHint": "Sekret trafia do agenta jeden raz i nigdy więcej nie jest pokazywany, ani tutaj, ani nigdzie indziej. Wtyczka nigdy go nie widzi: agent dodaje go tylko do żądań wysyłanych do wymienionych hostów.",
+    "credentialsOf": "Poświadczenia wtyczki {{name}}",
+    "nothing": "Ta wersja nie deklaruje żadnych ustawień ani poświadczeń.",
+    "saved": "Zapisano ustawienia"
+  }
+}

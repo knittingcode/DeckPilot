@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
+
+import { i18n } from "@/i18n"
 
 import type { CatalogEntry, ParameterKind } from "./types"
 import {
@@ -231,5 +233,33 @@ describe("referenceRoot", () => {
     const status = describeStatus({ status: "unavailable", owner: "projects" })
     expect(status.label).toBe("Unavailable")
     expect(status.detail).toContain("projects")
+  })
+})
+
+describe("variable texts in Polish", () => {
+  afterEach(async () => {
+    await i18n.changeLanguage("en")
+  })
+
+  it("translate descriptions, never references", async () => {
+    const platform = SYSTEM_ENTRIES.find((e) => e.reference === "system.platform")
+    expect(platform?.description).toBe("Operating system of this computer")
+    await i18n.changeLanguage("pl")
+    expect(platform?.label).toBe("Platforma")
+    expect(platform?.description).toBe("System operacyjny tego komputera")
+    expect(platform?.reference).toBe("system.platform")
+    expect(describeStatus({ status: "missing", reason: "noProject" }).detail).toBe(
+      "Żaden projekt nie jest aktywny.",
+    )
+    expect(
+      describeContext(
+        { profile: "p1", project: "x", projectSource: "application" },
+        { profile: "Praca", project: "SHOP" },
+      ),
+    ).toBe("Profil Praca · aktywny projekt SHOP")
+    expect(groupEntries(SYSTEM_ENTRIES).map((g) => g.label)).toEqual([
+      "Systemowe",
+      "Przepływ pracy",
+    ])
   })
 })

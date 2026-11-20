@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
+import { useTranslation } from "@/i18n"
 import type {
   EventField,
   LifecycleEvent,
@@ -57,6 +58,7 @@ function InputSource({
   index: number
   onChange: (value: TriggerValue | undefined) => void
 }) {
+  const { t } = useTranslation()
   const value = trigger.inputs?.[input.key]
   const fields = EVENT_FIELDS.filter(
     (field) => fieldAvailable(field, trigger) && fieldFits(field, input.kind),
@@ -67,7 +69,12 @@ function InputSource({
       <div className="flex items-center gap-1">
         <span className="flex-1 truncate text-xs">
           {label}
-          {input.required && <span className="text-muted-foreground"> · required</span>}
+          {input.required && (
+            <span className="text-muted-foreground">
+              {" "}
+              · {t("workflows:triggers.input.required")}
+            </span>
+          )}
         </span>
         <Select
           value={sourceOf(value)}
@@ -79,15 +86,19 @@ function InputSource({
         >
           <SelectTrigger
             className="h-7 w-36 text-xs"
-            aria-label={`Trigger ${index + 1} ${label} value`}
+            aria-label={t("workflows:triggers.input.source", { index: index + 1, input: label })}
           >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="default">
-              {input.required ? "No value" : `Default${input.default ? ` (${input.default})` : ""}`}
+              {input.required
+                ? t("workflows:triggers.input.noValue")
+                : input.default
+                  ? t("workflows:triggers.input.defaultValue", { value: input.default })
+                  : t("workflows:triggers.input.default")}
             </SelectItem>
-            <SelectItem value="fixed">Fixed value</SelectItem>
+            <SelectItem value="fixed">{t("workflows:triggers.input.fixed")}</SelectItem>
             {fields.map((field) => (
               <SelectItem key={field} value={`field:${field}`}>
                 {FIELD_LABEL[field]}
@@ -98,7 +109,7 @@ function InputSource({
       </div>
       {value?.type === "fixed" && (
         <Input
-          aria-label={`Trigger ${index + 1} ${label} fixed value`}
+          aria-label={t("workflows:triggers.input.fixedValue", { index: index + 1, input: label })}
           className="h-7 text-xs"
           value={value.value}
           onChange={(e) => {
@@ -106,7 +117,9 @@ function InputSource({
           }}
         />
       )}
-      {!value && input.required && <p className="text-xs text-destructive">Needs a value.</p>}
+      {!value && input.required && (
+        <p className="text-xs text-destructive">{t("workflows:triggers.input.needsValue")}</p>
+      )}
     </div>
   )
 }
@@ -120,6 +133,7 @@ function ScheduleFields({
   index: number
   onChange: (schedule: Schedule) => void
 }) {
+  const { t } = useTranslation()
   return (
     <div className="grid gap-1.5">
       <Select
@@ -128,35 +142,42 @@ function ScheduleFields({
           onChange(SCHEDULE_DEFAULTS[every as Schedule["every"]])
         }}
       >
-        <SelectTrigger className="h-7 text-xs" aria-label={`Trigger ${index + 1} repeats`}>
+        <SelectTrigger
+          className="h-7 text-xs"
+          aria-label={t("workflows:triggers.repeats", { index: index + 1 })}
+        >
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="interval">At an interval</SelectItem>
-          <SelectItem value="daily">Every day</SelectItem>
-          <SelectItem value="weekly">On weekdays</SelectItem>
+          <SelectItem value="interval">{t("workflows:triggers.every.interval")}</SelectItem>
+          <SelectItem value="daily">{t("workflows:triggers.every.daily")}</SelectItem>
+          <SelectItem value="weekly">{t("workflows:triggers.every.weekly")}</SelectItem>
         </SelectContent>
       </Select>
       {schedule.every === "interval" ? (
         <div className="flex items-center gap-1.5 text-xs">
-          <span>Every</span>
+          <span>{t("workflows:triggers.intervalBefore")}</span>
           <Input
             type="number"
             min={MIN_INTERVAL_MINUTES}
             max={MAX_INTERVAL_MINUTES}
-            aria-label={`Trigger ${index + 1} minutes`}
+            aria-label={t("workflows:triggers.minutes", { index: index + 1 })}
             className="h-7 w-20 text-xs"
             value={schedule.minutes}
             onChange={(e) => {
               onChange({ every: "interval", minutes: Math.trunc(Number(e.target.value)) })
             }}
           />
-          <span>minutes</span>
+          <span>{t("workflows:triggers.intervalAfter", { count: schedule.minutes })}</span>
         </div>
       ) : (
         <>
           {schedule.every === "weekly" && (
-            <div className="flex flex-wrap gap-1" role="group" aria-label="Weekdays">
+            <div
+              className="flex flex-wrap gap-1"
+              role="group"
+              aria-label={t("workflows:triggers.weekdays")}
+            >
               {WEEKDAYS.map(({ day, label }) => {
                 const on = schedule.days.includes(day)
                 return (
@@ -184,17 +205,17 @@ function ScheduleFields({
             </div>
           )}
           <div className="flex items-center gap-1.5 text-xs">
-            <span>At</span>
+            <span>{t("workflows:triggers.at")}</span>
             <Input
               type="time"
-              aria-label={`Trigger ${index + 1} time`}
+              aria-label={t("workflows:triggers.time", { index: index + 1 })}
               className="h-7 w-28 text-xs"
               value={schedule.at}
               onChange={(e) => {
                 onChange({ ...schedule, at: e.target.value })
               }}
             />
-            <span className="text-muted-foreground">local time</span>
+            <span className="text-muted-foreground">{t("workflows:triggers.localTime")}</span>
           </div>
         </>
       )}
@@ -219,14 +240,17 @@ export function TriggersEditor({
   onTriggers: (triggers: WorkflowTrigger[]) => void
   onPaused: (paused: boolean) => void
 }) {
+  const { t } = useTranslation()
   const set = (index: number, trigger: WorkflowTrigger) => {
-    onTriggers(triggers.map((t, i) => (i === index ? trigger : t)))
+    onTriggers(triggers.map((other, i) => (i === index ? trigger : other)))
   }
   const full = triggers.length >= MAX_TRIGGERS
   return (
-    <section className="grid gap-3 border-t px-4 py-3" aria-label="Triggers">
+    <section className="grid gap-3 border-t px-4 py-3" aria-label={t("workflows:triggers.title")}>
       <div className="flex items-center gap-2">
-        <h3 className="flex-1 text-xs font-medium text-muted-foreground uppercase">Triggers</h3>
+        <h3 className="flex-1 text-xs font-medium text-muted-foreground uppercase">
+          {t("workflows:triggers.title")}
+        </h3>
         {triggers.length > 0 && (
           <div className="flex items-center gap-1.5">
             <Switch
@@ -237,21 +261,20 @@ export function TriggersEditor({
               }}
             />
             <Label htmlFor="triggers-paused" className="text-xs font-normal">
-              Paused
+              {t("workflows:triggers.paused")}
             </Label>
           </div>
         )}
       </div>
-      <p className="text-xs text-muted-foreground">
-        Start this workflow on a schedule or when something happens, while DeckPilot is unlocked and
-        this profile is active. A run is skipped while the previous one still runs; missed times are
-        not made up.
-      </p>
+      <p className="text-xs text-muted-foreground">{t("workflows:triggers.description")}</p>
       {triggers.map((trigger, index) => (
         <div
           key={index}
           role="group"
-          aria-label={`Trigger ${index + 1}: ${describeTrigger(trigger)}`}
+          aria-label={t("workflows:triggers.group", {
+            index: index + 1,
+            trigger: describeTrigger(trigger),
+          })}
           className={cn("grid gap-2 rounded-md border p-2", paused && "opacity-60")}
         >
           <div className="flex items-center gap-1.5">
@@ -265,7 +288,7 @@ export function TriggersEditor({
               variant="ghost"
               size="icon"
               className="size-7"
-              aria-label={`Remove trigger ${index + 1}`}
+              aria-label={t("workflows:triggers.remove", { index: index + 1 })}
               onClick={() => {
                 onTriggers(triggers.filter((_, i) => i !== index))
               }}
@@ -288,7 +311,10 @@ export function TriggersEditor({
                 set(index, { ...trigger, event: event as LifecycleEvent })
               }}
             >
-              <SelectTrigger className="h-7 text-xs" aria-label={`Trigger ${index + 1} event`}>
+              <SelectTrigger
+                className="h-7 text-xs"
+                aria-label={t("workflows:triggers.eventSelect", { index: index + 1 })}
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -326,7 +352,7 @@ export function TriggersEditor({
             onTriggers([...triggers, { type: "schedule", schedule: SCHEDULE_DEFAULTS.interval }])
           }}
         >
-          <Plus /> Schedule
+          <Plus /> {t("workflows:triggers.addSchedule")}
         </Button>
         <Button
           variant="outline"
@@ -336,7 +362,7 @@ export function TriggersEditor({
             onTriggers([...triggers, { type: "lifecycle", event: "deviceConnected" }])
           }}
         >
-          <Plus /> Event
+          <Plus /> {t("workflows:triggers.addEvent")}
         </Button>
       </div>
     </section>

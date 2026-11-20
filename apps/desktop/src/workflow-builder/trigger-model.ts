@@ -3,6 +3,7 @@
  * (crates/deckpilot-core/src/trigger.rs); its validation stays the
  * authority and is shown in the workflow panel.
  */
+import { i18n } from "@/i18n"
 import type {
   EventField,
   ExecutionSummary,
@@ -13,37 +14,49 @@ import type {
   WorkflowTrigger,
 } from "@/lib/types"
 
+import { translatedLabels } from "./variable-reference"
+
 export const MIN_INTERVAL_MINUTES = 1
 export const MAX_INTERVAL_MINUTES = 7 * 24 * 60
 export const MAX_TRIGGERS = 16
 
-export const WEEKDAYS: { day: Weekday; label: string }[] = [
-  { day: "mon", label: "Mon" },
-  { day: "tue", label: "Tue" },
-  { day: "wed", label: "Wed" },
-  { day: "thu", label: "Thu" },
-  { day: "fri", label: "Fri" },
-  { day: "sat", label: "Sat" },
-  { day: "sun", label: "Sun" },
-]
+const WEEKDAY_LABEL = translatedLabels<Weekday>({
+  mon: "workflows:triggers.weekday.mon",
+  tue: "workflows:triggers.weekday.tue",
+  wed: "workflows:triggers.weekday.wed",
+  thu: "workflows:triggers.weekday.thu",
+  fri: "workflows:triggers.weekday.fri",
+  sat: "workflows:triggers.weekday.sat",
+  sun: "workflows:triggers.weekday.sun",
+})
 
-export const LIFECYCLE_LABEL: Record<LifecycleEvent, string> = {
-  agentStarted: "DeckPilot started",
-  profileActivated: "Profile activated",
-  projectChanged: "Active project changed",
-  deviceConnected: "Stream Deck connected",
-  deviceDisconnected: "Stream Deck disconnected",
-}
+/** The days of the week in order, with short names in the window's language. */
+export const WEEKDAYS: readonly { day: Weekday; readonly label: string }[] = (
+  ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const
+).map((day) => ({
+  day,
+  get label() {
+    return WEEKDAY_LABEL[day]
+  },
+}))
 
-export const FIELD_LABEL: Record<EventField, string> = {
-  firedAt: "Date and time",
-  profileName: "Profile name",
-  projectKey: "Project key",
-  projectName: "Project name",
-  previousProjectKey: "Previous project key",
-  deviceId: "Device serial",
-  deviceModel: "Device model",
-}
+export const LIFECYCLE_LABEL = translatedLabels<LifecycleEvent>({
+  agentStarted: "workflows:triggers.event.agentStarted",
+  profileActivated: "workflows:triggers.event.profileActivated",
+  projectChanged: "workflows:triggers.event.projectChanged",
+  deviceConnected: "workflows:triggers.event.deviceConnected",
+  deviceDisconnected: "workflows:triggers.event.deviceDisconnected",
+})
+
+export const FIELD_LABEL = translatedLabels<EventField>({
+  firedAt: "workflows:triggers.field.firedAt",
+  profileName: "workflows:triggers.field.profileName",
+  projectKey: "workflows:triggers.field.projectKey",
+  projectName: "workflows:triggers.field.projectName",
+  previousProjectKey: "workflows:triggers.field.previousProjectKey",
+  deviceId: "workflows:triggers.field.deviceId",
+  deviceModel: "workflows:triggers.field.deviceModel",
+})
 
 export const EVENT_FIELDS = Object.keys(FIELD_LABEL) as EventField[]
 
@@ -80,11 +93,14 @@ function dayList(days: Weekday[]) {
 export function describeSchedule(schedule: Schedule): string {
   switch (schedule.every) {
     case "interval":
-      return schedule.minutes === 1 ? "Every minute" : `Every ${schedule.minutes} minutes`
+      return i18n.t("workflows:triggers.schedule.interval", { count: schedule.minutes })
     case "daily":
-      return `Daily at ${schedule.at}`
+      return i18n.t("workflows:triggers.schedule.daily", { time: schedule.at })
     case "weekly":
-      return `${dayList(schedule.days) || "No days"} at ${schedule.at}`
+      return i18n.t("workflows:triggers.schedule.weekly", {
+        days: dayList(schedule.days) || i18n.t("workflows:triggers.schedule.noDays"),
+        time: schedule.at,
+      })
   }
 }
 
@@ -99,22 +115,26 @@ export function describeTrigger(trigger: WorkflowTrigger): string {
 export function triggersSummary(triggers: WorkflowTrigger[] | undefined, paused?: boolean) {
   if (!triggers?.length) return ""
   const text = triggers.map(describeTrigger).join(" · ")
-  return paused ? `Paused · ${text}` : text
+  return paused ? i18n.t("workflows:triggers.pausedSummary", { triggers: text }) : text
 }
 
 /** How a run was started, in words. */
 export function triggerText(run: Pick<ExecutionSummary, "trigger" | "triggerDetail">): string {
-  const detail = run.triggerDetail ? ` (${run.triggerDetail})` : ""
+  const detail = run.triggerDetail
   switch (run.trigger) {
     case "app":
-      return "Started in the app"
+      return i18n.t("workflows:triggers.startedBy.app")
     case "device":
-      return "Started from a Stream Deck"
+      return i18n.t("workflows:triggers.startedBy.device")
     case "schedule":
-      return `Started by a schedule${detail}`
+      return detail
+        ? i18n.t("workflows:triggers.startedBy.scheduleDetail", { detail })
+        : i18n.t("workflows:triggers.startedBy.schedule")
     case "lifecycle":
-      return `Started by an event${detail}`
+      return detail
+        ? i18n.t("workflows:triggers.startedBy.eventDetail", { detail })
+        : i18n.t("workflows:triggers.startedBy.event")
     default:
-      return "Started automatically"
+      return i18n.t("workflows:triggers.startedBy.automatic")
   }
 }

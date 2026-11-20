@@ -31,7 +31,7 @@ import {
 import { useState } from "react"
 import { toast } from "sonner"
 
-import { ConfirmDialog } from "@/components/confirm-dialog"
+import { ConfirmDialog, FieldError, FormDialog } from "@/components/dialogs"
 import { EmptyState, ErrorNotice, Loading, Page } from "@/components/page"
 import { RequireProfile } from "@/components/require-profile"
 import { Button } from "@/components/ui/button"
@@ -41,14 +41,6 @@ import {
   SettingsRow,
   SettingsSection,
 } from "@/components/settings-layout"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -61,21 +53,23 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAsync } from "@/hooks/use-async"
 import { useEditingProfile } from "@/hooks/use-profile"
+import { Trans, type TranslationKey, useTranslation } from "@/i18n"
+import { useFormat } from "@/i18n/format"
 import { api } from "@/lib/api"
 import { failureMessage, toastFailure } from "@/lib/failure"
 import { useTitlebar } from "@/hooks/use-titlebar"
 import { useAppContext } from "@/lib/app-context"
-import { RESOURCE_KIND_LABELS } from "@/lib/format"
 import type { Project, ProfileView, ResourceCheck, ResourceKind, ResourceStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 import { ProjectSwitcher } from "./project-switcher"
 
 export function ProjectsPage() {
+  const { t } = useTranslation()
   return (
     <Page
-      title="Projects"
-      description="Projects of this profile and their resources on this machine"
+      title={t("workspace:projects.page.title")}
+      description={t("workspace:projects.page.description")}
       profileScoped
     >
       <RequireProfile>{() => <Projects />}</RequireProfile>
@@ -85,20 +79,44 @@ export function ProjectsPage() {
 
 const STATUS: Record<
   ResourceStatus,
-  { label: string; icon: typeof CircleCheck; className: string }
+  { label: TranslationKey; icon: typeof CircleCheck; className: string }
 > = {
-  ok: { label: "Found", icon: CircleCheck, className: "text-emerald-600" },
-  missing: { label: "Missing", icon: CircleAlert, className: "text-destructive" },
-  unbound: { label: "Not set on this machine", icon: CircleAlert, className: "text-amber-600" },
-  unchecked: { label: "Not checked", icon: CircleDashed, className: "text-muted-foreground" },
+  ok: { label: "workspace:projects.status.ok", icon: CircleCheck, className: "text-emerald-600" },
+  missing: {
+    label: "workspace:projects.status.missing",
+    icon: CircleAlert,
+    className: "text-destructive",
+  },
+  unbound: {
+    label: "workspace:projects.status.unbound",
+    icon: CircleAlert,
+    className: "text-amber-600",
+  },
+  unchecked: {
+    label: "workspace:projects.status.unchecked",
+    icon: CircleDashed,
+    className: "text-muted-foreground",
+  },
+}
+
+const KIND_LABELS: Record<ResourceKind, TranslationKey> = {
+  directory: "workspace:projects.kind.directory",
+  application: "workspace:projects.kind.application",
+  terminal: "workspace:projects.kind.terminal",
+  dockerEnvironment: "workspace:projects.kind.dockerEnvironment",
+  service: "workspace:projects.kind.service",
+  url: "workspace:projects.kind.url",
+  other: "workspace:projects.kind.other",
 }
 
 function StatusIcon({ status }: { status: ResourceStatus }) {
+  const { t } = useTranslation()
   const { icon: Icon, className, label } = STATUS[status]
-  return <Icon className={cn("size-3.5 shrink-0", className)} aria-label={label} />
+  return <Icon className={cn("size-3.5 shrink-0", className)} aria-label={t(label)} />
 }
 
 function Projects() {
+  const { t } = useTranslation()
   const { state, reload, profileId } = useEditingProfile()
   const { revision } = useAppContext()
   const checks = useAsync(
@@ -116,8 +134,8 @@ function Projects() {
   return (
     <Tabs defaultValue="projects" className="mx-auto w-full max-w-3xl gap-4">
       <TabsList>
-        <TabsTrigger value="projects">Projects</TabsTrigger>
-        <TabsTrigger value="machine">This machine</TabsTrigger>
+        <TabsTrigger value="projects">{t("workspace:projects.tabs.projects")}</TabsTrigger>
+        <TabsTrigger value="machine">{t("workspace:projects.tabs.machine")}</TabsTrigger>
       </TabsList>
       <TabsContent value="projects" className="grid content-start gap-8">
         <ProjectCycle
@@ -151,6 +169,7 @@ function ProjectCycle({
   checks: ResourceCheck[]
   onChange: () => void
 }) {
+  const { t } = useTranslation()
   const { refresh, profiles } = useAppContext()
   const [dialog, setDialog] = useState<ProjectDialogState>(null)
   const otherProfiles = profiles.profiles.filter((p) => p.id !== profileId)
@@ -167,7 +186,7 @@ function ProjectCycle({
     const to = projects.findIndex((p) => p.id === event.over?.id)
     if (to < 0 || event.active.id === event.over?.id) return
     api.moveProject(profileId, String(event.active.id), to).then(changed, (e: unknown) => {
-      toastFailure("The project was not moved", e)
+      toastFailure(t("workspace:projects.cycle.moveFailed"), e)
     })
   }
   const statusOf = (key: string) => checks.find((c) => c.key === key)?.status ?? "unbound"
@@ -176,7 +195,7 @@ function ProjectCycle({
     actions: [
       {
         id: "projects.new",
-        label: "New project",
+        label: t("workspace:projects.actions.new"),
         icon: Plus,
         placement: "primary",
         onSelect: () => {
@@ -189,15 +208,18 @@ function ProjectCycle({
         ? [
             {
               id: "projects.switch",
-              label: "Switch project",
+              label: t("workspace:projects.actions.switch"),
               icon: ArrowLeftRight,
               items: projects.map((project) => ({
                 id: project.id,
-                label: `${project.key} · ${project.name}`,
+                label: t("workspace:projects.option", { key: project.key, project: project.name }),
                 checked: project.id === view.activeProjectId,
                 onSelect: () => {
                   api.selectProject(profileId, project.id).then(changed, (e: unknown) => {
-                    toastFailure(`${project.key} was not selected`, e)
+                    toastFailure(
+                      t("workspace:projects.actions.selectFailed", { key: project.key }),
+                      e,
+                    )
                   })
                 },
               })),
@@ -210,13 +232,13 @@ function ProjectCycle({
   return (
     <>
       <SettingsSection
-        title="Project switcher"
-        description="Switching only changes which project actions refer to. Nothing is checked out, restarted or launched."
+        title={t("workspace:projects.switcher.title")}
+        description={t("workspace:projects.switcher.description")}
       >
         {projects.length > 0 && (
           <SettingsGroup>
             {profiles.activeProfileId === profileId ? (
-              <SettingsRow label="Active project">
+              <SettingsRow label={t("workspace:projects.switcher.active")}>
                 <ProjectSwitcher
                   profileId={profileId}
                   projects={projects}
@@ -225,20 +247,24 @@ function ProjectCycle({
               </SettingsRow>
             ) : (
               <SettingsRow
-                label="Active project"
-                description={
-                  <>
-                    {view.profile.name} is not active on the device. Its active project is{" "}
-                    {projects.find((p) => p.id === view.activeProjectId)?.key ?? "not set"}; it is
-                    restored when the profile is activated.
-                  </>
-                }
+                label={t("workspace:projects.switcher.active")}
+                description={(() => {
+                  const active = projects.find((p) => p.id === view.activeProjectId)
+                  return active
+                    ? t("workspace:projects.switcher.inactiveWithProject", {
+                        profile: view.profile.name,
+                        key: active.key,
+                      })
+                    : t("workspace:projects.switcher.inactiveNoProject", {
+                        profile: view.profile.name,
+                      })
+                })()}
               />
             )}
             <SettingsRow
-              label="Default project"
+              label={t("workspace:projects.default.label")}
               htmlFor="default-project"
-              description="Selected when the profile is activated and no project was chosen before."
+              description={t("workspace:projects.default.description")}
             >
               <Select
                 value={view.profile.defaultProject ?? "first"}
@@ -246,11 +272,11 @@ function ProjectCycle({
                   api
                     .setDefaultProject(profileId, value === "first" ? null : value)
                     .then(() => {
-                      toast.success("Default project saved")
+                      toast.success(t("workspace:projects.default.saved"))
                       changed()
                     })
                     .catch((e: unknown) => {
-                      toastFailure("The default project was not saved", e)
+                      toastFailure(t("workspace:projects.default.saveFailed"), e)
                     })
                 }}
               >
@@ -258,10 +284,10 @@ function ProjectCycle({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="first">First project in the order</SelectItem>
+                  <SelectItem value="first">{t("workspace:projects.default.first")}</SelectItem>
                   {projects.map((project) => (
                     <SelectItem key={project.id} value={project.id}>
-                      {project.key} · {project.name}
+                      {t("workspace:projects.option", { key: project.key, project: project.name })}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -271,12 +297,18 @@ function ProjectCycle({
         )}
       </SettingsSection>
       <SettingsSection
-        title="Cycle order"
-        description="Drag to reorder. Next and previous project follow this order."
+        title={t("workspace:projects.cycle.title")}
+        description={
+          projects.length > 0
+            ? t("workspace:projects.cycle.description", {
+                projects: t("common:counts.projects", { count: projects.length }),
+              })
+            : t("workspace:projects.cycle.descriptionEmpty")
+        }
       >
         {projects.length === 0 ? (
-          <EmptyState variant="plain" title="No projects in this profile">
-            Projects give actions a context, such as the repository of the active project.
+          <EmptyState variant="plain" title={t("workspace:projects.cycle.empty")}>
+            {t("workspace:projects.cycle.emptyHint")}
           </EmptyState>
         ) : (
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
@@ -303,16 +335,10 @@ function ProjectCycle({
                           }
                         : undefined
                     }
-                    onDelete={() => {
-                      api
-                        .deleteProject(profileId, project.id)
-                        .then(() => {
-                          toast.success("Project deleted")
-                          changed()
-                        })
-                        .catch((e: unknown) => {
-                          toastFailure(`${project.key} was not deleted`, e)
-                        })
+                    onDelete={async () => {
+                      await api.deleteProject(profileId, project.id)
+                      toast.success(t("workspace:projects.item.deleted"))
+                      changed()
                     }}
                   />
                 ))}
@@ -321,37 +347,34 @@ function ProjectCycle({
           </DndContext>
         )}
       </SettingsSection>
-      <Dialog
-        open={dialog !== null}
-        onOpenChange={(open) => {
-          if (!open) setDialog(null)
-        }}
-      >
-        <DialogContent className="sm:max-w-xl">
-          {dialog?.mode === "copy" && (
-            <CopyProjectForm
-              profileId={profileId}
-              project={dialog.project}
-              targets={otherProfiles}
-              onDone={() => {
-                setDialog(null)
-                changed()
-              }}
-            />
-          )}
-          {dialog && dialog.mode !== "copy" && (
-            <ProjectForm
-              key={dialog.mode === "edit" ? dialog.project.id : "new"}
-              profileId={profileId}
-              project={dialog.mode === "edit" ? dialog.project : null}
-              onDone={() => {
-                setDialog(null)
-                changed()
-              }}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
+      {dialog?.mode === "copy" && (
+        <CopyProjectForm
+          profileId={profileId}
+          project={dialog.project}
+          targets={otherProfiles}
+          onClose={() => {
+            setDialog(null)
+          }}
+          onDone={() => {
+            setDialog(null)
+            changed()
+          }}
+        />
+      )}
+      {dialog && dialog.mode !== "copy" && (
+        <ProjectForm
+          key={dialog.mode === "edit" ? dialog.project.id : "new"}
+          profileId={profileId}
+          project={dialog.mode === "edit" ? dialog.project : null}
+          onClose={() => {
+            setDialog(null)
+          }}
+          onDone={() => {
+            setDialog(null)
+            changed()
+          }}
+        />
+      )}
     </>
   )
 }
@@ -373,8 +396,10 @@ function SortableProject({
   statusOf: (key: string) => ResourceStatus
   onEdit: () => void
   onCopy?: () => void
-  onDelete: () => void
+  /** Rejects with the backend's error; the confirmation then shows it. */
+  onDelete: () => Promise<void>
 }) {
+  const { t } = useTranslation()
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
     id: project.id,
   })
@@ -389,7 +414,7 @@ function SortableProject({
       <button
         type="button"
         className="cursor-grab rounded p-1 text-muted-foreground hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-        aria-label={`Reorder ${project.key}`}
+        aria-label={t("workspace:projects.item.reorder", { key: project.key })}
         {...attributes}
         {...listeners}
       >
@@ -402,8 +427,14 @@ function SortableProject({
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-mono text-sm font-semibold">{project.key}</span>
           <span className="text-sm">{project.name}</span>
-          {active && <InlineStatus tone="positive">Active</InlineStatus>}
-          {isDefault && <span className="text-caption text-muted-foreground">Default</span>}
+          {active && (
+            <InlineStatus tone="positive">{t("workspace:projects.item.active")}</InlineStatus>
+          )}
+          {isDefault && (
+            <span className="text-caption text-muted-foreground">
+              {t("workspace:projects.item.default")}
+            </span>
+          )}
         </div>
         {resources.length > 0 && (
           <ul className="grid gap-0.5 text-xs text-muted-foreground">
@@ -411,21 +442,30 @@ function SortableProject({
               <li key={role} className="flex items-center gap-1">
                 <StatusIcon status={statusOf(key)} />
                 {role} → <span className="font-mono">{key}</span>
-                <span className="text-muted-foreground/70">({STATUS[statusOf(key)].label})</span>
+                <span className="text-muted-foreground/70">
+                  {t("workspace:projects.item.resourceStatus", {
+                    status: t(STATUS[statusOf(key)].label),
+                  })}
+                </span>
               </li>
             ))}
           </ul>
         )}
       </div>
-      <Button variant="ghost" size="icon-sm" aria-label={`Edit ${project.key}`} onClick={onEdit}>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label={t("workspace:projects.item.edit", { key: project.key })}
+        onClick={onEdit}
+      >
         <Pencil />
       </Button>
       {onCopy && (
         <Button
           variant="ghost"
           size="icon"
-          aria-label={`Copy ${project.key} to another profile`}
-          title="Copy to another profile"
+          aria-label={t("workspace:projects.item.copy", { key: project.key })}
+          title={t("workspace:projects.item.copyTooltip")}
           onClick={onCopy}
         >
           <Copy />
@@ -433,13 +473,20 @@ function SortableProject({
       )}
       <ConfirmDialog
         trigger={
-          <Button variant="ghost" size="icon-sm" aria-label={`Delete ${project.key}`}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={t("workspace:projects.item.delete", { key: project.key })}
+          >
             <Trash2 />
           </Button>
         }
-        title={`Delete ${project.key}?`}
-        description="Actions that refer to its resources through the active project will no longer resolve while no project provides them."
+        title={t("workspace:projects.item.deleteTitle", { key: project.key })}
+        description={t("workspace:projects.item.deleteDescription")}
         onConfirm={onDelete}
+        describeError={(e) =>
+          failureMessage(t("workspace:projects.item.deleteFailed", { key: project.key }), e)
+        }
       />
     </li>
   )
@@ -450,59 +497,51 @@ function CopyProjectForm({
   profileId,
   project,
   targets,
+  onClose,
   onDone,
 }: {
   profileId: string
   project: Project
   targets: { id: string; name: string }[]
+  onClose: () => void
   onDone: () => void
 }) {
+  const { t } = useTranslation()
   const [target, setTarget] = useState(targets[0]?.id ?? "")
-  const [error, setError] = useState<string | null>(null)
-  const name = targets.find((t) => t.id === target)?.name ?? ""
-  const submit = (event: React.SyntheticEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    api
-      .copyProject(profileId, project.id, target)
-      .then(() => {
-        toast.success(`${project.key} copied to ${name}`)
-        onDone()
-      })
-      .catch((e: unknown) => {
-        setError(failureMessage(`${project.key} was not copied`, e))
-      })
-  }
+  const name = targets.find((p) => p.id === target)?.name ?? ""
   return (
-    <form className="grid gap-4" onSubmit={submit}>
-      <DialogHeader>
-        <DialogTitle>Copy {project.key} to another profile</DialogTitle>
-        <DialogDescription>
-          The other profile gets its own copy with the same key, name and resource roles. Later
-          changes to either project do not affect the other.
-        </DialogDescription>
-      </DialogHeader>
-      {error && <ErrorNotice error={error} />}
+    <FormDialog
+      open
+      title={t("workspace:projects.copy.title", { key: project.key })}
+      description={t("workspace:projects.copy.description")}
+      submitLabel={t("workspace:projects.copy.submit")}
+      canSubmit={Boolean(target)}
+      onClose={onClose}
+      onSubmit={async () => {
+        await api.copyProject(profileId, project.id, target)
+        toast.success(t("workspace:projects.copy.done", { key: project.key, profile: name }))
+        onDone()
+      }}
+      describeError={(e) =>
+        failureMessage(t("workspace:projects.copy.failed", { key: project.key }), e)
+      }
+    >
       <div className="grid gap-2">
-        <Label htmlFor="copy-target">Target profile</Label>
+        <Label htmlFor="copy-target">{t("workspace:projects.copy.target")}</Label>
         <Select value={target} onValueChange={setTarget}>
           <SelectTrigger id="copy-target" className="w-full">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {targets.map((t) => (
-              <SelectItem key={t.id} value={t.id}>
-                {t.name}
+            {targets.map((p) => (
+              <SelectItem key={p.id} value={p.id}>
+                {p.name}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
       </div>
-      <DialogFooter>
-        <Button type="submit" disabled={!target}>
-          <Copy /> Copy project
-        </Button>
-      </DialogFooter>
-    </form>
+    </FormDialog>
   )
 }
 
@@ -511,64 +550,83 @@ interface ResourceRow {
   key: string
 }
 
+/** A problem with what was entered, shown as it is (not as a backend failure). */
+class InvalidInput extends Error {}
+
 function ProjectForm({
   profileId,
   project,
+  onClose,
   onDone,
 }: {
   profileId: string
   project: Project | null
+  onClose: () => void
   onDone: () => void
 }) {
+  const { t } = useTranslation()
+  const initialRows = Object.entries(project?.resources ?? {}).map(([role, resource]) => ({
+    role,
+    key: resource,
+  }))
   const [key, setKey] = useState(project?.key ?? "")
   const [name, setName] = useState(project?.name ?? "")
-  const [rows, setRows] = useState<ResourceRow[]>(
-    Object.entries(project?.resources ?? {}).map(([role, resource]) => ({ role, key: resource })),
-  )
-  const [error, setError] = useState<string | null>(null)
+  const [rows, setRows] = useState<ResourceRow[]>(initialRows)
+  const dirty =
+    key !== (project?.key ?? "") ||
+    name !== (project?.name ?? "") ||
+    JSON.stringify(rows) !== JSON.stringify(initialRows)
   const update = (index: number, patch: Partial<ResourceRow>) => {
     setRows((current) => current.map((row, i) => (i === index ? { ...row, ...patch } : row)))
   }
-  const submit = async (event: React.SyntheticEvent<HTMLFormElement>) => {
-    event.preventDefault()
+  const submit = async () => {
     const filled = rows
       .map((r) => ({ role: r.role.trim(), key: r.key.trim() }))
       .filter((r) => r.role || r.key)
     // A half-filled row or a repeated role would otherwise be saved silently
     // as an empty role or overwrite the earlier row.
     if (filled.some((r) => !r.role || !r.key)) {
-      setError("Each resource needs a role and a resource key.")
-      return
+      throw new InvalidInput(t("workspace:projects.form.incompleteResource"))
     }
     const roles = filled.map((r) => r.role)
     const repeated = roles.find((role, index) => roles.indexOf(role) !== index)
     if (repeated) {
-      setError(`The role “${repeated}” is used twice.`)
-      return
+      throw new InvalidInput(t("workspace:projects.form.repeatedRole", { role: repeated }))
     }
     const resources = Object.fromEntries(filled.map((r) => [r.role, r.key]))
-    try {
-      if (project) await api.updateProject(profileId, project.id, { key, name, resources })
-      else await api.createProject(profileId, { key, name, resources })
-      toast.success("Project saved")
-      onDone()
-    } catch (e) {
-      setError(failureMessage("The project was not saved", e))
-    }
+    if (project) await api.updateProject(profileId, project.id, { key, name, resources })
+    else await api.createProject(profileId, { key, name, resources })
+    toast.success(t("workspace:projects.form.saved"))
+    onDone()
   }
   return (
-    <form className="grid gap-4" onSubmit={(e) => void submit(e)}>
-      <DialogHeader>
-        <DialogTitle>{project ? `Edit ${project.key}` : "New project"}</DialogTitle>
-        <DialogDescription>
-          Resources map a role (for example <code>repository</code>) to a logical key such as
-          <code className="mx-1">shop.repository</code>. Each machine maps keys to real paths.
-        </DialogDescription>
-      </DialogHeader>
-      {error && <ErrorNotice error={error} />}
+    <FormDialog
+      open
+      title={
+        project
+          ? t("workspace:projects.form.editTitle", { key: project.key })
+          : t("workspace:projects.form.newTitle")
+      }
+      description={
+        <Trans
+          i18nKey="workspace:projects.form.description"
+          components={{ role: <code />, key: <code className="mx-1" /> }}
+        />
+      }
+      submitLabel={t("workspace:projects.form.save")}
+      canSubmit={Boolean(key.trim())}
+      dirty={dirty}
+      onClose={onClose}
+      onSubmit={submit}
+      describeError={(e) =>
+        e instanceof InvalidInput
+          ? e.message
+          : failureMessage(t("workspace:projects.form.saveFailed"), e)
+      }
+    >
       <div className="grid grid-cols-[8rem_1fr] gap-4">
         <div className="grid gap-2">
-          <Label htmlFor="project-key">Key</Label>
+          <Label htmlFor="project-key">{t("workspace:projects.form.key")}</Label>
           <Input
             id="project-key"
             value={key}
@@ -580,11 +638,11 @@ function ProjectForm({
           />
         </div>
         <div className="grid gap-2">
-          <Label htmlFor="project-name">Name</Label>
+          <Label htmlFor="project-name">{t("workspace:projects.form.name")}</Label>
           <Input
             id="project-name"
             value={name}
-            placeholder="Online Shop"
+            placeholder={t("workspace:projects.form.namePlaceholder")}
             onChange={(e) => {
               setName(e.target.value)
             }}
@@ -592,16 +650,16 @@ function ProjectForm({
         </div>
       </div>
       <div className="grid gap-2">
-        <Label>Resources</Label>
+        <Label>{t("workspace:projects.form.resources")}</Label>
         {rows.map((row, index) => (
           <div
             key={index}
             role="group"
-            aria-label={`Resource ${index + 1}`}
+            aria-label={t("workspace:projects.form.resource", { number: index + 1 })}
             className="grid grid-cols-[1fr_1fr_auto] gap-2"
           >
             <Input
-              aria-label="Role"
+              aria-label={t("workspace:projects.form.role")}
               value={row.role}
               placeholder="repository"
               onChange={(e) => {
@@ -609,7 +667,7 @@ function ProjectForm({
               }}
             />
             <Input
-              aria-label="Resource key"
+              aria-label={t("workspace:projects.form.resourceKey")}
               value={row.key}
               placeholder="shop.repository"
               onChange={(e) => {
@@ -620,7 +678,7 @@ function ProjectForm({
               type="button"
               variant="ghost"
               size="icon-sm"
-              aria-label="Remove resource"
+              aria-label={t("workspace:projects.form.removeResource")}
               onClick={() => {
                 setRows((current) => current.filter((_, i) => i !== index))
               }}
@@ -638,28 +696,25 @@ function ProjectForm({
               setRows((current) => [...current, { role: "", key: "" }])
             }}
           >
-            <Plus /> Add resource
+            <Plus /> {t("workspace:projects.form.addResource")}
           </Button>
         </div>
       </div>
-      <DialogFooter>
-        <Button type="submit" disabled={!key.trim()}>
-          Save
-        </Button>
-      </DialogFooter>
-    </form>
+    </FormDialog>
   )
 }
 
-const KINDS = Object.keys(RESOURCE_KIND_LABELS) as ResourceKind[]
+const KINDS = Object.keys(KIND_LABELS) as ResourceKind[]
 const PICKABLE: ResourceKind[] = ["directory", "application", "terminal"]
 
 function MachineResources({ checks, onChange }: { checks: ResourceCheck[]; onChange: () => void }) {
+  const { t } = useTranslation()
+  const format = useFormat()
   const [editing, setEditing] = useState<ResourceCheck | "new" | null>(null)
   return (
     <SettingsSection
-      title="Resources on this machine"
-      description="Logical resources used by projects, mapped to paths, applications or URLs on this computer. These mappings are never part of a profile."
+      title={t("workspace:projects.machine.title")}
+      description={t("workspace:projects.machine.description")}
       actions={
         <Button
           size="sm"
@@ -667,12 +722,12 @@ function MachineResources({ checks, onChange }: { checks: ResourceCheck[]; onCha
             setEditing("new")
           }}
         >
-          <Plus /> Add mapping
+          <Plus /> {t("workspace:projects.machine.add")}
         </Button>
       }
     >
       {checks.length === 0 && (
-        <EmptyState variant="plain" title="No resources used or mapped yet" />
+        <EmptyState variant="plain" title={t("workspace:projects.machine.empty")} />
       )}
       {checks.length > 0 && (
         <div className="grid divide-y border-y">
@@ -683,12 +738,20 @@ function MachineResources({ checks, onChange }: { checks: ResourceCheck[]; onCha
                 <span className="font-mono text-sm">{check.key}</span>
                 <span className="truncate text-xs text-muted-foreground select-text">
                   {check.value
-                    ? `${check.kind ? RESOURCE_KIND_LABELS[check.kind] : ""}: ${check.value}`
-                    : "Not set on this machine"}
+                    ? check.kind
+                      ? t("workspace:projects.machine.value", {
+                          kind: t(KIND_LABELS[check.kind]),
+                          value: check.value,
+                        })
+                      : check.value
+                    : t("workspace:projects.status.unbound")}
                 </span>
                 {check.usedBy.length > 0 && (
                   <span className="text-xs text-muted-foreground">
-                    Used by {check.usedBy.join(", ")}
+                    {t("workspace:projects.machine.usedBy", {
+                      count: check.usedBy.length,
+                      projects: format.list(check.usedBy),
+                    })}
                   </span>
                 )}
               </div>
@@ -701,12 +764,12 @@ function MachineResources({ checks, onChange }: { checks: ResourceCheck[]; onCha
                       : "neutral"
                 }
               >
-                {STATUS[check.status].label}
+                {t(STATUS[check.status].label)}
               </InlineStatus>
               <Button
                 variant="ghost"
                 size="icon-sm"
-                aria-label={`Edit ${check.key}`}
+                aria-label={t("workspace:projects.machine.edit", { key: check.key })}
                 onClick={() => {
                   setEditing(check)
                 }}
@@ -716,80 +779,107 @@ function MachineResources({ checks, onChange }: { checks: ResourceCheck[]; onCha
               {check.value && (
                 <ConfirmDialog
                   trigger={
-                    <Button variant="ghost" size="icon-sm" aria-label={`Remove ${check.key}`}>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={t("workspace:projects.machine.remove", { key: check.key })}
+                    >
                       <Trash2 />
                     </Button>
                   }
-                  title={`Remove the mapping for ${check.key}?`}
-                  description="Actions using this resource cannot resolve it on this machine until it is mapped again."
-                  confirmLabel="Remove"
-                  onConfirm={() => {
-                    api.removeResourceBinding(check.key).then(onChange, (e: unknown) => {
-                      toastFailure(`The mapping for ${check.key} was not removed`, e)
-                    })
+                  title={t("workspace:projects.machine.removeTitle", { key: check.key })}
+                  description={t("workspace:projects.machine.removeDescription")}
+                  confirmLabel={t("workspace:projects.machine.removeConfirm")}
+                  // Stays open, busy, until removed; a failure is shown inline.
+                  onConfirm={async () => {
+                    await api.removeResourceBinding(check.key)
+                    onChange()
                   }}
+                  describeError={(e) =>
+                    failureMessage(
+                      t("workspace:projects.machine.removeFailed", { key: check.key }),
+                      e,
+                    )
+                  }
                 />
               )}
             </div>
           ))}
         </div>
       )}
-      <Dialog
-        open={editing !== null}
-        onOpenChange={(open) => {
-          if (!open) setEditing(null)
-        }}
-      >
-        <DialogContent>
-          {editing && (
-            <BindingForm
-              key={editing === "new" ? "new" : editing.key}
-              check={editing === "new" ? null : editing}
-              onDone={() => {
-                setEditing(null)
-                onChange()
-              }}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
+      {editing && (
+        <BindingForm
+          key={editing === "new" ? "new" : editing.key}
+          check={editing === "new" ? null : editing}
+          onClose={() => {
+            setEditing(null)
+          }}
+          onDone={() => {
+            setEditing(null)
+            onChange()
+          }}
+        />
+      )}
     </SettingsSection>
   )
 }
 
-function BindingForm({ check, onDone }: { check: ResourceCheck | null; onDone: () => void }) {
+function BindingForm({
+  check,
+  onClose,
+  onDone,
+}: {
+  check: ResourceCheck | null
+  onClose: () => void
+  onDone: () => void
+}) {
+  const { t } = useTranslation()
   const [key, setKey] = useState(check?.key ?? "")
   const [kind, setKind] = useState<ResourceKind>(check?.kind ?? "directory")
   const [value, setValue] = useState(check?.value ?? "")
-  const [error, setError] = useState<string | null>(null)
+  const [browseError, setBrowseError] = useState<string | null>(null)
+  const dirty =
+    key !== (check?.key ?? "") ||
+    kind !== (check?.kind ?? "directory") ||
+    value !== (check?.value ?? "")
   const browse = async () => {
+    setBrowseError(null)
     try {
       const picked = await openDialog({ directory: kind === "directory", multiple: false })
       if (typeof picked === "string") setValue(picked)
     } catch (e) {
-      setError(failureMessage("The file browser did not open", e, "Type the path instead"))
-    }
-  }
-  const submit = async (event: React.SyntheticEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    try {
-      await api.setResourceBinding(key, kind, value)
-      toast.success("Mapping saved")
-      onDone()
-    } catch (e) {
-      setError(failureMessage(`The mapping for ${key} was not saved`, e))
+      setBrowseError(
+        failureMessage(
+          t("workspace:projects.binding.browseFailed"),
+          e,
+          t("workspace:projects.binding.browseNext"),
+        ),
+      )
     }
   }
   return (
-    <form className="grid gap-4" onSubmit={(e) => void submit(e)}>
-      <DialogHeader>
-        <DialogTitle>{check ? `Map ${check.key}` : "New mapping"}</DialogTitle>
-        <DialogDescription>Stored for this computer only.</DialogDescription>
-      </DialogHeader>
-      {error && <ErrorNotice error={error} />}
+    <FormDialog
+      open
+      title={
+        check
+          ? t("workspace:projects.binding.editTitle", { key: check.key })
+          : t("workspace:projects.binding.newTitle")
+      }
+      description={t("workspace:projects.binding.description")}
+      submitLabel={t("workspace:projects.form.save")}
+      canSubmit={Boolean(key.trim() && value.trim())}
+      dirty={dirty}
+      onClose={onClose}
+      onSubmit={async () => {
+        await api.setResourceBinding(key, kind, value)
+        toast.success(t("workspace:projects.binding.saved"))
+        onDone()
+      }}
+      describeError={(e) => failureMessage(t("workspace:projects.binding.saveFailed", { key }), e)}
+    >
       <div className="grid grid-cols-[1fr_12rem] gap-4">
         <div className="grid gap-2">
-          <Label htmlFor="binding-key">Resource key</Label>
+          <Label htmlFor="binding-key">{t("workspace:projects.form.resourceKey")}</Label>
           <Input
             id="binding-key"
             value={key}
@@ -801,7 +891,7 @@ function BindingForm({ check, onDone }: { check: ResourceCheck | null; onDone: (
           />
         </div>
         <div className="grid gap-2">
-          <Label htmlFor="binding-kind">Kind</Label>
+          <Label htmlFor="binding-kind">{t("workspace:projects.binding.kind")}</Label>
           <Select
             value={kind}
             onValueChange={(next) => {
@@ -814,7 +904,7 @@ function BindingForm({ check, onDone }: { check: ResourceCheck | null; onDone: (
             <SelectContent>
               {KINDS.map((option) => (
                 <SelectItem key={option} value={option}>
-                  {RESOURCE_KIND_LABELS[option]}
+                  {t(KIND_LABELS[option])}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -822,28 +912,28 @@ function BindingForm({ check, onDone }: { check: ResourceCheck | null; onDone: (
         </div>
       </div>
       <div className="grid gap-2">
-        <Label htmlFor="binding-value">Value</Label>
+        <Label htmlFor="binding-value">{t("workspace:projects.binding.value")}</Label>
         <div className="flex gap-2">
           <Input
             id="binding-value"
             value={value}
-            placeholder={kind === "url" ? "https://…" : "Path, application, container name…"}
+            aria-invalid={browseError ? true : undefined}
+            aria-describedby={browseError ? "binding-value-error" : undefined}
+            placeholder={
+              kind === "url" ? "https://…" : t("workspace:projects.binding.valuePlaceholder")
+            }
             onChange={(e) => {
               setValue(e.target.value)
             }}
           />
           {PICKABLE.includes(kind) && (
             <Button type="button" variant="outline" onClick={() => void browse()}>
-              <FolderOpen /> Browse
+              <FolderOpen /> {t("workspace:projects.binding.browse")}
             </Button>
           )}
         </div>
+        <FieldError id="binding-value-error" message={browseError} />
       </div>
-      <DialogFooter>
-        <Button type="submit" disabled={!key.trim() || !value.trim()}>
-          Save
-        </Button>
-      </DialogFooter>
-    </form>
+    </FormDialog>
   )
 }

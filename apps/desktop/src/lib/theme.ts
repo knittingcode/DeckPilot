@@ -1,20 +1,15 @@
-import { createContext, useContext } from "react"
+/**
+ * DeckPilot's appearance is permanently dark: one design system, no light
+ * theme, no theme setting, independent of the operating system's
+ * appearance. The tokens are in `index.css`; native windows start with the
+ * same background (`tauri.conf.json`, `src-tauri/src/windows.rs`) and
+ * `index.html` paints it before the stylesheet loads, so nothing flashes
+ * white.
+ */
+export const THEME = "dark"
 
-/** Where the preference is kept; shared by every window of the app. */
-export const THEME_STORAGE_KEY = "deckpilot.theme"
-
-export type ThemePreference = "system" | "light" | "dark"
-
-export interface ThemeContextValue {
-  preference: ThemePreference
-  resolved: "light" | "dark"
-  setPreference: (preference: ThemePreference) => void
-}
-
-export const ThemeContext = createContext<ThemeContextValue | null>(null)
-
-export function useTheme(): ThemeContextValue {
-  const value = useContext(ThemeContext)
-  if (!value) throw new Error("useTheme must be used inside ThemeProvider")
-  return value
-}
+/**
+ * Where DeckPilot ≤ 0.9 kept the light/dark/system choice. It no longer
+ * applies; `ThemeProvider` removes it once so nothing reads it later.
+ */
+export const LEGACY_THEME_STORAGE_KEY = "deckpilot.theme"

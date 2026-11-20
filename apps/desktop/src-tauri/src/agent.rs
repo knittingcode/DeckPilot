@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use deckpilot_ipc::client::request_once;
 use deckpilot_ipc::paths::RUN_AGENT_ARG;
+use deckpilot_ipc::plugins::PluginEvent;
 use deckpilot_ipc::{
     AgentClient, AgentEvent, AgentPaths, AgentStatus, Capability, ClientError, ClientKind,
     ErrorCode, KeyMaterial, Request, Response, SecurityState,
@@ -33,9 +34,11 @@ pub const VARIABLES_EVENT: &str = "agent-variables";
 /// before protocol 8 send none.
 pub const WORK_SESSION_EVENT: &str = "agent-work-session";
 /// Event with a plugin operation's progress or a plugin's new state: the
-/// agent's `pluginEvent` payload as it is (`progress`, `changed`). Only
-/// forwarded once the plugin screen asked for it (`watch_plugin_events`)
-/// and only from agents that answer plugin requests.
+/// agent's `pluginEvent` payload as it is (`progress`, `changed`,
+/// `migrationChanged`; `dialogOpened` and `dialogClosed` to the main
+/// window only). Only forwarded once the plugin screen asked for it
+/// (`watch_plugin_events`, `plugin_dialogs_ready`) and only from agents
+/// that answer plugin requests.
 pub const PLUGIN_EVENT: &str = "plugin-event";
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
@@ -127,6 +130,15 @@ fn agent_compatibility(status: &AgentStatus) -> AgentCompatibility {
 }
 
 /// Why the agent is not stopped now.
+pub fn running_workflows_error(running: u32) -> crate::error::CommandError {
+    crate::error::CommandError::invalid_with(
+        "workflowsRunning",
+        running_workflows_message(running),
+        [("count", running.into())],
+    )
+}
+
+/// The English text of [`running_workflows_error`].
 pub fn running_workflows_message(running: u32) -> String {
     format!(
         "{running} workflow{} running in the background; wait until {} finished or cancel {}",
@@ -408,6 +420,16 @@ async fn subscribe<R: Runtime>(app: &AppHandle<R>, paths: &AgentPaths) -> Result
     let mut client = AgentClient::connect(paths, ClientKind::Desktop).await?;
     let (protocol, capabilities) = (client.protocol(), client.capabilities().to_vec());
     let running = |status| AgentConnection::running(status, protocol, capabilities.clone());
+    // The app's language (protocol 13), before anything is shown: also an
+    // agent that started after the app hears it. An older agent is not
+    // told and keeps English.
+    if let Some(locale) = app
+        .try_state::<crate::commands::locale::AgentLocale>()
+        .and_then(|locale| locale.get())
+        && let Err(error) = client.set_locale(&locale).await
+    {
+        eprintln!("the agent was not told the language: {error}");
+    }
     if let Response::Status { status } = client.request(Request::GetStatus).await? {
         unlock_if_needed(app, paths, &status).await;
         let _ = app.emit(STATUS_EVENT, running(*status));
@@ -466,11 +488,17 @@ async fn subscribe<R: Runtime>(app: &AppHandle<R>, paths: &AgentPaths) -> Result
 /// Keeps a plugin event subscription to the agent and forwards its events
 /// to the windows. Agents before protocol 10, and agents whose plugins are
 /// not available, are asked again later; nothing is subscribed to then.
+/// While the main window renders plugin dialogs
+/// ([`crate::commands::plugins::PluginEvents::watch_dialogs`]) and the
+/// agent has them, the subscription announces
+/// [`deckpilot_ipc::plugins::feature::PLUGIN_DIALOGS`]; when that changes
+/// it subscribes again at once.
 pub fn spawn_plugin_bridge<R: Runtime>(app: AppHandle<R>, paths: AgentPaths) {
     tauri::async_runtime::spawn(async move {
         loop {
             let delay = match forward_plugin_events(&app, &paths).await {
-                Ok(()) => PLUGIN_RETRY_DELAY,
+                Ok(Bridge::Resubscribe) => Duration::ZERO,
+                Ok(Bridge::Retry) => PLUGIN_RETRY_DELAY,
                 Err(ClientError::Closed | ClientError::NotRunning) => RECONNECT_DELAY,
                 Err(error) => {
                     eprintln!("plugin event subscription failed: {error}");
@@ -482,24 +510,96 @@ pub fn spawn_plugin_bridge<R: Runtime>(app: AppHandle<R>, paths: AgentPaths) {
     });
 }
 
-/// Returns `Ok` without subscribing when the agent has no plugins.
+/// How a plugin event subscription ended.
+enum Bridge {
+    /// The agent has no plugins (now): ask again later.
+    Retry,
+    /// Whether the main window renders plugin dialogs changed.
+    Resubscribe,
+}
+
+/// Whether a plugin event goes to the main window only: plugin dialogs
+/// are shown there and nowhere else.
+pub(crate) fn main_window_only(event: &PluginEvent) -> bool {
+    matches!(
+        event,
+        PluginEvent::DialogOpened { .. } | PluginEvent::DialogClosed { .. }
+    )
+}
+
+/// Returns `Ok(Bridge::Retry)` without subscribing when the agent has no
+/// plugins.
 async fn forward_plugin_events<R: Runtime>(
     app: &AppHandle<R>,
     paths: &AgentPaths,
-) -> Result<(), ClientError> {
+) -> Result<Bridge, ClientError> {
+    let mut ready = app
+        .try_state::<crate::commands::plugins::PluginEvents>()
+        .map(|events| events.watch_dialogs());
     let mut client = AgentClient::connect(paths, ClientKind::Desktop).await?;
     if !client.supports(Capability::Plugins) {
-        return Ok(());
+        return Ok(Bridge::Retry);
     }
-    match client.request(Request::GetPluginRuntime).await? {
-        Response::PluginRuntime { status } if status.available => {}
-        _ => return Ok(()),
-    }
+    let dialogs = match client.request(Request::GetPluginRuntime).await? {
+        Response::PluginRuntime { status } if status.available => {
+            status.has_feature(deckpilot_ipc::plugins::feature::PLUGIN_DIALOGS)
+        }
+        _ => return Ok(Bridge::Retry),
+    };
+    let announced = dialogs
+        && ready
+            .as_mut()
+            .is_some_and(|ready| *ready.borrow_and_update());
+    let features = if announced {
+        vec![deckpilot_ipc::plugins::feature::PLUGIN_DIALOGS.to_owned()]
+    } else {
+        Vec::new()
+    };
     // With module migration events: this app shows the migration notice.
-    client.subscribe_plugin_events_with(true).await?;
+    client
+        .subscribe_plugin_events_announcing(true, features)
+        .await?;
     loop {
-        let event = client.next_plugin_event().await?;
-        let _ = app.emit(PLUGIN_EVENT, event);
+        // Watched only when the agent has plugin dialogs. A change always
+        // ends this connection: the read it interrupts is not cancel safe.
+        let changed = async {
+            match ready.as_mut().filter(|_| dialogs) {
+                Some(ready) => ready.changed().await.is_ok(),
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            event = client.next_plugin_event() => {
+                let event = event?;
+                if main_window_only(&event) {
+                    if let PluginEvent::DialogOpened { .. } = &event {
+                        reveal_main_window(app);
+                    }
+                    let _ = app.emit_to(crate::windows::MAIN, PLUGIN_EVENT, event);
+                } else {
+                    let _ = app.emit(PLUGIN_EVENT, event);
+                }
+            }
+            alive = changed => {
+                if !alive {
+                    // The state is gone (the app is ending).
+                    return Ok(Bridge::Retry);
+                }
+                // A new connection announces it (or not); closing this one
+                // tells the agent this app stopped showing them.
+                return Ok(Bridge::Resubscribe);
+            }
+        }
+    }
+}
+
+/// A plugin dialog arrived: the main window comes forward if it was
+/// hidden (closed to the menu bar), since the user started what asks.
+fn reveal_main_window<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(main) = app.get_webview_window(crate::windows::MAIN)
+        && !main.is_visible().unwrap_or(true)
+    {
+        crate::windows::show_main(app);
     }
 }
 

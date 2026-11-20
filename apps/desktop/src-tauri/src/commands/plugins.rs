@@ -45,6 +45,12 @@ pub mod reason {
     pub const FAILED: &str = "failed";
     /// No file dialog is available in this window.
     pub const NO_DIALOG: &str = "noDialog";
+    /// The plugin dialog is no longer open (answered, timed out, or its
+    /// plugin stopped): the app takes it down.
+    pub const DIALOG_CLOSED: &str = "dialogClosed";
+    /// The agent refused a plugin dialog's answer: the values do not fit
+    /// the dialog. It stays open with the agent's message.
+    pub const INVALID_ANSWER: &str = "invalidAnswer";
 }
 
 /// A refused plugin command, as the frontend receives it.
@@ -170,6 +176,51 @@ async fn connect(state: &AppState, gated: bool) -> PluginResult<Connection> {
         paged,
         navigation,
     })
+}
+
+/// The installed plugins with visual assets (plugin API 1.8), and a way to
+/// read their files, for the Icon and Background Libraries
+/// (`commands::assets`). `None` when the agent does not list visual assets
+/// ([`plugins::feature::VISUAL_ASSETS`]); an error when it answers no
+/// plugin request (locked, plugins off or unavailable, no agent).
+pub(crate) async fn visual_asset_plugins(
+    state: &AppState,
+) -> PluginResult<Option<(Vec<PluginSummary>, AssetReader)>> {
+    let mut connection = connect(state, true).await?;
+    match connection.client.request(Request::GetPluginRuntime).await? {
+        Response::PluginRuntime { status }
+            if status.has_feature(plugins::feature::VISUAL_ASSETS) => {}
+        Response::PluginRuntime { .. } => return Ok(None),
+        other => return Err(PluginError::unexpected(&other)),
+    }
+    // Paged: the summaries without their actions fit one message.
+    let request = if connection.paged {
+        Request::ListPluginsPaged
+    } else {
+        Request::ListPlugins
+    };
+    match connection.client.request(request).await? {
+        Response::Plugins { plugins } => Ok(Some((
+            plugins
+                .into_iter()
+                .filter(|plugin| !plugin.visual_assets.is_empty())
+                .collect(),
+            AssetReader(connection.client),
+        ))),
+        other => Err(PluginError::unexpected(&other)),
+    }
+}
+
+/// Reads visual asset files over the connection that listed them.
+pub(crate) struct AssetReader(AgentClient);
+
+impl AssetReader {
+    /// The file of `plugin`'s asset `asset` as a `data:` URL, as the agent
+    /// checked it against the package's integrity record; `None` when it
+    /// has none to show.
+    pub async fn file(&mut self, plugin: &str, asset: &str) -> PluginResult<Option<String>> {
+        Ok(plugin_answers::visual_asset_file(&mut self.0, plugin, asset).await?)
+    }
 }
 
 /// Sends one plugin request over a connection of its own. Every request
@@ -503,6 +554,32 @@ pub async fn uninstall_plugin(
     }
 }
 
+/// Installs again, from the application bundle, a bundled first-party
+/// plugin the user uninstalled, or reinstalls one whose installed copy is
+/// broken (`restoreBundledPlugin`, protocol 15); the agent verifies it
+/// against the pins compiled into it first. An agent before protocol 15 is
+/// refused here and never receives the request.
+#[tauri::command]
+pub async fn restore_bundled_plugin(
+    state: State<'_, AppState>,
+    plugin: String,
+) -> PluginResult<PluginDetails> {
+    let connection = connect(&state, true).await?;
+    if !connection.client.supports(Capability::RestoreBundled) {
+        return Err(PluginError::new(
+            reason::AGENT_TOO_OLD,
+            format!(
+                "the running agent speaks protocol {} and cannot restore DeckPilot's own \
+                 plugins (it needs protocol {}); restart the agent with the one of this release",
+                connection.client.protocol(),
+                Capability::RestoreBundled.since_protocol()
+            ),
+        ));
+    }
+    drop(connection);
+    plugin_details(&state, Request::RestoreBundledPlugin { plugin }).await
+}
+
 /// Refreshes the action types of every installed plugin after a change
 /// that touched several (a plan, a removal with its dependents).
 async fn resync_plugin_actions(state: &AppState) {
@@ -831,10 +908,116 @@ pub async fn pick_plugin_package<R: Runtime>(
         .filter(|path| !path.is_empty() && path.len() <= plugins::MAX_PACKAGE_PATH))
 }
 
-/// Whether the plugin event bridge runs.
-#[derive(Debug, Default)]
+/// Whether the plugin event bridge runs, and whether the main window
+/// renders plugin dialogs (`plugin_dialogs_ready`).
+#[derive(Debug)]
 pub struct PluginEvents {
     started: AtomicBool,
+    /// `true` while the main window's plugin dialog host is mounted: only
+    /// then does the bridge announce [`plugins::feature::PLUGIN_DIALOGS`],
+    /// so an app that cannot show them never receives a plugin dialog
+    /// (the plugin is told `unavailable`).
+    dialogs: tokio::sync::watch::Sender<bool>,
+}
+
+impl Default for PluginEvents {
+    fn default() -> Self {
+        Self {
+            started: AtomicBool::new(false),
+            dialogs: tokio::sync::watch::channel(false).0,
+        }
+    }
+}
+
+impl PluginEvents {
+    /// Whether the main window renders plugin dialogs, and its changes; the
+    /// bridge subscribes again
+    /// (announcing the feature or not) when it changes.
+    pub fn watch_dialogs(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.dialogs.subscribe()
+    }
+
+    /// The main window's host was mounted (`true`) or went away (`false`:
+    /// unmounted, the window was destroyed, the app locked). Without an
+    /// announcing connection the agent cancels open dialogs `appClosed`.
+    pub fn set_dialogs_ready(&self, ready: bool) {
+        self.dialogs.send_if_modified(|current| {
+            let changed = *current != ready;
+            *current = ready;
+            changed
+        });
+    }
+}
+
+/// The main window's plugin dialog host is mounted (`ready`) or unmounted:
+/// the plugin event bridge (started here if needed) subscribes again,
+/// announcing [`plugins::feature::PLUGIN_DIALOGS`] only while it is.
+/// Calls from other windows are ignored: only the main window shows plugin
+/// dialogs.
+#[tauri::command]
+pub fn plugin_dialogs_ready<R: Runtime>(
+    app: AppHandle<R>,
+    window: WebviewWindow<R>,
+    state: State<'_, AppState>,
+    ready: bool,
+) {
+    if window.label() != crate::windows::MAIN {
+        return;
+    }
+    let Some(events) = app.try_state::<PluginEvents>() else {
+        return;
+    };
+    events.set_dialogs_ready(ready);
+    if ready && !events.started.swap(true, Ordering::SeqCst) {
+        crate::agent::spawn_plugin_bridge(app.clone(), state.paths.clone());
+    }
+}
+
+/// Answers a plugin dialog the main window showed. Sent on a connection
+/// that announces [`plugins::feature::PLUGIN_DIALOGS`] (the agent accepts
+/// answers only there). The agent checks the answer against the dialog: a
+/// refusal ([`reason::INVALID_ANSWER`]) keeps it open with the agent's
+/// message; [`reason::DIALOG_CLOSED`] means it is no longer open.
+#[tauri::command]
+pub async fn answer_plugin_dialog(
+    state: State<'_, AppState>,
+    dialog: String,
+    plugin: String,
+    answer: deckpilot_ipc::plugin_dialogs::DialogAnswer,
+) -> PluginResult<()> {
+    let mut client = AgentClient::connect(&state.paths, ClientKind::Desktop).await?;
+    if !client.supports(Capability::PluginDialogs) {
+        return Err(PluginError::new(
+            reason::DIALOG_CLOSED,
+            "the running agent does not show plugin dialogs",
+        ));
+    }
+    client
+        .subscribe_plugin_events_announcing(false, vec![plugins::feature::PLUGIN_DIALOGS.into()])
+        .await?;
+    let request = Request::AnswerPluginDialog {
+        dialog,
+        plugin,
+        answer,
+    };
+    match client.request(request).await {
+        Ok(Response::Ok) => Ok(()),
+        Ok(other) => Err(PluginError::unexpected(&other)),
+        Err(error) => Err(answer_error(error)),
+    }
+}
+
+/// The frontend's reason for a refused answer.
+fn answer_error(error: ClientError) -> PluginError {
+    match error {
+        ClientError::Agent(error) if error.code == ErrorCode::NotFound => {
+            PluginError::new(reason::DIALOG_CLOSED, error.message)
+        }
+        ClientError::Agent(error) if error.code == ErrorCode::InvalidRequest => {
+            PluginError::new(reason::INVALID_ANSWER, error.message)
+        }
+        other => other.into(),
+    }
 }
 
 /// Starts forwarding the agent's `pluginEvent` messages to the windows as
@@ -856,6 +1039,56 @@ mod tests {
     use deckpilot_ipc::IpcError;
 
     use super::*;
+
+    #[test]
+    fn dialog_readiness_changes_only_when_it_changes() {
+        let events = PluginEvents::default();
+        let mut ready = events.watch_dialogs();
+        assert!(!*ready.borrow_and_update());
+        events.set_dialogs_ready(false);
+        assert!(!ready.has_changed().unwrap());
+        events.set_dialogs_ready(true);
+        assert!(ready.has_changed().unwrap());
+        assert!(*ready.borrow_and_update());
+        events.set_dialogs_ready(true);
+        assert!(!ready.has_changed().unwrap());
+        events.set_dialogs_ready(false);
+        assert!(!*ready.borrow_and_update());
+    }
+
+    #[test]
+    fn refused_dialog_answers_tell_the_host_what_to_do() {
+        let gone = answer_error(ClientError::Agent(IpcError::new(
+            ErrorCode::NotFound,
+            "the dialog is no longer open",
+        )));
+        assert_eq!(gone.reason, reason::DIALOG_CLOSED);
+        let invalid = answer_error(ClientError::Agent(IpcError::new(
+            ErrorCode::InvalidRequest,
+            "“Count” must be at most 10",
+        )));
+        assert_eq!(invalid.reason, reason::INVALID_ANSWER);
+        assert_eq!(invalid.message, "“Count” must be at most 10");
+        assert_eq!(
+            answer_error(ClientError::NotRunning).reason,
+            reason::AGENT_NOT_RUNNING
+        );
+    }
+
+    #[test]
+    fn plugin_dialogs_go_to_the_main_window_only() {
+        let closed: deckpilot_ipc::plugins::PluginEvent = serde_json::from_value(
+            serde_json::json!({"type": "dialogClosed", "dialog": "ab", "plugin": "acme.x",
+                "reason": "timeout"}),
+        )
+        .unwrap();
+        assert!(crate::agent::main_window_only(&closed));
+        let changed = deckpilot_ipc::plugins::PluginEvent::Changed {
+            plugin: "acme.x".into(),
+            state: None,
+        };
+        assert!(!crate::agent::main_window_only(&changed));
+    }
 
     fn summary(id: &str, state: &str, navigation: serde_json::Value) -> PluginSummary {
         serde_json::from_value(serde_json::json!({

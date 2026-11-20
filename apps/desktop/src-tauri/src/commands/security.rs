@@ -162,12 +162,17 @@ pub fn prompt_window(state: &AppState) -> &'static str {
     }
 }
 
+fn password_incorrect() -> CommandError {
+    CommandError::invalid("passwordIncorrect", "the password is not correct")
+}
+
 /// A wrong password is a normal outcome, not a failure.
 fn unlock_error(error: StorageError) -> CommandError {
     match error {
-        StorageError::InvalidKey => CommandError::Invalid("the password is not correct".into()),
-        StorageError::CredentialsRequired(_) => CommandError::Invalid(
-            "this configuration does not use a password; it opens with the system key".into(),
+        StorageError::InvalidKey => password_incorrect(),
+        StorageError::CredentialsRequired(_) => CommandError::invalid(
+            "notPasswordProtected",
+            "this configuration does not use a password; it opens with the system key",
         ),
         other => other.into(),
     }
@@ -222,8 +227,9 @@ pub async fn security_status(state: State<'_, AppState>) -> CommandResult<Securi
 /// Runs the operating system's verification on a blocking thread.
 async fn verify_presence(state: &AppState, reason: &'static str) -> CommandResult<()> {
     if state.presence.method().is_none() {
-        return Err(CommandError::Invalid(
-            "this computer has no system authentication".into(),
+        return Err(CommandError::invalid(
+            "noSystemAuthentication",
+            "this computer has no system authentication",
         ));
     }
     // The check blocks until the user answered the system prompt.
@@ -232,7 +238,9 @@ async fn verify_presence(state: &AppState, reason: &'static str) -> CommandResul
         .await
         .map_err(|e| CommandError::Invalid(e.to_string()))?;
     outcome.map_err(|error| match error {
-        PresenceError::Cancelled => CommandError::Invalid("authentication was cancelled".into()),
+        PresenceError::Cancelled => {
+            CommandError::invalid("authenticationCancelled", "authentication was cancelled")
+        }
         other => CommandError::Invalid(other.to_string()),
     })
 }
@@ -267,8 +275,9 @@ pub async fn system_unlock(state: State<'_, AppState>) -> CommandResult<Security
         false
     };
     if agent_state.is_none() {
-        return Err(CommandError::Invalid(
-            "the DeckPilot background agent is not running".into(),
+        return Err(CommandError::invalid(
+            "agentNotRunning",
+            "the DeckPilot background agent is not running",
         ));
     }
     agent::request(&state.paths, Request::SystemUnlock).await?;
@@ -321,13 +330,14 @@ async fn verify_user(
     let current = state.key().ok_or(CommandError::Locked)?;
     match state.protection() {
         Some(ProtectionMode::Password) => {
-            let password = password
-                .ok_or_else(|| CommandError::Invalid("enter your DeckPilot password".into()))?;
+            let password = password.ok_or_else(|| {
+                CommandError::invalid("passwordRequired", "enter your DeckPilot password")
+            })?;
             let key = state.vault.unlock(&password).map_err(unlock_error)?;
             if key.matches(&current) {
                 Ok(())
             } else {
-                Err(CommandError::Invalid("the password is not correct".into()))
+                Err(password_incorrect())
             }
         }
         _ if state.presence.method().is_some() => verify_presence(state, reason).await,
@@ -449,8 +459,9 @@ pub async fn use_password(
         .map_err(StorageError::from)?;
     let current = state.key().ok_or(CommandError::Locked)?;
     if state.protection() == Some(ProtectionMode::Password) {
-        return Err(CommandError::Invalid(
-            "the configuration already uses a password; change it instead".into(),
+        return Err(CommandError::invalid(
+            "alreadyPassword",
+            "the configuration already uses a password; change it instead",
         ));
     }
     state.take_authorization()?;
@@ -468,13 +479,15 @@ pub async fn use_password(
 pub async fn use_system_key(state: State<'_, AppState>) -> CommandResult<SecurityView> {
     let current = state.key().ok_or(CommandError::Locked)?;
     if state.protection() != Some(ProtectionMode::Password) {
-        return Err(CommandError::Invalid(
-            "the configuration already uses a system-managed key".into(),
+        return Err(CommandError::invalid(
+            "alreadySystemKey",
+            "the configuration already uses a system-managed key",
         ));
     }
     if refresh_agent(&state).await.is_none() {
-        return Err(CommandError::Invalid(
-            "the DeckPilot background agent must be running to store the key".into(),
+        return Err(CommandError::invalid(
+            "agentRequiredForKey",
+            "the DeckPilot background agent must be running to store the key",
         ));
     }
     state.take_authorization()?;
@@ -516,9 +529,9 @@ pub async fn set_security_policy(
     let needs_verification = policy.auto_lock != AutoLock::Never
         || policy.reauthentication != Reauthentication::SensitiveOnly;
     if needs_verification && !state.can_verify_user() {
-        return Err(CommandError::Invalid(
-            "this setting needs a password or system authentication, which this computer does not offer"
-                .into(),
+        return Err(CommandError::invalid(
+            "verificationUnavailable",
+            "this setting needs a password or system authentication, which this computer does not offer",
         ));
     }
     if policy.auto_lock == AutoLock::ScreenLock
@@ -526,8 +539,9 @@ pub async fn set_security_policy(
             .await
             .is_some_and(|status| status.screen_lock_detection)
     {
-        return Err(CommandError::Invalid(
-            "DeckPilot cannot detect the screen lock on this computer".into(),
+        return Err(CommandError::invalid(
+            "screenLockUndetectable",
+            "DeckPilot cannot detect the screen lock on this computer",
         ));
     }
     let unchanged = security_policy(&*state.store()?)? == policy;

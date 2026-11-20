@@ -12,7 +12,7 @@ import type { DeviceLayout, DeviceModel, ProfileView } from "@/lib/types"
 
 import { LayoutEditor } from "./editor"
 import { NEW_FOLDER_DRAG_ID } from "./library-panel"
-import { closePages, currentPage, managePages, pageNames } from "@/test/pages"
+import { closePages, currentPage, managePages, pageCommand, pageNames, upTo } from "@/test/pages"
 
 // Radix menus and dialogs rely on browser APIs that jsdom does not implement.
 Element.prototype.hasPointerCapture = () => false
@@ -36,8 +36,13 @@ vi.mock("@dnd-kit/core", async (original) => {
   const actual = await original<typeof import("@dnd-kit/core")>()
   return {
     ...actual,
-    DndContext: (props: { onDragEnd?: (event: DragEndEvent) => void; children?: ReactNode }) => {
-      dnd.onDragEnd = props.onDragEnd
+    DndContext: (props: {
+      id?: string
+      onDragEnd?: (event: DragEndEvent) => void
+      children?: ReactNode
+    }) => {
+      // The editor's own, not the Page Navigator's (page-tree).
+      if (props.id !== "page-tree") dnd.onDragEnd = props.onDragEnd
       return <actual.DndContext {...props} />
     },
     useDraggable: (args: Parameters<typeof actual.useDraggable>[0]) => {
@@ -260,7 +265,7 @@ describe("folders in the layout editor", { timeout: 20_000 }, () => {
     expect(selectedTab()).toBe("Folder")
     expect(screen.getByText("This folder is empty")).toBeInTheDocument()
     expect(
-      within(screen.getByRole("navigation", { name: "Page location" }))
+      within(screen.getByRole("navigation", { name: "Breadcrumb" }))
         .getAllByRole("listitem")
         .map((item) => item.textContent),
     ).toEqual(["Home", "Folder"])
@@ -275,9 +280,9 @@ describe("folders in the layout editor", { timeout: 20_000 }, () => {
     expect(selectedTab()).toBe("Folder 2")
 
     // Back goes up one folder at a time, to the page each was opened from.
-    await user.click(screen.getByRole("button", { name: "Back" }))
+    await upTo(user, "Folder")
     expect(selectedTab()).toBe("Folder")
-    await user.click(screen.getByRole("button", { name: "Back" }))
+    await upTo(user, "Home")
     expect(selectedTab()).toBe("Home")
     // The home page still has its keys.
     expect(describes("Key 1")).toBe("Key 1: Press: Shop")
@@ -322,7 +327,7 @@ describe("folders in the layout editor", { timeout: 20_000 }, () => {
     drop("library:action:mail", "key:0")
     drop(NEW_FOLDER_DRAG_ID, "key:1")
 
-    await user.click(within(await managePages(user)).getByRole("button", { name: "Delete page" }))
+    await pageCommand(user, "Folder", /Delete page/)
     const dialog = await screen.findByRole("alertdialog", { name: "Delete “Folder”?" })
     expect(dialog).toHaveTextContent("2 controls on it are deleted with it.")
     expect(dialog).toHaveTextContent(
@@ -340,7 +345,7 @@ describe("folders in the layout editor", { timeout: 20_000 }, () => {
 
     // Confirmed: the folder goes, the editor shows the page it was on, the
     // key that opened it is empty and the folder inside it is kept.
-    await user.click(within(await managePages(user)).getByRole("button", { name: "Delete page" }))
+    await pageCommand(user, "Folder", /Delete page/)
     await user.click(
       within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete page" }),
     )
@@ -362,10 +367,17 @@ describe("folders in the layout editor", { timeout: 20_000 }, () => {
   it("never offers to delete the home page", async () => {
     const user = renderEditor()
     const pages = await managePages(user)
-    expect(within(pages).getByRole("region", { name: "This page" })).toHaveTextContent(
-      "is the home page",
-    )
-    expect(within(pages).queryByRole("button", { name: "Delete page" })).not.toBeInTheDocument()
+    // No explanation in the navigator, and no Delete in the home page's menu.
+    expect(pages).not.toHaveTextContent("is the home page")
+    await user.click(within(pages).getByRole("button", { name: "Actions for “Home”" }))
+    const menu = await screen.findByRole("menu")
+    expect(within(menu).queryByRole("menuitem", { name: /Delete page/ })).not.toBeInTheDocument()
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((i) => i.textContent),
+    ).toEqual(["Rename", "Add page"])
+    await user.keyboard("{Escape}")
     await closePages(user)
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
   })

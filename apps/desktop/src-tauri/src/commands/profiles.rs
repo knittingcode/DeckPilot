@@ -109,8 +109,9 @@ fn summary(store: &deckpilot_storage::SqliteStore, id: ProfileId) -> CommandResu
 fn checked_name(name: &str) -> CommandResult<String> {
     let name = name.trim();
     if name.is_empty() {
-        Err(CommandError::Invalid(
-            "profile name must not be empty".into(),
+        Err(CommandError::invalid(
+            "profileNameEmpty",
+            "profile name must not be empty",
         ))
     } else {
         Ok(name.to_owned())

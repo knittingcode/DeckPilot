@@ -4,6 +4,7 @@ import { useId, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { useTranslation } from "@/i18n"
 import type { ParameterKind } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { insertedReference } from "@/lib/variable-catalog"
@@ -36,6 +37,7 @@ export function VariablePicker({
   label?: string
   className?: string
 }) {
+  const { t } = useTranslation()
   const scope = useVariableScope()
   const [open, setOpen] = useState(false)
   if (!scope?.live) return null
@@ -48,8 +50,8 @@ export function VariablePicker({
           size="icon"
           className={cn("size-9 shrink-0", className)}
           disabled={disabled}
-          aria-label={label ?? `Insert a variable into ${fieldLabel}`}
-          title="Insert a variable"
+          aria-label={label ?? t("editor:variables.insertInto", { field: fieldLabel })}
+          title={t("editor:variables.insert")}
         >
           <Braces />
         </Button>
@@ -57,7 +59,7 @@ export function VariablePicker({
       <PopoverContent
         align="end"
         className="w-[36rem] max-w-[90vw] p-0"
-        aria-label={`Variables for ${fieldLabel}`}
+        aria-label={t("editor:variables.forField", { field: fieldLabel })}
       >
         <PickerBody
           scope={scope}
@@ -81,6 +83,7 @@ function PickerBody({
   kind: ParameterKind | undefined
   onPick: (reference: string) => void
 }) {
+  const { t } = useTranslation()
   const listId = useId()
   const [query, setQuery] = useState("")
   const browser = useVariableBrowser(scope, query, kind)
@@ -90,12 +93,12 @@ function PickerBody({
         <Input
           autoFocus
           role="combobox"
-          aria-label="Search variables"
+          aria-label={t("editor:variables.search")}
           aria-expanded
           aria-controls={listId}
           aria-autocomplete="list"
           aria-activedescendant={activeDescendant(listId, browser)}
-          placeholder="Search by name, description, scope, type or module"
+          placeholder={t("editor:variables.searchPlaceholder")}
           className="h-8 text-xs"
           value={query}
           onChange={(e) => {
@@ -107,8 +110,13 @@ function PickerBody({
             })
           }}
         />
-        <p className="text-[0.7rem] text-muted-foreground" aria-label="Preview context">
-          Values for {describeContext(scope.context, scope.names)}
+        <p
+          className="text-[0.7rem] text-muted-foreground"
+          aria-label={t("editor:variables.previewContext")}
+        >
+          {t("editor:variables.valuesFor", {
+            scope: describeContext(scope.context, scope.names),
+          })}
         </p>
       </div>
       <VariableResults

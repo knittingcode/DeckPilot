@@ -5,6 +5,7 @@
  * parts. Nothing is evaluated here: the engine resolves mappings when a
  * node runs.
  */
+import { i18n } from "@/i18n"
 import type {
   GraphMapping,
   GraphReference,
@@ -23,6 +24,7 @@ import {
   referenceSyntaxProblem,
   referenceType,
   rendersAsText,
+  translatedLabels,
 } from "./variable-reference"
 
 export type Segment =
@@ -131,7 +133,11 @@ export function variableProblems(
     }
     const type = referenceType(reference, definitions)
     if (!type && definitions && reference.startsWith("shared.")) {
-      problems.push(`there is no shared variable “${reference.slice("shared.".length)}”`)
+      problems.push(
+        i18n.t("workflows:mapping.problem.noSharedVariable", {
+          name: reference.slice("shared.".length),
+        }),
+      )
     }
     return type
   }
@@ -140,19 +146,31 @@ export function variableProblems(
     const type = known(mapping.reference)
     if (type && parameter && !assignable(type, parameter)) {
       problems.push(
-        `{{ ${mapping.reference.trim()} }} is a ${type.type} value, the parameter expects ${expects(parameter)}`,
+        i18n.t("workflows:mapping.problem.variableType", {
+          reference: `{{ ${mapping.reference.trim()} }}`,
+          type: type.type,
+          expected: expects(parameter),
+        }),
       )
     }
     if (mapping.default && parameter && !assignable(valueType(mapping.default), parameter)) {
       problems.push(
-        `the default is a ${mapping.default.type} value, the parameter expects ${expects(parameter)}`,
+        i18n.t("workflows:mapping.problem.defaultType", {
+          type: mapping.default.type,
+          expected: expects(parameter),
+        }),
       )
     }
   } else if (mapping.type === "template") {
     for (const reference of mappingVariables(mapping)) {
       const type = known(reference)
       if (type && !rendersAsText(type)) {
-        problems.push(`{{ ${reference} }} is a ${type.type} value and cannot be part of text`)
+        problems.push(
+          i18n.t("workflows:mapping.problem.notText", {
+            reference: `{{ ${reference} }}`,
+            type: type.type,
+          }),
+        )
       }
     }
   }
@@ -177,7 +195,7 @@ export function outputOptions(graph: WorkflowGraph, id: string, lookup: Lookup):
   // Variables hold the value on the node's path; readable anywhere.
   const variables: OutputOption[] = (lookup.variables ?? []).map((variable) => ({
     reference: { node: VARIABLES_NODE, output: variable.key },
-    label: `Variable · ${variable.label || variable.key}`,
+    label: i18n.t("workflows:mapping.variableOption", { name: variable.label || variable.key }),
     kind: variable.kind,
     sensitive: variable.sensitive,
   }))
@@ -192,7 +210,10 @@ function outputsBefore(graph: WorkflowGraph, id: string, lookup: Lookup): Output
     const callee =
       node.type === "call" ? lookup.workflows.find((w) => w.id === node.workflow) : undefined
     const title =
-      node.label || action?.name || callee?.name || (node.type === "trigger" ? "Inputs" : nodeId)
+      node.label ||
+      action?.name ||
+      callee?.name ||
+      (node.type === "trigger" ? i18n.t("workflows:mapping.inputs") : nodeId)
     return nodeOutputs(node, lookup).map((output) => ({
       reference: { node: nodeId, output: output.key },
       label: `${title} · ${output.label}`,
@@ -212,15 +233,18 @@ export function referenceProblem(
   if (reference.node === VARIABLES_NODE && lookup.variables?.length) {
     return lookup.variables.some((v) => v.key === reference.output)
       ? null
-      : `there is no variable “${reference.output}”`
+      : i18n.t("workflows:mapping.problem.noVariable", { name: reference.output })
   }
   const node = graph.nodes.find((n) => n.id === reference.node)
-  if (!node) return `there is no node “${reference.node}”`
+  if (!node) return i18n.t("workflows:mapping.problem.noNode", { node: reference.node })
   if (!upstream(graph, id).includes(reference.node)) {
-    return `“${reference.node}” does not run before this node`
+    return i18n.t("workflows:mapping.problem.notBefore", { node: reference.node })
   }
   if (!nodeOutputs(node, lookup).some((o) => o.key === reference.output)) {
-    return `“${reference.node}” has no output “${reference.output}”`
+    return i18n.t("workflows:mapping.problem.noOutput", {
+      node: reference.node,
+      output: reference.output,
+    })
   }
   return null
 }
@@ -242,14 +266,15 @@ export function parameterKindOf(kind: ValueKind): ParameterKind {
   }
 }
 
-export const VALUE_KIND_LABEL: Record<ValueKind, string> = {
-  text: "text",
-  integer: "number",
-  boolean: "yes/no",
-  path: "path",
-  url: "URL",
-  projectKey: "project key",
-}
+/** The name of each kind of value, in the window's language when read. */
+export const VALUE_KIND_LABEL: Readonly<Record<ValueKind, string>> = translatedLabels({
+  text: "workflows:mapping.kind.text",
+  integer: "workflows:mapping.kind.integer",
+  boolean: "workflows:mapping.kind.boolean",
+  path: "workflows:mapping.kind.path",
+  url: "workflows:mapping.kind.url",
+  projectKey: "workflows:mapping.kind.projectKey",
+})
 
 export interface Compatibility {
   level: "ok" | "warning" | "error"
@@ -273,37 +298,37 @@ export function compatibility(
     case "lines":
       return {
         level: "warning",
-        message: "Each line of the value becomes one item; nothing is split on spaces.",
+        message: i18n.t("workflows:mapping.fit.lines"),
       }
     case "pairs":
       return {
         level: "warning",
-        message: `Each line must be a name and a value separated by “${parameter.separator}”.`,
+        message: i18n.t("workflows:mapping.fit.pairs", { separator: parameter.separator }),
       }
     case "credential":
       return {
         level: "warning",
-        message: "The value must be the name of a credential stored on this computer.",
+        message: i18n.t("workflows:mapping.fit.credential"),
       }
     case "integer":
       return kind === "integer"
         ? { level: "ok" }
-        : { level: "warning", message: "The value must be a whole number when the node runs." }
+        : { level: "warning", message: i18n.t("workflows:mapping.fit.integer") }
     case "boolean":
       return kind === "boolean"
         ? { level: "ok" }
-        : { level: "warning", message: "The value must be “true” or “false” when the node runs." }
+        : { level: "warning", message: i18n.t("workflows:mapping.fit.boolean") }
     case "choice":
       return {
         level: "warning",
-        message: `The value must be one of: ${parameter.options.join(", ")}.`,
+        message: i18n.t("workflows:mapping.fit.choice", { options: parameter.options.join(", ") }),
       }
     case "project":
       return kind === "projectKey"
         ? { level: "ok" }
-        : { level: "warning", message: "The value must be a project key of this profile." }
+        : { level: "warning", message: i18n.t("workflows:mapping.fit.project") }
     case "resource":
-      return { level: "error", message: "Resources cannot come from earlier nodes." }
+      return { level: "error", message: i18n.t("workflows:mapping.fit.resource") }
   }
 }
 

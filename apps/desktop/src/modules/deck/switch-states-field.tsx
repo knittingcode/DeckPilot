@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { type TranslationKey, useTranslation } from "@/i18n"
 import type { ActionInstance, Workflow } from "@/lib/types"
 
 import { RANDOM_TYPE } from "./candidates"
@@ -25,6 +26,25 @@ import {
 } from "./switch-states"
 
 const NO_GLYPH = "none"
+
+const GLYPH_LABELS: Record<(typeof GLYPHS)[number], TranslationKey> = {
+  check: "actions:deck.glyph.check",
+  cross: "actions:deck.glyph.cross",
+  play: "actions:deck.glyph.play",
+  pause: "actions:deck.glyph.pause",
+  stop: "actions:deck.glyph.stop",
+  timer: "actions:deck.glyph.timer",
+  bell: "actions:deck.glyph.bell",
+  up: "actions:deck.glyph.up",
+  down: "actions:deck.glyph.down",
+  dot: "actions:deck.glyph.dot",
+  circle: "actions:deck.glyph.circle",
+  square: "actions:deck.glyph.square",
+  diamond: "actions:deck.glyph.diamond",
+  triangle: "actions:deck.glyph.triangle",
+  star: "actions:deck.glyph.star",
+  heart: "actions:deck.glyph.heart",
+}
 
 /**
  * The states of a Multi Action Switch: in order, each a saved action or
@@ -46,6 +66,7 @@ export function SwitchStatesField({
   workflows: Pick<Workflow, "id" | "name">[]
   onChange: (text: string) => void
 }) {
+  const { t } = useTranslation()
   const lines = parseStates(value)
   const offered = actions.filter(
     (a) => a.actionType !== RANDOM_TYPE && a.actionType !== MULTI_SWITCH_TYPE,
@@ -71,10 +92,12 @@ export function SwitchStatesField({
   }
   const targets = (current?: string) => (
     <>
-      {current && !known(current) && <SelectItem value={current}>Missing (deleted)</SelectItem>}
+      {current && !known(current) && (
+        <SelectItem value={current}>{t("actions:deck.missingDeleted")}</SelectItem>
+      )}
       {offered.length > 0 && (
         <SelectGroup>
-          <SelectLabel>Actions</SelectLabel>
+          <SelectLabel>{t("actions:deck.groupActions")}</SelectLabel>
           {offered.map((a) => (
             <SelectItem key={a.id} value={`action:${a.id}`}>
               {a.name}
@@ -84,7 +107,7 @@ export function SwitchStatesField({
       )}
       {workflows.length > 0 && (
         <SelectGroup>
-          <SelectLabel>Workflows and Multi Actions</SelectLabel>
+          <SelectLabel>{t("actions:deck.groupWorkflowsMulti")}</SelectLabel>
           {workflows.map((w) => (
             <SelectItem key={w.id} value={`workflow:${w.id}`}>
               {w.name}
@@ -101,7 +124,9 @@ export function SwitchStatesField({
           <li key={index} className="flex flex-wrap items-center gap-2 rounded-md border p-2">
             <span className="w-5 text-sm text-muted-foreground tabular-nums">{index + 1}.</span>
             {line.raw !== undefined ? (
-              <span className="text-sm text-destructive">Unreadable: {line.raw}</span>
+              <span className="text-sm text-destructive">
+                {t("actions:deck.unreadable", { line: line.raw })}
+              </span>
             ) : (
               <>
                 <Select
@@ -110,7 +135,10 @@ export function SwitchStatesField({
                     change(index, { target })
                   }}
                 >
-                  <SelectTrigger className="w-48" aria-label={`Runs in state ${index + 1}`}>
+                  <SelectTrigger
+                    className="w-48"
+                    aria-label={t("actions:deck.states.runs", { number: index + 1 })}
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>{targets(line.target)}</SelectContent>
@@ -118,8 +146,8 @@ export function SwitchStatesField({
                 <Input
                   className="h-8 w-32"
                   maxLength={32}
-                  placeholder="Title"
-                  aria-label={`Title of state ${index + 1}`}
+                  placeholder={t("actions:deck.states.titlePlaceholder")}
+                  aria-label={t("actions:deck.states.title", { number: index + 1 })}
                   value={line.title}
                   onChange={(e) => {
                     change(index, { title: e.target.value })
@@ -131,14 +159,17 @@ export function SwitchStatesField({
                     change(index, { glyph: glyph === NO_GLYPH ? "" : glyph })
                   }}
                 >
-                  <SelectTrigger className="w-28" aria-label={`Glyph of state ${index + 1}`}>
+                  <SelectTrigger
+                    className="w-28"
+                    aria-label={t("actions:deck.states.glyph", { number: index + 1 })}
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value={NO_GLYPH}>No glyph</SelectItem>
+                    <SelectItem value={NO_GLYPH}>{t("actions:deck.states.noGlyph")}</SelectItem>
                     {GLYPHS.map((glyph) => (
                       <SelectItem key={glyph} value={glyph}>
-                        {glyph}
+                        {t(GLYPH_LABELS[glyph])}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -149,7 +180,7 @@ export function SwitchStatesField({
             <Button
               variant="ghost"
               size="icon"
-              aria-label={`Move state ${index + 1} up`}
+              aria-label={t("actions:deck.states.moveUp", { number: index + 1 })}
               disabled={index === 0}
               onClick={() => {
                 move(index, index - 1)
@@ -160,7 +191,7 @@ export function SwitchStatesField({
             <Button
               variant="ghost"
               size="icon"
-              aria-label={`Move state ${index + 1} down`}
+              aria-label={t("actions:deck.states.moveDown", { number: index + 1 })}
               disabled={index === lines.length - 1}
               onClick={() => {
                 move(index, index + 1)
@@ -171,7 +202,7 @@ export function SwitchStatesField({
             <Button
               variant="ghost"
               size="icon"
-              aria-label={`Remove state ${index + 1}`}
+              aria-label={t("actions:deck.states.remove", { number: index + 1 })}
               onClick={() => {
                 set(lines.filter((_, i) => i !== index))
               }}
@@ -188,16 +219,15 @@ export function SwitchStatesField({
             set([...lines, { target, title: "", glyph: "" }])
           }}
         >
-          <SelectTrigger className="w-56" aria-label="Add a state">
-            <SelectValue placeholder="Add a state" />
+          <SelectTrigger className="w-56" aria-label={t("actions:deck.states.add")}>
+            <SelectValue placeholder={t("actions:deck.states.add")} />
           </SelectTrigger>
           <SelectContent>{targets()}</SelectContent>
         </Select>
       )}
       <p className="text-xs text-muted-foreground">
-        Each press runs the current state and, when that run succeeds, moves to the next one; after
-        the last it starts again. {MIN_STATES} to {MAX_STATES} states.
-        {lines.length < MIN_STATES && " Add at least two."}
+        {t("actions:deck.states.hint", { min: MIN_STATES, count: MAX_STATES })}
+        {lines.length < MIN_STATES && ` ${t("actions:deck.states.addAtLeastTwo")}`}
       </p>
     </div>
   )

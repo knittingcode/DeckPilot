@@ -1,10 +1,11 @@
 import {
+  AppWindow,
   ArrowRightLeft,
   Database,
   Info,
   KeyRound,
+  Languages,
   MonitorSmartphone,
-  Palette,
   Puzzle,
   RefreshCw,
   ScrollText,
@@ -17,6 +18,7 @@ import {
 } from "lucide-react"
 import { lazy } from "react"
 
+import { type TranslationKey, i18n } from "@/i18n"
 import type { ModuleInfo } from "@/lib/types"
 import { moduleSettingsPages } from "@/modules"
 
@@ -24,13 +26,40 @@ type View = React.LazyExoticComponent<() => React.JSX.Element>
 
 export type SettingsCategory = "general" | "hardware" | "security" | "extensions" | "advanced"
 
-export const CATEGORIES: { id: SettingsCategory; label: string }[] = [
-  { id: "general", label: "General" },
-  { id: "hardware", label: "Hardware" },
-  { id: "security", label: "Security & Data" },
-  { id: "extensions", label: "Extensions" },
-  { id: "advanced", label: "Advanced" },
+const CATEGORY_LABELS = {
+  general: "settings:categories.general",
+  hardware: "settings:categories.hardware",
+  security: "settings:categories.security",
+  extensions: "settings:categories.extensions",
+  advanced: "settings:categories.advanced",
+} as const satisfies Record<SettingsCategory, TranslationKey>
+
+const CATEGORY_ORDER: SettingsCategory[] = [
+  "general",
+  "hardware",
+  "security",
+  "extensions",
+  "advanced",
 ]
+
+/** The categories in display order, named in the window's language. */
+export function settingsCategories(): { id: SettingsCategory; label: string }[] {
+  return CATEGORY_ORDER.map((id) => ({ id, label: i18n.t(CATEGORY_LABELS[id]) }))
+}
+
+export function categoryLabel(id: SettingsCategory): string {
+  return i18n.t(CATEGORY_LABELS[id])
+}
+
+/**
+ * A page as the registry defines it: its texts are translation keys,
+ * resolved in the window's language when the pages are listed
+ * (`settingsPages`), so a change of language shows at the next render.
+ */
+interface PageDefinition extends Omit<SettingsPageEntry, "title" | "description" | "module"> {
+  title: TranslationKey
+  description: TranslationKey
+}
 
 export interface SettingsPageEntry {
   id: string
@@ -53,20 +82,20 @@ const view = (load: () => Promise<{ default: () => React.JSX.Element }>) => lazy
  * Pages of the core application. Only settings the application actually
  * supports have a page; a category without pages is not shown.
  */
-const CORE_PAGES: SettingsPageEntry[] = [
+const CORE_PAGES: PageDefinition[] = [
   {
-    id: "appearance",
-    title: "Appearance",
-    description: "Theme of the configuration app",
+    id: "language",
+    title: "settings:pages.language.title",
+    description: "settings:pages.language.description",
     category: "general",
-    icon: Palette,
-    keywords: ["theme", "dark", "light", "mode"],
-    view: view(() => import("./pages/appearance").then((m) => ({ default: m.AppearanceSettings }))),
+    icon: Languages,
+    keywords: ["language", "locale", "translation", "english", "polish", "polski", "język"],
+    view: view(() => import("./pages/language").then((m) => ({ default: m.LanguageSettings }))),
   },
   {
     id: "profiles",
-    title: "Profiles",
-    description: "Profiles and the one active on the device",
+    title: "settings:pages.profiles.title",
+    description: "settings:pages.profiles.description",
     category: "general",
     icon: UserRound,
     keywords: ["profile", "create", "rename", "duplicate", "delete", "active", "activate"],
@@ -74,8 +103,8 @@ const CORE_PAGES: SettingsPageEntry[] = [
   },
   {
     id: "updates",
-    title: "Updates",
-    description: "Signed updates from GitHub Releases",
+    title: "settings:pages.updates.title",
+    description: "settings:pages.updates.description",
     category: "general",
     icon: RefreshCw,
     keywords: ["version", "release", "download", "install", "upgrade"],
@@ -83,8 +112,8 @@ const CORE_PAGES: SettingsPageEntry[] = [
   },
   {
     id: "variables",
-    title: "Variables",
-    description: "Every value actions, workflows and keys can read with {{ … }}",
+    title: "settings:pages.variables.title",
+    description: "settings:pages.variables.description",
     category: "general",
     icon: Variable,
     keywords: [
@@ -103,8 +132,8 @@ const CORE_PAGES: SettingsPageEntry[] = [
   },
   {
     id: "devices",
-    title: "Devices",
-    description: "Connected Stream Decks, supported models, brightness and gesture timing",
+    title: "settings:pages.devices.title",
+    description: "settings:pages.devices.description",
     category: "hardware",
     icon: MonitorSmartphone,
     keywords: [
@@ -124,8 +153,8 @@ const CORE_PAGES: SettingsPageEntry[] = [
   },
   {
     id: "agent",
-    title: "Background Agent",
-    description: "The process that drives your devices and runs actions",
+    title: "settings:pages.agent.title",
+    description: "settings:pages.agent.description",
     category: "hardware",
     icon: Server,
     keywords: ["agent", "autostart", "login", "start", "stop", "process"],
@@ -133,8 +162,8 @@ const CORE_PAGES: SettingsPageEntry[] = [
   },
   {
     id: "security",
-    title: "Security",
-    description: "Encryption, unlocking and automatic locking",
+    title: "settings:pages.security.title",
+    description: "settings:pages.security.description",
     category: "security",
     icon: ShieldCheck,
     keywords: ["password", "keychain", "lock", "touch id", "encryption", "authentication"],
@@ -142,8 +171,8 @@ const CORE_PAGES: SettingsPageEntry[] = [
   },
   {
     id: "backup",
-    title: "Backup & Restore",
-    description: "Encrypted export and import of your configuration",
+    title: "settings:pages.backup.title",
+    description: "settings:pages.backup.description",
     category: "security",
     icon: ArrowRightLeft,
     keywords: ["export", "import", "backup", "restore", "transfer", "migrate"],
@@ -151,8 +180,8 @@ const CORE_PAGES: SettingsPageEntry[] = [
   },
   {
     id: "storage",
-    title: "Storage",
-    description: "Where and how the configuration is stored",
+    title: "settings:pages.storage.title",
+    description: "settings:pages.storage.description",
     category: "security",
     icon: Database,
     keywords: ["database", "sqlcipher", "path", "data", "upgrade notes"],
@@ -160,8 +189,8 @@ const CORE_PAGES: SettingsPageEntry[] = [
   },
   {
     id: "modules",
-    title: "Modules",
-    description: "Features of DeckPilot you can enable or disable",
+    title: "settings:pages.modules.title",
+    description: "settings:pages.modules.description",
     category: "extensions",
     icon: Puzzle,
     keywords: ["plugins", "extensions", "features", "enable", "disable"],
@@ -169,8 +198,8 @@ const CORE_PAGES: SettingsPageEntry[] = [
   },
   {
     id: "permissions",
-    title: "Permissions",
-    description: "What each module is allowed to access",
+    title: "settings:pages.permissions.title",
+    description: "settings:pages.permissions.description",
     category: "extensions",
     icon: KeyRound,
     keywords: ["capabilities", "access", "privacy"],
@@ -180,8 +209,8 @@ const CORE_PAGES: SettingsPageEntry[] = [
   },
   {
     id: "diagnostics",
-    title: "Logs & Diagnostics",
-    description: "Logs and technical details for troubleshooting",
+    title: "settings:pages.diagnostics.title",
+    description: "settings:pages.diagnostics.description",
     category: "advanced",
     icon: ScrollText,
     keywords: ["log", "debug", "troubleshoot", "support", "ipc", "paths"],
@@ -191,8 +220,8 @@ const CORE_PAGES: SettingsPageEntry[] = [
   },
   {
     id: "about",
-    title: "About",
-    description: "Version, license and system",
+    title: "settings:pages.about.title",
+    description: "settings:pages.about.description",
     category: "advanced",
     icon: Info,
     keywords: ["version", "license", "open source"],
@@ -200,7 +229,28 @@ const CORE_PAGES: SettingsPageEntry[] = [
   },
 ]
 
-let pluginsPage: SettingsPageEntry | undefined
+let showcasePage: PageDefinition | undefined
+
+/**
+ * Development tools, present only in `vite dev` (`tauri dev`). Vite
+ * replaces `import.meta.env.DEV` with `false` in builds, so release builds
+ * contain neither the page nor its code.
+ */
+function developmentPages(): PageDefinition[] {
+  if (!import.meta.env.DEV) return []
+  showcasePage ??= {
+    id: "dev-dialogs",
+    title: "settings:pages.devDialogs.title",
+    description: "settings:pages.devDialogs.description",
+    category: "advanced",
+    icon: AppWindow,
+    keywords: ["dialog", "modal", "showcase", "design", "development"],
+    view: view(() => import("@/dev/dialog-showcase").then((m) => ({ default: m.DialogShowcase }))),
+  }
+  return [showcasePage]
+}
+
+let pluginsPage: PageDefinition | undefined
 
 /**
  * Experimental pages, present only in builds that opt in. The plugin
@@ -208,12 +258,12 @@ let pluginsPage: SettingsPageEntry | undefined
  * the check with a constant, so normal and release builds contain neither
  * the page nor its code.
  */
-function experimentalPages(): SettingsPageEntry[] {
+function experimentalPages(): PageDefinition[] {
   if (import.meta.env.VITE_DECKPILOT_PLUGINS !== "1") return []
   pluginsPage ??= {
     id: "plugins",
-    title: "Plugins",
-    description: "Experimental: installed plugins, their permissions, settings and updates",
+    title: "settings:pages.plugins.title",
+    description: "settings:pages.plugins.description",
     category: "extensions",
     icon: Store,
     keywords: ["marketplace", "plugins", "install", "community", "registry", "experimental"],
@@ -224,19 +274,35 @@ function experimentalPages(): SettingsPageEntry[] {
   return [pluginsPage]
 }
 
-/** Every settings page, with the pages of enabled modules under Extensions. */
+// `{{ … }}` (the reference syntax) is a value, so it is never read as a
+// placeholder of the translation.
+const resolve = (page: PageDefinition): SettingsPageEntry => ({
+  ...page,
+  title: i18n.t(page.title),
+  description: i18n.t(page.description, { syntax: "{{ … }}" }),
+})
+
+/**
+ * Every settings page, with the pages of enabled modules under Extensions,
+ * in the window's language (a module's own name is its manifest's).
+ */
 export function settingsPages(modules: ModuleInfo[]): SettingsPageEntry[] {
   const fromModules = moduleSettingsPages(modules).map((page): SettingsPageEntry => ({
     id: page.id,
     title: page.module.name,
-    description: `Settings of the ${page.module.name} module`,
+    description: i18n.t("settings:pages.module.description", { module: page.module.name }),
     category: "extensions",
     icon: page.icon,
     keywords: ["module", page.module.id, ...page.module.config.map((spec) => spec.label)],
     view: page.view ?? null,
     module: page.module,
   }))
-  return [...CORE_PAGES, ...experimentalPages(), ...fromModules]
+  return [
+    ...CORE_PAGES.map(resolve),
+    ...experimentalPages().map(resolve),
+    ...fromModules,
+    ...developmentPages().map(resolve),
+  ]
 }
 
 export function findSettingsPage(modules: ModuleInfo[], id: string) {
@@ -245,10 +311,12 @@ export function findSettingsPage(modules: ModuleInfo[], id: string) {
 
 /** Pages grouped by category, in display order; empty categories are left out. */
 export function groupedSettings(pages: SettingsPageEntry[]) {
-  return CATEGORIES.map((category) => ({
-    ...category,
-    pages: pages.filter((page) => page.category === category.id),
-  })).filter((group) => group.pages.length > 0)
+  return settingsCategories()
+    .map((category) => ({
+      ...category,
+      pages: pages.filter((page) => page.category === category.id),
+    }))
+    .filter((group) => group.pages.length > 0)
 }
 
 /** Pages whose title, description or keywords contain every word of `query`. */

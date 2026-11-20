@@ -1,10 +1,12 @@
 import { Fingerprint, KeyRound, LockKeyhole, ShieldCheck, TriangleAlert } from "lucide-react"
 import { useEffect, useState } from "react"
 
+import { CredentialDialog } from "@/components/dialogs/credential-dialog"
 import { ModalShell } from "@/components/modal-shell"
-import { NewPasswordFields, PasswordField } from "@/components/password-field"
+import { NewPasswordFields } from "@/components/password-field"
 import { newPasswordReady } from "@/lib/passwords"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Trans, i18n, useTranslation } from "@/i18n"
 import { api, errorMessage } from "@/lib/api"
 import { failureMessage } from "@/lib/failure"
 import type { SecurityView } from "@/lib/types"
@@ -66,9 +68,9 @@ function useSecurityView(): ViewState & { reload: () => void } {
           setState({
             status: "error",
             error: failureMessage(
-              "The protection status could not be read",
+              i18n.t("errors:security.statusUnreadable"),
               error,
-              "Restart DeckPilot",
+              i18n.t("errors:next.restart"),
             ),
           })
         }
@@ -103,13 +105,14 @@ function useSecurityView(): ViewState & { reload: () => void } {
 
 /** The agent is reading the key; the credential store may ask first. */
 function WaitingForKeyStore({ view }: { view: SecurityView }) {
+  const { t } = useTranslation()
   return (
     <ModalShell
       size="compact"
       blocking
       icon={KeyRound}
-      title={`Waiting for the ${view.keyStore}`}
-      description={`DeckPilot is reading its key. If the ${view.keyStore} asks whether DeckPilot may use it, allow it.`}
+      title={t("security:keyStore.waitingTitle", { keyStore: view.keyStore })}
+      description={t("security:keyStore.waitingDescription", { keyStore: view.keyStore })}
       loading
     />
   )
@@ -120,6 +123,7 @@ function WaitingForKeyStore({ view }: { view: SecurityView }) {
  * gone. Nothing is created until the user decides.
  */
 function MissingDatabase({ onChanged }: { onChanged: () => void }) {
+  const { t } = useTranslation()
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -143,8 +147,8 @@ function MissingDatabase({ onChanged }: { onChanged: () => void }) {
       size="compact"
       blocking
       icon={TriangleAlert}
-      title="Your configuration is missing"
-      description="DeckPilot was set up on this computer, but its configuration database is gone — perhaps it was moved, deleted, or is on a drive that is not connected. Nothing was created or overwritten."
+      title={t("security:missingDatabase.title")}
+      description={t("security:missingDatabase.description")}
       error={error}
       onSubmit={() => {
         act(confirming ? () => api.startNewConfiguration() : () => api.systemUnlock())
@@ -152,13 +156,13 @@ function MissingDatabase({ onChanged }: { onChanged: () => void }) {
       secondary={
         confirming
           ? {
-              label: "Back",
+              label: t("common:actions.back"),
               onClick: () => {
                 setConfirming(false)
               },
             }
           : {
-              label: "Start a new configuration…",
+              label: t("security:missingDatabase.startNewEllipsis"),
               onClick: () => {
                 setConfirming(true)
               },
@@ -167,24 +171,29 @@ function MissingDatabase({ onChanged }: { onChanged: () => void }) {
       primary={
         confirming
           ? {
-              label: "Start a new configuration",
-              loadingLabel: "Creating…",
+              label: t("security:missingDatabase.startNew"),
+              loadingLabel: t("security:missingDatabase.creating"),
               loading: busy,
               variant: "destructive",
             }
-          : { label: "Try again", loadingLabel: "Trying…", loading: busy }
+          : {
+              label: t("common:actions.tryAgain"),
+              loadingLabel: t("common:status.trying"),
+              loading: busy,
+            }
       }
     >
       {confirming ? (
         <p className="text-sm text-muted-foreground">
-          DeckPilot starts with an empty configuration. The old key file is kept next to it, and its
-          key stays in the credential store, so the old configuration can still be opened if you
-          find its database. Import an encrypted export to restore your profiles.
+          {t("security:missingDatabase.startNewExplanation")}
         </p>
       ) : (
         <p className="text-sm text-muted-foreground">
-          Restore <span className="font-mono">deckpilot.db</span> to the data folder (or connect its
-          drive) and try again.
+          <Trans
+            i18nKey="security:missingDatabase.restore"
+            values={{ file: "deckpilot.db" }}
+            components={{ file: <span className="font-mono" /> }}
+          />
         </p>
       )}
     </ModalShell>
@@ -221,6 +230,7 @@ function NewPasswordForm({
   secondary?: { label: string; onClick: () => void }
   submit: (password: string, confirmation: string) => Promise<unknown>
 }) {
+  const { t } = useTranslation()
   const [password, setPassword] = useState("")
   const [confirmation, setConfirmation] = useState("")
   const { busy, error, run } = useSubmit()
@@ -239,7 +249,7 @@ function NewPasswordForm({
       secondary={secondary}
       primary={{
         label: submitLabel,
-        loadingLabel: "Encrypting…",
+        loadingLabel: t("security:newPassword.encrypting"),
         loading: busy,
         disabled: !ready,
       }}
@@ -252,9 +262,7 @@ function NewPasswordForm({
         onConfirmation={setConfirmation}
         autoFocus
       />
-      <p className="text-xs text-muted-foreground">
-        The password cannot be recovered. Keep an encrypted export as a backup.
-      </p>
+      <p className="text-xs text-muted-foreground">{t("security:newPassword.notRecoverable")}</p>
     </ModalShell>
   )
 }
@@ -278,6 +286,7 @@ function SystemKeyProblem({
   hint?: string
   onPassword?: () => void
 }) {
+  const { t } = useTranslation()
   const { busy, error, run } = useSubmit()
   return (
     <ModalShell
@@ -290,8 +299,10 @@ function SystemKeyProblem({
       onSubmit={() => {
         run(() => api.systemUnlock())
       }}
-      secondary={onPassword ? { label: "Use a password instead", onClick: onPassword } : undefined}
-      primary={{ label: retryLabel, loadingLabel: "Trying…", loading: busy }}
+      secondary={
+        onPassword ? { label: t("security:systemKey.usePassword"), onClick: onPassword } : undefined
+      }
+      primary={{ label: retryLabel, loadingLabel: t("common:status.trying"), loading: busy }}
     >
       {view.problem && (
         <Alert>
@@ -300,10 +311,7 @@ function SystemKeyProblem({
         </Alert>
       )}
       {!view.agentRunning && (
-        <p className="text-sm text-muted-foreground">
-          The DeckPilot background agent is not running. It keeps the key and starts with your
-          login; start it from the Dashboard or try again.
-        </p>
+        <p className="text-sm text-muted-foreground">{t("security:systemKey.agentNotRunning")}</p>
       )}
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
       <button
@@ -313,7 +321,7 @@ function SystemKeyProblem({
           api.openWindow("app.logs").catch(() => undefined)
         }}
       >
-        Show the agent log
+        {t("security:systemKey.showLog")}
       </button>
     </ModalShell>
   )
@@ -324,12 +332,13 @@ function SystemKeyProblem({
  * (normally the agent sets everything up without asking).
  */
 export function SetupWindow() {
+  const { t } = useTranslation()
   const state = useSecurityView()
   const [password, setPassword] = useState(false)
   if (state.status !== "ready")
     return (
       <Loading
-        title="Welcome to DeckPilot"
+        title={t("security:setup.welcome")}
         error={state.status === "error" ? state.error : undefined}
       />
     )
@@ -339,11 +348,11 @@ export function SetupWindow() {
     return (
       <NewPasswordForm
         icon={ShieldCheck}
-        title="Protect DeckPilot with a password"
-        description="The configuration is encrypted with a key derived from this password. You enter it after each restart."
-        submitLabel="Create encrypted configuration"
+        title={t("security:setup.passwordTitle")}
+        description={t("security:setup.passwordDescription")}
+        submitLabel={t("security:setup.create")}
         secondary={{
-          label: "Back",
+          label: t("common:actions.back"),
           onClick: () => {
             setPassword(false)
           },
@@ -355,9 +364,9 @@ export function SetupWindow() {
   return (
     <SystemKeyProblem
       view={state.data}
-      title="Welcome to DeckPilot"
-      description={`DeckPilot encrypts your configuration with a key kept in the ${state.data.keyStore}, but could not store it there.`}
-      retryLabel="Try again"
+      title={t("security:setup.welcome")}
+      description={t("security:setup.keyStoreFailed", { keyStore: state.data.keyStore })}
+      retryLabel={t("common:actions.tryAgain")}
       onPassword={() => {
         setPassword(true)
       }}
@@ -370,20 +379,19 @@ export function SetupWindow() {
  * agent could not encrypt with a system key by itself.
  */
 export function MigrateWindow() {
+  const { t } = useTranslation()
   const state = useSecurityView()
   const [password, setPassword] = useState(false)
   const notice = (
     <Alert>
-      <AlertTitle>The unencrypted original is kept</AlertTitle>
-      <AlertDescription>
-        Until you delete it in Settings, anyone with access to your files can read it.
-      </AlertDescription>
+      <AlertTitle>{t("security:migrate.originalKept")}</AlertTitle>
+      <AlertDescription>{t("security:migrate.originalReadable")}</AlertDescription>
     </Alert>
   )
   if (state.status !== "ready")
     return (
       <Loading
-        title="Encrypt your configuration"
+        title={t("security:migrate.title")}
         error={state.status === "error" ? state.error : undefined}
       />
     )
@@ -392,12 +400,12 @@ export function MigrateWindow() {
     return (
       <NewPasswordForm
         icon={KeyRound}
-        title="Encrypt your configuration"
-        description="It was saved by an earlier DeckPilot without encryption. Choose a password; everything is kept."
-        submitLabel="Encrypt configuration"
+        title={t("security:migrate.title")}
+        description={t("security:migrate.passwordDescription")}
+        submitLabel={t("security:migrate.encrypt")}
         notice={notice}
         secondary={{
-          label: "Back",
+          label: t("common:actions.back"),
           onClick: () => {
             setPassword(false)
           },
@@ -409,9 +417,9 @@ export function MigrateWindow() {
   return (
     <SystemKeyProblem
       view={state.data}
-      title="Encrypt your configuration"
-      description={`It was saved by an earlier DeckPilot without encryption. DeckPilot encrypts it with a key kept in the ${state.data.keyStore}, but could not store the key.`}
-      retryLabel="Try again"
+      title={t("security:migrate.title")}
+      description={t("security:migrate.keyStoreFailed", { keyStore: state.data.keyStore })}
+      retryLabel={t("common:actions.tryAgain")}
       onPassword={() => {
         setPassword(true)
       }}
@@ -419,6 +427,7 @@ export function MigrateWindow() {
   )
 }
 
+/** The password check of the unlock and confirmation windows (blocking). */
 function PasswordPrompt({
   icon,
   title,
@@ -432,42 +441,16 @@ function PasswordPrompt({
   submitLabel: string
   submit: (password: string) => Promise<unknown>
 }) {
-  const [password, setPassword] = useState("")
-  const { busy, error, run } = useSubmit()
   return (
-    <ModalShell
-      size="compact"
-      blocking
+    <CredentialDialog
+      presentation="window"
       icon={icon}
       title={title}
       description={description}
-      error={error}
-      onSubmit={() => {
-        if (password)
-          run(
-            () => submit(password),
-            () => {
-              setPassword("")
-            },
-          )
-      }}
-      primary={{
-        label: submitLabel,
-        loadingLabel: "Checking…",
-        loading: busy,
-        disabled: !password,
-      }}
-    >
-      <PasswordField
-        id="password"
-        label="Password"
-        value={password}
-        onChange={setPassword}
-        autoComplete="current-password"
-        autoFocus
-        invalid={Boolean(error)}
-      />
-    </ModalShell>
+      submitLabel={submitLabel}
+      submit={submit}
+      onDone={() => void finish()}
+    />
   )
 }
 
@@ -483,6 +466,7 @@ function SystemPrompt({
   description: string
   submit: () => Promise<unknown>
 }) {
+  const { t } = useTranslation()
   const { busy, error, run } = useSubmit()
   const touchId = view.verification === "touchId"
   return (
@@ -497,26 +481,25 @@ function SystemPrompt({
         run(submit)
       }}
       primary={{
-        label: touchId ? "Unlock with Touch ID" : "Unlock",
-        loadingLabel: "Waiting…",
+        label: touchId ? t("security:unlock.withTouchId") : t("security:unlock.action"),
+        loadingLabel: t("common:status.waiting"),
         loading: busy,
       }}
     >
       {touchId && (
-        <p className="text-sm text-muted-foreground">
-          You can also use your Mac&apos;s login password in the system prompt.
-        </p>
+        <p className="text-sm text-muted-foreground">{t("security:unlock.macPassword")}</p>
       )}
     </ModalShell>
   )
 }
 
 export function UnlockWindow() {
+  const { t } = useTranslation()
   const state = useSecurityView()
   if (state.status !== "ready")
     return (
       <Loading
-        title="DeckPilot is locked"
+        title={t("security:locked.title")}
         error={state.status === "error" ? state.error : undefined}
       />
     )
@@ -526,9 +509,9 @@ export function UnlockWindow() {
     return (
       <PasswordPrompt
         icon={LockKeyhole}
-        title="DeckPilot is locked"
-        description="Enter your password. Your Stream Deck resumes as soon as it is unlocked."
-        submitLabel="Unlock"
+        title={t("security:locked.title")}
+        description={t("security:unlock.passwordDescription")}
+        submitLabel={t("security:unlock.action")}
         submit={(password) => api.unlock(password)}
       />
     )
@@ -537,26 +520,26 @@ export function UnlockWindow() {
     return (
       <SystemKeyProblem
         view={view}
-        title="DeckPilot cannot open its configuration"
-        description={`Its key is kept in the ${view.keyStore}, which did not provide it. Unlock the ${view.keyStore} or sign in again, then try again. Nothing was changed.`}
-        retryLabel="Try again"
-        hint="If the key was deleted (for example when the keychain was reset), this configuration cannot be opened anymore. Restore your encrypted export on a new configuration; see the security documentation."
+        title={t("security:cannotOpen.title")}
+        description={t("security:cannotOpen.keyUnavailable", { keyStore: view.keyStore })}
+        retryLabel={t("common:actions.tryAgain")}
+        hint={t("security:cannotOpen.keyDeleted")}
       />
     )
   }
-  const reason =
+  const description =
     view.lockReason === "idle"
-      ? "It was locked after a period without activity."
+      ? t("security:unlock.reason.idle")
       : view.lockReason === "sleep"
-        ? "It was locked when the computer went to sleep."
+        ? t("security:unlock.reason.sleep")
         : view.lockReason === "screenLocked"
-          ? "It was locked when the screen was locked."
-          : "It was locked."
+          ? t("security:unlock.reason.screenLocked")
+          : t("security:unlock.reason.other")
   return (
     <SystemPrompt
       view={view}
-      title="DeckPilot is locked"
-      description={`${reason} Your Stream Deck resumes as soon as it is unlocked.`}
+      title={t("security:locked.title")}
+      description={description}
       submit={() => api.systemUnlock()}
     />
   )
@@ -564,11 +547,12 @@ export function UnlockWindow() {
 
 /** The authentication the security policy asks for after an update or at launch. */
 export function ConfirmWindow() {
+  const { t } = useTranslation()
   const state = useSecurityView()
   if (state.status !== "ready")
     return (
       <Loading
-        title="Confirm it's you"
+        title={t("security:confirm.title")}
         error={state.status === "error" ? state.error : undefined}
       />
     )
@@ -577,9 +561,9 @@ export function ConfirmWindow() {
     return (
       <PasswordPrompt
         icon={ShieldCheck}
-        title="Confirm it's you"
-        description="Your security settings ask for your password when DeckPilot starts or after an update."
-        submitLabel="Continue"
+        title={t("security:confirm.title")}
+        description={t("security:confirm.passwordDescription")}
+        submitLabel={t("common:actions.continue")}
         submit={(password) => api.confirmIdentity(password)}
       />
     )
@@ -587,8 +571,8 @@ export function ConfirmWindow() {
   return (
     <SystemPrompt
       view={view}
-      title="Confirm it's you"
-      description="Your security settings ask for authentication when DeckPilot starts or after an update."
+      title={t("security:confirm.title")}
+      description={t("security:confirm.systemDescription")}
       submit={() => api.confirmIdentity(null)}
     />
   )

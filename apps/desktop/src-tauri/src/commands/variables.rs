@@ -26,12 +26,16 @@ pub const NOT_SUPPORTED: &str = "not supported";
 
 fn not_supported(error: ClientError) -> CommandError {
     match error {
-        ClientError::NotRunning | ClientError::Closed => CommandError::Invalid(format!(
-            "{NOT_SUPPORTED}: start the DeckPilot agent to see variable values"
-        )),
-        ClientError::Unsupported { .. } => CommandError::Invalid(format!(
-            "{NOT_SUPPORTED}: the running agent is too old for variables; restart the agent"
-        )),
+        ClientError::NotRunning | ClientError::Closed => CommandError::invalid(
+            "variablesAgentNotRunning",
+            format!("{NOT_SUPPORTED}: start the DeckPilot agent to see variable values"),
+        ),
+        ClientError::Unsupported { .. } => CommandError::invalid(
+            "variablesAgentTooOld",
+            format!(
+                "{NOT_SUPPORTED}: the running agent is too old for variables; restart the agent"
+            ),
+        ),
         other => other.into(),
     }
 }
@@ -68,9 +72,11 @@ pub async fn preview_references(
         return Ok(Vec::new());
     }
     if items.len() > MAX_PREVIEW_ITEMS {
-        return Err(CommandError::Invalid(format!(
-            "at most {MAX_PREVIEW_ITEMS} references can be previewed at once"
-        )));
+        return Err(CommandError::invalid_with(
+            "tooManyPreviews",
+            format!("at most {MAX_PREVIEW_ITEMS} references can be previewed at once"),
+            [("max", MAX_PREVIEW_ITEMS.into())],
+        ));
     }
     let request = Request::PreviewReferences {
         context: Box::new(context),

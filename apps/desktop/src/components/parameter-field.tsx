@@ -12,6 +12,7 @@ import { ReferenceDiagnostics } from "@/components/variable-picker/reference-dia
 import { ReferenceInput } from "@/components/variable-picker/reference-input"
 import { ReferenceValueField } from "@/components/variable-picker/reference-value"
 import { VariablePicker } from "@/components/variable-picker/variable-picker"
+import { useTranslation } from "@/i18n"
 import { initialValue } from "@/lib/parameters"
 import { PROFILE_PARAMETER, ProfileField, SWITCH_PROFILE_TYPE } from "@/modules/deck/profile-field"
 import { CANDIDATES_PARAMETER, RANDOM_TYPE } from "@/modules/deck/candidates"
@@ -62,6 +63,7 @@ export function ParameterField({
   }
   onChange: (value: ParameterValue) => void
 }) {
+  const { t } = useTranslation()
   const id = `parameter-${spec.key}`
   const labelId = `${id}-label`
   const profile =
@@ -134,7 +136,7 @@ export function ParameterField({
           <VariablePicker
             kind={spec.kind}
             fieldLabel={spec.label}
-            label={`Use a variable for ${spec.label}`}
+            label={t("actions:parameters.useVariable", { label: spec.label })}
             onPick={(reference) => {
               onChange({ type: "reference", value: reference })
             }}
@@ -159,6 +161,7 @@ function Control({
   projects: Project[]
   onChange: (value: ParameterValue) => void
 }) {
+  const { t } = useTranslation()
   const kind = spec.kind
   if (kind.type === "text" && (value.type === "text" || value.type === "template")) {
     const template = value.type === "template"
@@ -310,7 +313,7 @@ function Control({
       />
     )
   }
-  return <p className="text-sm text-destructive">Unsupported parameter type.</p>
+  return <p className="text-sm text-destructive">{t("actions:parameters.unsupported")}</p>
 }
 
 /** Select value standing for "no project set", i.e. the current project. */
@@ -334,11 +337,12 @@ function ProjectControl({
   projects: Project[]
   onChange: (project: string) => void
 }) {
+  const { t } = useTranslation()
   const known = projects.some((p) => p.id === value)
   if (projects.length === 0 && !optional) {
     return (
       <p id={id} className="text-sm text-muted-foreground">
-        This profile has no projects yet. Add one on the Projects page.
+        {t("actions:parameters.project.none")}
       </p>
     )
   }
@@ -352,10 +356,14 @@ function ProjectControl({
         }}
       >
         <SelectTrigger id={id} className="w-64">
-          <SelectValue placeholder="Choose a project" />
+          <SelectValue placeholder={t("actions:parameters.project.choose")} />
         </SelectTrigger>
         <SelectContent>
-          {optional && <SelectItem value={CURRENT_PROJECT}>Current project (default)</SelectItem>}
+          {optional && (
+            <SelectItem value={CURRENT_PROJECT}>
+              {t("actions:parameters.project.current")}
+            </SelectItem>
+          )}
           {projects.map((project) => (
             <SelectItem key={project.id} value={project.id}>
               {project.key} · {project.name}
@@ -364,9 +372,7 @@ function ProjectControl({
         </SelectContent>
       </Select>
       {value !== "" && !known && (
-        <p className="text-xs text-destructive">
-          The saved project is not part of this profile. Choose one of its projects.
-        </p>
+        <p className="text-xs text-destructive">{t("actions:parameters.project.notInProfile")}</p>
       )}
     </>
   )
@@ -381,6 +387,7 @@ function ResourceControl({
   value: ResourceRef
   onChange: (value: ParameterValue) => void
 }) {
+  const { t } = useTranslation()
   const text = value.type === "fixed" ? value.key : value.role
   const set = (reference: ResourceRef) => {
     onChange({ type: "resource", value: reference })
@@ -393,12 +400,14 @@ function ResourceControl({
           set(type === "fixed" ? { type: "fixed", key: text } : { type: "projectRole", role: text })
         }}
       >
-        <SelectTrigger aria-label="Resource source">
+        <SelectTrigger aria-label={t("actions:parameters.resource.source")}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="projectRole">Role of active project</SelectItem>
-          <SelectItem value="fixed">Fixed resource key</SelectItem>
+          <SelectItem value="projectRole">
+            {t("actions:parameters.resource.projectRole")}
+          </SelectItem>
+          <SelectItem value="fixed">{t("actions:parameters.resource.fixed")}</SelectItem>
         </SelectContent>
       </Select>
       <Input

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { toast } from "sonner"
 
+import { i18n } from "@/i18n"
 import { api, errorMessage } from "@/lib/api"
 import type { IconInfo } from "@/lib/types"
 
@@ -21,7 +22,7 @@ function readBase64(file: File): Promise<string> {
       resolve(result.slice(result.indexOf(",") + 1))
     }
     reader.onerror = () => {
-      reject(new Error("The file could not be read."))
+      reject(new Error(i18n.t("editor:icons.unreadable")))
     }
     reader.readAsDataURL(file)
   })
@@ -56,7 +57,7 @@ export function useIcons(profileId: string) {
       },
       (e: unknown) => {
         setLoading(false)
-        setProblem(`The icons could not be loaded: ${sentence(errorMessage(e))}`)
+        setProblem(i18n.t("editor:icons.loadFailed", { detail: sentence(errorMessage(e)) }))
       },
     )
   }, [profileId])
@@ -83,10 +84,15 @@ export function useIcons(profileId: string) {
       }
       const icon = await api.importIcon(profileId, iconName(file.name), await readBase64(file))
       setIcons((list) => [...list.filter((i) => i.id !== icon.id), icon])
-      toast.success(`Imported “${icon.name}”`)
+      toast.success(i18n.t("editor:icons.imported", { name: icon.name }))
       return icon
     } catch (e) {
-      setProblem(`“${file.name}” was not imported: ${sentence(errorMessage(e))}`)
+      setProblem(
+        i18n.t("editor:icons.importFailed", {
+          name: file.name,
+          detail: sentence(errorMessage(e)),
+        }),
+      )
       return null
     } finally {
       setBusy(false)
@@ -99,9 +105,14 @@ export function useIcons(profileId: string) {
     try {
       await api.deleteIcon(profileId, icon.id)
       setIcons((list) => list.filter((i) => i.id !== icon.id))
-      toast.success(`Deleted “${icon.name}”`)
+      toast.success(i18n.t("editor:icons.deleted", { name: icon.name }))
     } catch (e) {
-      setProblem(`“${icon.name}” was not deleted: ${sentence(errorMessage(e))}`)
+      setProblem(
+        i18n.t("editor:icons.deleteFailed", {
+          name: icon.name,
+          detail: sentence(errorMessage(e)),
+        }),
+      )
     } finally {
       setBusy(false)
     }

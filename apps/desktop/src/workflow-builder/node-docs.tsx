@@ -1,26 +1,27 @@
+import { type TranslationKey, useTranslation } from "@/i18n"
 import { CAPABILITIES } from "@/lib/capabilities"
 import type { ActionEffect, ActionType, ParameterKind } from "@/lib/types"
 
 import type { Lookup } from "./describe"
 
-const KIND_LABEL: Record<ParameterKind["type"], string> = {
-  text: "text",
-  integer: "number",
-  boolean: "yes/no",
-  choice: "choice",
-  resource: "resource",
-  project: "project",
-  lines: "list",
-  pairs: "rows",
-  code: "code",
-  credential: "credential",
+const KIND_LABEL: Record<ParameterKind["type"], TranslationKey> = {
+  text: "workflows:inspector.docs.kind.text",
+  integer: "workflows:inspector.docs.kind.integer",
+  boolean: "workflows:inspector.docs.kind.boolean",
+  choice: "workflows:inspector.docs.kind.choice",
+  resource: "workflows:inspector.docs.kind.resource",
+  project: "workflows:inspector.docs.kind.project",
+  lines: "workflows:inspector.docs.kind.lines",
+  pairs: "workflows:inspector.docs.kind.pairs",
+  code: "workflows:inspector.docs.kind.code",
+  credential: "workflows:inspector.docs.kind.credential",
 }
 
 /** How the catalog and the inspector describe what an action does. */
-const EFFECT_LABEL: Record<ActionEffect, string> = {
-  readOnly: "Read-only",
-  opens: "Opens something",
-  modifies: "Changes things",
+const EFFECT_LABEL: Record<ActionEffect, TranslationKey> = {
+  readOnly: "workflows:inspector.docs.effect.readOnly",
+  opens: "workflows:inspector.docs.effect.opens",
+  modifies: "workflows:inspector.docs.effect.modifies",
 }
 
 function Badge({ children, muted }: { children: string; muted?: boolean }) {
@@ -43,51 +44,73 @@ function Badge({ children, muted }: { children: string; muted?: boolean }) {
  * inputs. The editor shows metadata; it never runs module code.
  */
 export function NodeDocumentation({ type, lookup }: { type: ActionType; lookup: Lookup }) {
+  const { t } = useTranslation()
   const module = lookup.modules?.find((m) => m.actionTypes.some((t) => t.id === type.id))
   const spec = type.node
   return (
-    <section className="grid gap-2 border-t px-4 py-3" aria-label="About this node">
-      <h3 className="text-xs font-medium text-muted-foreground uppercase">About this node</h3>
+    <section
+      className="grid gap-2 border-t px-4 py-3"
+      aria-label={t("workflows:inspector.docs.title")}
+    >
+      <h3 className="text-xs font-medium text-muted-foreground uppercase">
+        {t("workflows:inspector.docs.title")}
+      </h3>
       <p className="text-xs">
         <code className="font-mono">{type.id}</code>
-        {spec && <span className="text-muted-foreground"> · version {spec.version}</span>}
-        {module && <span className="text-muted-foreground"> · {module.name} module</span>}
+        {spec && (
+          <span className="text-muted-foreground">
+            {" "}
+            · {t("workflows:inspector.docs.version", { version: spec.version })}
+          </span>
+        )}
+        {module && (
+          <span className="text-muted-foreground">
+            {" "}
+            · {t("workflows:inspector.docs.module", { name: module.name })}
+          </span>
+        )}
       </p>
       {spec && (
         <div className="flex flex-wrap gap-1">
           <Badge muted={(spec.effect ?? "readOnly") === "readOnly"}>
-            {EFFECT_LABEL[spec.effect ?? "readOnly"]}
+            {t(EFFECT_LABEL[spec.effect ?? "readOnly"])}
           </Badge>
-          <Badge muted={!spec.retrySafe}>{spec.retrySafe ? "Retry-safe" : "Not retry-safe"}</Badge>
-          {spec.idempotent && <Badge>Idempotent</Badge>}
+          <Badge muted={!spec.retrySafe}>
+            {spec.retrySafe
+              ? t("workflows:inspector.docs.retrySafe")
+              : t("workflows:inspector.docs.notRetrySafe")}
+          </Badge>
+          {spec.idempotent && <Badge>{t("workflows:inspector.docs.idempotent")}</Badge>}
           <Badge muted={!spec.cancellable}>
-            {spec.cancellable ? "Can be interrupted" : "Cannot be interrupted"}
+            {spec.cancellable
+              ? t("workflows:inspector.docs.cancellable")
+              : t("workflows:inspector.docs.notCancellable")}
           </Badge>
-          {spec.changesContext && <Badge>Selects a project</Badge>}
+          {spec.changesContext && <Badge>{t("workflows:inspector.docs.selectsProject")}</Badge>}
         </div>
       )}
       {module && module.capabilities.length > 0 && (
         <div className="grid gap-1">
-          <h4 className="text-xs font-medium">Permissions of its module</h4>
+          <h4 className="text-xs font-medium">{t("workflows:inspector.docs.permissions")}</h4>
           <ul className="grid gap-0.5 text-xs text-muted-foreground">
             {module.capabilities.map((capability) => (
-              <li key={capability}>{CAPABILITIES[capability].title}</li>
+              <li key={capability}>{t(CAPABILITIES[capability].title)}</li>
             ))}
           </ul>
         </div>
       )}
       {type.parameters.length > 0 && (
         <div className="grid gap-1">
-          <h4 className="text-xs font-medium">Inputs</h4>
+          <h4 className="text-xs font-medium">{t("workflows:inspector.docs.inputs")}</h4>
           <ul className="grid gap-0.5 text-xs">
             {type.parameters.map((p) => (
               <li key={p.key} className="flex gap-2">
                 <code className="font-mono">{p.key}</code>
                 <span className="flex-1 text-muted-foreground">
                   {p.label}
-                  {p.required ? "" : " (optional)"}
+                  {p.required ? "" : ` ${t("workflows:inspector.docs.optional")}`}
                 </span>
-                <span className="text-muted-foreground">{KIND_LABEL[p.kind.type]}</span>
+                <span className="text-muted-foreground">{t(KIND_LABEL[p.kind.type])}</span>
               </li>
             ))}
           </ul>
@@ -95,18 +118,21 @@ export function NodeDocumentation({ type, lookup }: { type: ActionType; lookup: 
       )}
       {spec && spec.outputs.length > 0 && (
         <div className="grid gap-1">
-          <h4 className="text-xs font-medium">Outputs</h4>
+          <h4 className="text-xs font-medium">{t("workflows:inspector.docs.outputs")}</h4>
           <ul className="grid gap-0.5 text-xs">
             {spec.outputs.map((o) => (
               <li key={o.key} className="flex gap-2">
                 <code className="font-mono">{o.key}</code>
                 <span className="flex-1 text-muted-foreground">
                   {o.label}
-                  {o.always ? "" : " (sometimes)"}
+                  {o.always ? "" : ` ${t("workflows:inspector.docs.sometimes")}`}
                 </span>
                 {o.sensitive && (
-                  <span className="text-muted-foreground" title="Available to later nodes only">
-                    not kept in history
+                  <span
+                    className="text-muted-foreground"
+                    title={t("workflows:inspector.docs.sensitiveHint")}
+                  >
+                    {t("workflows:inspector.docs.notKept")}
                   </span>
                 )}
               </li>

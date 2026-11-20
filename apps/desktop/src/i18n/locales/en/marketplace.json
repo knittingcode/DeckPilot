@@ -1,0 +1,314 @@
+{
+  "publisher": {
+    "by": "by {{name}}",
+    "verified": "Verified publisher",
+    "notVerified": "· not verified by the registry"
+  },
+  "experimental": {
+    "title": "Experimental",
+    "text": "Plugins run out of process in a sandboxed host. The plugin runtime is experimental and not ready for production use; only install plugins you trust."
+  },
+  "runtime": {
+    "label": "Plugin runtime",
+    "cannotRunOn": "Plugins cannot run on {{platform}}",
+    "checkAgain": "Check again",
+    "title": {
+      "platformUnsupported": "Plugins cannot run on this platform",
+      "notBuilt": "Plugins are not available: the agent was built without plugin support",
+      "notEnabled": "Plugins are not available: they are turned off in the agent",
+      "unavailable": "Plugins are not available right now",
+      "agentNotRunning": "Plugins are not available: the agent is not running",
+      "agentTooOld": "Plugins are not available: the running agent is too old"
+    },
+    "hint": {
+      "platformUnsupported": "Plugins can be installed and inspected here, but not enabled or run: the plugin sandbox is only verified on macOS, Linux and Windows.",
+      "notBuilt": "Plugins need an agent built with the `plugins` cargo feature.",
+      "notEnabled": "Start the agent without --disable-plugins (and without DECKPILOT_ENABLE_PLUGINS=0).",
+      "unavailable": "Unlock DeckPilot, or check the agent's log.",
+      "agentNotRunning": "Start it in Settings › Background Agent.",
+      "agentTooOld": "Restart it in Settings › Background Agent so that the agent of this release runs."
+    }
+  },
+  "registry": {
+    "label": "Registry",
+    "check": "Check the registry",
+    "none": {
+      "title": "No plugin registry configured",
+      "text": "Start the agent with --plugin-registry and --plugin-registry-roots."
+    },
+    "error": {
+      "title": "The registry could not be read"
+    },
+    "neverVerified": {
+      "title": "Registry not verified yet",
+      "text": "Nothing can be installed until the registry has been verified."
+    },
+    "stale": {
+      "title": "Registry stale",
+      "text": "Installed plugins keep running. Installing and updating are paused."
+    }
+  },
+  "progress": {
+    "label": "Plugin operations",
+    "line": "{{operation}} <id>{{plugin}}</id>: {{stage}}",
+    "lineWithMessage": "{{operation}} <id>{{plugin}}</id>: {{stage}} ({{message}})",
+    "operation": {
+      "install": "Installing",
+      "enable": "Enabling",
+      "disable": "Disabling",
+      "grant": "Granting",
+      "revoke": "Revoking",
+      "update": "Updating",
+      "rollback": "Rolling back",
+      "uninstall": "Uninstalling",
+      "recover": "Recovering"
+    },
+    "stage": {
+      "started": "started",
+      "fetching": "reading the package",
+      "verifying": "verifying signatures and pins",
+      "installing": "unpacking and committing",
+      "finished": "done",
+      "failed": "failed"
+    }
+  },
+  "blocked": {
+    "noRegistry": "No plugin registry is configured in the agent (--plugin-registry).",
+    "stale": "The registry is out of date; installing and updating are paused until it is checked again.",
+    "neverVerified": "The registry has not been verified yet; nothing can be installed."
+  },
+  "platforms": {
+    "all": "macOS, Windows and Linux",
+    "only": "{{platform}} only"
+  },
+  "loadFailed": "Plugins could not be loaded",
+  "tabs": {
+    "label": "Plugin marketplace",
+    "discover": "Discover",
+    "installed": "Installed {{number}}",
+    "updates": "Updates {{number}}"
+  },
+  "package": {
+    "title": "Install the plugin package?",
+    "description": "DeckPilot installs it only if its bytes are a version the verified registry pins. Nothing is granted now: its permissions are shown for your consent before it can be enabled.",
+    "confirm": "Install"
+  },
+  "toast": {
+    "enabled": "{{name}} enabled",
+    "disabled": "{{name}} disabled",
+    "installed": "{{name}} installed",
+    "installedWithMore_one": "{{name}} installed with {{count}} more",
+    "installedWithMore_other": "{{name}} installed with {{count}} more",
+    "installedFromFile": "{{name}} {{version}} installed from the package file",
+    "updated": "{{name}} updated to {{version}}",
+    "updateDeclined": "Update of {{name}} declined",
+    "uninstalled": "{{name}} uninstalled",
+    "uninstalledKeptSettings": "{{name}} uninstalled; its settings are kept for a reinstall",
+    "uninstalledKeptCredentials": "{{name}} uninstalled; its credentials are kept for a reinstall",
+    "uninstalledKeptBoth": "{{name}} uninstalled; its settings and credentials are kept for a reinstall",
+    "rolledBack": "{{name}} rolled back to {{version}}",
+    "rolledBackPrevious": "{{name}} rolled back to the previous version",
+    "permissionGranted": "Permission granted",
+    "permissionRevoked": "Permission revoked",
+    "migrationRetry": "{{module}}: trying again",
+    "migrationDeclined": "{{module}} stays built-in",
+    "migrationConsent": "{{module}}: consent saved",
+    "restored": "{{name}} restored",
+    "reinstalled": "{{name}} reinstalled"
+  },
+  "refresh": "Refresh",
+  "classes": {
+    "label": "What DeckPilot includes",
+    "core": {
+      "title": "Core functionality",
+      "list": "Built into DeckPilot, not plugins: {{modules}}.",
+      "none": "Built into DeckPilot, not plugins; see Settings › Modules."
+    },
+    "bundled": {
+      "title": "Bundled system plugins",
+      "text_one": "{{count}} shipped with DeckPilot.",
+      "text_other": "{{count}} shipped with DeckPilot."
+    },
+    "installed": {
+      "title": "Installed optional plugins",
+      "none": "None installed.",
+      "text_one": "{{count}} installed by you; see Installed.",
+      "text_other": "{{count}} installed by you; see Installed."
+    },
+    "available": {
+      "title": "Available plugins",
+      "none": "Nothing more in the registry.",
+      "text_one": "{{count}} in the registry, not installed.",
+      "text_other": "{{count}} in the registry, not installed."
+    }
+  },
+  "discover": {
+    "installFile": "Install from package file…",
+    "installFileHint": "Only a .dpplugin whose bytes the verified registry pins is accepted.",
+    "search": "Search plugins",
+    "categories": "Categories",
+    "allCategories": "All categories",
+    "list": "Plugins",
+    "empty": {
+      "title": "No plugins to show",
+      "registryError": "The registry could not be read.",
+      "noRegistry": "No registry is configured in the agent.",
+      "neverVerified": "The registry has not been verified on this computer yet.",
+      "none": "The registry lists no plugins."
+    },
+    "noMatch": {
+      "title": "No plugins found",
+      "text": "No plugin matches your search.",
+      "inCategory": "No plugin in {{category}} matches your search."
+    }
+  },
+  "badge": {
+    "latestVersion": "Latest {{version}}",
+    "installedVersion": "Installed {{version}}",
+    "optional": "Optional plugin",
+    "available": "Available plugin",
+    "update": "Update available",
+    "withdrawn": "Withdrawn",
+    "incompatible": "Not compatible",
+    "deprecated": "Deprecated"
+  },
+  "updates": {
+    "intro": "Updates that ask for new permissions are never applied without your consent.",
+    "check": "Check for updates",
+    "none": "All plugins are up to date",
+    "list": "Available updates",
+    "item": "{{name}} {{from}} to {{to}}",
+    "waiting_one": "Waiting for consent: {{count}} permission",
+    "waiting_other": "Waiting for consent: {{count}} permissions",
+    "review": "Review and update",
+    "update": "Update"
+  },
+  "details": {
+    "back": "Back to plugins",
+    "noVersion": "No version can be installed: every version was withdrawn or does not run here.",
+    "license": "License",
+    "homepage": "Homepage",
+    "source": "Source",
+    "categories": "Categories",
+    "about": "About",
+    "deprecated": "Deprecated by the registry",
+    "installStatus": "Install status",
+    "installed": "Installed {{version}} ({{state}})",
+    "updateTo": "Update to {{version}}",
+    "noUpdate": "No update available",
+    "install": "Install",
+    "installVersion": "Install {{version}}",
+    "installedFor": "Installed for {{plugin}}; it is offered for removal once nothing needs it.",
+    "knownBefore": "Installed here before as {{name}}, last version {{version}} ({{date}}). Actions that still use it say it is not installed.",
+    "storage": "Storage",
+    "storageHint": "What the plugin keeps for itself in DeckPilot. It is deleted when the plugin is uninstalled.",
+    "compatibility": "Compatibility of version {{version}}",
+    "notStated": "Not stated by the registry",
+    "platforms": "Platforms",
+    "thisComputer": "This computer",
+    "compatibleOn": "{{platform}}: compatible",
+    "incompatible": "Not compatible with this DeckPilot",
+    "incompatibleReasons": "Incompatibility reasons",
+    "withdrawn": "Version {{version}} was withdrawn",
+    "permissions": "Permissions of version {{version}}",
+    "permissionsHint": "Each with the publisher's reason. DeckPilot asks for your consent before it installs anything.",
+    "permissionsLabel": "Permissions",
+    "versions": "Versions",
+    "published": "published {{date}}",
+    "latest": "Latest",
+    "withdrawnBecause": "Withdrawn: {{reason}}",
+    "installedBadge": "Installed",
+    "actions": "Actions",
+    "actionsNotListed": "The registry does not list a plugin's actions; they are shown here once it is installed.",
+    "noActions": "This plugin adds no actions.",
+    "unavailable": "Unavailable"
+  },
+  "installed": {
+    "empty": "No plugins installed",
+    "browse": "Browse plugins",
+    "intro": "Plugins run only while enabled, and only with the permissions you granted.",
+    "list": "Installed plugins",
+    "health": {
+      "label": "Health of {{name}}",
+      "crashes_one": "The plugin host stopped {{count}} time since the agent started",
+      "crashes_other": "The plugin host stopped {{count}} times since the agent started",
+      "lastFailed": "The last action of this plugin failed",
+      "lastError": "Last error: {{error}}",
+      "lastErrorAt": "Last error ({{time}}): {{error}}"
+    },
+    "origin": {
+      "dev": "DEV",
+      "sideload": "Local package",
+      "bundled": "Bundled"
+    },
+    "updateBadge": "Update {{version}} available",
+    "settingsMissing": "Settings missing",
+    "latest": "Latest in the registry: {{version}}",
+    "storage": "Storage: {{usage}}",
+    "notGranted_one": "{{count}} permission not granted; calls that need it fail with “not permitted”.",
+    "notGranted_other": "{{count}} permissions not granted; calls that need them fail with “not permitted”.",
+    "enableNamed": "Enable {{name}}",
+    "disableNamed": "Disable {{name}}",
+    "broken": "{{name}} is broken",
+    "quarantined": "Disabled: revoked by the registry",
+    "stateOf": "{{name}}: {{state}}",
+    "blockedHint": "It cannot run or be enabled. Roll back, update or uninstall it.",
+    "brokenBundledHint": "Its files no longer match the copy that comes with DeckPilot. Reinstall it from that copy; its settings and your permission choices are kept.",
+    "reinstall": "Reinstall",
+    "reinstallNamed": "Reinstall {{name}}",
+    "removed": {
+      "title": "Removed DeckPilot plugins",
+      "intro": "Plugins that come with DeckPilot and that you uninstalled. Restore one to install DeckPilot's own copy again; settings you kept come back with it.",
+      "list": "Removed DeckPilot plugins",
+      "lastVersion": "Last installed: version {{version}}",
+      "restore": "Restore",
+      "restoreNamed": "Restore {{name}}"
+    },
+    "cannotRun": "Cannot run on {{platform}}",
+    "cannotRunHint": "It can be inspected, updated and uninstalled, but not enabled here.",
+    "missingSettings_one": "{{settings}} has no value and no default. Set it in Configure.",
+    "missingSettings_other": "{{settings}} have no value and no default. Set them in Configure.",
+    "staged": {
+      "title": "Version {{version}} waits for your consent",
+      "text_one": "It asks for {{count}} more permission. The current version keeps running until you decide.",
+      "text_other": "It asks for {{count}} more permissions. The current version keeps running until you decide."
+    },
+    "reviewUpdate": "Review update to {{version}}",
+    "rollBack": "Roll back to {{version}}",
+    "details": "Details",
+    "configure": "Configure",
+    "more": "Permissions and actions",
+    "permissionsOf": "Permissions of {{name}}",
+    "revoke": "Revoke",
+    "revokeNamed": "Revoke: {{title}}",
+    "revoked": "Revoked",
+    "notGrantedBadge": "Not granted",
+    "grant": "Grant",
+    "grantNamed": "Grant: {{title}}",
+    "actionsOf": "Actions of {{name}}",
+    "run": {
+      "button": "Run",
+      "named": "Run {{name}}",
+      "result": "Result of {{name}}",
+      "succeeded": "Succeeded",
+      "succeededWith": "Succeeded: {{message}}",
+      "skipped": "Skipped",
+      "skippedWith": "Skipped: {{message}}",
+      "failed": "Failed ({{code}})",
+      "failedWith": "Failed ({{code}}): {{message}}"
+    }
+  },
+  "uninstall": {
+    "button": "Uninstall",
+    "title": "Uninstall {{name}}?",
+    "description": "Stops the plugin and removes its files, its permissions, its records (including the version kept for rollback) and its storage. Its settings and credentials are deleted too, unless you keep them below.",
+    "keep": "Keep for a reinstall",
+    "keepSettings": "Keep its settings",
+    "keepCredentials": "Keep its credentials",
+    "keepCredentialsLong": "{{keep}} (stored secrets stay in DeckPilot until the plugin is installed again and uninstalled without keeping them)"
+  },
+  "page": {
+    "title": "Marketplace",
+    "description": "Signed community plugins from the verified registry"
+  }
+}

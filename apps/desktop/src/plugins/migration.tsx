@@ -12,6 +12,8 @@ import { ArrowRightLeft, RotateCcw, ShieldQuestion } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { useTranslation } from "@/i18n"
+import { useFormat } from "@/i18n/format"
 
 import { isDeclined, migrationStatus, type MigrationTone } from "./migration-status"
 import type { ModuleMigration } from "./types"
@@ -41,23 +43,22 @@ export function MigrationNotice({
   onReview: (migration: ModuleMigration) => void
   onRetry: (migration: ModuleMigration) => void
 }) {
+  const { t } = useTranslation()
+  const format = useFormat()
   if (migrations.length === 0) return null
-  const sorted = [...migrations].sort((a, b) => a.moduleName.localeCompare(b.moduleName))
+  const sorted = [...migrations].sort((a, b) => format.compare(a.moduleName, b.moduleName))
   return (
     <section aria-labelledby="module-migrations-title" className="grid gap-3">
       <div className="flex items-start gap-2">
         <ArrowRightLeft className="mt-0.5 size-4 shrink-0" aria-hidden />
         <div className="grid gap-0.5">
           <h3 id="module-migrations-title" className="text-sm font-medium">
-            Built-in modules moving to plugins
+            {t("plugins:migration.notice.title")}
           </h3>
-          <p className="text-xs text-muted-foreground">
-            Some built-in modules are replaced by plugins that ship with DeckPilot. Your actions,
-            keys and workflows keep their action types and keep working; nothing is deleted.
-          </p>
+          <p className="text-xs text-muted-foreground">{t("plugins:migration.notice.text")}</p>
         </div>
       </div>
-      <ul className="grid divide-y border-y" aria-label="Module migrations">
+      <ul className="grid divide-y border-y" aria-label={t("plugins:migration.notice.list")}>
         {sorted.map((m) => {
           const status = migrationStatus(m)
           const id = `migration-${m.module}`
@@ -72,14 +73,17 @@ export function MigrationNotice({
                 <Badge variant={BADGE[status.tone]}>{status.label}</Badge>
                 {m.attempts > 0 && (
                   <span className="text-xs text-muted-foreground">
-                    {String(m.attempts)} of {String(m.maxAttempts)} automatic attempts
+                    {t("plugins:migration.notice.attempts", {
+                      attempts: m.attempts,
+                      count: m.maxAttempts,
+                    })}
                   </span>
                 )}
               </div>
               <p className="text-sm">{status.text}</p>
               {m.reason && (
                 <p className="text-xs text-muted-foreground">
-                  <span className="font-medium">Reason: </span>
+                  <span className="font-medium">{t("plugins:migration.notice.reason")} </span>
                   {m.reason}
                 </p>
               )}
@@ -93,7 +97,7 @@ export function MigrationNotice({
                         onReview(m)
                       }}
                     >
-                      <ShieldQuestion /> Review…
+                      <ShieldQuestion /> {t("plugins:migration.notice.review")}
                     </Button>
                   )}
                   {m.canRetry && (
@@ -101,13 +105,22 @@ export function MigrationNotice({
                       size="sm"
                       variant="outline"
                       disabled={busy !== null}
-                      aria-label={`${declined ? "Ask again" : "Retry"}: ${m.moduleName}`}
+                      aria-label={t(
+                        declined
+                          ? "plugins:migration.notice.askAgainNamed"
+                          : "plugins:migration.notice.retryNamed",
+                        { module: m.moduleName },
+                      )}
                       onClick={() => {
                         onRetry(m)
                       }}
                     >
                       <RotateCcw />{" "}
-                      {busy === m.module ? "Working…" : declined ? "Ask again" : "Retry"}
+                      {busy === m.module
+                        ? t("common:status.working")
+                        : declined
+                          ? t("plugins:migration.notice.askAgain")
+                          : t("plugins:migration.notice.retry")}
                     </Button>
                   )}
                 </div>

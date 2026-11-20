@@ -20,6 +20,22 @@ use deckpilot_core::{
 };
 use deckpilot_ipc::plugins::PluginSummary;
 
+/// `definition` with its editor navigation (plugin API 1.7) only when the
+/// host's own rules accept it: an allowlisted operation whose target is one
+/// of the action's text parameters. The editor maps it to its own
+/// navigation; nothing of the plugin runs for it.
+fn checked(definition: &ActionType) -> ActionType {
+    let mut definition = definition.clone();
+    if definition
+        .editor_navigation
+        .as_ref()
+        .is_some_and(|navigation| navigation.check(&definition.parameters).is_err())
+    {
+        definition.editor_navigation = None;
+    }
+    definition
+}
+
 /// The installed plugins of the last answer, by plugin id.
 #[derive(Debug, Default)]
 pub struct PluginActions {
@@ -90,7 +106,7 @@ impl PluginActions {
                         module.clone(),
                         &[],
                         Box::new(AgentAction {
-                            definition: definition.clone(),
+                            definition: checked(definition),
                         }),
                     );
                 } else {
@@ -177,6 +193,7 @@ mod tests {
             health: None,
             navigation: Vec::new(),
             installed_for: None,
+            visual_assets: Vec::new(),
         }
     }
 
@@ -189,6 +206,41 @@ mod tests {
             deckpilot_modules::builtin(deckpilot_core::Os::current()).action_registry();
         actions.extend(&mut registry);
         registry
+    }
+
+    /// Plugin API 1.7: a plugin's editor navigation reaches the catalog
+    /// only as the host's rules allow; the plugin never runs for it.
+    #[test]
+    fn editor_navigation_reaches_the_catalog_only_when_it_checks_out() {
+        use deckpilot_core::{EditorNavigation, NavigationOperation};
+        let with = |navigation: serde_json::Value| {
+            let mut summary = plugin("acme.hello-weather", true);
+            let mut definition = serde_json::to_value(definition(&greet().to_string())).unwrap();
+            definition["editorNavigation"] = navigation;
+            summary.actions[0].definition = Some(serde_json::from_value(definition).unwrap());
+            let mut actions = PluginActions::default();
+            actions.replace(&[summary]);
+            registry(&actions)
+                .definition(&greet())
+                .unwrap()
+                .editor_navigation
+                .clone()
+        };
+        assert_eq!(
+            with(serde_json::json!({"operation": "folder.open", "targetParameter": "name"})),
+            Some(EditorNavigation::with_target(
+                NavigationOperation::FolderOpen,
+                "name"
+            ))
+        );
+        assert_eq!(
+            with(serde_json::json!({"operation": "folder.open", "targetParameter": "nope"})),
+            None
+        );
+        assert_eq!(
+            with(serde_json::json!({"operation": "page.next", "targetParameter": "name"})),
+            None
+        );
     }
 
     #[test]

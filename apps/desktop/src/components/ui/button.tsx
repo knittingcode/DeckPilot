@@ -25,6 +25,17 @@ const buttonVariants = cva(
         icon: "size-9",
         "icon-xs": "size-6 rounded-md [&_svg:not([class*='size-'])]:size-3",
         "icon-sm": "size-8",
+        /** 28px: tight groups of icon controls. */
+        "icon-compact": "size-7",
+        /** 28px high text button sized by its content. */
+        compact: "h-7 gap-0.5 rounded-md px-1.5",
+        /**
+         * The page navigation's controls (layout-editor/page-nav.tsx), one
+         * size for all: 32px high, text 10px in from either side, icons
+         * 32×32; the focus ring inside (the breadcrumbs clip).
+         */
+        nav: "h-8 gap-0.5 rounded-md px-2.5 focus-visible:ring-inset",
+        "icon-nav": "size-8 rounded-md focus-visible:ring-inset",
         "icon-lg": "size-10",
       },
     },

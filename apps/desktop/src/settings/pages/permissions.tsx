@@ -2,29 +2,33 @@ import { InlineStatus, SettingsGroup, SettingsRow } from "@/components/settings-
 import { useAppContext } from "@/lib/app-context"
 import { CAPABILITIES } from "@/lib/capabilities"
 import type { Capability } from "@/lib/types"
+import { Trans, useTranslation } from "@/i18n"
 
 /**
  * Capabilities declared in module manifests. They are fixed by each
  * module; disabling a module withdraws all of them.
  */
 export function PermissionsSettings() {
+  const { t } = useTranslation()
   const { modules, openSettings } = useAppContext()
   const capabilities = Object.keys(CAPABILITIES) as Capability[]
   return (
     <div className="grid gap-3">
       <p className="text-sm text-muted-foreground">
-        Every module declares what it may access. A disabled module has no access. To withdraw a
-        permission, disable the module under{" "}
-        <button
-          type="button"
-          className="text-primary underline-offset-2 hover:underline"
-          onClick={() => {
-            openSettings("modules")
+        <Trans
+          i18nKey="settings:permissions.intro"
+          components={{
+            page: (
+              <button
+                type="button"
+                className="text-primary underline-offset-2 hover:underline"
+                onClick={() => {
+                  openSettings("modules")
+                }}
+              />
+            ),
           }}
-        >
-          Modules
-        </button>
-        .
+        />
       </p>
       <SettingsGroup>
         {capabilities.map((capability) => {
@@ -33,20 +37,25 @@ export function PermissionsSettings() {
             <SettingsRow
               key={capability}
               align="start"
-              label={CAPABILITIES[capability].title}
-              description={CAPABILITIES[capability].description}
+              label={t(CAPABILITIES[capability].title)}
+              description={t(CAPABILITIES[capability].description)}
             >
               {users.length === 0 ? (
                 <p className="w-44 text-caption text-muted-foreground">
-                  No module uses this permission.
+                  {t("settings:permissions.unused")}
                 </p>
               ) : (
-                <ul className="grid w-44 gap-1 text-sm" aria-label={CAPABILITIES[capability].title}>
+                <ul
+                  className="grid w-44 gap-1 text-sm"
+                  aria-label={t(CAPABILITIES[capability].title)}
+                >
                   {users.map((module) => (
                     <li key={module.id} className="flex items-center justify-between gap-3">
                       <span className="truncate">{module.name}</span>
                       <InlineStatus tone={module.enabled ? "positive" : "neutral"}>
-                        {module.enabled ? "Granted" : "Disabled"}
+                        {module.enabled
+                          ? t("settings:permissions.granted")
+                          : t("settings:permissions.disabled")}
                       </InlineStatus>
                     </li>
                   ))}

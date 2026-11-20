@@ -125,9 +125,9 @@ describe("Layouts page", () => {
     const dialog = await screen.findByRole("alertdialog")
     expect(dialog).toHaveTextContent("No profile uses this layout")
     await user.click(within(dialog).getByRole("button", { name: "Delete" }))
-    await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith("the profiles using the layout changed")
-    })
+    // The confirmation stays open and shows the refusal inline.
+    expect(await within(dialog).findByText("the profiles using the layout changed")).toBeVisible()
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument()
     expect(api.deleteSharedLayout).toHaveBeenCalledWith("layout-2", [])
   })
 
@@ -157,6 +157,26 @@ describe("Layouts page", () => {
     await user.type(name, "Studio{Enter}")
     await waitFor(() => {
       expect(api.renameSharedLayout).toHaveBeenCalledWith("layout-1", "Studio")
+    })
+  })
+
+  it("keeps the rename dialog open and shows a refusal inline", async () => {
+    api.renameSharedLayout.mockRejectedValue("a layout with this name exists")
+    const { user } = await renderPage()
+    await user.click(row("Desk").getByRole("button", { name: "More actions for Desk" }))
+    await user.click(screen.getByRole("menuitem", { name: /Rename/ }))
+    const dialog = await screen.findByRole("dialog", { name: "Rename layout" })
+    const name = within(dialog).getByRole("textbox", { name: "Layout name" })
+    await user.clear(name)
+    await user.type(name, "Spare{Enter}")
+    expect(await within(dialog).findByText("a layout with this name exists")).toBeVisible()
+    expect(toast.error).not.toHaveBeenCalled()
+    // Cancel with a changed name asks before discarding it.
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }))
+    const discard = await screen.findByRole("alertdialog", { name: "Discard your changes?" })
+    await user.click(within(discard).getByRole("button", { name: "Discard" }))
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Rename layout" })).not.toBeInTheDocument()
     })
   })
 

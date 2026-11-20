@@ -73,8 +73,9 @@ pub fn duplicate_workflow(
         copy.id = WorkflowId::new();
         name.trim().clone_into(&mut copy.name);
         if copy.name.is_empty() {
-            return Err(CommandError::Invalid(
-                "workflow name must not be empty".into(),
+            return Err(CommandError::invalid(
+                "workflowNameEmpty",
+                "workflow name must not be empty",
             ));
         }
         profile.workflows.push(copy.clone());

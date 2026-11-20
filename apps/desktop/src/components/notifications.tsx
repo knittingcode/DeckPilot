@@ -4,6 +4,7 @@ import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { useSnapshot } from "@/hooks/use-status"
+import { type TranslationKey, useTranslation } from "@/i18n"
 import { formatTimestamp } from "@/lib/format"
 import { NotificationStore, type Severity } from "@/lib/status"
 import { cn } from "@/lib/utils"
@@ -13,6 +14,12 @@ const SEVERITY: Record<Severity, { icon: typeof Info; className: string }> = {
   warning: { icon: TriangleAlert, className: "text-amber-600 dark:text-amber-400" },
   error: { icon: CircleAlert, className: "text-destructive" },
 }
+
+const SEVERITY_LABEL = {
+  info: "notifications:severity.info",
+  warning: "notifications:severity.warning",
+  error: "notifications:severity.error",
+} as const satisfies Record<Severity, TranslationKey>
 
 /**
  * The notifications of the session (workflow actions, the agent, updates)
@@ -26,6 +33,7 @@ export function NotificationsButton({
   store: NotificationStore
   className?: string
 }) {
+  const { t } = useTranslation()
   const notifications = useSnapshot(store)
   const [open, setOpen] = useState(false)
   const unread = notifications.filter((n) => !n.read)
@@ -35,7 +43,10 @@ export function NotificationsButton({
       ? "warning"
       : null
   const list = NotificationStore.newestFirst(notifications)
-  const label = unread.length > 0 ? `Notifications, ${unread.length} unread` : "Notifications"
+  const label =
+    unread.length > 0
+      ? t("notifications:center.unread", { count: unread.length })
+      : t("notifications:center.title")
   return (
     <Popover
       open={open}
@@ -78,7 +89,7 @@ export function NotificationsButton({
       >
         <div className="flex items-center border-b px-3 py-2">
           <h2 className="flex-1 text-xs font-medium text-muted-foreground uppercase">
-            Notifications
+            {t("notifications:center.title")}
           </h2>
           {list.length > 0 && (
             <Button
@@ -89,14 +100,19 @@ export function NotificationsButton({
                 store.clear()
               }}
             >
-              <X /> Clear
+              <X /> {t("common:actions.clear")}
             </Button>
           )}
         </div>
         {list.length === 0 ? (
-          <p className="px-3 py-6 text-center text-sm text-muted-foreground">No notifications</p>
+          <p className="px-3 py-6 text-center text-sm text-muted-foreground">
+            {t("notifications:center.empty")}
+          </p>
         ) : (
-          <ul className="grid max-h-80 overflow-y-auto" aria-label="Notifications">
+          <ul
+            className="relative grid max-h-80 overflow-y-auto"
+            aria-label={t("notifications:center.title")}
+          >
             {list.map((n) => {
               const { icon: Icon, className: tone } = SEVERITY[n.severity]
               return (
@@ -107,7 +123,10 @@ export function NotificationsButton({
                     !n.read && "bg-accent/40",
                   )}
                 >
-                  <Icon className={cn("mt-0.5 size-4 shrink-0", tone)} aria-label={n.severity} />
+                  <Icon
+                    className={cn("mt-0.5 size-4 shrink-0", tone)}
+                    aria-label={t(SEVERITY_LABEL[n.severity])}
+                  />
                   <div className="grid min-w-0 flex-1 gap-0.5">
                     <span className="font-medium">
                       {n.title}

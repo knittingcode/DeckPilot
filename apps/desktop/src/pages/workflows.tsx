@@ -16,6 +16,7 @@ import {
 import { useAsync } from "@/hooks/use-async"
 import { useEditingProfile } from "@/hooks/use-profile"
 import { useTitlebar } from "@/hooks/use-titlebar"
+import { useTranslation } from "@/i18n"
 import { api, errorMessage } from "@/lib/api"
 import { useActionModules, useAppContext } from "@/lib/app-context"
 import { withPluginTypes } from "@/lib/plugin-actions"
@@ -27,8 +28,13 @@ import { emptyGraph } from "@/workflow-builder/graph"
 import { WorkflowRun } from "@/workflow-builder/workflow-run"
 
 export function WorkflowsPage() {
+  const { t } = useTranslation()
   return (
-    <Page title="Workflows" description="Connect actions into workflows" profileScoped>
+    <Page
+      title={t("workflows:page.title")}
+      description={t("workflows:page.description")}
+      profileScoped
+    >
       <RequireProfile>{() => <Workflows />}</RequireProfile>
     </Page>
   )
@@ -49,11 +55,11 @@ function Workflows() {
 const NEW = "new"
 const NEW_STEPS = "new-steps"
 
-function newWorkflow(): Workflow {
+function newWorkflow(name: string): Workflow {
   // New workflows keep project changes to their runs.
   return {
     id: crypto.randomUUID(),
-    name: "New workflow",
+    name,
     description: "",
     steps: [],
     projectScope: "execution",
@@ -70,9 +76,10 @@ function WorkflowSwitcher({
   value: string
   onChange: (id: string) => void
 }) {
+  const { t } = useTranslation()
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="h-7 w-64 text-sm" aria-label="Workflow">
+      <SelectTrigger className="h-7 w-64 text-sm" aria-label={t("workflows:page.switcher")}>
         <WorkflowIcon className="size-3.5" />
         <SelectValue />
       </SelectTrigger>
@@ -80,12 +87,14 @@ function WorkflowSwitcher({
         {workflows.map((w) => (
           <SelectItem key={w.id} value={w.id}>
             {w.name}
-            {!w.graph && <span className="text-muted-foreground"> · steps</span>}
+            {!w.graph && (
+              <span className="text-muted-foreground">{t("workflows:page.stepsMark")}</span>
+            )}
           </SelectItem>
         ))}
         {workflows.length > 0 && <SelectSeparator />}
-        <SelectItem value={NEW}>New workflow</SelectItem>
-        <SelectItem value={NEW_STEPS}>New step workflow</SelectItem>
+        <SelectItem value={NEW}>{t("workflows:page.new")}</SelectItem>
+        <SelectItem value={NEW_STEPS}>{t("workflows:page.newSteps")}</SelectItem>
       </SelectContent>
     </Select>
   )
@@ -102,6 +111,7 @@ function WorkflowsView({
   profileId: string
   reload: () => unknown
 }) {
+  const { t } = useTranslation()
   const { refresh } = useAppContext()
   // Built-in modules and, in builds with plugins, the installed plugins,
   // whose types are the ones available now.
@@ -114,9 +124,9 @@ function WorkflowsView({
     id: workflows.find((w) => w.id === focus?.workflow)?.id ?? workflows[0]?.id ?? NEW,
   })
   // A new workflow gets a fresh id each time "New workflow" is chosen.
-  const [draft, setDraft] = useState(newWorkflow)
+  const [draft, setDraft] = useState(() => newWorkflow(t("workflows:page.defaultName")))
   const select = (id: string) => {
-    if (id === NEW || id === NEW_STEPS) setDraft(newWorkflow())
+    if (id === NEW || id === NEW_STEPS) setDraft(newWorkflow(t("workflows:page.defaultName")))
     setSelection({ id })
   }
   // Step workflows opened in the graph editor; stored only when saved.
@@ -137,7 +147,7 @@ function WorkflowsView({
     actions: [
       {
         id: "workflows.new",
-        label: "New workflow",
+        label: t("workflows:page.new"),
         icon: Plus,
         placement: "secondary",
         order: 10,
@@ -147,7 +157,7 @@ function WorkflowsView({
       },
       {
         id: "workflows.new-steps",
-        label: "New step workflow",
+        label: t("workflows:page.newSteps"),
         icon: ListOrdered,
         placement: "overflow",
         order: 11,
@@ -171,7 +181,7 @@ function WorkflowsView({
         <div className="flex flex-wrap items-center gap-3 border-b pb-3">
           {switcher}
           <p className="flex-1 text-caption text-muted-foreground">
-            A step workflow runs its actions in order. It can be opened in the graph editor later.
+            {t("workflows:page.stepsIntro")}
           </p>
         </div>
         <StepEditor
@@ -193,8 +203,7 @@ function WorkflowsView({
         <div className="flex flex-wrap items-center gap-3 border-b pb-3">
           {switcher}
           <p className="flex-1 text-caption text-muted-foreground">
-            This workflow runs its steps in order. Open it in the graph editor to add branches,
-            parallel steps and loops; the steps are kept.
+            {t("workflows:page.stepsHint")}
           </p>
           <Button
             size="sm"
@@ -205,13 +214,13 @@ function WorkflowsView({
                   setConversions((c) => ({ ...c, [current.id]: conversion }))
                 })
                 .catch((e: unknown) =>
-                  toast.error("The workflow could not be opened in the graph editor", {
+                  toast.error(t("workflows:page.convertFailed"), {
                     description: errorMessage(e),
                   }),
                 )
             }}
           >
-            Open in graph editor
+            {t("workflows:page.openInGraph")}
           </Button>
         </div>
         <StepEditor

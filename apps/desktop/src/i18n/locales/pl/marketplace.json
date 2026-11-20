@@ -1,0 +1,332 @@
+{
+  "publisher": {
+    "by": "wydawca: {{name}}",
+    "verified": "Zweryfikowany wydawca",
+    "notVerified": "· niezweryfikowany przez rejestr"
+  },
+  "experimental": {
+    "title": "Funkcja eksperymentalna",
+    "text": "Wtyczki działają poza procesem aplikacji, w hoście z piaskownicą. Środowisko wykonawcze wtyczek jest eksperymentalne i nie jest gotowe do użytku produkcyjnego; instaluj tylko wtyczki, którym ufasz."
+  },
+  "runtime": {
+    "label": "Środowisko wykonawcze wtyczek",
+    "cannotRunOn": "Wtyczek nie można uruchamiać w systemie {{platform}}",
+    "checkAgain": "Sprawdź ponownie",
+    "title": {
+      "platformUnsupported": "Wtyczek nie można uruchamiać na tej platformie",
+      "notBuilt": "Wtyczki są niedostępne: agent został zbudowany bez obsługi wtyczek",
+      "notEnabled": "Wtyczki są niedostępne: są wyłączone w agencie",
+      "unavailable": "Wtyczki są w tej chwili niedostępne",
+      "agentNotRunning": "Wtyczki są niedostępne: agent nie jest uruchomiony",
+      "agentTooOld": "Wtyczki są niedostępne: uruchomiony agent jest zbyt stary"
+    },
+    "hint": {
+      "platformUnsupported": "Wtyczki można tu instalować i przeglądać, ale nie można ich włączać ani uruchamiać: piaskownica wtyczek jest zweryfikowana tylko w systemach macOS, Linux i Windows.",
+      "notBuilt": "Wtyczki wymagają agenta zbudowanego z funkcją cargo `plugins`.",
+      "notEnabled": "Uruchom agenta bez --disable-plugins (i bez DECKPILOT_ENABLE_PLUGINS=0).",
+      "unavailable": "Odblokuj DeckPilot lub sprawdź dziennik agenta.",
+      "agentNotRunning": "Uruchom go w Ustawienia › Agent w tle.",
+      "agentTooOld": "Uruchom go ponownie w Ustawienia › Agent w tle, aby działał agent z tego wydania."
+    }
+  },
+  "registry": {
+    "label": "Rejestr",
+    "check": "Sprawdź rejestr",
+    "none": {
+      "title": "Nie skonfigurowano rejestru wtyczek",
+      "text": "Uruchom agenta z opcjami --plugin-registry i --plugin-registry-roots."
+    },
+    "error": {
+      "title": "Nie udało się odczytać rejestru"
+    },
+    "neverVerified": {
+      "title": "Rejestr nie został jeszcze zweryfikowany",
+      "text": "Nie można niczego zainstalować, dopóki rejestr nie zostanie zweryfikowany."
+    },
+    "stale": {
+      "title": "Rejestr jest nieaktualny",
+      "text": "Zainstalowane wtyczki nadal działają. Instalowanie i uaktualnianie są wstrzymane."
+    }
+  },
+  "progress": {
+    "label": "Operacje na wtyczkach",
+    "line": "{{operation}} <id>{{plugin}}</id>: {{stage}}",
+    "lineWithMessage": "{{operation}} <id>{{plugin}}</id>: {{stage}} ({{message}})",
+    "operation": {
+      "install": "Instalowanie",
+      "enable": "Włączanie",
+      "disable": "Wyłączanie",
+      "grant": "Przyznawanie uprawnień",
+      "revoke": "Odbieranie uprawnień",
+      "update": "Uaktualnianie",
+      "rollback": "Przywracanie poprzedniej wersji",
+      "uninstall": "Odinstalowywanie",
+      "recover": "Odzyskiwanie"
+    },
+    "stage": {
+      "started": "rozpoczęto",
+      "fetching": "odczytywanie pakietu",
+      "verifying": "weryfikowanie podpisów i przypięć",
+      "installing": "rozpakowywanie i zatwierdzanie",
+      "finished": "gotowe",
+      "failed": "niepowodzenie"
+    }
+  },
+  "blocked": {
+    "noRegistry": "W agencie nie skonfigurowano rejestru wtyczek (--plugin-registry).",
+    "stale": "Rejestr jest nieaktualny; instalowanie i uaktualnianie są wstrzymane do czasu jego ponownego sprawdzenia.",
+    "neverVerified": "Rejestr nie został jeszcze zweryfikowany; nie można niczego zainstalować."
+  },
+  "platforms": {
+    "all": "macOS, Windows i Linux",
+    "only": "Tylko {{platform}}"
+  },
+  "loadFailed": "Nie udało się wczytać wtyczek",
+  "tabs": {
+    "label": "Marketplace wtyczek",
+    "discover": "Odkrywaj",
+    "installed": "Zainstalowane {{number}}",
+    "updates": "Aktualizacje {{number}}"
+  },
+  "package": {
+    "title": "Zainstalować pakiet wtyczki?",
+    "description": "DeckPilot zainstaluje go tylko wtedy, gdy jego bajty odpowiadają wersji przypiętej w zweryfikowanym rejestrze. Teraz nie zostaje przyznane nic: przed włączeniem wtyczki jej uprawnienia zostaną pokazane do Twojej zgody.",
+    "confirm": "Zainstaluj"
+  },
+  "toast": {
+    "enabled": "Włączono: {{name}}",
+    "disabled": "Wyłączono: {{name}}",
+    "installed": "Zainstalowano: {{name}}",
+    "installedWithMore_one": "Zainstalowano: {{name}} i {{count}} inną wtyczkę",
+    "installedWithMore_few": "Zainstalowano: {{name}} i {{count}} inne wtyczki",
+    "installedWithMore_many": "Zainstalowano: {{name}} i {{count}} innych wtyczek",
+    "installedWithMore_other": "Zainstalowano: {{name}} i {{count}} innej wtyczki",
+    "installedFromFile": "Zainstalowano z pliku pakietu: {{name}} {{version}}",
+    "updated": "Uaktualniono {{name}} do wersji {{version}}",
+    "updateDeclined": "Odrzucono aktualizację: {{name}}",
+    "uninstalled": "Odinstalowano: {{name}}",
+    "uninstalledKeptSettings": "Odinstalowano: {{name}}; jej ustawienia zostały zachowane na potrzeby ponownej instalacji",
+    "uninstalledKeptCredentials": "Odinstalowano: {{name}}; jej poświadczenia zostały zachowane na potrzeby ponownej instalacji",
+    "uninstalledKeptBoth": "Odinstalowano: {{name}}; jej ustawienia i poświadczenia zostały zachowane na potrzeby ponownej instalacji",
+    "rolledBack": "Przywrócono {{name}} do wersji {{version}}",
+    "rolledBackPrevious": "Przywrócono poprzednią wersję: {{name}}",
+    "permissionGranted": "Przyznano uprawnienie",
+    "permissionRevoked": "Odebrano uprawnienie",
+    "migrationRetry": "{{module}}: ponowna próba",
+    "migrationDeclined": "{{module}} pozostaje modułem wbudowanym",
+    "migrationConsent": "{{module}}: zapisano zgodę",
+    "restored": "Przywrócono: {{name}}",
+    "reinstalled": "Zainstalowano ponownie: {{name}}"
+  },
+  "refresh": "Odśwież",
+  "classes": {
+    "label": "Co zawiera DeckPilot",
+    "core": {
+      "title": "Funkcje podstawowe",
+      "list": "Wbudowane w DeckPilot, to nie wtyczki: {{modules}}.",
+      "none": "Wbudowane w DeckPilot, to nie wtyczki; zobacz Ustawienia › Moduły."
+    },
+    "bundled": {
+      "title": "Dołączone wtyczki systemowe",
+      "text_one": "{{count}} wtyczka dostarczona z DeckPilot.",
+      "text_few": "{{count}} wtyczki dostarczone z DeckPilot.",
+      "text_many": "{{count}} wtyczek dostarczonych z DeckPilot.",
+      "text_other": "{{count}} wtyczki dostarczonej z DeckPilot."
+    },
+    "installed": {
+      "title": "Zainstalowane wtyczki opcjonalne",
+      "none": "Brak zainstalowanych.",
+      "text_one": "{{count}} wtyczka zainstalowana przez Ciebie; zobacz Zainstalowane.",
+      "text_few": "{{count}} wtyczki zainstalowane przez Ciebie; zobacz Zainstalowane.",
+      "text_many": "{{count}} wtyczek zainstalowanych przez Ciebie; zobacz Zainstalowane.",
+      "text_other": "{{count}} wtyczki zainstalowanej przez Ciebie; zobacz Zainstalowane."
+    },
+    "available": {
+      "title": "Dostępne wtyczki",
+      "none": "W rejestrze nie ma nic więcej.",
+      "text_one": "{{count}} wtyczka w rejestrze, niezainstalowana.",
+      "text_few": "{{count}} wtyczki w rejestrze, niezainstalowane.",
+      "text_many": "{{count}} wtyczek w rejestrze, niezainstalowanych.",
+      "text_other": "{{count}} wtyczki w rejestrze, niezainstalowanej."
+    }
+  },
+  "discover": {
+    "installFile": "Zainstaluj z pliku pakietu…",
+    "installFileHint": "Akceptowany jest tylko plik .dpplugin, którego bajty są przypięte w zweryfikowanym rejestrze.",
+    "search": "Szukaj wtyczek",
+    "categories": "Kategorie",
+    "allCategories": "Wszystkie kategorie",
+    "list": "Wtyczki",
+    "empty": {
+      "title": "Brak wtyczek do wyświetlenia",
+      "registryError": "Nie udało się odczytać rejestru.",
+      "noRegistry": "W agencie nie skonfigurowano rejestru.",
+      "neverVerified": "Rejestr nie został jeszcze zweryfikowany na tym komputerze.",
+      "none": "Rejestr nie zawiera żadnych wtyczek."
+    },
+    "noMatch": {
+      "title": "Nie znaleziono wtyczek",
+      "text": "Żadna wtyczka nie pasuje do wyszukiwania.",
+      "inCategory": "Żadna wtyczka w kategorii {{category}} nie pasuje do wyszukiwania."
+    }
+  },
+  "badge": {
+    "latestVersion": "Najnowsza {{version}}",
+    "installedVersion": "Zainstalowana {{version}}",
+    "optional": "Wtyczka opcjonalna",
+    "available": "Dostępna wtyczka",
+    "update": "Dostępna aktualizacja",
+    "withdrawn": "Wycofana",
+    "incompatible": "Niezgodna",
+    "deprecated": "Przestarzała"
+  },
+  "updates": {
+    "intro": "Aktualizacje, które proszą o nowe uprawnienia, nigdy nie są instalowane bez Twojej zgody.",
+    "check": "Sprawdź dostępność aktualizacji",
+    "none": "Wszystkie wtyczki są aktualne",
+    "list": "Dostępne aktualizacje",
+    "item": "{{name}} {{from}} do {{to}}",
+    "waiting_one": "Oczekuje na zgodę: {{count}} uprawnienie",
+    "waiting_few": "Oczekuje na zgodę: {{count}} uprawnienia",
+    "waiting_many": "Oczekuje na zgodę: {{count}} uprawnień",
+    "waiting_other": "Oczekuje na zgodę: {{count}} uprawnienia",
+    "review": "Przejrzyj i uaktualnij",
+    "update": "Uaktualnij"
+  },
+  "details": {
+    "back": "Wróć do wtyczek",
+    "noVersion": "Nie można zainstalować żadnej wersji: każda została wycofana lub nie działa na tym komputerze.",
+    "license": "Licencja",
+    "homepage": "Strona domowa",
+    "source": "Kod źródłowy",
+    "categories": "Kategorie",
+    "about": "Informacje",
+    "deprecated": "Oznaczona przez rejestr jako przestarzała",
+    "installStatus": "Stan instalacji",
+    "installed": "Zainstalowana {{version}} ({{state}})",
+    "updateTo": "Uaktualnij do {{version}}",
+    "noUpdate": "Brak dostępnych aktualizacji",
+    "install": "Zainstaluj",
+    "installVersion": "Zainstaluj {{version}}",
+    "installedFor": "Zainstalowana dla wtyczki {{plugin}}; zostanie zaproponowana do usunięcia, gdy nic nie będzie jej potrzebować.",
+    "knownBefore": "Była tu wcześniej zainstalowana jako {{name}}, ostatnia wersja {{version}} ({{date}}). Akcje, które nadal jej używają, informują, że nie jest zainstalowana.",
+    "storage": "Pamięć",
+    "storageHint": "To, co wtyczka przechowuje dla siebie w DeckPilot. Zostanie usunięte po odinstalowaniu wtyczki.",
+    "compatibility": "Zgodność wersji {{version}}",
+    "notStated": "Nie podano w rejestrze",
+    "platforms": "Platformy",
+    "thisComputer": "Ten komputer",
+    "compatibleOn": "{{platform}}: zgodna",
+    "incompatible": "Niezgodna z tą wersją DeckPilot",
+    "incompatibleReasons": "Przyczyny niezgodności",
+    "withdrawn": "Wersja {{version}} została wycofana",
+    "permissions": "Uprawnienia wersji {{version}}",
+    "permissionsHint": "Każde z uzasadnieniem wydawcy. DeckPilot prosi o Twoją zgodę, zanim cokolwiek zainstaluje.",
+    "permissionsLabel": "Uprawnienia",
+    "versions": "Wersje",
+    "published": "opublikowano {{date}}",
+    "latest": "Najnowsza",
+    "withdrawnBecause": "Wycofana: {{reason}}",
+    "installedBadge": "Zainstalowana",
+    "actions": "Akcje",
+    "actionsNotListed": "Rejestr nie wymienia akcji wtyczki; zostaną tu pokazane po jej zainstalowaniu.",
+    "noActions": "Ta wtyczka nie dodaje żadnych akcji.",
+    "unavailable": "Niedostępna"
+  },
+  "installed": {
+    "empty": "Brak zainstalowanych wtyczek",
+    "browse": "Przeglądaj wtyczki",
+    "intro": "Wtyczki działają tylko wtedy, gdy są włączone, i tylko z uprawnieniami przyznanymi przez Ciebie.",
+    "list": "Zainstalowane wtyczki",
+    "health": {
+      "label": "Stan wtyczki {{name}}",
+      "crashes_one": "Host wtyczki zatrzymał się {{count}} raz od uruchomienia agenta",
+      "crashes_few": "Host wtyczki zatrzymał się {{count}} razy od uruchomienia agenta",
+      "crashes_many": "Host wtyczki zatrzymał się {{count}} razy od uruchomienia agenta",
+      "crashes_other": "Host wtyczki zatrzymał się {{count}} razy od uruchomienia agenta",
+      "lastFailed": "Ostatnia akcja tej wtyczki się nie powiodła",
+      "lastError": "Ostatni błąd: {{error}}",
+      "lastErrorAt": "Ostatni błąd ({{time}}): {{error}}"
+    },
+    "origin": {
+      "dev": "DEV",
+      "sideload": "Pakiet lokalny",
+      "bundled": "Dołączona"
+    },
+    "updateBadge": "Dostępna aktualizacja {{version}}",
+    "settingsMissing": "Brak ustawień",
+    "latest": "Najnowsza w rejestrze: {{version}}",
+    "storage": "Pamięć: {{usage}}",
+    "notGranted_one": "Nie przyznano {{count}} uprawnienia; wywołania, które go wymagają, kończą się błędem „brak uprawnień”.",
+    "notGranted_few": "Nie przyznano {{count}} uprawnień; wywołania, które ich wymagają, kończą się błędem „brak uprawnień”.",
+    "notGranted_many": "Nie przyznano {{count}} uprawnień; wywołania, które ich wymagają, kończą się błędem „brak uprawnień”.",
+    "notGranted_other": "Nie przyznano {{count}} uprawnienia; wywołania, które go wymagają, kończą się błędem „brak uprawnień”.",
+    "enableNamed": "Włącz {{name}}",
+    "disableNamed": "Wyłącz {{name}}",
+    "broken": "Wtyczka {{name}} jest uszkodzona",
+    "quarantined": "Wyłączona: unieważniona przez rejestr",
+    "stateOf": "{{name}}: {{state}}",
+    "blockedHint": "Nie można jej uruchomić ani włączyć. Przywróć poprzednią wersję, uaktualnij ją lub odinstaluj.",
+    "brokenBundledHint": "Jej pliki nie zgadzają się już z kopią dostarczaną z DeckPilot. Zainstaluj ją ponownie z tej kopii; jej ustawienia i Twoje decyzje dotyczące uprawnień zostaną zachowane.",
+    "reinstall": "Zainstaluj ponownie",
+    "reinstallNamed": "Zainstaluj ponownie: {{name}}",
+    "removed": {
+      "title": "Usunięte wtyczki DeckPilot",
+      "intro": "Wtyczki dostarczane z DeckPilot, które odinstalowano. Przywróć wtyczkę, aby ponownie zainstalować kopię dostarczaną z DeckPilot; zachowane ustawienia wrócą razem z nią.",
+      "list": "Usunięte wtyczki DeckPilot",
+      "lastVersion": "Ostatnio zainstalowana wersja: {{version}}",
+      "restore": "Przywróć",
+      "restoreNamed": "Przywróć: {{name}}"
+    },
+    "cannotRun": "Nie można uruchomić w systemie {{platform}}",
+    "cannotRunHint": "Można ją tu przeglądać, uaktualniać i odinstalować, ale nie można jej włączyć.",
+    "missingSettings_one": "{{settings}}: brak wartości i wartości domyślnej. Ustaw je w oknie Konfiguruj.",
+    "missingSettings_few": "{{settings}}: brak wartości i wartości domyślnych. Ustaw je w oknie Konfiguruj.",
+    "missingSettings_many": "{{settings}}: brak wartości i wartości domyślnych. Ustaw je w oknie Konfiguruj.",
+    "missingSettings_other": "{{settings}}: brak wartości i wartości domyślnych. Ustaw je w oknie Konfiguruj.",
+    "staged": {
+      "title": "Wersja {{version}} oczekuje na Twoją zgodę",
+      "text_one": "Prosi o {{count}} dodatkowe uprawnienie. Do czasu Twojej decyzji działa bieżąca wersja.",
+      "text_few": "Prosi o {{count}} dodatkowe uprawnienia. Do czasu Twojej decyzji działa bieżąca wersja.",
+      "text_many": "Prosi o {{count}} dodatkowych uprawnień. Do czasu Twojej decyzji działa bieżąca wersja.",
+      "text_other": "Prosi o {{count}} dodatkowego uprawnienia. Do czasu Twojej decyzji działa bieżąca wersja."
+    },
+    "reviewUpdate": "Przejrzyj aktualizację do {{version}}",
+    "rollBack": "Przywróć wersję {{version}}",
+    "details": "Szczegóły",
+    "configure": "Konfiguruj",
+    "more": "Uprawnienia i akcje",
+    "permissionsOf": "Uprawnienia wtyczki {{name}}",
+    "revoke": "Odbierz",
+    "revokeNamed": "Odbierz: {{title}}",
+    "revoked": "Odebrane",
+    "notGrantedBadge": "Nieprzyznane",
+    "grant": "Przyznaj",
+    "grantNamed": "Przyznaj: {{title}}",
+    "actionsOf": "Akcje wtyczki {{name}}",
+    "run": {
+      "button": "Uruchom",
+      "named": "Uruchom {{name}}",
+      "result": "Wynik: {{name}}",
+      "succeeded": "Powodzenie",
+      "succeededWith": "Powodzenie: {{message}}",
+      "skipped": "Pominięto",
+      "skippedWith": "Pominięto: {{message}}",
+      "failed": "Niepowodzenie ({{code}})",
+      "failedWith": "Niepowodzenie ({{code}}): {{message}}"
+    }
+  },
+  "uninstall": {
+    "button": "Odinstaluj",
+    "title": "Odinstalować {{name}}?",
+    "description": "Zatrzymuje wtyczkę i usuwa jej pliki, uprawnienia, zapisy (w tym wersję zachowaną do przywrócenia) oraz pamięć. Jej ustawienia i poświadczenia również zostaną usunięte, chyba że zachowasz je poniżej.",
+    "keep": "Zachowaj na potrzeby ponownej instalacji",
+    "keepSettings": "Zachowaj jej ustawienia",
+    "keepCredentials": "Zachowaj jej poświadczenia",
+    "keepCredentialsLong": "{{keep}} (przechowywane sekrety pozostaną w DeckPilot, dopóki wtyczka nie zostanie ponownie zainstalowana i odinstalowana bez ich zachowania)"
+  },
+  "page": {
+    "title": "Marketplace",
+    "description": "Podpisane wtyczki społeczności ze zweryfikowanego rejestru"
+  }
+}

@@ -45,41 +45,50 @@ import {
   providerLabel,
   updateControls,
 } from "@/lib/update-distribution"
+import { type TranslationKey, useTranslation } from "@/i18n"
+import { useFormat } from "@/i18n/format"
 
-const MODES: { value: UpdateMode; label: string; description: string }[] = [
-  { value: "notifyOnly", label: "Notify me", description: "Show that an update is available." },
+const MODES: { value: UpdateMode; label: TranslationKey; description: TranslationKey }[] = [
+  {
+    value: "notifyOnly",
+    label: "settings:updates.mode.notifyOnly",
+    description: "settings:updates.mode.notifyOnlyDescription",
+  },
   {
     value: "downloadAndAsk",
-    label: "Download, then ask",
-    description: "Download in the background and install after you confirm.",
+    label: "settings:updates.mode.downloadAndAsk",
+    description: "settings:updates.mode.downloadAndAskDescription",
   },
   {
     value: "installWhenIdle",
-    label: "Install when idle",
-    description:
-      "Install automatically after ten minutes without device input. Not recommended until updates have been tested on your system.",
+    label: "settings:updates.mode.installWhenIdle",
+    description: "settings:updates.mode.installWhenIdleDescription",
   },
 ]
 
-const CHANNELS: { value: UpdateChannel; label: string; description: string }[] = [
-  { value: "stable", label: "Stable", description: "Only stable releases." },
+const CHANNELS: { value: UpdateChannel; label: TranslationKey; description: TranslationKey }[] = [
+  {
+    value: "stable",
+    label: "settings:updates.channel.stable",
+    description: "settings:updates.channel.stableDescription",
+  },
   {
     value: "prerelease",
-    label: "Pre-releases",
-    description:
-      "Also alpha, beta and release-candidate builds, which may have unfinished features or bugs. You move on to the stable release once it is newer; switching back to Stable never installs an older version.",
+    label: "settings:updates.channel.prerelease",
+    description: "settings:updates.channel.prereleaseDescription",
   },
 ]
 
 const INTERVALS = [6, 12, 24, 72, 168]
 
-const INTERNET = "Check your internet connection and try again"
-
 export function UpdatesCard() {
+  const { t } = useTranslation()
+  const format = useFormat()
   const { updates, setUpdates } = useAppContext()
   const [busy, setBusy] = useState(false)
+  const internet = t("settings:updates.checkInternet")
   const checkNow = () => {
-    void run(() => api.checkForUpdates(), "Checking for updates failed", INTERNET)
+    void run(() => api.checkForUpdates(), t("settings:updates.checkFailed"), internet)
   }
   const controls = updates ? updateControls(updates) : null
   const downloading =
@@ -90,12 +99,12 @@ export function UpdatesCard() {
       ? [
           {
             id: "updates.check",
-            label: "Check for updates",
+            label: t("settings:updates.check"),
             icon: RefreshCw,
             placement: "primary",
             busy: updates?.phase === "checking",
             disabled: !controls.checkEnabled || busy || updates?.phase !== "idle",
-            hint: controls.checkEnabled ? undefined : "Updates are not available in this build",
+            hint: controls.checkEnabled ? undefined : t("settings:updates.notAvailable"),
             onSelect: checkNow,
           },
         ]
@@ -109,10 +118,12 @@ export function UpdatesCard() {
   })
   if (!updates || !controls) return null
   const { preferences, available, progress, phase } = updates
+  const modeDescription = MODES.find((m) => m.value === preferences.mode)?.description
+  const channelDescription = CHANNELS.find((c) => c.value === preferences.channel)?.description
 
   const savePreferences = (change: Partial<UpdatePreferences>) => {
     api.setUpdatePreferences({ ...preferences, ...change }).then(setUpdates, (e: unknown) => {
-      toastFailure("The update settings were not saved", e)
+      toastFailure(t("settings:updates.preferencesNotSaved"), e)
     })
   }
   const run = async (operation: () => Promise<unknown>, failed: string, next?: string) => {
@@ -133,25 +144,25 @@ export function UpdatesCard() {
 
   const lastCheck =
     phase === "checking"
-      ? "Checking for updates…"
+      ? t("settings:updates.checking")
       : preferences.lastCheck
-        ? `Last checked ${formatTimestamp(preferences.lastCheck)}`
-        : "Not checked yet"
+        ? t("settings:updates.lastChecked", { time: formatTimestamp(preferences.lastCheck) })
+        : t("settings:updates.notChecked")
 
   return (
     <>
       <p className="text-sm text-muted-foreground">
         {controls.selfUpdate
-          ? "Updates come from GitHub Releases and are installed only if their signature verifies. Your configuration is never uploaded."
+          ? t("settings:updates.introSelfUpdate")
           : controls.managed || controls.command
-            ? `${deliveredBy(updates)}. DeckPilot does not download or install updates itself in this installation. Your configuration is never uploaded.`
-            : "Your configuration is never uploaded."}
+            ? t("settings:updates.introExternal", { deliveredBy: deliveredBy(updates) })
+            : t("settings:updates.introNeverUploaded")}
       </p>
 
       {updates.developmentOverride && <DevelopmentOverrideNotice state={updates} />}
       {updates.updateProvider === "none" && (
         <Alert>
-          <AlertTitle>Updates are not available in this build</AlertTitle>
+          <AlertTitle>{t("settings:updates.notAvailable")}</AlertTitle>
           <AlertDescription>
             {notConfiguredExplanation(updates.notConfiguredReason)}
           </AlertDescription>
@@ -164,23 +175,25 @@ export function UpdatesCard() {
       {(controls.selfUpdate ||
         controls.versionNotice ||
         (controls.check && controls.checkEnabled)) && (
-        <SettingsSection title="Status">
+        <SettingsSection title={t("settings:agent.status")}>
           <SettingsGroup>
             <SettingsRow
               label={
                 available && (controls.selfUpdate || controls.versionNotice)
-                  ? `Version ${available.version} is available`
+                  ? t("settings:updates.versionAvailable", { version: available.version })
                   : controls.selfUpdate
-                    ? "DeckPilot is up to date."
-                    : `Version ${updates.currentVersion}`
+                    ? t("settings:updates.upToDate")
+                    : t("settings:updates.versionValue", { version: updates.currentVersion })
               }
               description={
                 <>
                   {controls.versionNotice && available && (
-                    <span className="block">Update with your package manager.</span>
+                    <span className="block">{t("settings:updates.usePackageManager")}</span>
                   )}
                   {controls.selfUpdate && available?.date && (
-                    <span className="block">Released {available.date}</span>
+                    <span className="block">
+                      {t("settings:updates.released", { date: available.date })}
+                    </span>
                   )}
                   {controls.check && controls.checkEnabled && (
                     <span className="block">{lastCheck}</span>
@@ -195,10 +208,14 @@ export function UpdatesCard() {
                   onClick={() => {
                     // Progress follows in its own window as well.
                     void api.openWindow("updates.progress").catch(() => undefined)
-                    void run(() => api.downloadUpdate(), "The update was not downloaded", INTERNET)
+                    void run(
+                      () => api.downloadUpdate(),
+                      t("settings:updates.notDownloaded"),
+                      internet,
+                    )
                   }}
                 >
-                  <Download /> Download
+                  <Download /> {t("settings:updates.download")}
                 </Button>
               )}
               {controls.selfUpdate && available && phase === "ready" && (
@@ -207,10 +224,10 @@ export function UpdatesCard() {
                   disabled={busy}
                   onClick={() => {
                     void api.openWindow("updates.progress").catch(() => undefined)
-                    void run(() => api.installUpdate(), "The update was not installed")
+                    void run(() => api.installUpdate(), t("settings:updates.notInstalled"))
                   }}
                 >
-                  <RotateCw /> Install and restart
+                  <RotateCw /> {t("settings:updates.installAndRestart")}
                 </Button>
               )}
             </SettingsRow>
@@ -218,21 +235,26 @@ export function UpdatesCard() {
               <div className="grid gap-2 py-3">
                 {phase === "downloading" && (
                   <div className="grid gap-1">
-                    <Progress value={percent ?? undefined} aria-label="Download progress" />
+                    <Progress
+                      value={percent ?? undefined}
+                      aria-label={t("settings:updates.downloadProgress")}
+                    />
                     <span className="text-caption text-muted-foreground">
-                      {percent !== null ? `${percent}%` : "Downloading…"}
+                      {percent !== null
+                        ? format.percent(percent / 100)
+                        : t("settings:updates.downloading")}
                     </span>
                   </div>
                 )}
                 {available.notes && (
-                  <pre className="max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap select-text">
+                  <pre className="relative max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap select-text">
                     {available.notes}
                   </pre>
                 )}
                 <p className="text-caption text-muted-foreground">
-                  {phase === "ready" ? "Downloaded and verified. " : ""}Installing stops the
-                  background agent after its current task, releases the devices, installs, and
-                  restarts DeckPilot with the new agent.
+                  {phase === "ready"
+                    ? t("settings:updates.readyInstallExplanation")
+                    : t("settings:updates.installExplanation")}
                 </p>
               </div>
             )}
@@ -241,13 +263,13 @@ export function UpdatesCard() {
       )}
 
       {(controls.mode || controls.channelChoice || controls.schedule) && (
-        <SettingsSection title="Preferences">
+        <SettingsSection title={t("settings:updates.preferences")}>
           <SettingsGroup>
             {controls.mode && (
               <SettingsRow
-                label="When an update is available"
+                label={t("settings:updates.modeLabel")}
                 htmlFor="update-mode"
-                description={MODES.find((m) => m.value === preferences.mode)?.description}
+                description={modeDescription && t(modeDescription)}
               >
                 <Select
                   value={preferences.mode}
@@ -261,7 +283,7 @@ export function UpdatesCard() {
                   <SelectContent>
                     {MODES.map((mode) => (
                       <SelectItem key={mode.value} value={mode.value}>
-                        {mode.label}
+                        {t(mode.label)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -270,9 +292,9 @@ export function UpdatesCard() {
             )}
             {controls.channelChoice && (
               <SettingsRow
-                label="Update channel"
+                label={t("settings:updates.channelLabel")}
                 htmlFor="update-channel"
-                description={CHANNELS.find((c) => c.value === preferences.channel)?.description}
+                description={channelDescription && t(channelDescription)}
               >
                 <Select
                   value={preferences.channel}
@@ -287,7 +309,7 @@ export function UpdatesCard() {
                   <SelectContent>
                     {CHANNELS.map((channel) => (
                       <SelectItem key={channel.value} value={channel.value}>
-                        {channel.label}
+                        {t(channel.label)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -297,9 +319,9 @@ export function UpdatesCard() {
             {controls.schedule && (
               <>
                 <SettingsRow
-                  label="Check automatically"
+                  label={t("settings:updates.automatic")}
                   htmlFor="update-automatic"
-                  description="While DeckPilot is open."
+                  description={t("settings:updates.automaticDescription")}
                 >
                   <Switch
                     id="update-automatic"
@@ -309,7 +331,7 @@ export function UpdatesCard() {
                     }}
                   />
                 </SettingsRow>
-                <SettingsRow label="Check every" htmlFor="update-interval">
+                <SettingsRow label={t("settings:updates.interval")} htmlFor="update-interval">
                   <Select
                     value={String(preferences.checkIntervalHours)}
                     disabled={!preferences.automaticChecks}
@@ -326,8 +348,8 @@ export function UpdatesCard() {
                         .map((hours) => (
                           <SelectItem key={hours} value={String(hours)}>
                             {hours < 24
-                              ? `${hours} hours`
-                              : `${hours / 24} day${hours === 24 ? "" : "s"}`}
+                              ? t("settings:updates.hours", { count: hours })
+                              : t("settings:updates.days", { count: hours / 24 })}
                           </SelectItem>
                         ))}
                     </SelectContent>
@@ -339,7 +361,7 @@ export function UpdatesCard() {
         </SettingsSection>
       )}
 
-      <SettingsSection title="This installation">
+      <SettingsSection title={t("settings:updates.installation")}>
         <InstallationDetails state={updates} />
       </SettingsSection>
     </>
@@ -348,11 +370,12 @@ export function UpdatesCard() {
 
 /** Version, channels and who updates this installation. */
 export function InstallationDetails({ state }: { state: UpdateState }) {
+  const { t } = useTranslation()
   const rows: [string, string][] = [
-    ["Version", state.currentVersion],
-    ["Release channel", RELEASE_CHANNEL_LABELS[state.releaseChannel]],
-    ["Installed from", installedFrom(state)],
-    ["Updates", providerLabel(state)],
+    [t("settings:about.version"), state.currentVersion],
+    [t("settings:updates.releaseChannel"), t(RELEASE_CHANNEL_LABELS[state.releaseChannel])],
+    [t("settings:updates.installedFrom"), installedFrom(state)],
+    [t("settings:pages.updates.title"), providerLabel(state)],
   ]
   return (
     <PropertyList className="border-t pt-3">
@@ -367,16 +390,19 @@ export function InstallationDetails({ state }: { state: UpdateState }) {
 
 /** A debug build pretending to be installed from another channel. */
 export function DevelopmentOverrideNotice({ state }: { state: UpdateState }) {
+  const { t } = useTranslation()
   return (
     <Alert>
       <FlaskConical />
       <AlertTitle className="flex flex-wrap items-center gap-2">
-        <Badge variant="outline">Development override</Badge>
-        Simulated installation
+        <Badge variant="outline">{t("settings:updates.override.badge")}</Badge>
+        {t("settings:updates.override.title")}
       </AlertTitle>
       <AlertDescription>
-        This debug build behaves as if installed from {CHANNEL_LABELS[state.distributionChannel]}{" "}
-        (set by DECKPILOT_DISTRIBUTION_OVERRIDE). Release builds ignore the override.
+        {t("settings:updates.override.description", {
+          channel: t(CHANNEL_LABELS[state.distributionChannel]),
+          variable: "DECKPILOT_DISTRIBUTION_OVERRIDE",
+        })}
       </AlertDescription>
     </Alert>
   )
@@ -384,6 +410,7 @@ export function DevelopmentOverrideNotice({ state }: { state: UpdateState }) {
 
 /** Store builds: the store installs updates; there is nothing to check or install here. */
 export function ManagedNotice({ state, instruction }: { state: UpdateState; instruction: string }) {
+  const { t } = useTranslation()
   return (
     <Alert>
       <PackageCheck />
@@ -392,7 +419,7 @@ export function ManagedNotice({ state, instruction }: { state: UpdateState; inst
         <p>
           <InlineCode text={sentenceOf(instruction)} />
         </p>
-        <p>{RESTART_AFTER_EXTERNAL_UPDATE}</p>
+        <p>{t("settings:updates.restartAfterExternal")}</p>
       </AlertDescription>
     </Alert>
   )
@@ -400,16 +427,17 @@ export function ManagedNotice({ state, instruction }: { state: UpdateState; inst
 
 /** Package-manager builds: the documented command, copyable; never an install button. */
 export function PackageManagerNotice({ state, command }: { state: UpdateState; command: string }) {
+  const { t } = useTranslation()
   return (
     <Alert>
       <PackageCheck />
       <AlertTitle>{deliveredBy(state)}</AlertTitle>
       <AlertDescription className="grid gap-2">
-        <p>Update DeckPilot with your package manager:</p>
+        <p>{t("settings:updates.packageManager")}</p>
         <div className="flex w-full items-center gap-2">
           <code
-            className="flex-1 overflow-x-auto rounded-md bg-muted px-2 py-1 font-mono text-xs whitespace-nowrap text-foreground"
-            aria-label="Update command"
+            className="relative flex-1 overflow-x-auto rounded-md bg-muted px-2 py-1 font-mono text-xs whitespace-nowrap text-foreground"
+            aria-label={t("settings:updates.command")}
           >
             {command}
           </code>
@@ -418,27 +446,29 @@ export function PackageManagerNotice({ state, command }: { state: UpdateState; c
             size="sm"
             onClick={() => {
               navigator.clipboard.writeText(command).then(
-                () => toast.success("Command copied"),
+                () => toast.success(t("settings:updates.commandCopied")),
                 (e: unknown) => {
-                  toastFailure("The command was not copied", e, "Select it and copy it by hand")
+                  toastFailure(
+                    t("settings:updates.commandNotCopied"),
+                    e,
+                    t("settings:updates.copyByHand"),
+                  )
                 },
               )
             }}
           >
-            <ClipboardCopy /> Copy
+            <ClipboardCopy /> {t("settings:shared.copy")}
           </Button>
         </div>
-        <p>{RESTART_AFTER_EXTERNAL_UPDATE}</p>
+        <p>{t("settings:updates.restartAfterExternal")}</p>
       </AlertDescription>
     </Alert>
   )
 }
 
-const RESTART_AFTER_EXTERNAL_UPDATE =
-  "After an update is installed, quit and reopen DeckPilot. If the background agent still runs the previous version, DeckPilot offers to restart it."
-
 /** An update error of the backend, with a title that says what happened. */
 export function UpdateErrorNotice({ error }: { error: string }) {
+  const { t } = useTranslation()
   const described = describeUpdateError(error)
   return (
     <Alert variant="destructive">
@@ -446,7 +476,11 @@ export function UpdateErrorNotice({ error }: { error: string }) {
       <AlertTitle>{described.title}</AlertTitle>
       <AlertDescription>
         <p>{described.message}</p>
-        {described.detail && <p className="text-xs opacity-80">Details: {described.detail}</p>}
+        {described.detail && (
+          <p className="text-xs opacity-80">
+            {t("settings:updates.details", { detail: described.detail })}
+          </p>
+        )}
       </AlertDescription>
     </Alert>
   )

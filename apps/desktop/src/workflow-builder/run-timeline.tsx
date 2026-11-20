@@ -1,3 +1,4 @@
+import { useTranslation } from "@/i18n"
 import { cn } from "@/lib/utils"
 
 import { formatMs } from "./describe"
@@ -24,29 +25,33 @@ export function RunTimeline({
   selected: string | null
   onSelect: (node: string) => void
 }) {
+  const { t } = useTranslation()
   return (
     <div className="grid gap-1">
-      <ol className="grid gap-0.5" aria-label="Execution timeline">
+      <ol className="grid gap-0.5" aria-label={t("workflows:run.timeline.label")}>
         {timeline.rows.map((row) => {
           const { left, width } = barGeometry(row, timeline.spanMs)
           const description = [
             STATUS_LABEL[row.status],
-            `${row.estimated ? "started about" : "started"} ${formatMs(row.startMs)} in`,
+            row.estimated
+              ? t("workflows:run.timeline.startedAbout", { time: formatMs(row.startMs) })
+              : t("workflows:run.timeline.started", { time: formatMs(row.startMs) }),
             row.status === "running"
-              ? `running for ${formatMs(row.durationMs)}`
-              : `took ${formatMs(row.durationMs)}`,
-            row.parallel ? "in parallel" : "",
-            row.attempts > 1 ? `${row.attempts} attempts` : "",
+              ? t("workflows:run.timeline.runningFor", { time: formatMs(row.durationMs) })
+              : t("workflows:run.timeline.took", { time: formatMs(row.durationMs) }),
+            row.parallel ? t("workflows:run.timeline.parallel") : "",
+            row.attempts > 1 ? t("workflows:run.attempts", { count: row.attempts }) : "",
           ]
             .filter(Boolean)
             .join(", ")
+          const label = t("workflows:run.timeline.row", { node: row.title, description })
           return (
             <li key={row.node}>
               <button
                 type="button"
                 aria-pressed={selected === row.node}
-                aria-label={`${row.title}: ${description}`}
-                title={`${row.title}: ${description}`}
+                aria-label={label}
+                title={label}
                 onClick={() => {
                   onSelect(row.node)
                 }}
@@ -60,7 +65,7 @@ export function RunTimeline({
                     <span
                       className="shrink-0 font-mono text-muted-foreground"
                       aria-hidden
-                      title={`Lane ${row.lane + 1}`}
+                      title={t("workflows:run.timeline.lane", { lane: row.lane + 1 })}
                     >
                       ∥
                     </span>

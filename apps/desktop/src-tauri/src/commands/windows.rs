@@ -177,9 +177,88 @@ pub fn titlebar_double_click<R: Runtime>(window: WebviewWindow<R>) -> CommandRes
     result.map_err(|error| CommandError::Invalid(error.to_string()))
 }
 
+/// The right edge, in points from the window's left edge, of the native
+/// window controls that overlay the content (macOS traffic lights with the
+/// `Overlay` titlebar): the toolbar keeps its content to the right of it.
+/// `None` where the platform draws its own titlebar (Windows, Linux).
+///
+/// The buttons' size and spacing differ between macOS versions (larger from
+/// macOS 26), and their position comes from `trafficLightPosition` in the
+/// window's configuration. Reading the frames from `AppKit` directly would
+/// need `unsafe` code, which this crate forbids.
+#[tauri::command]
+// Always `Some` on macOS; `None` on the other platforms.
+#[cfg_attr(target_os = "macos", allow(clippy::unnecessary_wraps))]
+pub fn window_controls_inset<R: Runtime>(window: WebviewWindow<R>) -> Option<f64> {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::Manager;
+        let x = window
+            .app_handle()
+            .config()
+            .app
+            .windows
+            .iter()
+            .find(|w| w.label == window.label())
+            .and_then(|w| w.traffic_light_position.as_ref())
+            .map_or(DEFAULT_TRAFFIC_LIGHT_X, |p| p.x);
+        Some(controls_right_edge(x, macos_major_version()))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window;
+        None
+    }
+}
+
+/// macOS places the first button 7 pt in; Tauri's default when no position
+/// is configured is close to it.
+const DEFAULT_TRAFFIC_LIGHT_X: f64 = 7.0;
+
+/// Right edge of the three traffic lights whose first one starts at `x`.
+/// Before macOS 26 the buttons are 12 pt wide, 20 pt apart (centre to
+/// centre); from macOS 26 14 pt wide, 23 pt apart (measured on screen).
+/// An unknown version gets the larger geometry: too much room is harmless,
+/// too little overlaps the buttons.
+fn controls_right_edge(x: f64, macos_major: Option<u32>) -> f64 {
+    let (width, pitch) = match macos_major {
+        Some(major) if major < 26 => (12.0, 20.0),
+        _ => (14.0, 23.0),
+    };
+    x + 2.0 * pitch + width
+}
+
+#[cfg(target_os = "macos")]
+fn macos_major_version() -> Option<u32> {
+    let output = std::process::Command::new("/usr/bin/sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()?;
+    output.status.success().then_some(())?;
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .split('.')
+        .next()?
+        .parse()
+        .ok()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{DoubleClick, double_click_action};
+    use super::{DoubleClick, controls_right_edge, double_click_action};
+
+    #[test]
+    fn traffic_lights_end_where_macos_draws_them() {
+        // tauri.conf.json: trafficLightPosition.x = 16.
+        // macOS 15 and earlier: 12 pt buttons, 20 pt apart.
+        assert!((controls_right_edge(16.0, Some(15)) - 68.0).abs() < f64::EPSILON);
+        // macOS 26 and later: 14 pt buttons, 23 pt apart (76 pt measured on
+        // a macOS 27 Retina screen).
+        assert!((controls_right_edge(16.0, Some(26)) - 76.0).abs() < f64::EPSILON);
+        assert!((controls_right_edge(16.0, Some(27)) - 76.0).abs() < f64::EPSILON);
+        // Unknown version: the larger geometry, never too little room.
+        assert!((controls_right_edge(16.0, None) - 76.0).abs() < f64::EPSILON);
+    }
 
     #[test]
     fn titlebar_double_click_follows_the_system_setting() {

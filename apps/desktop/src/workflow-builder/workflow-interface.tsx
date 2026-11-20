@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { useTranslation } from "@/i18n"
 import type { ValueKind, WorkflowInput, WorkflowOutput } from "@/lib/types"
 
 import { MAX_WORKFLOW_VALUES } from "./graph"
@@ -125,6 +126,7 @@ export function WorkflowInterfaceEditor({
   onInputs: (inputs: WorkflowInput[]) => void
   onOutputs: (outputs: WorkflowOutput[]) => void
 }) {
+  const { t } = useTranslation()
   const setInput = (index: number, change: Partial<WorkflowInput>) => {
     onInputs(inputs.map((input, i) => (i === index ? { ...input, ...change } : input)))
   }
@@ -132,11 +134,13 @@ export function WorkflowInterfaceEditor({
     onOutputs(outputs.map((output, i) => (i === index ? { ...output, ...change } : output)))
   }
   return (
-    <section className="grid gap-3 border-t px-4 py-3" aria-label="Inputs and outputs">
+    <section className="grid gap-3 border-t px-4 py-3" aria-label={t("workflows:interface.title")}>
       <div className="grid gap-1">
-        <h3 className="text-xs font-medium text-muted-foreground uppercase">Inputs</h3>
+        <h3 className="text-xs font-medium text-muted-foreground uppercase">
+          {t("workflows:interface.inputs")}
+        </h3>
         <p className="text-xs text-muted-foreground">
-          Values a Sub-workflow node gives this workflow. Nodes read them from the start node.
+          {t("workflows:interface.inputsDescription")}
         </p>
       </div>
       {inputs.map((input, index) => (
@@ -144,18 +148,18 @@ export function WorkflowInterfaceEditor({
           key={index}
           className="grid grid-cols-[minmax(0,1fr)] gap-1.5 rounded-md border p-2"
           role="group"
-          aria-label={`Input ${input.key}`}
+          aria-label={t("workflows:interface.input.group", { key: input.key })}
         >
           <div className="flex items-center gap-1">
             <KeyField
-              label="Input key"
+              label={t("workflows:interface.input.key")}
               value={input.key}
               onChange={(key) => {
                 setInput(index, { key })
               }}
             />
             <KindSelect
-              label="Input type"
+              label={t("workflows:interface.input.type")}
               value={input.kind}
               onChange={(kind) => {
                 setInput(index, { kind })
@@ -165,7 +169,7 @@ export function WorkflowInterfaceEditor({
               variant="ghost"
               size="icon"
               className="size-7 shrink-0"
-              aria-label={`Remove input ${input.key}`}
+              aria-label={t("workflows:interface.input.remove", { key: input.key })}
               onClick={() => {
                 onInputs(inputs.filter((_, i) => i !== index))
               }}
@@ -174,18 +178,22 @@ export function WorkflowInterfaceEditor({
             </Button>
           </div>
           <Input
-            aria-label="Input label"
+            aria-label={t("workflows:interface.input.label")}
             className="h-7 text-xs"
-            placeholder="Label"
+            placeholder={t("workflows:interface.labelPlaceholder")}
             value={input.label ?? ""}
             onChange={(e) => {
               setInput(index, { label: e.target.value || undefined })
             }}
           />
           <Input
-            aria-label="Input default"
+            aria-label={t("workflows:interface.input.default")}
             className="h-7 text-xs"
-            placeholder={input.required ? "Required: no default" : "Default (optional)"}
+            placeholder={
+              input.required
+                ? t("workflows:interface.input.requiredNoDefault")
+                : t("workflows:interface.input.defaultPlaceholder")
+            }
             disabled={input.required}
             value={input.default ?? ""}
             onChange={(e) => {
@@ -195,7 +203,7 @@ export function WorkflowInterfaceEditor({
           <div className="flex gap-3">
             <Check
               id={`input-required-${index}`}
-              label="Required"
+              label={t("workflows:interface.input.required")}
               checked={Boolean(input.required)}
               onChange={(required) => {
                 setInput(index, {
@@ -206,7 +214,7 @@ export function WorkflowInterfaceEditor({
             />
             <Check
               id={`input-sensitive-${index}`}
-              label="Sensitive"
+              label={t("workflows:interface.input.sensitive")}
               checked={Boolean(input.sensitive)}
               onChange={(sensitive) => {
                 setInput(index, { sensitive: sensitive || undefined })
@@ -223,12 +231,14 @@ export function WorkflowInterfaceEditor({
           onInputs([...inputs, { key: nextKey("input", inputs), kind: "text" }])
         }}
       >
-        <Plus /> Add input
+        <Plus /> {t("workflows:interface.input.add")}
       </Button>
       <div className="grid gap-1">
-        <h3 className="text-xs font-medium text-muted-foreground uppercase">Outputs</h3>
+        <h3 className="text-xs font-medium text-muted-foreground uppercase">
+          {t("workflows:interface.outputs")}
+        </h3>
         <p className="text-xs text-muted-foreground">
-          Values this workflow returns to a Sub-workflow node; Output nodes set them.
+          {t("workflows:interface.outputsDescription")}
         </p>
       </div>
       {outputs.map((output, index) => (
@@ -236,18 +246,18 @@ export function WorkflowInterfaceEditor({
           key={index}
           className="grid grid-cols-[minmax(0,1fr)] gap-1.5 rounded-md border p-2"
           role="group"
-          aria-label={`Output ${output.key}`}
+          aria-label={t("workflows:interface.output.group", { key: output.key })}
         >
           <div className="flex items-center gap-1">
             <KeyField
-              label="Output key"
+              label={t("workflows:interface.output.key")}
               value={output.key}
               onChange={(key) => {
                 setOutput(index, { key })
               }}
             />
             <KindSelect
-              label="Output type"
+              label={t("workflows:interface.output.type")}
               value={output.kind}
               onChange={(kind) => {
                 setOutput(index, { kind })
@@ -257,7 +267,7 @@ export function WorkflowInterfaceEditor({
               variant="ghost"
               size="icon"
               className="size-7 shrink-0"
-              aria-label={`Remove output ${output.key}`}
+              aria-label={t("workflows:interface.output.remove", { key: output.key })}
               onClick={() => {
                 onOutputs(outputs.filter((_, i) => i !== index))
               }}
@@ -266,9 +276,9 @@ export function WorkflowInterfaceEditor({
             </Button>
           </div>
           <Input
-            aria-label="Output label"
+            aria-label={t("workflows:interface.output.label")}
             className="h-7 text-xs"
-            placeholder="Label"
+            placeholder={t("workflows:interface.labelPlaceholder")}
             value={output.label ?? ""}
             onChange={(e) => {
               setOutput(index, { label: e.target.value || undefined })
@@ -276,7 +286,7 @@ export function WorkflowInterfaceEditor({
           />
           <Check
             id={`output-sensitive-${index}`}
-            label="Sensitive: not kept in history"
+            label={t("workflows:interface.sensitiveNotKept")}
             checked={Boolean(output.sensitive)}
             onChange={(sensitive) => {
               setOutput(index, { sensitive: sensitive || undefined })
@@ -292,7 +302,7 @@ export function WorkflowInterfaceEditor({
           onOutputs([...outputs, { key: nextKey("output", outputs), kind: "text" }])
         }}
       >
-        <Plus /> Add output
+        <Plus /> {t("workflows:interface.output.add")}
       </Button>
     </section>
   )

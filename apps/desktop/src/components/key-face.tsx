@@ -3,6 +3,12 @@ import { ArrowLeft, Folder, ListOrdered } from "lucide-react"
 import { ActionIcon } from "@/components/action-icon"
 import type { KeyFace } from "@/lib/types"
 import { cn } from "@/lib/utils"
+// The folder's system Back icon: one core-owned file, the one the agent's
+// renderer draws (crates/deckpilot-render/assets/icons/folder-back.svg).
+import folderBackIcon from "../../../../crates/deckpilot-render/assets/icons/folder-back.svg?url"
+
+/** The `symbol` of the folder's system Back face. */
+export const FOLDER_BACK_SYMBOL = "folder-back"
 
 // Faces drawn until the device's own image of the key arrives: neutral LCD
 // tones from the device tokens, the key's icon first and its title under it.
@@ -32,8 +38,10 @@ export function FaceTile({
   className?: string
 }) {
   const style = face?.style ?? "empty"
-  const Glyph =
-    style === "folder"
+  const folderBack = face?.symbol === FOLDER_BACK_SYMBOL
+  const Glyph = folderBack
+    ? null
+    : style === "folder"
       ? Folder
       : style === "back"
         ? ArrowLeft
@@ -59,6 +67,8 @@ export function FaceTile({
       className={cn(
         "flex size-full min-w-0 flex-col items-center justify-center gap-[calc(var(--key,4rem)*0.06)] overflow-hidden p-[calc(var(--key,4rem)*0.07)] text-center",
         STYLE[style],
+        // As the device draws it: white on black.
+        folderBack && "bg-black text-white",
         face?.highlighted && "ring-2 ring-sky-400 ring-inset",
         unavailable && "opacity-50",
         className,
@@ -66,12 +76,26 @@ export function FaceTile({
     >
       {style !== "empty" &&
         !compact &&
-        (Glyph ? (
+        (folderBack ? (
+          // The file itself, drawn white through a mask (not redrawn here).
+          <span
+            aria-hidden
+            data-slot="folder-back-icon"
+            className={cn(glyph, "bg-white")}
+            style={{
+              maskImage: `url("${folderBackIcon}")`,
+              WebkitMaskImage: `url("${folderBackIcon}")`,
+              maskRepeat: "no-repeat",
+              maskPosition: "center",
+              maskSize: "contain",
+            }}
+          />
+        ) : Glyph ? (
           <Glyph className={glyph} aria-hidden />
         ) : style === "action" ? (
           <ActionIcon name={icon} className={glyph} />
         ) : null)}
-      {face?.title && (
+      {face?.title && !folderBack && (
         <span
           className={cn(
             "max-w-full text-[length:max(9px,calc(var(--key,4rem)*0.13))] leading-[1.2] font-medium [overflow-wrap:anywhere]",

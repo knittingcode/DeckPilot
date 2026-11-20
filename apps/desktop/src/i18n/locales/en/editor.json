@@ -1,0 +1,947 @@
+{
+  "text": {
+    "mode": {
+      "label": "Text mode",
+      "wrap": "Wrap",
+      "singleLine": "Single line",
+      "autoFit": "Auto fit",
+      "marquee": "Marquee"
+    },
+    "mixed": "Mixed",
+    "auto": "Auto",
+    "align": {
+      "label": "Text alignment",
+      "left": "Left",
+      "center": "Center",
+      "right": "Right"
+    },
+    "maxLines": {
+      "label": "Maximum lines"
+    },
+    "overflow": {
+      "label": "When too long",
+      "ellipsis": "Ellipsis",
+      "clip": "Clip"
+    },
+    "minSize": {
+      "label": "Minimum size (pt)",
+      "tooLarge": "The minimum is larger than the preferred size; the preferred size is used."
+    },
+    "fit": {
+      "label": "Fit on",
+      "singleLine": "One line",
+      "multiline": "Several lines"
+    },
+    "speed": {
+      "custom": "Speed (px/s)"
+    },
+    "pause": {
+      "label": "Pause at start and end (ms)"
+    },
+    "notice": {
+      "doesNotFit": "Doesn't fit at the minimum size: the device shows it at {{size}} pt, cut with “…”. Shorten the title, lower the minimum size or fit on several lines.",
+      "scrollsReduced": "Scrolls on the device. Shown still here because your system reduces motion.",
+      "scrolls": "Scrolls on the device, as shown here.",
+      "truncatedLines": "Too long for its lines: the last line ends with “…” on the device.",
+      "truncatedLine": "Too long for one line: cut on the device.",
+      "shrunk": "Shown at {{size}} pt to fit."
+    },
+    "wholeNumber": "Enter a whole number from {{min}} to {{max}}."
+  },
+  "appearance": {
+    "appliesTo_one": "Applies to {{count}} key",
+    "appliesTo_other": "Applies to {{count}} keys",
+    "background": "Background",
+    "textColor": "Text colour",
+    "contrast": {
+      "good": "Contrast {{ratio}}:1",
+      "low": "Contrast {{ratio}}:1 — readable only with large text",
+      "poor": "Contrast {{ratio}}:1 — hard to read"
+    }
+  },
+  "color": {
+    "swatches": "{{label}} swatches",
+    "picker": "{{label}} picker",
+    "hex": "{{label}} hex",
+    "swatchTitle": "{{name}} {{value}}",
+    "mixed": "Mixed",
+    "default": "Default",
+    "transparent": "Transparent",
+    "transparentTitle": "Transparent: the device's display shows through",
+    "defaultIs": "Default: {{value}}",
+    "invalid": "Enter a colour as #rrggbb.",
+    "black": "Black",
+    "graphite": "Graphite",
+    "white": "White",
+    "red": "Red",
+    "orange": "Orange",
+    "amber": "Amber",
+    "green": "Green",
+    "teal": "Teal",
+    "blue": "Blue",
+    "indigo": "Indigo",
+    "purple": "Purple",
+    "pink": "Pink",
+    "swatchButton": "{{label}}: {{value}}"
+  },
+  "icons": {
+    "file": "Icon file",
+    "import": "Import icon",
+    "limits": "{{used}} of {{max}} · PNG or JPEG, up to 2 MiB",
+    "list": "Icons",
+    "none": "No icon",
+    "entry_one": "{{name}}, used by {{count}} key",
+    "entry_other": "{{name}}, used by {{count}} keys",
+    "delete": "Delete {{name}}",
+    "deleteTitle": "Delete",
+    "inUse_one": "Used by {{count}} key; cannot be deleted",
+    "inUse_other": "Used by {{count}} keys; cannot be deleted",
+    "empty": "No icons in this profile yet. Imported images are scaled to at most 256 pixels and stored in the profile.",
+    "fitLabel": "Icon fit",
+    "fit": "Fit",
+    "fitHint": "Whole icon, aspect kept",
+    "fill": "Fill",
+    "fillHint": "Stretched to the key",
+    "crop": "Crop",
+    "cropHint": "Covers the key, edges cut off",
+    "withFit": "{{name}} with {{fit}}",
+    "defaultName": "Icon",
+    "tooMany": "A profile holds at most {{max}} icons. Delete unused icons first.",
+    "wrongType": "Choose a PNG or JPEG image.",
+    "emptyFile": "The file is empty.",
+    "tooLarge": "The image is larger than 2 MiB.",
+    "tooManyPixels": "The image is larger than {{max}} × {{max}} pixels.",
+    "unreadable": "The file could not be read.",
+    "loadFailed": "The icons could not be loaded: {{detail}}",
+    "importFailed": "“{{name}}” was not imported: {{detail}}",
+    "deleteFailed": "“{{name}}” was not deleted: {{detail}}",
+    "imported": "Imported “{{name}}”",
+    "deleted": "Deleted “{{name}}”",
+    "pickerDefault": "Default icon",
+    "pickerUseDefault": "Use the default icon"
+  },
+  "library": {
+    "title": "Library",
+    "dock": "Action Library",
+    "hint": "Drag onto a control, or select a control and choose in the inspector.",
+    "search": "Search the library",
+    "compatibleOnly": "Compatible only",
+    "showingFits": "Showing what fits {{control}}.",
+    "selectControl": "Select a control to see what fits it.",
+    "empty": "No actions or workflows yet. Create them in the Action Library.",
+    "noMatches": "Nothing matches.",
+    "navigation": "Navigation",
+    "newSequence": "New: Sequence",
+    "newCategory": "New: {{category}}",
+    "drag": "Drag {{name}} onto a control",
+    "unavailable": "{{name}}: unavailable, {{reason}}",
+    "incompatible": "{{name}}: not for the selected control. {{reason}}",
+    "typeTitle": "{{description}} ({{module}})",
+    "newFolder": "New folder",
+    "newFolderDrag": "Drag New folder onto an empty control",
+    "newFolderTitle": "Drop on an empty key to create a folder there. Double-click the key to enter it.",
+    "multiAction": "Multi Action",
+    "multiActionDrag": "Drag Multi Action onto a control",
+    "multiActionTitle": "Runs several actions in order, with delays between them. Drop it on a key, then add its steps.",
+    "searchFolder": "new folder folders navigation",
+    "searchMulti": "new multi action sequence steps workflow"
+  },
+  "targets": {
+    "actions": "Actions",
+    "workflows": "Workflows",
+    "navigation": "Navigation",
+    "back": "Back",
+    "openPage": "Open {{page}}",
+    "workSession": "Work Session",
+    "workSessionController": "Work Session controller"
+  },
+  "drag": {
+    "action": "Action",
+    "missingAction": "Missing action",
+    "workflow": "Workflow",
+    "openPage": "Open {{page}}",
+    "page": "page"
+  },
+  "layoutSwitch": {
+    "defaultName": "Switch layout",
+    "changeFailed": "The destination was not changed",
+    "title": "Switch layout",
+    "shows": "Shows: <name>{{name}}</name>",
+    "notInProfile": "a layout not in this profile",
+    "nothingChosen": "nothing chosen yet",
+    "layout": "Layout",
+    "onlyLayouts": "Only layouts for {{model}} assigned to this profile.",
+    "page": "Page",
+    "homePage": "Home page",
+    "missingPage": "Missing page (home page)",
+    "back": "Back",
+    "shared": "Other keys run “{{action}}” too: a change here gives this key an action of its own.",
+    "choose": "Choose a layout",
+    "search": "Search layouts",
+    "noMatches": "No layout matches.",
+    "default": "default",
+    "previousTitle": "Back to previous layout",
+    "previousHint": "Returns this device to the layout it showed before, in this profile. Does nothing when there is none. A folder's Back key returns to a page instead.",
+    "nowBack": "Now: back to {{layout}}.",
+    "previousLayout": "the previous layout",
+    "nowNone": "Now: this device has no previous layout, so the key does nothing."
+  },
+  "liveStates": {
+    "live": "Live values from the agent",
+    "inactiveProfile": "Live values show while this profile is active",
+    "stoppedStale": "The agent is not running: live values are not current",
+    "stopped": "The agent is not running: no live values",
+    "disconnected": "Lost the agent: live values are not current",
+    "unsupported": "Restart the agent to see live values here"
+  },
+  "gesture": {
+    "names": {
+      "click": "Single press",
+      "doubleClick": "Double click",
+      "longPress": "Long press"
+    },
+    "timing": {
+      "doubleClickMs": "Double-click window",
+      "longPressMs": "Long-press time",
+      "wholeNumber": "{{label}} must be a whole number of milliseconds.",
+      "range": "{{label}} must be between {{min}} and {{max}} ms.",
+      "label": "{{label}} (ms)",
+      "placeholder": "Default ({{ms}})",
+      "useDefaultLabel": "Use the default {{label}}",
+      "useDefault": "Use default",
+      "usingDefault": "{{min}}–{{max}} ms. Using this computer's default ({{ms}} ms).",
+      "default": "{{min}}–{{max}} ms. Default: this computer's default ({{ms}} ms)."
+    },
+    "unavailable": "Unavailable: {{reason}}. It stays assigned and runs again once the plugin can.",
+    "clickNote": {
+      "immediate": "A single click fires as soon as the key is pressed.",
+      "onRelease": "A single click fires when the key is released before the long-press time, so a hold can be told apart.",
+      "afterWindow": "A single click fires after the double-click window ({{ms}} ms) has passed without a second press."
+    },
+    "refused": "Not put on the {{gesture}} of {{control}}",
+    "heading": "Gestures",
+    "rawNote": "This key acts as soon as it is pressed. Adding a double click or long press switches it to gestures.",
+    "release": "Release",
+    "help": "Help: {{gesture}}",
+    "releaseHint": "Runs without delay when the key is released. Keys with a double click or long press can't use it.",
+    "nothing": "Nothing",
+    "optionUnavailable": "(unavailable)",
+    "optionNotHere": "(not on this control)",
+    "remove": "Remove {{gesture}}",
+    "removeTitle": "Remove what {{gesture}} does",
+    "empty": {
+      "drop": "Drag an action here",
+      "choose": "Choose an action",
+      "assign": "Assign an action to: {{gesture}}",
+      "description": "Drop an action, a workflow or a page on this card, or press Enter to choose one.",
+      "chooseDescription": "Press Enter to choose an action, a workflow or a page."
+    },
+    "carousel": {
+      "role": "carousel",
+      "previous": "Previous gesture",
+      "next": "Next gesture"
+    },
+    "labelFor": "Label for {{gesture}}",
+    "labelPlaceholder": "Label (optional)",
+    "editSteps": "Edit steps ({{count}})",
+    "overrides": {
+      "hide": "Hide parameters",
+      "some_one": "Parameters for this gesture ({{count}} overridden)",
+      "some_other": "Parameters for this gesture ({{count}} overridden)",
+      "none": "Override parameters for this gesture",
+      "hint": "Overrides apply to this {{gesture}} only; “{{action}}” itself stays unchanged.",
+      "override": "Override “{{label}}”"
+    },
+    "convert": {
+      "title": "Switch {{control}} to gestures?",
+      "click": "{{control}} acts as soon as it is pressed. A Work Session controller needs gestures, so its single click becomes a gesture. With no double click or long press it still fires on the press.",
+      "doubleClick": "{{control}} acts as soon as it is pressed. To add a {{gesture}}, its single click becomes a gesture: it then fires after the double-click window ({{ms}} ms) has passed without a second press, so it reacts a little later than now.",
+      "longPress": "{{control}} acts as soon as it is pressed. To add a {{gesture}}, its single click becomes a gesture: it then fires when the key is released before the long-press time ({{ms}} ms), so it reacts a little later than now.",
+      "release": "Its release binding (“{{target}}”) is removed: a key with gestures cannot also react to its release.",
+      "untilSaved": "Nothing changes on the device until you save the layout.",
+      "confirm": "Switch to gestures"
+    }
+  },
+  "shell": {
+    "switchPreset": {
+      "label": "Switch to {{layout}}",
+      "description": "Shows {{layout}} on this device; Back to previous layout returns here."
+    },
+    "drop": {
+      "refused": "{{item}} cannot go on {{control}}. {{reason}}",
+      "refusedAction": "The action cannot go on {{control}}. {{reason}}",
+      "refusedThis": "This cannot go on {{control}}. {{reason}}",
+      "notPut": "{{item}} was not put on {{control}}",
+      "notPutAction": "The action was not put on {{control}}",
+      "notPutThis": "This was not put on {{control}}",
+      "notPlaced": "Not placed. {{reason}}"
+    },
+    "addFailed": "“{{name}}” could not be added",
+    "multiActionFailed": "The Multi Action could not be created",
+    "gestureDrop": {
+      "title": "A gesture takes an action, a workflow or another page",
+      "description": "Drag one from the library onto the gesture."
+    },
+    "noPreviousLayout": "No previous layout",
+    "saved": {
+      "sent": "Layout saved and sent to the agent",
+      "saved": "Layout saved",
+      "keptNotRun_one": "{{count}} binding is kept but not run",
+      "keptNotRun_other": "{{count}} bindings are kept but not run",
+      "keptNotRunDetail": "Their action cannot run from their control: {{list}}"
+    },
+    "noControls": "{{model}} has no configurable controls",
+    "folderEmpty": "This folder is empty",
+    "pageEmpty": "This page is empty",
+    "emptyHint": "Drag an action, a workflow or “New folder” from the library onto a control, or select a control and choose in the inspector.",
+    "noBackKey": "This folder has no “Back” binding. On the device, DeckPilot adds one on its first free key. To choose the key, drag “Back” from the library onto a control.",
+    "multiAction": {
+      "title": "Multi Action",
+      "description": "The steps run in order in the agent when the key is pressed. A delay waits between two steps; a running Multi Action can be cancelled from the status bar."
+    }
+  },
+  "bar": {
+    "label": "Layout editing",
+    "unsaved": "Unsaved",
+    "allSaved": "All changes saved",
+    "undo": "Undo",
+    "redo": "Redo",
+    "revert": "Revert",
+    "save": "Save"
+  },
+  "live": {
+    "live": "Live on the device",
+    "suspended": "Device shows another layout",
+    "connecting": "Connecting to the device…",
+    "disconnected": "Device shows the saved layout (agent not connected)",
+    "unsupported": "Changes reach the device when saved (update the agent for live preview)",
+    "otherProfile": "Changes reach the device when saved (it runs another profile)",
+    "refused": "Live preview paused"
+  },
+  "inspector": {
+    "label": "Inspector",
+    "multiHint": "{{controls}}. Copy, cut, paste, duplicate or clear them together, or drop a library entry onto one of them.",
+    "clearMany_one": "Clear {{count}} control",
+    "clearMany_other": "Clear {{count}} controls",
+    "unavailable": "Unavailable: {{reason}}. It stays assigned and runs again once the plugin can.",
+    "nothing": "Nothing",
+    "optionUnavailable": "{{option}} (unavailable)",
+    "optionNotHere": "{{option}} (not on this control)",
+    "labelFor": "Label for {{trigger}}",
+    "labelPlaceholder": "Label (optional)",
+    "clearControl": "Clear control",
+    "region": "{{control}} settings",
+    "regionMany_one": "Settings of {{count}} control",
+    "regionMany_other": "Settings of {{count}} controls",
+    "deselect": {
+      "key": "Deselect key",
+      "encoder": "Deselect dial",
+      "touchZone": "Deselect touch zone",
+      "many": "Deselect controls"
+    }
+  },
+  "pageNav": {
+    "untitled": "Untitled",
+    "label": "Page navigation",
+    "previous": "Previous page",
+    "previousTo": "Previous page: {{page}}",
+    "first": "This is the first page",
+    "positionTitle": "{{page}}, page {{number}} of {{count}}. Go to another page",
+    "position": "Page {{number}} of {{count}}",
+    "next": "Next page",
+    "nextTo": "Next page: {{page}}",
+    "last": "This is the last page",
+    "add": "Add page",
+    "addTitle": "Add a page after the last one and show it",
+    "location": "Page location",
+    "newPageName": "Page {{number}}",
+    "positionNamed": "Page {{number}} of {{count}}: {{page}}"
+  },
+  "pageSettings": {
+    "name": "Page name",
+    "delete": "Delete page",
+    "autoReturn": "Close after a key runs",
+    "sheetTitle": "Pages"
+  },
+  "deletePage": {
+    "title": "Delete “{{page}}”?",
+    "undoable": "You can undo this until the layout is saved.",
+    "controls_one": "{{count}} control on it is deleted with it.",
+    "controls_other": "{{count}} controls on it are deleted with it.",
+    "openers_one": "{{count}} control on other pages that opens it will do nothing afterwards.",
+    "openers_other": "{{count}} controls on other pages that open it will do nothing afterwards.",
+    "quoted": "“{{name}}”",
+    "insideToFolder_one": "The page inside it ({{names}}) is kept and moves to “{{folder}}”.",
+    "insideToFolder_other": "The pages inside it ({{names}}) are kept and move to “{{folder}}”.",
+    "insideToTop_one": "The page inside it ({{names}}) is kept and moves to the top level.",
+    "insideToTop_other": "The pages inside it ({{names}}) are kept and move to the top level.",
+    "empty": "The page is empty and nothing opens it."
+  },
+  "pageTree": {
+    "label": "Page tree",
+    "unreadable": "The page tree could not be read: {{problem}}",
+    "saveFirst": "Save or revert your changes to reorder, move or copy pages.",
+    "automaticBack": "automatic Back",
+    "notMovedUp": "“{{page}}” was not moved up",
+    "notMovedDown": "“{{page}}” was not moved down",
+    "moved": {
+      "page": "“{{page}}” moved to “{{target}}”",
+      "top": "“{{page}}” moved to the top level"
+    },
+    "copyFailed": "“{{page}}” was not copied: {{reason}}"
+  },
+  "canvas": {
+    "controls": "{{model}} controls",
+    "summaryEntry": "{{trigger}}: {{label}}",
+    "viewport": "Device canvas",
+    "roleDescription": "canvas",
+    "viewportHint": "Drag the background, or hold Space and drag, to move the device; scroll to move it too. Ctrl or Cmd and scroll, or pinch, to zoom. With the canvas focused: plus and minus zoom, 0 shows the actual size, 1 fits the device, arrow keys move it.",
+    "toolbar": "Zoom",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "fit": "Fit to screen",
+    "actualSize": "Actual size (100%)",
+    "zoomLevel": "Zoom {{percent}}%",
+    "zoomMenu": "Zoom options",
+    "percent": "{{percent}}%"
+  },
+  "controlMenu": {
+    "controls_one": "{{count}} control",
+    "controls_other": "{{count}} controls",
+    "label": "{{subject}} actions",
+    "assign": "Assign",
+    "openFolder": "Open “{{folder}}”",
+    "folderTaken": "Clear the control first: it already does something",
+    "newFolder": "New folder",
+    "copy": "Copy",
+    "cut": "Cut",
+    "paste": "Paste",
+    "duplicate": "Duplicate",
+    "clear": "Clear",
+    "deleteKey": "Del"
+  },
+  "designer": {
+    "noModels": "No device models available",
+    "noLayout": "No layout for {{model}} in this profile",
+    "noLayoutHint": "Create one with “{{newLayout}}” in the toolbar's layout menu, or use one from the {{layouts}} page. Layouts can be designed without the device."
+  },
+  "chooser": {
+    "shared": "Shared: edits apply to every profile using this layout ({{profiles}}).",
+    "deviceShows": "The device shows {{layout}}.",
+    "open": "Open {{layout}}"
+  },
+  "editing": {
+    "discard": {
+      "title": "Discard unsaved changes?",
+      "description": "The layout open in the editor has changes that are not saved. They are lost if you continue.",
+      "confirm": "Discard changes"
+    },
+    "folderName": "Folder",
+    "folderNameNumbered": "Folder {{number}}",
+    "copied_one": "Copied {{count}} control",
+    "copied_other": "Copied {{count}} controls",
+    "notPasted_one": "{{count}} binding could not be pasted here",
+    "notPasted_other": "{{count}} bindings could not be pasted here",
+    "notPastedDetail": "The control does not support that event, or the target page is missing.",
+    "noFreeControl": "No free control to duplicate onto",
+    "folderTaken": "{{control}} already does something",
+    "folderTakenDetail": "Create the folder on an empty control, or clear this one first.",
+    "dropRefused": "{{control}} cannot take these bindings"
+  },
+  "variables": {
+    "references": "References",
+    "unclosed": "A reference is not closed: add “{{braces}}” after it.",
+    "literalBraces": "“{{braces}}” in plain text stays as typed. Insert a variable to use a reference.",
+    "notLive": "<reference>{{reference}}</reference> cannot be resolved by this DeckPilot agent; update the agent or use a fixed value.",
+    "resolving": "resolving…",
+    "isNow": "<reference>{{reference}}</reference> is now <value>{{value}}</value>",
+    "valuesFor": "Values for {{scope}}",
+    "unavailable": "Values are not available: {{reason}}",
+    "list": "Variables",
+    "sensitiveMark": "sensitive",
+    "noneFits": "No variable fits this field.",
+    "noMatches": "No variables match.",
+    "loading": "Loading variables…",
+    "chooseToSee": "Choose a variable to see its value.",
+    "preview": {
+      "notLive": "Not available from this agent",
+      "failed": "Could not be resolved: {{reason}}",
+      "unknown": "Unknown",
+      "redacted": "Redacted (sensitive)"
+    },
+    "details": {
+      "label": "Variable details",
+      "value": "Value",
+      "currentValue": "Current value",
+      "source": "Source",
+      "type": "Type",
+      "scope": "Scope",
+      "owner": "Owner",
+      "access": "Access",
+      "editable": "Editable",
+      "readOnly": "Read-only",
+      "deprecated": "Deprecated",
+      "stillWorks": "Still works; use <reference>{{reference}}</reference>",
+      "changes": "Changes",
+      "dynamic": "Dynamic: depends on the context",
+      "static": "Static",
+      "availability": "Availability",
+      "sensitive": "Sensitive",
+      "neverShown": "Never shown, logged or exported",
+      "context": "Resolution context",
+      "resolvedFor": "Resolved for: {{scope}}"
+    },
+    "insertInto": "Insert a variable into {{field}}",
+    "insert": "Insert a variable",
+    "forField": "Variables for {{field}}",
+    "search": "Search variables",
+    "searchPlaceholder": "Search by name, description, scope, type or module",
+    "previewContext": "Preview context",
+    "reference": "Reference",
+    "chooseAnother": "Choose another variable for {{field}}",
+    "useFixed": "Use a fixed value"
+  },
+  "controlName": {
+    "key": "Key {{number}}",
+    "encoder": "Dial {{number}}",
+    "touchZone": "Touch zone {{number}}"
+  },
+  "triggerName": {
+    "click": "Click",
+    "doubleClick": "Double click",
+    "longPress": "Long press",
+    "press": "Press",
+    "release": "Release",
+    "rotateClockwise": "Turn right",
+    "rotateCounterClockwise": "Turn left",
+    "touchTap": "Tap",
+    "touchLongPress": "Long press",
+    "touchSwipe": "Swipe"
+  },
+  "targetName": {
+    "missingWorkflow": "Missing workflow",
+    "openPage": "Open “{{page}}”",
+    "missingPage": "missing page"
+  },
+  "layoutHistory": {
+    "push": {
+      "label": "Back returns here",
+      "detail": "Back to previous layout returns to the layout this key left."
+    },
+    "replace": {
+      "label": "Back skips this layout",
+      "detail": "Back to previous layout returns to where the device was before this layout."
+    },
+    "clear": {
+      "label": "Clear the way back",
+      "detail": "Back to previous layout has nowhere to go afterwards."
+    }
+  },
+  "compatibility": {
+    "kindRequired": {
+      "key": "a key",
+      "encoder": "a dial",
+      "touchZone": "a touch zone"
+    },
+    "kindOn": {
+      "key": "a key",
+      "encoder": "a dial",
+      "touchZone": "a touch zone"
+    },
+    "selected": {
+      "key": "The selected {{model}} key",
+      "encoder": "The selected {{model}} dial",
+      "touchZone": "The selected {{model}} touch zone"
+    },
+    "input": {
+      "press": "press",
+      "release": "release",
+      "rotateClockwise": "turn right",
+      "rotateCounterClockwise": "turn left",
+      "tap": "tap",
+      "longTouch": "long touch",
+      "swipe": "swipe",
+      "click": "click",
+      "doubleClick": "double click",
+      "longPress": "long press"
+    },
+    "inputRequired": {
+      "press": "a press",
+      "release": "a release",
+      "rotateClockwise": "a turn right",
+      "rotateCounterClockwise": "a turn left",
+      "tap": "a tap",
+      "longTouch": "a long touch",
+      "swipe": "a swipe",
+      "click": "a click",
+      "doubleClick": "a double click",
+      "longPress": "a long press"
+    },
+    "family": {
+      "press": "press",
+      "turn": "turn",
+      "tap": "tap",
+      "longTouch": "long touch",
+      "swipe": "swipe"
+    },
+    "summary": {
+      "none": "no actions",
+      "only": "{{family}} actions only",
+      "several": "{{families}} actions"
+    },
+    "listAnd": "{{items}} and {{last}}",
+    "listOr": "{{items}} or {{last}}",
+    "noControl": "Cannot be put on any control.",
+    "requiresKind": "Requires {{kinds}}.",
+    "requiresInput": "Requires {{inputs}} on {{on}}.",
+    "supports": "{{requires}} {{selected}} supports {{summary}}.",
+    "notReacting": "Does not react to {{input}} on {{on}}. On {{on}} it reacts to {{reacts}}.",
+    "noInput": "{{selected}} has no {{input}}.",
+    "noInputSupports": "{{selected}} has no {{input}}; it supports {{summary}}."
+  },
+  "variableText": {
+    "type": {
+      "string": "text",
+      "integer": "number",
+      "boolean": "yes/no",
+      "projectId": "project",
+      "profileId": "profile",
+      "resource": "resource",
+      "json": "JSON",
+      "secretRef": "credential name",
+      "resourceOfKind": "resource ({{kind}})"
+    },
+    "scope": {
+      "global": "global",
+      "profile": "profile",
+      "project": "project",
+      "execution": "run"
+    },
+    "group": {
+      "shared": "Shared",
+      "system": "System",
+      "profile": "Profile",
+      "project": "Project",
+      "module": "Modules",
+      "workflow": "Workflow",
+      "stepOutput": "Step outputs"
+    },
+    "system": {
+      "projectId": {
+        "label": "Project id",
+        "description": "Id of the project in the context"
+      },
+      "projectKey": {
+        "label": "Project key",
+        "description": "Key of the project in the context"
+      },
+      "projectName": {
+        "label": "Project name",
+        "description": "Name of the project in the context"
+      },
+      "profileId": {
+        "label": "Profile id",
+        "description": "Id of the profile in the context"
+      },
+      "profileName": {
+        "label": "Profile name",
+        "description": "Name of the profile in the context"
+      },
+      "device": {
+        "label": "Device",
+        "description": "The device whose control started the run"
+      },
+      "platform": {
+        "label": "Platform",
+        "description": "Operating system of this computer"
+      },
+      "workflowId": {
+        "label": "Workflow id",
+        "description": "Id of the running workflow"
+      },
+      "executionId": {
+        "label": "Run id",
+        "description": "Id of this run of the workflow"
+      }
+    },
+    "missing": {
+      "unknownVariable": "There is no such variable.",
+      "noValue": "No value is set and there is no default.",
+      "noProject": "No project is active.",
+      "noDevice": "No device is in the context.",
+      "noWorkflow": "No workflow is in the context.",
+      "noExecution": "No run is in the context.",
+      "noOutput": "The step has not produced it.",
+      "otherProfile": "The value belongs to another profile."
+    },
+    "status": {
+      "resolved": "Resolved",
+      "redacted": "Redacted",
+      "redactedDetail": "The value is sensitive and never shown.",
+      "runtime": "Available when it runs",
+      "runtimeDetail": "The value exists only while the workflow runs.",
+      "missing": "Missing",
+      "typeMismatch": "Type mismatch",
+      "typeMismatchDetail": "The value is {{type}}, which does not fit this field.",
+      "permissionDenied": "Permission denied",
+      "permissionDeniedDetail": "This action may not read it.",
+      "unavailable": "Unavailable",
+      "unavailableDetail": "The {{module}} module is disabled or not installed. The reference is kept.",
+      "invalid": "Invalid reference"
+    },
+    "projectRole": "role {{role}} of the project",
+    "source": {
+      "global": "Global value",
+      "profile": "Profile value",
+      "project": "Project value",
+      "execution": "Value set by the run",
+      "default": "Default value",
+      "system": "From the context",
+      "stepOutput": "Output of step “{{node}}”"
+    },
+    "availability": {
+      "available": "Available in this context",
+      "runtimeOnly": "Only while the workflow runs",
+      "notInContext": "Not in this context",
+      "unavailable": "Its module is disabled or not installed"
+    },
+    "context": {
+      "profile": "Profile {{profile}}",
+      "activeProject": "active project {{project}}",
+      "theActiveProject": "the active project",
+      "runProject": "the project of run {{run}}",
+      "runProjectLater": "the project of the run (known when it runs)",
+      "chosenProject": "project {{project}} (chosen for this preview)",
+      "noProject": "no project",
+      "workflow": "workflow {{workflow}}",
+      "device": "device {{device}}"
+    }
+  },
+  "breadcrumbs": {
+    "label": "Breadcrumb",
+    "hidden": "Hidden levels: {{count}}",
+    "nowShowing": "Now showing {{path}}",
+    "renameHint": "Double-click to rename"
+  },
+  "preview": {
+    "test": "Test action",
+    "testHint": "Simulated on the device by the agent",
+    "single": "Single press",
+    "double": "Double press",
+    "long": "Long press",
+    "configure": "Configure action",
+    "goBack": "Go back",
+    "removeAssignment": "Remove assignment",
+    "remove": {
+      "title": "Remove the assignment of {{subject}}?",
+      "description": "Its actions, folders and gestures are removed from this page of the draft. You can undo this until the layout is saved."
+    },
+    "why": {
+      "noAction": "No action assigned",
+      "oneControl": "Select one control to test it",
+      "agentNotRunning": "The DeckPilot agent is not running",
+      "agentTooOld": "The agent is too old for simulation: update it",
+      "disconnected": "Device not connected",
+      "otherProfile": "The device runs another profile: activate this one first",
+      "otherLayout": "The device shows another layout: switch it first",
+      "otherPage": "The device shows another page: switch it first"
+    },
+    "ran": {
+      "single": "Simulated single press on {{control}}",
+      "double": "Simulated double press on {{control}}",
+      "long": "Simulated long press on {{control}}"
+    },
+    "ranDetail": "A simulation: the agent pressed the key on the device, not the editor.",
+    "refusedTitle": "{{control}} was not pressed",
+    "failedTitle": "Could not simulate a press on {{control}}",
+    "refused": {
+      "locked": "DeckPilot is locked. Unlock it and try again.",
+      "wrongProfile": "The device runs another profile. Activate this profile first.",
+      "wrongLayout": "The device shows another layout. Switch it to this layout first.",
+      "wrongPage": "The device shows another page. Switch it to this page first.",
+      "disconnected": "The device is not connected.",
+      "control": "This control cannot be pressed on the device.",
+      "unsupported": "The agent is too old for simulated presses. Update it.",
+      "agentNotRunning": "The DeckPilot agent is not running.",
+      "settings": "A setting on this computer does not allow it (for example running commands or plugin permissions).",
+      "failed": "The agent could not simulate the press."
+    },
+    "confirm": {
+      "title": "Simulate a press on {{control}}?",
+      "note": "These actions really run, as if the key were pressed on the device. Your settings and permissions still apply.",
+      "run": "Run simulation"
+    },
+    "unsaved": {
+      "title": "The layout has unsaved changes",
+      "description": "The device runs the saved layout, not the changes in the editor.",
+      "save": "Save first",
+      "saveDetail": "Save the changes, then test them on the device",
+      "saved": "Test the saved version",
+      "savedDetail": "Leave the changes unsaved and press the key as it is saved",
+      "continue": "Continue"
+    }
+  },
+  "navigator": {
+    "rename": "Rename",
+    "duplicate": "Duplicate",
+    "duplicated": "“{{page}}” duplicated",
+    "newPage": "New page inside",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "rowActions": "Actions for “{{page}}”",
+    "emptyName": "A page needs a name",
+    "renameHint": "Enter to save, Escape to cancel",
+    "renameFailed": "The name was not changed: {{reason}}",
+    "addInFolder": "Add a page in this folder and show it",
+    "movedUp": "“{{page}}” moved up",
+    "movedDown": "“{{page}}” moved down",
+    "reordered": "“{{page}}” moved to its new place",
+    "notMoved": "“{{page}}” was not moved",
+    "dragHint": "Drag to reorder this page or to move it into another page. Alt+Up and Alt+Down move it among its siblings."
+  },
+  "folderSettings": {
+    "title": "Folder settings",
+    "autoExit": "Auto Exit",
+    "exitAfter": "Exit after",
+    "seconds_one": "second",
+    "seconds_other": "seconds",
+    "invalid": {
+      "whole": "Enter a whole number of seconds.",
+      "range": "Enter between {{min}} and {{max}} seconds."
+    },
+    "moveBack": "Move Back to the first key",
+    "noFreeKey": "Every key of this page runs something. Free a key first, then move Back."
+  },
+  "systemBack": {
+    "canvasDescription": "System control: Back, returns to the parent folder",
+    "dropRefused": "This key is the folder's Back and stays reserved.",
+    "region": "Back – system control"
+  },
+  "folderControl": {
+    "dropRefused": "This key opens a folder and runs nothing else.",
+    "needsFreeKey": "A folder opens from a key of its own: drop it on a free key.",
+    "recovered": {
+      "title_one": "Recovered gestures ({{count}})",
+      "title_other": "Recovered gestures ({{count}})",
+      "move": "Move to a free key",
+      "discard": "Discard",
+      "discardTitle_one": "Discard {{count}} recovered gesture?",
+      "discardTitle_other": "Discard {{count}} recovered gestures?",
+      "discardDescription": "They were kept from {{control}} when it became a folder key and never run. Discarding them cannot be undone after saving.",
+      "noFreeKey": "Every key of this page runs something. Free a key first, then move them."
+    },
+    "recoveredTitle": {
+      "title": "Earlier key title",
+      "text": "Before the folder name became this key's title, the key had its own title “{{label}}”.",
+      "use": "Use as folder name",
+      "discard": "Discard"
+    }
+  },
+  "iconMenu": {
+    "library": "Choose from icon library…",
+    "import": "Import icon from file…",
+    "paste": "Paste icon from clipboard",
+    "remove": "Remove icon",
+    "pastedName": "Pasted icon",
+    "pasteEmpty": "The clipboard has no image.",
+    "pasteFormat": "The clipboard image is not PNG or JPEG.",
+    "pasteDenied": "DeckPilot may not read the clipboard. Allow it, or import the image from a file.",
+    "pasteUnsupported": "Pasting images is not available here. Import the image from a file."
+  },
+  "keyHeader": {
+    "preview": "{{control}} preview: icon and background",
+    "previewTitle": "Icon and background",
+    "title": "Key title",
+    "noTitle": "No title",
+    "icons": "Icon and background",
+    "folderName": "Folder name"
+  },
+  "title": {
+    "open": "Title appearance",
+    "popover": "Title appearance",
+    "show": "Show title",
+    "reset": "Reset title appearance",
+    "font": "Font",
+    "size": "Size (px)",
+    "position": {
+      "label": "Title position",
+      "top": "Top",
+      "middle": "Middle",
+      "bottom": "Bottom"
+    },
+    "style": {
+      "label": "Text style",
+      "bold": "Bold",
+      "italic": "Italic",
+      "underline": "Underline"
+    }
+  },
+  "keyMenu": {
+    "icon": "Icon",
+    "background": "Background",
+    "chooseBackground": "Choose background…",
+    "customColour": "Choose custom colour…",
+    "resetBackground": "Reset to device default",
+    "backgroundLibrary": "Background library"
+  },
+  "assets": {
+    "sources": "Icon source",
+    "deckpilot": "DeckPilot",
+    "mine": "My Icons",
+    "plugins": "Plugins",
+    "search": "Search icons",
+    "category": "Category",
+    "allCategories": "All categories",
+    "categories": {
+      "media": "Media",
+      "video": "Video & camera",
+      "streaming": "Streaming",
+      "communication": "Communication",
+      "devices": "Devices",
+      "development": "Development",
+      "files": "Files & folders",
+      "editing": "Editing & text",
+      "navigation": "Navigation & arrows",
+      "system": "System",
+      "security": "Security",
+      "time": "Time & calendar",
+      "weather": "Weather & nature",
+      "people": "People",
+      "business": "Business & finance",
+      "home": "Home",
+      "travel": "Travel & places",
+      "shapes": "Shapes & symbols",
+      "gaming": "Gaming"
+    },
+    "deckpilotIcons": "DeckPilot icons",
+    "pluginIcons": "Plugin icons",
+    "pluginEntry": "{{name}} ({{plugin}})",
+    "pluginDisabledEntry": "{{name}} ({{plugin}}, disabled)",
+    "noPluginIcons": "No installed plugin adds icons.",
+    "noMatch": "No icon matches.",
+    "iconDisabled": "This key's icon belongs to a disabled plugin: the key shows no icon of its own until the plugin is enabled again.",
+    "iconMissing": "This key's icon is not available here (its plugin is not installed): the key shows no icon of its own until it is.",
+    "basic": "Basic",
+    "solid": "Solid colours",
+    "customColour": "Custom colour {{value}}",
+    "chooseCustom": "Custom colour…",
+    "gradientsTitle": "Gradients",
+    "gradients": {
+      "midnight": "Midnight",
+      "graphite": "Graphite",
+      "ocean": "Ocean",
+      "forest": "Forest",
+      "sunset": "Sunset",
+      "ember": "Ember",
+      "berry": "Berry",
+      "aurora": "Aurora",
+      "steel": "Steel",
+      "lime": "Lime"
+    },
+    "images": "Images",
+    "pluginBackgrounds": "Plugin backgrounds",
+    "noPluginBackgrounds": "No installed plugin adds backgrounds.",
+    "backgroundDisabled": "This key's background belongs to a disabled plugin: the key shows the device default until the plugin is enabled again.",
+    "backgroundMissing": "This key's background is not available here (its plugin is not installed): the key shows the device default until it is."
+  }
+}

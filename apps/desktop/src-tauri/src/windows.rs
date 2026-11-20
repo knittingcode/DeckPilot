@@ -363,6 +363,24 @@ const FALLBACK_WORK_AREA: Rect = Rect {
     height: 800.0,
 };
 
+/// The background of every window before its page has painted: the
+/// `--background` token of `index.css` and the inline style of `index.html`
+/// (#111111), so a window never flashes white while it loads.
+pub const WINDOW_BACKGROUND: tauri::window::Color = tauri::window::Color(0x11, 0x11, 0x11, 0xff);
+
+/// DeckPilot's permanently dark appearance for a native window: the dark
+/// system appearance (titlebar, traffic lights, native controls and
+/// scrollbars on macOS; the dark titlebar on Windows; the GTK dark variant
+/// on Linux) and the background shown before the page paints. Applied to
+/// the main window and to every window opened by identifier.
+pub fn appearance<R: Runtime, M: Manager<R>>(
+    builder: WebviewWindowBuilder<'_, R, M>,
+) -> WebviewWindowBuilder<'_, R, M> {
+    builder
+        .theme(Some(tauri::Theme::Dark))
+        .background_color(WINDOW_BACKGROUND)
+}
+
 /// Debug builds on Windows driven by `WebDriver` (`tauri-driver` sets
 /// `TAURI_WEBVIEW_AUTOMATION=true`): msedgedriver hands `WebView2` its
 /// debugging port and profile through `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`
@@ -409,7 +427,7 @@ pub fn open<R: Runtime>(app: &AppHandle<R>, spec: &WindowSpec) -> Result<(), Win
     let page = format!("index.html?window={}", spec.id);
     let url = crate::dev_server::fallback_url(app.config(), &page)
         .unwrap_or_else(|| WebviewUrl::App(page.into()));
-    let mut builder = for_webdriver(WebviewWindowBuilder::new(app, &label, url))
+    let mut builder = appearance(for_webdriver(WebviewWindowBuilder::new(app, &label, url)))
         .title(&spec.title)
         .inner_size(size.0, size.1)
         .position(x, y)
@@ -766,6 +784,26 @@ mod tests {
             // they were, never a page made of it.
             assert_eq!(settings_reference(Some(page)), "settings", "{page}");
         }
+    }
+
+    #[test]
+    fn windows_start_with_the_dark_background_of_the_page() {
+        // index.html paints the same colour before the stylesheet loads, and
+        // index.css uses it as --background.
+        let html = include_str!("../../index.html");
+        let css = include_str!("../../src/index.css");
+        let tauri::window::Color(r, g, b, a) = WINDOW_BACKGROUND;
+        let hex = format!("#{r:02x}{g:02x}{b:02x}");
+        assert_eq!(a, 0xff);
+        assert!(
+            html.contains(&format!("background-color: {hex}")),
+            "index.html paints {hex}"
+        );
+        assert!(html.contains(r#"class="dark""#), "index.html starts dark");
+        assert!(
+            css.contains(&format!("--background: {hex}")),
+            "index.css --background is {hex}"
+        );
     }
 
     #[test]

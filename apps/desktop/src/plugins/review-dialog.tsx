@@ -1,21 +1,14 @@
-import { Check, ShieldAlert } from "lucide-react"
+import { Check, Loader2, ShieldAlert, ShieldCheck } from "lucide-react"
 import { useState } from "react"
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { ModalShell } from "@/components/dialogs"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+import { useTranslation } from "@/i18n"
 
-import { pluginErrorText, type PluginErrorText } from "./api"
 import { PermissionList, PublisherLine } from "./components"
+import { pluginErrorSentence } from "./dialog-error"
 import type { Grant } from "./permissions"
 import type { PublisherInfo } from "./types"
 
@@ -46,7 +39,11 @@ export interface ReviewRequest {
   decline?: () => Promise<void>
 }
 
-const CONFIRM = { install: "Install", update: "Update", enable: "Enable" } as const
+const CONFIRM = {
+  install: "permissions:review.confirm.install",
+  update: "permissions:review.confirm.update",
+  enable: "permissions:review.confirm.enable",
+} as const
 
 /**
  * Asks for consent before an install, an update that asks for more, or
@@ -61,9 +58,10 @@ export function PermissionReviewDialog({
   request: ReviewRequest
   onClose: () => void
 }) {
+  const { t } = useTranslation()
   const [checked, setChecked] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<PluginErrorText | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const required = request.items.filter((i) => i.state !== "granted").map((i) => i.grant.key)
   const missing = required.filter((key) => !checked.has(key)).length
   const states = new Map(request.items.map((i) => [i.grant.key, i.state]))
@@ -81,7 +79,7 @@ export function PermissionReviewDialog({
     setBusy(true)
     setError(null)
     work.then(onClose, (e: unknown) => {
-      setError(pluginErrorText(e))
+      setError(pluginErrorSentence(e))
       setBusy(false)
     })
   }
@@ -90,140 +88,151 @@ export function PermissionReviewDialog({
     finish(request.confirm(required.filter((key) => checked.has(key))))
   }
 
+  const names = { name: request.name, version: request.version }
   const title =
     request.mode === "install"
-      ? `Install ${request.name} ${request.version}?`
+      ? t("permissions:review.title.install", names)
       : request.mode === "update"
-        ? `Update ${request.name} to ${request.version}?`
-        : `Enable ${request.name}?`
+        ? t("permissions:review.title.update", names)
+        : t("permissions:review.title.enable", names)
   const intro =
     request.mode === "install"
-      ? "Review what this plugin may do. Check each permission to consent to it; you can revoke permissions later in Installed."
+      ? t("permissions:review.intro.install")
       : request.mode === "update"
-        ? "This version asks for more than you granted. Check each new or broadened permission to consent, decline the update, or cancel to decide later."
-        : "A plugin runs only with every permission it declares. Check each one that is not granted yet."
+        ? t("permissions:review.intro.update")
+        : t("permissions:review.intro.enable")
+
+  const status = (
+    <span aria-live="polite">
+      {required.length === 0
+        ? request.mode === "enable"
+          ? t("permissions:review.status.allGranted")
+          : t("permissions:list.none")
+        : missing === 0
+          ? t("permissions:review.status.consented")
+          : t("permissions:review.status.missing", { missing, total: required.length })}
+    </span>
+  )
+  const primary = {
+    label: t(CONFIRM[request.mode]),
+    loadingLabel: t("common:status.working"),
+    loading: busy,
+    disabled: missing > 0,
+  }
 
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open && !busy) onClose()
+    <ModalShell
+      presentation="dialog"
+      size="medium"
+      icon={ShieldCheck}
+      title={title}
+      description={intro}
+      error={error}
+      status={status}
+      onClose={() => {
+        if (!busy) onClose()
       }}
+      onSubmit={submit}
+      primary={primary}
+      secondary={{ label: t("common:actions.cancel"), onClick: onClose, disabled: busy }}
+      // An update that asks for more can also be declined: a third action.
+      footer={
+        request.decline ? (
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => {
+                if (request.decline) finish(request.decline())
+              }}
+            >
+              {t("permissions:review.decline")}
+            </Button>
+            <Button type="button" variant="outline" disabled={busy} onClick={onClose}>
+              {t("common:actions.cancel")}
+            </Button>
+            <Button type="submit" disabled={busy || missing > 0} aria-busy={busy || undefined}>
+              {busy && <Loader2 className="animate-spin" aria-hidden />}
+              {busy ? primary.loadingLabel : primary.label}
+            </Button>
+          </>
+        ) : undefined
+      }
     >
-      <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{intro}</DialogDescription>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-mono text-xs">{request.pluginId}</span>
-            <PublisherLine publisher={request.publisher} info={request.publisherInfo} />
-          </div>
-        </DialogHeader>
-        <p className="flex items-start gap-2 text-xs text-muted-foreground">
-          <ShieldAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
-          <span>
-            The agent enforces these permissions on every call the plugin makes. The plugin runtime
-            is experimental; only install plugins you trust.
-          </span>
-        </p>
-        <PermissionList
-          label="Requested permissions"
-          grants={request.items.map((i) => i.grant)}
-          renderControl={(grant) => {
-            const state = states.get(grant.key)
-            const id = `consent-${grant.key}`
-            if (state === "granted") {
-              return (
-                <Badge variant="secondary">
-                  <Check aria-hidden /> Already granted
-                </Badge>
-              )
-            }
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono text-xs">{request.pluginId}</span>
+        <PublisherLine publisher={request.publisher} info={request.publisherInfo} />
+      </div>
+      <p className="flex items-start gap-2 text-xs text-muted-foreground">
+        <ShieldAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+        <span>{t("permissions:review.enforced")}</span>
+      </p>
+      {required.length > 1 && (
+        <div className="flex justify-end">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy || missing === 0}
+            onClick={() => {
+              setChecked(new Set([...checked, ...required]))
+            }}
+          >
+            {t("permissions:review.allowAll", { number: required.length })}
+          </Button>
+        </div>
+      )}
+      <PermissionList
+        label={t("permissions:review.requested")}
+        grants={request.items.map((i) => i.grant)}
+        renderControl={(grant) => {
+          const state = states.get(grant.key)
+          const id = `consent-${grant.key}`
+          if (state === "granted") {
             return (
-              <div className="flex shrink-0 items-center gap-2">
-                <Checkbox
-                  id={id}
-                  checked={checked.has(grant.key)}
-                  disabled={busy}
-                  aria-label={`Allow: ${grant.title}`}
-                  onCheckedChange={(value) => {
-                    toggle(grant.key, value === true)
-                  }}
-                />
-                <label htmlFor={id} className="text-xs">
-                  {state === "broadened"
-                    ? "Broadened: allow"
-                    : request.mode === "update"
-                      ? "New: allow"
-                      : "Allow"}
-                </label>
-              </div>
+              <Badge variant="secondary">
+                <Check aria-hidden /> {t("permissions:review.alreadyGranted")}
+              </Badge>
             )
-          }}
-        />
-        {request.removed && request.removed.length > 0 && (
-          <div className="grid gap-1 text-sm">
-            <h4 className="text-xs font-medium text-muted-foreground uppercase">
-              No longer requested
-            </h4>
-            <ul className="grid gap-0.5 font-mono text-xs" aria-label="No longer requested">
-              {request.removed.map((key) => (
-                <li key={key}>{key}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {error && (
-          <Alert variant="destructive">
-            <AlertTitle className="line-clamp-none">{error.title}</AlertTitle>
-            <AlertDescription className="grid gap-1">
-              <p>{error.message}</p>
-              {error.hint && <p>{error.hint}</p>}
-            </AlertDescription>
-          </Alert>
-        )}
-        <DialogFooter className="items-center gap-2 sm:justify-between">
-          <p className="text-xs text-muted-foreground" aria-live="polite">
-            {required.length === 0
-              ? request.mode === "enable"
-                ? "Every permission is granted."
-                : "This plugin asks for no permissions."
-              : missing === 0
-                ? "You consented to every permission."
-                : `${String(missing)} of ${String(required.length)} permissions still need your consent.`}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {required.length > 1 && (
-              <Button
-                variant="outline"
-                disabled={busy || missing === 0}
-                onClick={() => {
-                  setChecked(new Set([...checked, ...required]))
-                }}
-              >
-                Allow all {required.length}
-              </Button>
-            )}
-            {request.decline && (
-              <Button
-                variant="outline"
+          }
+          return (
+            <div className="flex shrink-0 items-center gap-2">
+              <Checkbox
+                id={id}
+                checked={checked.has(grant.key)}
                 disabled={busy}
-                onClick={() => {
-                  if (request.decline) finish(request.decline())
+                aria-label={t("permissions:review.allowNamed", { title: grant.title })}
+                onCheckedChange={(value) => {
+                  toggle(grant.key, value === true)
                 }}
-              >
-                Decline update
-              </Button>
-            )}
-            <Button variant="ghost" disabled={busy} onClick={onClose}>
-              Cancel
-            </Button>
-            <Button disabled={busy || missing > 0} onClick={submit}>
-              {busy ? "Working…" : CONFIRM[request.mode]}
-            </Button>
-          </div>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+              />
+              <label htmlFor={id} className="text-xs">
+                {state === "broadened"
+                  ? t("permissions:review.allowBroadened")
+                  : request.mode === "update"
+                    ? t("permissions:review.allowNew")
+                    : t("permissions:review.allow")}
+              </label>
+            </div>
+          )
+        }}
+      />
+      {request.removed && request.removed.length > 0 && (
+        <div className="grid gap-1 text-sm">
+          <h4 className="text-xs font-medium text-muted-foreground uppercase">
+            {t("permissions:review.removed")}
+          </h4>
+          <ul
+            className="grid gap-0.5 font-mono text-xs"
+            aria-label={t("permissions:review.removed")}
+          >
+            {request.removed.map((key) => (
+              <li key={key}>{key}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </ModalShell>
   )
 }

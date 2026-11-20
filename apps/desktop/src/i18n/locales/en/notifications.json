@@ -1,0 +1,63 @@
+{
+  "center": {
+    "title": "Notifications",
+    "unread_one": "Notifications, {{count}} unread",
+    "unread_other": "Notifications, {{count}} unread",
+    "empty": "No notifications"
+  },
+  "severity": {
+    "info": "Information",
+    "warning": "Warning",
+    "error": "Error"
+  },
+  "operations": {
+    "title": "Background activity",
+    "failed": "{{title}} failed",
+    "succeeded": "{{title}} finished",
+    "cancelled": "{{title}} cancelled",
+    "counted": "{{title}} ({{completed}}/{{total}})",
+    "summary": "Background activity: {{operation}}",
+    "summaryWithMore_one": "Background activity: {{operation}}, {{count}} more",
+    "summaryWithMore_other": "Background activity: {{operation}}, {{count}} more",
+    "startedAt": "Started {{time}}",
+    "finishedAt": "Finished {{time}}"
+  },
+  "agent": {
+    "stopped": {
+      "title": "The background agent stopped",
+      "message": "Devices are blank until it is started again."
+    },
+    "otherInstallation": "The agent belongs to another installation",
+    "versionsDiffer": "Agent and app versions differ",
+    "versions": "Agent {{agent}}, app {{app}}."
+  },
+  "device": {
+    "disconnected": "{{model}} disconnected",
+    "simulated": "Simulated device",
+    "serial": "Serial {{serial}}"
+  },
+  "update": {
+    "checking": "Checking for updates…",
+    "downloading": "Downloading update",
+    "downloadingVersion": "Downloading {{version}}",
+    "restart": "Restart to update to the new version",
+    "restartVersion": "Restart to update to {{version}}",
+    "installing": "Installing update…",
+    "failed": "Update failed",
+    "available": "Update {{version}}",
+    "availableTitle": "DeckPilot {{version}} is available",
+    "downloadingTitle": "Downloading DeckPilot {{version}}",
+    "downloadingUpdate": "Downloading DeckPilot update",
+    "downloadFailed": "Download failed",
+    "installingTitle": "Installing the update",
+    "installFailed": "Installation failed",
+    "openSettings": "Open update settings"
+  },
+  "security": {
+    "attention": "Security needs your attention",
+    "unencryptedCopy": {
+      "title": "An unencrypted copy of the configuration remains",
+      "message": "Remove it under Settings → Security."
+    }
+  }
+}

@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
+
+import { i18n } from "@/i18n"
 
 import { moduleMatches, moduleToggle } from "./modules"
 import { moduleInfo } from "./test-fixtures"
@@ -73,5 +75,37 @@ describe("module search", () => {
     expect(moduleMatches(projects, "all", "switch")).toBe(true)
     expect(moduleMatches(projects, "all", "PROJECTS module")).toBe(true)
     expect(moduleMatches(projects, "all", "brightness")).toBe(false)
+  })
+})
+
+describe("module toggles in Polish", () => {
+  afterEach(async () => {
+    await i18n.changeLanguage("en")
+  })
+
+  it("uses the plural forms and the language's list", async () => {
+    await i18n.changeLanguage("pl")
+    const base = moduleInfo({ id: "base" })
+    const dependent = (id: string) => moduleInfo({ id, dependencies: ["base"] })
+    const one = [base, dependent("git")]
+    expect(moduleToggle(base, one).reason).toBe("Wymagany przez moduł Git. Najpierw go wyłącz.")
+    const two = [base, dependent("git"), dependent("docker")]
+    expect(moduleToggle(base, two).reason).toBe(
+      "Wymagany przez moduły Git i Docker. Najpierw je wyłącz.",
+    )
+    const missing = moduleInfo({ id: "addon", enabled: false, dependencies: ["a", "b", "c"] })
+    expect(moduleToggle(missing, [missing]).reason).toBe(
+      "Wymaga modułów a, b i c, które nie są zainstalowane.",
+    )
+    const other = moduleInfo({ id: "other", enabled: false, supported: false })
+    expect(moduleToggle(other, [other]).reason).toBe("Niedostępny w tym systemie operacyjnym.")
+  })
+
+  it("names several modules with the English list", () => {
+    const base = moduleInfo({ id: "base" })
+    const dependents = ["git", "docker"].map((id) => moduleInfo({ id, dependencies: ["base"] }))
+    expect(moduleToggle(base, [base, ...dependents]).reason).toBe(
+      "Required by Git and Docker. Disable them first.",
+    )
   })
 })

@@ -29,13 +29,18 @@ async fn ask(state: &AppState, request: Request) -> CommandResult<Response> {
 
 fn agent_error(error: ClientError) -> CommandError {
     match error {
-        ClientError::NotRunning => {
-            CommandError::Invalid("start the DeckPilot agent to see the work session".into())
-        }
-        ClientError::Unsupported { agent, .. } => CommandError::Invalid(format!(
-            "work sessions are not supported by the running agent ({agent}); restart the \
-             agent to use the one of this version"
-        )),
+        ClientError::NotRunning => CommandError::invalid(
+            "workSessionAgentNotRunning",
+            "start the DeckPilot agent to see the work session",
+        ),
+        ClientError::Unsupported { agent, .. } => CommandError::invalid_with(
+            "workSessionAgentTooOld",
+            format!(
+                "work sessions are not supported by the running agent ({agent}); restart the \
+                 agent to use the one of this version"
+            ),
+            [("agent", agent.into())],
+        ),
         other => other.into(),
     }
 }

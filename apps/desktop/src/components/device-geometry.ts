@@ -1,14 +1,30 @@
-// The proportions of the device drawn by DeviceCanvas, in units of one key.
-// Everything (gaps, padding, the touch strip, the dials) scales with the
-// key size, so the preview keeps the hardware's look at every size.
+// The proportions of the controls drawn by DeviceCanvas, in units of one
+// key. Everything (gaps, the touch strip, the dials) scales with the key
+// size, so the preview keeps the hardware's proportions at every size. Only
+// the controls are drawn, directly on the editor's workspace: no imitation
+// of the device's enclosure.
 
 import { controlsOf } from "@/lib/layout-model"
 import type { DeviceModel } from "@/lib/types"
 
 /** Gap between two keys, in keys. */
 export const KEY_GAP = 0.2
-/** Padding of the device body around the controls, in keys. */
-export const BODY_PADDING = 0.35
+/**
+ * Room around the controls, in keys: just enough for the selection ring,
+ * the keyboard focus outline and the drop highlight not to be clipped at
+ * the edge of the preview (no enclosure padding).
+ */
+export const EDGE_ROOM = 0.08
+/**
+ * Border of every control, in keys (whole pixels, at least 2): the same in
+ * every state; selection and drop targets change only its colour.
+ */
+export const KEY_BORDER = 0.055
+
+/** The border of a control at a key size (CSS pixels), in whole pixels. */
+export function keyBorderPixels(keySize: number): number {
+  return Math.max(2, Math.round(keySize * KEY_BORDER))
+}
 /** Diameter of a dial, in keys. */
 export const DIAL_SIZE = 0.9
 
@@ -40,7 +56,7 @@ export function gridWidth(geometry: DeviceGeometry): number {
   return geometry.columns + (geometry.columns - 1) * KEY_GAP
 }
 
-/** Width and height of the whole device body, in keys. */
+/** Width and height of the controls with their edge room, in keys. */
 export function deviceSize(geometry: DeviceGeometry): { width: number; height: number } {
   const grid = gridWidth(geometry)
   const sections: number[] = []
@@ -56,8 +72,8 @@ export function deviceSize(geometry: DeviceGeometry): { width: number; height: n
   const height =
     sections.reduce((sum, h) => sum + h, 0) +
     Math.max(sections.length - 1, 0) * KEY_GAP * 1.5 +
-    BODY_PADDING * 2
-  return { width: grid + BODY_PADDING * 2, height }
+    EDGE_ROOM * 2
+  return { width: grid + EDGE_ROOM * 2, height }
 }
 
 /**

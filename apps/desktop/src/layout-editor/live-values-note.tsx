@@ -1,3 +1,4 @@
+import { useTranslation } from "@/i18n"
 import type { LivePreview } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -5,6 +6,8 @@ import { type LiveStatus, liveValuesText } from "./use-live-key-states"
 
 /** One quiet line under the page navigation about the live values. */
 export function LiveValuesNote({ status, live }: { status: LiveStatus; live: LivePreview | null }) {
+  // The text is in the window's language.
+  useTranslation()
   const text = liveValuesText(status, live)
   if (!text) return null
   const current = status === "live"

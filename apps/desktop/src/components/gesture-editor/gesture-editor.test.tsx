@@ -98,9 +98,12 @@ const layout: DeviceLayout = {
       gestures: [{ control: { kind: "key", index: 1 }, longPressMs: 1500 }],
     },
     {
+      // A top-level page: Key 2 opens it with a long press next to its
+      // other gestures, an ordinary page key. A key that opened a folder of
+      // its page would be a folder key, which takes no gestures
+      // (lib/folder-control.ts, layout-editor/folder-control.test.tsx).
       id: "tools",
       name: "Tools",
-      parent: "home",
       bindings: [
         {
           control: { kind: "key", index: 0 },
@@ -159,7 +162,11 @@ function renderEditor(saved: DeviceLayout = layout) {
 
 const key = (name: string) => screen.getByRole("button", { name })
 const describes = (name: string) => key(name).getAttribute("title")
-const row = (name: string) => screen.getByRole("combobox", { name })
+/** A gesture's chooser; an empty gesture's is named "Assign an action to: …". */
+const row = (name: string) =>
+  screen.getByRole("combobox", {
+    name: (accessible) => accessible === name || accessible === `Assign an action to: ${name}`,
+  })
 
 async function choose(user: ReturnType<typeof userEvent.setup>, gesture: string, option: string) {
   await user.click(row(gesture))
@@ -202,7 +209,7 @@ describe("gesture editor", () => {
     await choose(user, "Double click", "Deploy")
     expect(describes("Key 3")).toBe("Key 3: Double click: Deploy")
     await choose(user, "Long press", "Mail")
-    await choose(user, "Single click", "Shop")
+    await choose(user, "Single press", "Shop")
     expect(describes("Key 3")).toBe("Key 3: Double click: Deploy · Long press: Mail · Click: Shop")
     expect(screen.getByRole("note")).toHaveTextContent("after the double-click window (350 ms)")
     expect(screen.getByLabelText("Double-click window (ms)")).toHaveAttribute(
@@ -248,11 +255,11 @@ describe("gesture editor", () => {
     expect(screen.getByRole("note")).toHaveTextContent("when the key is released")
     await choose(user, "Long press", "Nothing")
     expect(screen.getByRole("note")).toHaveTextContent("as soon as the key is pressed")
-    await choose(user, "Single click", "Nothing")
+    await choose(user, "Single press", "Nothing")
     expect(describes("Key 3")).toBe("Key 3")
 
     // An empty key's single click alone is the immediate press (D2).
-    await choose(user, "Single click (immediate)", "Mail")
+    await choose(user, "Single press", "Mail")
     expect(describes("Key 3")).toBe("Key 3: Press: Mail")
     const saved = await save(user)
     expect(saved.pages[0]?.bindings.filter((b) => b.control.index === 2)).toEqual([
@@ -268,7 +275,7 @@ describe("gesture editor", () => {
   it("asks before turning a press into a click and changes nothing on cancel", async () => {
     const user = renderEditor()
     await user.click(key("Key 1"))
-    expect(row("Single click (immediate)")).toHaveTextContent("Shop")
+    expect(row("Single press")).toHaveTextContent("Shop")
 
     await choose(user, "Long press", "Mail")
     const dialog = await screen.findByRole("alertdialog", { name: "Switch Key 1 to gestures?" })
@@ -284,7 +291,7 @@ describe("gesture editor", () => {
     expect(confirm).toHaveTextContent("after the double-click window (350 ms)")
     await user.click(within(confirm).getByRole("button", { name: "Switch to gestures" }))
     expect(describes("Key 1")).toBe("Key 1: Click: Shop · Double click: Deploy")
-    expect(row("Single click")).toHaveTextContent("Shop")
+    expect(row("Single press")).toHaveTextContent("Shop")
 
     const saved = await save(user)
     const keyOne = saved.pages[0]?.bindings.filter((b) => b.control.index === 0)
@@ -310,12 +317,12 @@ describe("gesture editor", () => {
     await user.click(key("Key 3"))
 
     // Not on the raw release: a stateful key needs gestures.
-    await user.click(row("Release (immediate)"))
+    await user.click(row("Release"))
     expect(await screen.findByRole("option", { name: "Mail" })).toBeInTheDocument()
     expect(screen.queryByRole("option", { name: "Work Session controller" })).toBeNull()
     await user.keyboard("{Escape}")
 
-    await choose(user, "Single click (immediate)", "Work Session controller")
+    await choose(user, "Single press", "Work Session controller")
     expect(describes("Key 3")).toBe("Key 3: Click: Work Session")
     await choose(user, "Long press", "Work Session controller")
     expect(row("Long press")).toHaveTextContent("Work Session controller")
@@ -345,7 +352,7 @@ describe("gesture editor", () => {
     try {
       const user = renderEditor()
       await user.click(key("Key 3"))
-      await user.click(row("Single click (immediate)"))
+      await user.click(row("Single press"))
       expect(await screen.findByRole("option", { name: "Mail" })).toBeInTheDocument()
       expect(screen.queryByRole("option", { name: "Work Session controller" })).toBeNull()
       await user.keyboard("{Escape}")
@@ -357,7 +364,7 @@ describe("gesture editor", () => {
   it("asks before a pressed key becomes a Work Session controller", async () => {
     const user = renderEditor()
     await user.click(key("Key 1"))
-    await choose(user, "Single click (immediate)", "Work Session controller")
+    await choose(user, "Single press", "Work Session controller")
     const dialog = await screen.findByRole("alertdialog", { name: "Switch Key 1 to gestures?" })
     expect(dialog).toHaveTextContent("still fires on the press")
     await user.click(within(dialog).getByRole("button", { name: "Switch to gestures" }))
@@ -376,7 +383,7 @@ describe("gesture editor", () => {
   it("keeps raw release bindings and says the conversion removes them", async () => {
     const user = renderEditor()
     await user.click(key("Key 1"))
-    await choose(user, "Release (immediate)", "Mail")
+    await choose(user, "Release", "Mail")
     expect(describes("Key 1")).toBe("Key 1: Press: Shop · Release: Mail")
 
     await choose(user, "Long press", "Deploy")
@@ -385,7 +392,7 @@ describe("gesture editor", () => {
     await user.click(within(dialog).getByRole("button", { name: "Switch to gestures" }))
     expect(describes("Key 1")).toBe("Key 1: Click: Shop · Long press: Deploy")
     // A gesture key offers no raw release.
-    expect(screen.queryByRole("combobox", { name: "Release (immediate)" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("combobox", { name: "Release" })).not.toBeInTheDocument()
   })
 
   it("overrides parameters per gesture and saves a variable reference as a reference", async () => {
