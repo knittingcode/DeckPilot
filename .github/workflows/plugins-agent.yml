@@ -234,3 +234,14 @@ jobs:
           DECKPILOT_BUNDLED_PINS="$RUNNER_TEMP/bundle-a/bundled/pins.json" \
             cargo build --locked -p deckpilot-agent --features plugins --bin deckpilot-agent
           tools/release-pipeline/check-bundled-plugins.sh "$RUNNER_TEMP/bundle-a/bundled" "target/debug/deckpilot-agent$exe"
+      # The release set the dry run built (pins.json and every plugin's
+      # files), to compare byte for byte with a build on another machine
+      # when this platform's recorded pins (released-pins.json) differ.
+      - name: Upload the bundled plugins
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bundled-plugins-${{ matrix.os }}
+          path: ${{ runner.temp }}/bundle-release/bundled
+          if-no-files-found: ignore
+          retention-days: 14
