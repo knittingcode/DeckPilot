@@ -160,10 +160,17 @@ impl Key {
         self.signing.public().to_owned()
     }
 
-    /// The `.minisig` bytes for `package` as `id` `version`.
-    fn sign(&self, package: &[u8], version: &str) -> Vec<u8> {
+    fn key_id(&self) -> String {
+        publisher::key_id(&self.public()).unwrap()
+    }
+
+    /// The `<package>.<KEYID>.minisig` file for `package` as `id` `version`.
+    fn sign(&self, package: &[u8], version: &str) -> SignatureFile {
         let comment = publisher::release_comment(&id(), &v(version), &digest(package));
-        self.signing.sign(package, &comment).unwrap().into_bytes()
+        SignatureFile {
+            key_id: self.key_id(),
+            bytes: self.signing.sign(package, &comment).unwrap().into_bytes(),
+        }
     }
 }
 
@@ -255,7 +262,7 @@ impl Env {
 struct Release {
     package: Vec<u8>,
     expected: ExpectedPackage,
-    signature: Vec<u8>,
+    signature: SignatureFile,
 }
 
 impl Release {
@@ -407,7 +414,7 @@ fn tampered_packages_and_swapped_signatures_are_refused() {
     swapped.signature = genuine.signature.clone();
     assert!(matches!(
         refusal(official.verify(&swapped.delivery(None, &host))),
-        Refusal::Publisher(PublisherError::Signature(_))
+        Refusal::Publisher(PublisherError::BelowThreshold { valid: 0, .. })
     ));
 
     // The signature of another version, replayed.
@@ -416,7 +423,7 @@ fn tampered_packages_and_swapped_signatures_are_refused() {
     replayed.signature = other.signature.clone();
     assert!(matches!(
         refusal(official.verify(&replayed.delivery(None, &host))),
-        Refusal::Publisher(PublisherError::Signature(_))
+        Refusal::Publisher(PublisherError::BelowThreshold { valid: 0, .. })
     ));
 
     // A key this agent does not pin.
@@ -425,15 +432,15 @@ fn tampered_packages_and_swapped_signatures_are_refused() {
     foreign.signature = stranger.sign(&foreign.package, "0.1.1");
     assert!(matches!(
         refusal(official.verify(&foreign.delivery(None, &host))),
-        Refusal::Publisher(PublisherError::Signature(_))
+        Refusal::Publisher(PublisherError::BelowThreshold { valid: 0, .. })
     ));
 
     // Garbage instead of a signature.
     let mut garbage = Release::new(&env, "0.1.1", &notifications());
-    garbage.signature = b"not base64 !".to_vec();
+    garbage.signature.bytes = b"not base64 !".to_vec();
     assert!(matches!(
         refusal(official.verify(&garbage.delivery(None, &host))),
-        Refusal::Publisher(PublisherError::Signature(_))
+        Refusal::Publisher(PublisherError::BelowThreshold { valid: 0, .. })
     ));
 
     // The registry's permissions (the consent dialog) must be the
@@ -681,6 +688,197 @@ fn an_incompatible_release_is_refused() {
         refusal(official.verify(&unknown)),
         Refusal::Unavailable(_)
     ));
+}
+
+// ------------------------------------------------- threshold 2 (multisig)
+
+/// `release` delivered with exactly `signatures`.
+fn delivery_with<'a>(
+    release: &'a Release,
+    signatures: &'a [SignatureFile],
+    host: &'a HostEnvironment,
+) -> Delivery<'a> {
+    Delivery {
+        signatures,
+        ..release.delivery(None, host)
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // one flow, step by step
+fn threshold_two_needs_two_distinct_pinned_keys() {
+    let env = Env::new();
+    let second = Key::new(env.root.path(), "second.key");
+    let stranger = Key::new(env.root.path(), "stranger.key");
+    let official = env.official_with(keys(&[&env.key, &second], 2, &[]), Vec::new());
+    assert_eq!(
+        official.signature_key_ids().unwrap(),
+        (vec![env.key.key_id(), second.key_id()], 2)
+    );
+    let host = host();
+    let release = Release::new(&env, "0.1.1", &notifications());
+    let by_first = env.key.sign(&release.package, "0.1.1");
+    let by_second = second.sign(&release.package, "0.1.1");
+    let below = |r: Result<VerifiedPackage, Refusal>, n: usize| {
+        matches!(
+            refusal(r),
+            Refusal::Publisher(PublisherError::BelowThreshold { valid, threshold: 2, .. })
+                if valid == n
+        )
+    };
+
+    // One valid signature, or a missing second file.
+    assert!(below(
+        official.verify(&delivery_with(
+            &release,
+            std::slice::from_ref(&by_first),
+            &host
+        )),
+        1
+    ));
+    assert!(below(
+        official.verify(&delivery_with(&release, &[], &host)),
+        0
+    ));
+    // The same signature under the second key's name.
+    let renamed = SignatureFile {
+        key_id: second.key_id(),
+        ..by_first.clone()
+    };
+    assert!(below(
+        official.verify(&delivery_with(
+            &release,
+            &[by_first.clone(), renamed],
+            &host
+        )),
+        1
+    ));
+    // The same key twice.
+    assert!(below(
+        official.verify(&delivery_with(
+            &release,
+            &[by_first.clone(), by_first.clone()],
+            &host
+        )),
+        1
+    ));
+    // A key this agent does not pin, under its own name or a pinned one's.
+    let foreign = stranger.sign(&release.package, "0.1.1");
+    let disguised = SignatureFile {
+        key_id: second.key_id(),
+        ..foreign.clone()
+    };
+    for other in [foreign, disguised] {
+        assert!(below(
+            official.verify(&delivery_with(&release, &[by_first.clone(), other], &host)),
+            1
+        ));
+    }
+    // Another version's or another package's signatures by both keys.
+    let other_version = Release::new(&env, "0.1.2", &notifications());
+    let replayed = [
+        env.key.sign(&other_version.package, "0.1.2"),
+        second.sign(&other_version.package, "0.1.2"),
+    ];
+    assert!(below(
+        official.verify(&delivery_with(&release, &replayed, &host)),
+        0
+    ));
+    // A compromised registry pins other bytes (its own package) under the
+    // genuine two signatures.
+    let evil = Release::with(&env, "0.1.1", &notifications(), "-evil", |_| {});
+    let genuine = [by_first.clone(), by_second.clone()];
+    assert!(below(
+        official.verify(&delivery_with(&evil, &genuine, &host)),
+        0
+    ));
+    // ... or rewrites the permissions the consent dialog shows, or the
+    // manifest hash: the registry's pins are still checked.
+    let mut relabeled = Release::new(&env, "0.1.1", &notifications());
+    relabeled.expected.permissions = Some(Vec::new());
+    assert!(matches!(
+        refusal(official.verify(&delivery_with(&relabeled, &genuine, &host))),
+        Refusal::Package(_)
+    ));
+    let mut other_manifest = Release::new(&env, "0.1.1", &notifications());
+    other_manifest.expected.manifest_sha256 = sha256(b"another manifest");
+    assert!(matches!(
+        refusal(official.verify(&delivery_with(&other_manifest, &genuine, &host))),
+        Refusal::Package(_)
+    ));
+    assert!(official.floor(&id()).is_none());
+
+    // Both keys: verified, both recorded as signers.
+    official
+        .verify(&delivery_with(&release, &genuine, &host))
+        .unwrap();
+    let floor = official.floor(&id()).unwrap();
+    assert_eq!(floor.version, v("0.1.1"));
+    let mut signers = floor.signers.clone();
+    signers.sort();
+    let mut expected = vec![
+        publisher::fingerprint(&env.key.public()).unwrap(),
+        publisher::fingerprint(&second.public()).unwrap(),
+    ];
+    expected.sort();
+    assert_eq!(signers, expected);
+
+    // A newer release, then a downgrade signed by both keys: refused.
+    let newer = Release::new(&env, "0.1.2", &notifications());
+    let both_newer = [
+        env.key.sign(&newer.package, "0.1.2"),
+        second.sign(&newer.package, "0.1.2"),
+    ];
+    official
+        .verify(&delivery_with(&newer, &both_newer, &host))
+        .unwrap();
+    assert!(matches!(
+        refusal(official.verify(&delivery_with(&release, &genuine, &host))),
+        Refusal::Publisher(PublisherError::Rollback { .. })
+    ));
+}
+
+#[test]
+fn a_revoked_key_never_counts_with_threshold_two() {
+    let env = Env::new();
+    let second = Key::new(env.root.path(), "second.key");
+    let old = Key::new(env.root.path(), "old.key");
+    let host = host();
+    let release = Release::new(&env, "0.1.1", &notifications());
+    let by_first = env.key.sign(&release.package, "0.1.1");
+    let by_second = second.sign(&release.package, "0.1.1");
+    let by_old = old.sign(&release.package, "0.1.1");
+    // The revoked key is not fetched at all.
+    let official = env.official_with(keys(&[&env.key, &second], 2, &[&old]), Vec::new());
+    assert!(
+        !official
+            .signature_key_ids()
+            .unwrap()
+            .0
+            .contains(&old.key_id())
+    );
+    // Revoked plus one valid key: refused (and the revoked one never counts).
+    assert!(matches!(
+        refusal(official.verify(&delivery_with(
+            &release,
+            &[by_first.clone(), by_old.clone()],
+            &host
+        ))),
+        Refusal::Publisher(PublisherError::RevokedKey { .. })
+    ));
+    // Revoked plus both valid keys, if it were presented: refused.
+    assert!(matches!(
+        refusal(official.verify(&delivery_with(
+            &release,
+            &[by_first.clone(), by_second.clone(), by_old],
+            &host
+        ))),
+        Refusal::Publisher(PublisherError::RevokedKey { .. })
+    ));
+    // The two current keys alone: verified.
+    official
+        .verify(&delivery_with(&release, &[by_first, by_second], &host))
+        .unwrap();
 }
 
 // ---------------------------------------------------------------- gate

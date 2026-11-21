@@ -62,7 +62,7 @@ use deckpilot_plugin_package::{
 };
 use deckpilot_plugin_registry::publisher::{
     self, ArtifactLock, AuditRecord, PublisherError, PublisherKeys, ReleaseClaim, ReleaseFloor,
-    ReleasePolicy, RevokedRelease, VerifiedRelease,
+    ReleasePolicy, RevokedRelease, SignatureFile, VerifiedRelease,
 };
 use deckpilot_plugin_registry::{InstalledVerdict, write_atomic};
 use deckpilot_plugin_store::{InstallSource, PluginRecord, VerdictSource, VersionRecord};
@@ -143,7 +143,9 @@ pub(super) struct Admitted {
 /// and revocations already passed: [`publisher::verify_release`] checks
 /// those first). Closed: the refusal stands. Open: the review's
 /// conditions (threshold, plugin, every privileged construct), the keys
-/// that actually signed (a threshold of them, counted again here), the
+/// that actually signed (counted again here with the verifier's rules,
+/// [`publisher::check_signatures`]: distinct pinned current keys, one file
+/// each, at least the review's `min_threshold`, never below 2), the
 /// registry's pins (manifest hash, permissions), then the bundled reader
 /// rules (`verify_bundled_files`, the only reader that accepts the
 /// privileged kinds), compatibility and the floor.
@@ -151,7 +153,7 @@ pub(super) fn admit_privileged(
     gate: PrivilegedGate,
     refusal: PublisherError,
     keys: &PublisherKeys,
-    signatures: &[String],
+    signatures: &[SignatureFile],
     expected: &ExpectedPackage,
     package: &[u8],
     policy: &ReleasePolicy<'_>,
@@ -172,19 +174,14 @@ pub(super) fn admit_privileged(
     else {
         return Err(refusal);
     };
-    let comment = publisher::release_comment(&expected.id, &expected.version, &expected.package);
-    let signers: Vec<String> = keys
-        .keys
-        .iter()
-        .filter(|key| {
-            signatures.iter().any(|signature| {
-                deckpilot_plugin_registry::sig::verify_exact(key, signature, package, &comment)
-                    .is_ok()
-            })
-        })
-        .filter_map(|key| publisher::fingerprint(key))
-        .collect();
-    if u64::try_from(signers.len()).unwrap_or(0) < review.min_threshold.max(keys.threshold) {
+    let claim = ReleaseClaim {
+        id: expected.id.clone(),
+        version: expected.version.clone(),
+        package: expected.package.clone(),
+    };
+    let signers = publisher::check_signatures(package, signatures, keys, &claim)?.signers;
+    let needed = review.min_threshold.max(keys.threshold).max(2);
+    if u64::try_from(signers.len()).unwrap_or(0) < needed {
         return Err(refusal);
     }
     let files = read_archive(package, policy.limits)?;
@@ -205,11 +202,6 @@ pub(super) fn admit_privileged(
         .check_compatibility(host)
         .map_err(PublisherError::Incompatible)?;
     if let Some(floor) = policy.floor {
-        let claim = ReleaseClaim {
-            id: expected.id.clone(),
-            version: expected.version.clone(),
-            package: expected.package.clone(),
-        };
         check_floor(&claim, floor, &digests(verified.files()))?;
     }
     Ok(Admitted {
@@ -374,8 +366,9 @@ pub(super) struct Delivery<'a> {
     /// manifest hash, permissions, `first_party`).
     pub expected: &'a ExpectedPackage,
     pub package: &'a [u8],
-    /// The signature files' bytes (`<package>.minisig`).
-    pub signatures: &'a [Vec<u8>],
+    /// The signature files found, one per pinned current key id
+    /// (`<package>.<KEYID>.minisig`); missing ones are simply absent.
+    pub signatures: &'a [SignatureFile],
     /// The bundled copy this agent pins for the id, if any (a floor).
     pub pin: Option<&'a Pin>,
     /// The running host; `None` refuses (the host is always checked).
@@ -589,6 +582,16 @@ impl Official {
             .map_err(Clone::clone)
     }
 
+    /// The key ids whose signature files a download fetches (the pinned
+    /// current keys, never a revoked one) and the threshold of distinct
+    /// keys that must have signed.
+    pub fn signature_key_ids(&self) -> Result<(Vec<String>, u64), String> {
+        let keys = self.keys.as_ref().map_err(Clone::clone)?;
+        keys.validate()
+            .map_err(|e| format!("the publisher keys are invalid: {e}"))?;
+        Ok((keys.signature_key_ids(), keys.threshold))
+    }
+
     fn lock_floors(&self) -> std::sync::MutexGuard<'_, Result<FloorsFile, String>> {
         self.floors
             .lock()
@@ -720,12 +723,7 @@ impl Official {
                 "the registry does not authorize the deckpilot namespace for this package".into(),
             ));
         }
-        let signatures = delivery
-            .signatures
-            .iter()
-            .map(|bytes| publisher::read_signature(bytes))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(Refusal::Publisher)?;
+        let signatures = delivery.signatures;
         compiled.check_locked(claim)?;
         let floor = self.effective_floor(&claim.id, delivery.pin)?;
         let limits = Limits::default();
@@ -736,7 +734,7 @@ impl Official {
             limits: &limits,
         };
         let (package, files, signers) =
-            match publisher::verify_release(delivery.package, &signatures, keys, claim, &policy) {
+            match publisher::verify_release(delivery.package, signatures, keys, claim, &policy) {
                 Ok(release) => {
                     let package = Self::registry_package(delivery, &release)?;
                     (package, release.file_digests(), release.signers().to_vec())
@@ -746,7 +744,7 @@ impl Official {
                         self.gate,
                         refusal,
                         keys,
-                        &signatures,
+                        signatures,
                         delivery.expected,
                         delivery.package,
                         &policy,

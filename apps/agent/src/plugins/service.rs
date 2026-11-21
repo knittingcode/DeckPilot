@@ -1233,18 +1233,26 @@ impl PluginService {
         // publisher keys compiled into this agent, on top of the registry's
         // pins (`official.rs`). Nothing is installed before it verified.
         if deckpilot_plugin_store::is_first_party(id) {
-            let signature = match registry.signature(&target.url) {
-                Ok(signature) => signature,
-                Err(e) => {
-                    let refused = download_error(&e);
+            let signatures = match self.official_signatures(registry, &target.url) {
+                Ok(signatures) => signatures,
+                Err(why) => {
                     self.official.refused_before_verification(
                         id,
                         Some(version),
                         Some(&target.expected.package),
-                        &format!("the publisher signature: {}", refused.message),
+                        &why,
                         Utc::now(),
                     );
-                    return Err(refused);
+                    // Not enough signature files could be downloaded: a
+                    // registry (download) problem, as a missing package is.
+                    return Err(error(
+                        ErrorCode::Failed,
+                        reason::REGISTRY,
+                        format!(
+                            "{id} is not a verified DeckPilot release; nothing was installed: \
+                             {why}"
+                        ),
+                    ));
                 }
             };
             let host = host_environment();
@@ -1252,7 +1260,7 @@ impl PluginService {
                 .verify(&official::Delivery {
                     expected: &target.expected,
                     package: &bytes,
-                    signatures: std::slice::from_ref(&signature),
+                    signatures: &signatures,
                     pin: self.bundle.pins.get(id),
                     host: host.as_ref(),
                     now: Utc::now(),
@@ -1260,6 +1268,42 @@ impl PluginService {
                 .map_err(|refusal| refusal.to_ipc(id))?;
         }
         Ok((target.expected, bytes))
+    }
+
+    /// The publisher signature files of an official release at `url`:
+    /// exactly one download per pinned current key id
+    /// (`<package>.<KEYID>.minisig`, size-capped, from where the package
+    /// comes from). A missing or unreadable file is tolerated only while the
+    /// files found can still meet the threshold; the verifier then decides
+    /// what each is worth.
+    fn official_signatures(
+        &self,
+        registry: &Registry,
+        url: &str,
+    ) -> Result<Vec<deckpilot_plugin_registry::publisher::SignatureFile>, String> {
+        let (key_ids, threshold) = self.official.signature_key_ids()?;
+        let mut found = Vec::new();
+        let mut missing = Vec::new();
+        for key_id in key_ids {
+            match registry.signature(url, &key_id) {
+                Ok(bytes) => {
+                    found.push(deckpilot_plugin_registry::publisher::SignatureFile {
+                        key_id,
+                        bytes,
+                    });
+                }
+                Err(e) => missing.push(download_error(&e).message),
+            }
+        }
+        if u64::try_from(found.len()).unwrap_or(0) < threshold {
+            return Err(format!(
+                "the publisher signatures: {} signature file(s) found, {threshold} distinct key(s) \
+                 required ({})",
+                found.len(),
+                missing.join("; ")
+            ));
+        }
+        Ok(found)
     }
 
     /// What the registry pins for `id` `version`, without the package.

@@ -3,15 +3,17 @@
 //! `docs/marketplace/publisher-signature.md`).
 //!
 //! `release sign` runs only in `knittingcode/deckpilot-plugins`' release
-//! environment, with the publisher key the owner provisions as a secret
-//! (or with a throwaway key in CI). `release verify` is the check an
-//! application build runs before it stages an artifact as a bundled
-//! plugin: with the pinned keys unless `--keys` names others (CI with
-//! throwaway keys; the output then says so).
+//! environment, with one publisher key the owner provisions as a secret
+//! (or with a throwaway key in CI), once per key (each key in its own job),
+//! and writes that key's file `<package>.<KEYID>.minisig`. `release verify`
+//! is the check an application build runs before it stages an artifact as
+//! a bundled plugin: it reads every `<package>.*.minisig`, reports which
+//! keys counted, and enforces the threshold of the pinned keys unless
+//! `--keys` names others (CI with throwaway keys; the output then says so).
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use deckpilot_plugin_manifest::{
@@ -25,11 +27,80 @@ use super::keys::SigningKey;
 use super::{PublishError, Result, fail};
 use crate::publisher::{
     self, AuditRecord, PublisherError, PublisherKeys, ReleaseClaim, ReleaseFloor, ReleasePolicy,
-    RevokedRelease,
+    RevokedRelease, SignatureCheck, SignatureFile,
 };
 
 fn read(path: &Path) -> Result<Vec<u8>> {
     std::fs::read(path).map_err(|e| PublishError(format!("{}: {e}", path.display())))
+}
+
+fn file_name(path: &Path) -> Result<String> {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_owned)
+        .ok_or_else(|| PublishError(format!("{}: no file name", path.display())))
+}
+
+/// Where `release sign` writes the signature of `key_id` for `package`:
+/// `<dir>/<package file name>.<KEYID>.minisig`, `dir` the package's own
+/// directory unless given.
+pub fn signature_path(package: &Path, dir: Option<&Path>, key_id: &str) -> Result<PathBuf> {
+    let name = publisher::signature_file_name(&file_name(package)?, key_id);
+    let dir = dir.map_or_else(
+        || package.parent().map(Path::to_path_buf).unwrap_or_default(),
+        Path::to_path_buf,
+    );
+    Ok(dir.join(name))
+}
+
+/// Every signature file of `package` in `dir` (the package's directory
+/// unless given): the files named `<package file name>.<KEYID>.minisig`,
+/// sorted by name, each read up to one byte over the signature limit (the
+/// verifier refuses what is larger). The old single name
+/// `<package>.minisig` is not read.
+pub fn signature_files(
+    package: &Path,
+    dir: Option<&Path>,
+) -> Result<Vec<(PathBuf, SignatureFile)>> {
+    let package_name = file_name(package)?;
+    let dir = dir.map_or_else(
+        || package.parent().map(Path::to_path_buf).unwrap_or_default(),
+        Path::to_path_buf,
+    );
+    let shown = if dir.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        dir.as_path()
+    };
+    let entries =
+        std::fs::read_dir(shown).map_err(|e| PublishError(format!("{}: {e}", shown.display())))?;
+    let mut found = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| PublishError(format!("{}: {e}", shown.display())))?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Some(key_id) = publisher::key_id_in_file_name(&package_name, &name) else {
+            continue;
+        };
+        let path = entry.path();
+        let limit = u64::try_from(publisher::MAX_SIGNATURE_BYTES).unwrap_or(u64::MAX) + 1;
+        let mut bytes = Vec::new();
+        std::fs::File::open(&path)
+            .and_then(|file| {
+                std::io::Read::read_to_end(&mut std::io::Read::take(file, limit), &mut bytes)
+            })
+            .map_err(|e| PublishError(format!("{}: {e}", path.display())))?;
+        found.push((
+            path,
+            SignatureFile {
+                key_id: key_id.to_owned(),
+                bytes,
+            },
+        ));
+    }
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(found)
 }
 
 /// Step 1 of `release sign`, before the secret key is loaded: the claim is
@@ -60,15 +131,18 @@ pub fn sign(package: &[u8], claim: &ReleaseClaim, key: &SigningKey) -> Result<St
     key.sign(package, &comment)
 }
 
-/// Step 3, after the secret key is dropped: the signature verifies with
-/// the verifier's rules against `public_key` alone (the host's
-/// compatibility is the application build's check: it knows the host).
+/// Step 3, after the secret key is dropped: the signature, as the file
+/// named for `public_key`'s key id, verifies with the verifier's rules
+/// against `public_key` alone (the host's compatibility is the application
+/// build's check: it knows the host).
 pub fn check_signed(
     package: &[u8],
     signature: &str,
     public_key: &str,
     claim: &ReleaseClaim,
 ) -> Result<()> {
+    let key_id = publisher::key_id(public_key)
+        .ok_or_else(|| PublishError("the signing key has no key id".into()))?;
     let keys = PublisherKeys {
         publisher_keys_version: publisher::KEYS_VERSION,
         publisher: FIRST_PARTY_PUBLISHER.to_owned(),
@@ -83,7 +157,11 @@ pub fn check_signed(
         revoked: &[],
         limits: &limits,
     };
-    publisher::verify_release(package, &[signature.to_owned()], &keys, claim, &policy)
+    let file = SignatureFile {
+        key_id,
+        bytes: format!("{signature}\n").into_bytes(),
+    };
+    publisher::verify_release(package, &[file], &keys, claim, &policy)
         .map(|_| ())
         .map_err(|e| PublishError(format!("the new signature does not verify: {e}")))
 }
@@ -171,8 +249,10 @@ pub fn revocations_of(bytes: &[u8]) -> Result<Vec<RevokedRelease>> {
 #[derive(Debug)]
 pub struct VerifyRequest<'a> {
     pub package: &'a Path,
-    /// One signature file per key (a threshold of them must verify).
-    pub signatures: Vec<&'a Path>,
+    /// Where the signature files are (`<package>.<KEYID>.minisig`, one per
+    /// key, a threshold of them must verify): the package's directory
+    /// unless given.
+    pub signatures_dir: Option<&'a Path>,
     /// `None`: the pinned keys.
     pub keys: Option<&'a Path>,
     pub claim: ReleaseClaim,
@@ -185,9 +265,19 @@ pub struct VerifyRequest<'a> {
 }
 
 /// Runs the verification, appends the audit record (accepted or refused)
-/// when asked, unpacks the files when asked, and returns the message.
+/// when asked, unpacks the files when asked, and returns the message: the
+/// outcome, then one line per signature file found (counted or ignored,
+/// with the reason), accepted or refused.
 pub fn verify(request: &VerifyRequest<'_>) -> Result<String> {
-    let outcome = verify_inner(request);
+    let keys_note = match request.keys {
+        Some(path) => format!("the keys in {} (not the pinned keys)", path.display()),
+        None => "the pinned keys".to_owned(),
+    };
+    let inputs = inputs(request);
+    let outcome = inputs
+        .as_ref()
+        .map_err(Clone::clone)
+        .and_then(|inputs| verify_inputs(request, inputs));
     if let Some(audit) = request.audit {
         let record = match &outcome {
             Ok(verified) => verified.audit(request.now),
@@ -202,31 +292,33 @@ pub fn verify(request: &VerifyRequest<'_>) -> Result<String> {
         };
         append(audit, record.to_line().as_bytes())?;
     }
+    let listing = inputs
+        .as_ref()
+        .map(|i| listing(request, i))
+        .unwrap_or_default();
     let verified = outcome.map_err(|refusal| match refusal {
         Refusal::Publisher(error) => PublishError(format!(
-            "{} {} refused: {error}",
-            request.claim.id, request.claim.version
+            "{} {} refused (threshold of {keys_note}): {error}{listing}",
+            request.claim.id, request.claim.version,
         )),
         Refusal::Tool(error) => error,
     })?;
     if let Some(dir) = request.unpack {
         unpack(dir, verified.files())?;
     }
-    let keys_note = match request.keys {
-        Some(path) => format!(" (keys from {}, not the pinned keys)", path.display()),
-        None => String::new(),
-    };
+    let threshold = inputs.map(|i| i.keys.threshold).unwrap_or_default();
     Ok(format!(
-        "{} {} verified: sha256 {}, {} bytes, signed by {}{keys_note}; authenticity only, no \
-         permission is granted by it",
+        "{} {} verified: sha256 {}, {} bytes, signed by {} distinct publisher key(s), threshold \
+         {threshold} of {keys_note}; authenticity only, no permission is granted by it{listing}",
         request.claim.id,
         request.claim.version,
         request.claim.package.sha256,
         request.claim.package.size,
-        verified.signers().join(", ")
+        verified.signers().len(),
     ))
 }
 
+#[derive(Clone)]
 enum Refusal {
     Publisher(PublisherError),
     Tool(PublishError),
@@ -238,22 +330,60 @@ impl From<PublishError> for Refusal {
     }
 }
 
-fn verify_inner(request: &VerifyRequest<'_>) -> Result<publisher::VerifiedRelease, Refusal> {
+/// The keys, the package and its signature files.
+struct Inputs {
+    keys: PublisherKeys,
+    package: Vec<u8>,
+    files: Vec<(PathBuf, SignatureFile)>,
+}
+
+fn inputs(request: &VerifyRequest<'_>) -> Result<Inputs, Refusal> {
     let keys = match request.keys {
         Some(path) => PublisherKeys::from_json(&read(path)?),
         None => PublisherKeys::pinned(),
     }
     .map_err(Refusal::Publisher)?;
-    let package = read(request.package)?;
-    let signatures = request
-        .signatures
+    Ok(Inputs {
+        keys,
+        package: read(request.package)?,
+        files: signature_files(request.package, request.signatures_dir)?,
+    })
+}
+
+/// One line per signature file: counted (key id, fingerprint), ignored
+/// (why), or only found (the keys could not judge it).
+fn listing(request: &VerifyRequest<'_>, inputs: &Inputs) -> String {
+    let files: Vec<SignatureFile> = inputs.files.iter().map(|(_, f)| f.clone()).collect();
+    let report =
+        publisher::signature_report(&inputs.package, &files, &inputs.keys, &request.claim).ok();
+    if inputs.files.is_empty() {
+        return "\n  no signature file <package>.<KEYID>.minisig was found".to_owned();
+    }
+    inputs
+        .files
         .iter()
-        .map(|path| {
-            read(path)
-                .map_err(Refusal::Tool)
-                .and_then(|bytes| publisher::read_signature(&bytes).map_err(Refusal::Publisher))
+        .enumerate()
+        .map(|(n, (path, _))| {
+            let shown = path.display();
+            match report.as_ref().and_then(|r| r.get(n)) {
+                Some(SignatureCheck::Counted {
+                    key_id,
+                    fingerprint,
+                }) => format!("\n  counted  {shown}: key {key_id} (fingerprint {fingerprint})"),
+                Some(SignatureCheck::Ignored { reason, .. }) => {
+                    format!("\n  ignored  {shown}: {reason}")
+                }
+                None => format!("\n  found    {shown}"),
+            }
         })
-        .collect::<Result<Vec<_>, Refusal>>()?;
+        .collect()
+}
+
+fn verify_inputs(
+    request: &VerifyRequest<'_>,
+    inputs: &Inputs,
+) -> Result<publisher::VerifiedRelease, Refusal> {
+    let signatures: Vec<SignatureFile> = inputs.files.iter().map(|(_, f)| f.clone()).collect();
     let floor = request
         .released_pins
         .map(|path| {
@@ -273,8 +403,14 @@ fn verify_inner(request: &VerifyRequest<'_>) -> Result<publisher::VerifiedReleas
         revoked: &revoked,
         limits: &limits,
     };
-    publisher::verify_release(&package, &signatures, &keys, &request.claim, &policy)
-        .map_err(Refusal::Publisher)
+    publisher::verify_release(
+        &inputs.package,
+        &signatures,
+        &inputs.keys,
+        &request.claim,
+        &policy,
+    )
+    .map_err(Refusal::Publisher)
 }
 
 fn append(path: &Path, bytes: &[u8]) -> Result<()> {

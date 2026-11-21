@@ -18,7 +18,10 @@
 //! 3. a threshold of distinct, non-revoked publisher keys signed exactly
 //!    these bytes with exactly [`release_comment`] (id, version, sha256 and
 //!    size: a valid signature of another plugin, version or file never
-//!    passes, nor a registry or updater signature);
+//!    passes, nor a registry or updater signature). Each key signs in its
+//!    own file, [`signature_file_name`] (`<package>.<KEYID>.minisig`), and
+//!    a file counts only for the one pinned key its name and its signature
+//!    both name ([`check_signatures`]);
 //! 4. that no revocation names the release ([`RevokedRelease`]);
 //! 5. the package itself with the first-party reader rules
 //!    (`deckpilot_plugin_package::verify_package`, `first_party`: archive
@@ -70,7 +73,7 @@ use deckpilot_plugin_package::{
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
-use crate::model::{RevokedVersions, Role};
+use crate::model::RevokedVersions;
 use crate::sig::{self, SigError, key_identity};
 
 /// Prefix of every publisher trusted comment. Distinct from the registry's
@@ -89,6 +92,41 @@ pub const MAX_SIGNATURE_BYTES: usize = crate::MAX_SIGNATURE_BYTES;
 
 /// Most keys a publisher role may have, current and revoked each.
 pub const MAX_KEYS: usize = 4;
+
+/// Most signature files a release may present: one per pinned key, current
+/// or revoked. More is refused, never truncated.
+pub const MAX_SIGNATURE_FILES: usize = 2 * MAX_KEYS;
+
+/// `<package>.<KEYID>.minisig`: the signature file of the key `key_id`
+/// (16 uppercase hex characters, as minisign prints key ids) for the
+/// package file `package_file`, next to it. One file per signing key; the
+/// single name `<package>.minisig` is not used.
+pub fn signature_file_name(package_file: &str, key_id: &str) -> String {
+    format!("{package_file}.{key_id}.minisig")
+}
+
+/// The `KEYID` part of `file_name` when it is a signature file name of
+/// `package_file` (`<package_file>.<KEYID>.minisig`, `KEYID` not empty and
+/// without a dot). Whether it is a well-formed key id is the verifier's
+/// check ([`is_key_id`]).
+pub fn key_id_in_file_name<'a>(package_file: &str, file_name: &'a str) -> Option<&'a str> {
+    file_name
+        .strip_prefix(package_file)?
+        .strip_prefix('.')?
+        .strip_suffix(".minisig")
+        .filter(|id| !id.is_empty() && !id.contains('.'))
+}
+
+/// Whether `text` is a minisign key id as minisign prints it: exactly 16
+/// characters `0-9A-F`.
+pub fn is_key_id(text: &str) -> bool {
+    text.len() == 16 && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'A'..=b'F'))
+}
+
+/// The minisign key id of a base64-wrapped public key (16 uppercase hex).
+pub fn key_id(public_key_b64: &str) -> Option<String> {
+    sig::public_key_id(public_key_b64).ok()
+}
 
 /// The pinned publisher keys: `publisher/first-party.json` of this crate,
 /// compiled in. Changing them is a reviewed change to this repository and
@@ -183,6 +221,15 @@ impl PublisherKeys {
         if !current.is_disjoint(&revoked) {
             return Err("a key is both current and revoked".into());
         }
+        // A signature file is matched to its key by the key id: one id must
+        // name one key, current or revoked.
+        let mut ids = BTreeSet::new();
+        for key in self.keys.iter().chain(&self.revoked_keys) {
+            let id = sig::public_key_id(key).map_err(|e| e.to_string())?;
+            if !ids.insert(id.clone()) {
+                return Err(format!("the key id {id} names two keys"));
+            }
+        }
         let count = u64::try_from(current.len()).unwrap_or(u64::MAX);
         if self.threshold == 0 || self.threshold > count.max(1) {
             return Err(format!(
@@ -199,17 +246,16 @@ impl PublisherKeys {
         !self.keys.is_empty()
     }
 
-    fn role(&self) -> Role {
-        Role {
-            keys: self.keys.clone(),
-            threshold: self.threshold,
-        }
-    }
-
     /// Short fingerprints (the first 8 bytes of each Ed25519 key, hex) of
     /// the current keys, for logs and the audit record.
     pub fn fingerprints(&self) -> Vec<String> {
         self.keys.iter().filter_map(|k| fingerprint(k)).collect()
+    }
+
+    /// The key ids of the current (non-revoked) keys: the signature files a
+    /// client fetches, one per id ([`signature_file_name`]).
+    pub fn signature_key_ids(&self) -> Vec<String> {
+        self.keys.iter().filter_map(|k| key_id(k)).collect()
     }
 }
 
@@ -298,9 +344,10 @@ impl LockedArtifact {
         )
     }
 
-    /// The package URL with `.minisig`.
-    pub fn signature_url(&self) -> String {
-        format!("{}.minisig", self.package_url())
+    /// The signature file of the key `key_id` next to the package
+    /// ([`signature_file_name`]).
+    pub fn signature_url(&self, key_id: &str) -> String {
+        signature_file_name(&self.package_url(), key_id)
     }
 }
 
@@ -375,8 +422,19 @@ pub enum PublisherError {
     NotFirstParty { found: String },
     #[error("the signature is {size} bytes; at most {MAX_SIGNATURE_BYTES}")]
     SignatureTooLarge { size: usize },
-    #[error("{count} signatures; at most {MAX_KEYS} (one per key)")]
+    #[error("{count} signature files; at most {MAX_SIGNATURE_FILES} (one per pinned key)")]
     TooManySignatures { count: usize },
+    #[error(
+        "{valid} valid signature(s) from distinct pinned publisher keys, {threshold} required \
+         ({})",
+        if .ignored.is_empty() { "no other signature file".to_owned() } else { .ignored.join("; ") }
+    )]
+    BelowThreshold {
+        valid: usize,
+        threshold: u64,
+        /// Why each other file did not count, `<KEYID>: <reason>`.
+        ignored: Vec<String>,
+    },
     #[error("the package is {actual}, the claim says {expected}")]
     DigestMismatch { expected: String, actual: String },
     #[error("signed by a revoked publisher key ({fingerprint})")]
@@ -440,6 +498,7 @@ pub struct VerifiedRelease {
     manifest: Manifest,
     files: Files,
     signers: Vec<String>,
+    checks: Vec<SignatureCheck>,
 }
 
 impl VerifiedRelease {
@@ -464,6 +523,11 @@ impl VerifiedRelease {
     /// Fingerprints of the publisher keys whose signature counted.
     pub fn signers(&self) -> &[String] {
         &self.signers
+    }
+
+    /// What each signature file was worth, in the order given.
+    pub fn signature_checks(&self) -> &[SignatureCheck] {
+        &self.checks
     }
 
     /// The audit record of this verification.
@@ -545,14 +609,183 @@ impl AuditRecord {
     }
 }
 
+/// One signature file of a release: the key id its name gives
+/// (`<package>.<KEYID>.minisig`) and its bytes (base64 minisign text, at
+/// most [`MAX_SIGNATURE_BYTES`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureFile {
+    pub key_id: String,
+    pub bytes: Vec<u8>,
+}
+
+/// What one signature file was worth.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignatureCheck {
+    /// A valid signature by the pinned, current key the file names.
+    Counted { key_id: String, fingerprint: String },
+    /// Not counted, with the reason.
+    Ignored { key_id: String, reason: String },
+}
+
+impl SignatureCheck {
+    pub fn key_id(&self) -> &str {
+        match self {
+            Self::Counted { key_id, .. } | Self::Ignored { key_id, .. } => key_id,
+        }
+    }
+}
+
+/// The signature files that counted, and why the others did not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signatures {
+    /// Fingerprints of the distinct keys whose signature counted.
+    pub signers: Vec<String>,
+    pub checks: Vec<SignatureCheck>,
+}
+
+/// The publisher signature check on its own (step 3 of [`verify_release`],
+/// which callers normally use): each file counts for at most one key, the
+/// pinned current key whose id is both in the file name and in the
+/// signature, once, and only if it signed exactly these bytes with exactly
+/// [`release_comment`]. Duplicates, unknown keys, mismatched names, wrong
+/// comments, malformed or oversized files and invalid signatures never
+/// count. A valid signature by a **revoked** key refuses the release. Fewer
+/// than `keys.threshold` counted keys refuses it (fail closed).
+pub fn check_signatures(
+    package: &[u8],
+    files: &[SignatureFile],
+    keys: &PublisherKeys,
+    claim: &ReleaseClaim,
+) -> Result<Signatures, PublisherError> {
+    let checks = signature_report(package, files, keys, claim)?;
+    let signers: Vec<String> = checks
+        .iter()
+        .filter_map(|c| match c {
+            SignatureCheck::Counted { fingerprint, .. } => Some(fingerprint.clone()),
+            SignatureCheck::Ignored { .. } => None,
+        })
+        .collect();
+    let threshold = usize::try_from(keys.threshold).unwrap_or(usize::MAX);
+    if keys.threshold == 0 || signers.len() < threshold {
+        return Err(PublisherError::BelowThreshold {
+            valid: signers.len(),
+            threshold: keys.threshold,
+            ignored: checks
+                .iter()
+                .filter_map(|c| match c {
+                    SignatureCheck::Ignored { key_id, reason } => {
+                        Some(format!("{key_id}: {reason}"))
+                    }
+                    SignatureCheck::Counted { .. } => None,
+                })
+                .collect(),
+        });
+    }
+    Ok(Signatures { signers, checks })
+}
+
+/// What each signature file is worth ([`check_signatures`] without the
+/// threshold, for reports): every file is [`SignatureCheck::Counted`] at
+/// most once per key, or [`SignatureCheck::Ignored`] with the reason. Still
+/// refuses too many files, invalid keys and a valid signature by a revoked
+/// key.
+pub fn signature_report(
+    package: &[u8],
+    files: &[SignatureFile],
+    keys: &PublisherKeys,
+    claim: &ReleaseClaim,
+) -> Result<Vec<SignatureCheck>, PublisherError> {
+    keys.validate().map_err(PublisherError::Keys)?;
+    if files.len() > MAX_SIGNATURE_FILES {
+        return Err(PublisherError::TooManySignatures { count: files.len() });
+    }
+    let comment = release_comment(&claim.id, &claim.version, &claim.package);
+    let by_id = |list: &[String]| -> BTreeMap<String, String> {
+        list.iter()
+            .filter_map(|k| key_id(k).map(|id| (id, k.clone())))
+            .collect()
+    };
+    let current = by_id(&keys.keys);
+    let revoked = by_id(&keys.revoked_keys);
+    let mut counted = BTreeSet::new();
+    let mut checks = Vec::new();
+    for file in files {
+        let check = match check_file(package, file, &current, &revoked, &counted, &comment)? {
+            Ok(print) => {
+                counted.insert(file.key_id.clone());
+                SignatureCheck::Counted {
+                    key_id: file.key_id.clone(),
+                    fingerprint: print,
+                }
+            }
+            Err(reason) => SignatureCheck::Ignored {
+                key_id: file.key_id.clone(),
+                reason,
+            },
+        };
+        checks.push(check);
+    }
+    Ok(checks)
+}
+
+/// One file: `Ok(Ok(fingerprint))` counts, `Ok(Err(reason))` is ignored,
+/// `Err` refuses the release (a valid signature by a revoked key).
+fn check_file(
+    package: &[u8],
+    file: &SignatureFile,
+    current: &BTreeMap<String, String>,
+    revoked: &BTreeMap<String, String>,
+    counted: &BTreeSet<String>,
+    comment: &str,
+) -> Result<Result<String, String>, PublisherError> {
+    if !is_key_id(&file.key_id) {
+        return Ok(Err(
+            "the file name does not name a key id (16 uppercase hex characters)".into(),
+        ));
+    }
+    let signature = match read_signature(&file.bytes) {
+        Ok(signature) => signature,
+        Err(e) => return Ok(Err(e.to_string())),
+    };
+    match sig::signature_key_id(&signature) {
+        Ok(inside) if inside == file.key_id => {}
+        Ok(inside) => {
+            return Ok(Err(format!(
+                "the file is named for key {} but the signature names key {inside}",
+                file.key_id
+            )));
+        }
+        Err(e) => return Ok(Err(e.to_string())),
+    }
+    if let Some(key) = revoked.get(&file.key_id) {
+        if sig::verify_exact(key, &signature, package, comment).is_ok() {
+            return Err(PublisherError::RevokedKey {
+                fingerprint: fingerprint(key).unwrap_or_default(),
+            });
+        }
+        return Ok(Err(
+            "a revoked key, and the signature does not verify".into()
+        ));
+    }
+    let Some(key) = current.get(&file.key_id) else {
+        return Ok(Err("not a pinned publisher key".into()));
+    };
+    if counted.contains(&file.key_id) {
+        return Ok(Err("a second file for the same key".into()));
+    }
+    Ok(sig::verify_exact(key, &signature, package, comment)
+        .map(|()| fingerprint(key).unwrap_or_default())
+        .map_err(|e| e.to_string()))
+}
+
 /// Verifies a first-party release artifact (`package`, the `.dpplugin`
-/// bytes, and `signatures`, its base64 minisign signatures: one per key, a
-/// threshold of them needed) against the publisher `keys`, the reviewed
-/// `claim` and the `policy`. See the module documentation for the order of
-/// the checks.
+/// bytes, and `signatures`, its signature files: one per key, a threshold
+/// of distinct pinned keys needed, [`check_signatures`]) against the
+/// publisher `keys`, the reviewed `claim` and the `policy`. See the module
+/// documentation for the order of the checks.
 pub fn verify_release(
     package: &[u8],
-    signatures: &[String],
+    signatures: &[SignatureFile],
     keys: &PublisherKeys,
     claim: &ReleaseClaim,
     policy: &ReleasePolicy<'_>,
@@ -566,18 +799,13 @@ pub fn verify_release(
             found: claim.id.to_string(),
         });
     }
-    if signatures.len() > MAX_KEYS {
+    if signatures.len() > MAX_SIGNATURE_FILES {
         return Err(PublisherError::TooManySignatures {
             count: signatures.len(),
         });
     }
-    if let Some(signature) = signatures.iter().find(|s| s.len() > MAX_SIGNATURE_BYTES) {
-        return Err(PublisherError::SignatureTooLarge {
-            size: signature.len(),
-        });
-    }
     check_bytes(package, claim, policy.limits)?;
-    let signers = check_signers(package, signatures, keys, claim)?;
+    let Signatures { signers, checks } = check_signatures(package, signatures, keys, claim)?;
     if let Some(revoked) = policy
         .revoked
         .iter()
@@ -605,6 +833,7 @@ pub fn verify_release(
         manifest: verified.manifest().clone(),
         files: verified.files().clone(),
         signers,
+        checks,
     })
 }
 
@@ -675,34 +904,6 @@ fn check_bytes(
         });
     }
     Ok(())
-}
-
-/// A threshold of current keys signed exactly this id, version and file,
-/// and no revoked key did. Returns the fingerprints of the signers.
-fn check_signers(
-    package: &[u8],
-    signatures: &[String],
-    keys: &PublisherKeys,
-    claim: &ReleaseClaim,
-) -> Result<Vec<String>, PublisherError> {
-    let comment = release_comment(&claim.id, &claim.version, &claim.package);
-    let signed_by = |key: &String| {
-        signatures
-            .iter()
-            .any(|signature| sig::verify_exact(key, signature, package, &comment).is_ok())
-    };
-    if let Some(revoked) = keys.revoked_keys.iter().find(|key| signed_by(key)) {
-        return Err(PublisherError::RevokedKey {
-            fingerprint: fingerprint(revoked).unwrap_or_default(),
-        });
-    }
-    sig::verify_role(&keys.role(), signatures, package, &comment)?;
-    Ok(keys
-        .keys
-        .iter()
-        .filter(|key| signed_by(key))
-        .filter_map(|key| fingerprint(key))
-        .collect())
 }
 
 /// The privileged-kinds gate: closed (see the module documentation). A

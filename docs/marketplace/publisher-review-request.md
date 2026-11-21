@@ -35,37 +35,56 @@ pipeline of `knittingcode/deckpilot-plugins` that produces them.
 3. **Order of checks.** The claim's size and sha256 are checked before any
    parsing; the archive is parsed only after a valid signature. Confirm
    no untrusted byte reaches the tar or gzip reader first.
-4. **Revocation.** `revokedKeys` beats any other valid signature;
+4. **Threshold and signature files.** One file per signing key,
+   `<package>.<KEYID>.minisig` (`signature_file_name`, `key_id_in_file_name`,
+   `is_key_id`; `KEYID` as minisign prints it: little-endian key number,
+   16 uppercase hex). In `check_signatures` / `check_file` confirm that a
+   file counts only for the one pinned current key whose id is both in its
+   name and inside its signature, at most once per key; that duplicates
+   under another name, two files of one key, unknown keys, mismatched
+   names, wrong comments, malformed and oversized files never count; that
+   fewer than `threshold` distinct keys refuses (no partial or
+   warning-only outcome); that `validate` refuses a threshold of 0 or
+   above the number of current keys and a key id naming two keys; and that
+   nothing at run time lowers the threshold. `release sign` uses one key
+   per invocation; check that the release workflow signs A and B in
+   separate jobs (no job holds both secrets) and that the combining job
+   runs `release verify` against the pinned keys.
+5. **Revocation.** `revokedKeys` beats any other valid signature;
    revoked releases in the lock are refused; a lock cannot both lock and
    revoke a release. Is build-time revocation (no run-time list) enough
    for artifacts that are re-pinned in the agent anyway?
-5. **Rollback.** The floor is the highest version in
+6. **Rollback.** The floor is the highest version in
    `released-pins.json` for the target platform; equal versions need equal
    files. Check the "other platforms do not count" rule and what happens
    when a platform has no recorded pins.
-6. **Authenticity vs. authorization.** Confirm that nothing derives a
+7. **Authenticity vs. authorization.** Confirm that nothing derives a
    grant, tier or the bundled source from a signature: a verified
    artifact becomes a bundled plugin only through a reviewed
    `artifacts.json` change and the pins compiled into the agent, and the
    registry and sideload paths (X12, `is_bundled_id`) are untouched.
-7. **The gate.** `check_gate` refuses every 1.9 privileged kind
+8. **The gate.** `check_gate` refuses every 1.9 privileged kind
    (`IssueCode::FirstPartyOnly`), process execution (`tools`) included.
    Decide whether the gate may open, and under which additional
-   conditions (for example a threshold of 2, a hardware-backed key, or
+   conditions (the opening path already needs at least 2 distinct keys
+   that actually signed; for example also a hardware-backed key, or
    reproducible-build attestation for Git and Docker).
-8. **Key handling.** The secret key is created offline by the owner,
-   stored only as an environment secret in deckpilot-plugins, passed to
-   `release sign --key-env` (never written to disk), and never available
-   to pull-request workflows. Review the environment protection rules
+9. **Key handling.** The two secret keys are created offline by the
+   owner, stored only as secrets of the `official-release` environment of
+   deckpilot-plugins (`DECKPILOT_PUBLISHER_KEY_A`,
+   `DECKPILOT_PUBLISHER_KEY_A_PASSWORD`, `DECKPILOT_PUBLISHER_KEY_B`,
+   `DECKPILOT_PUBLISHER_KEY_B_PASSWORD`), each passed to its own
+   `release sign --key-env … --password-env …` job (never written to
+   disk), and never available to pull-request workflows. Review the environment protection rules
    and that no workflow in `knittingcode/deckpilot` can sign
    (`check-release-separation.py`).
-9. **Release pipeline.** `official.yml` runs untrusted pull-request code
+10. **Release pipeline.** `official.yml` runs untrusted pull-request code
    with no secret and throwaway keys only; `official-release.yml` runs
    only on a release tag, in the protected environment, builds from the
    tagged commit with the pinned toolchain and `Cargo.lock`, and refuses
    to sign what the verifier would refuse (`release sign` runs the
    verifier first).
-10. **Reproducibility.** A release must be rebuildable bit for bit from
+11. **Reproducibility.** A release must be rebuildable bit for bit from
     the tag (two clean builds compared in CI). Decide whether the
     application build should rebuild and compare instead of, or in
     addition to, trusting the signature.
@@ -99,8 +118,12 @@ B. **The claim and the trust anchor.** The claim is the registry's
    (`TEST_KEYS_ENV`). Confirm no release build enables `test-hooks`
    (agent `Cargo.toml`, `release.yml`, `deckpilot-dev package`), and that
    nothing in an artifact, URL, registry document or setting selects a key.
-C. **Order and bounds.** The signature is capped at `MAX_SIGNATURE_BYTES`
-   on download; `verify_release` checks size and sha256 before parsing,
+C. **Order and bounds.** `PluginService::official_signatures` downloads
+   exactly one file per pinned current key id
+   (`Official::signature_key_ids`, never a revoked key's), each capped at
+   `MAX_SIGNATURE_BYTES`, from the package's base URL; missing files are
+   tolerated only while the threshold can still be met, otherwise the
+   install is refused before verification and audited; `verify_release` checks size and sha256 before parsing,
    signatures before the archive; `verify_package` then re-checks against
    the registry's manifest hash and permissions; the store receives only
    that `VerifiedPackage`.
@@ -162,11 +185,13 @@ J. **Migration.** `migration.rs` derives grants only onto a bundled copy;
 K. **Known open items** (not blockers for the closed state):
    `release verify --keys` exists in release builds of the CLI (Agent A's
    finding 3; the plugin repository's CI relies on it with throwaway
-   keys); only one `.minisig` per release is fetched, so a threshold above
-   1 needs a naming convention for further signature files before it can
-   be met at run time.
+   keys). (The former item "only one `.minisig` per release is fetched" is
+   resolved: one `<package>.<KEYID>.minisig` per pinned key, threshold 2
+   reachable at run time.)
 
-Run: `cargo test -p deckpilot-agent --features plugins --lib official`
+Run: `cargo test -p deckpilot-plugin-registry --all-features --test publisher`
+(the multi-signature rules),
+`cargo test -p deckpilot-agent --features plugins --lib official`
 and `cargo test -p deckpilot-agent --features plugins --test
 plugins_registry_https`.
 

@@ -33,7 +33,7 @@ rollback floor is `released-pins.json`, whose guard already exists.
 | --- | --- | --- |
 | Pinned public keys | `crates/deckpilot-plugin-registry/publisher/first-party.json`, compiled in (`publisher::PINNED_KEYS`) | `{"publisherKeysVersion": 1, "publisher": "deckpilot", "keys": [...], "threshold": n, "revokedKeys": [...]}`; keys are base64-wrapped minisign public keys; `keys` empty = not provisioned |
 | Release artifact | GitHub Release `<id>--v<version>` of `knittingcode/deckpilot-plugins` | `<id>-<version>.dpplugin`, unchanged format |
-| Signature | next to it | `<id>-<version>.dpplugin.minisig` (one file per signing key; a threshold of distinct keys must verify, 1 at first): base64 minisign over the package bytes, trusted comment exactly `deckpilot-publisher v1 role:release id:<id> version:<version> sha256:<hex> size:<bytes>` |
+| Signatures | next to it, one file per signing key | `<id>-<version>.dpplugin.<KEYID>.minisig`, `KEYID` the signing key's minisign key id as 16 uppercase hex characters in the byte order minisign itself prints it (`publisher::signature_file_name`). Each file: base64 minisign over exactly the package bytes, trusted comment exactly `deckpilot-publisher v1 role:release id:<id> version:<version> sha256:<hex> size:<bytes>`. A threshold of distinct pinned keys must verify ([below](#threshold-and-signature-files)). The single name `<package>.minisig` is not read or written (nothing was released with it) |
 | Artifact lock | `plugins/first-party/artifacts.json` | `{"artifactsVersion": 1, "plugins": [{"id", "version", "sha256", "size"}], "revoked": [{"id", "versions", "reason"}]}` (`publisher::ArtifactLock`); empty in Wave A |
 | Audit log | the file `release verify --audit` names | JSON Lines, one `publisher::AuditRecord` per verification, accepted or refused |
 
@@ -51,8 +51,10 @@ In this order; every failure is a refusal, there is no warning-only path:
 2. Size and sha256 of the downloaded bytes equal the reviewed claim (the
    lock entry), before anything parses them.
 3. A threshold of distinct current keys signed exactly these bytes with
-   exactly the release comment; a signature by a `revokedKeys` key is
-   refused even if another key also signed.
+   exactly the release comment, each in its own file
+   (`publisher::check_signatures`, [below](#threshold-and-signature-files));
+   a valid signature by a `revokedKeys` key is refused even if other keys
+   also signed.
 4. The release is not revoked by the lock.
 5. **The privileged-kinds gate** (below), then the package with the
    first-party reader rules (`verify_package`, `first_party`): archive
@@ -63,10 +65,54 @@ In this order; every failure is a refusal, there is no warning-only path:
    records for the platform, and the same version only with the same
    files (the rule `check-released-pins.sh` enforces for source builds).
 
-`deckpilot-registry release verify` runs it from the command line, with
-the pinned keys unless `--keys` names others (tests; the output says so),
-appends the audit record with `--audit`, and with `--unpack DIR` writes
-the verified files.
+`deckpilot-registry release verify` runs it from the command line: it
+reads every `<package>.*.minisig` next to the package (or in
+`--signatures-dir DIR`), prints one line per file (`counted` with the key
+id and fingerprint, or `ignored` with the reason), and enforces the
+threshold of the pinned keys unless `--keys` names others (tests only; the
+output says `not the pinned keys`). It appends the audit record with
+`--audit`, and with `--unpack DIR` writes the verified files.
+
+## Threshold and signature files
+
+`first-party.json` pins up to four current keys and a `threshold` from 1
+to their number; a document whose threshold is 0 or above the number of
+current keys is invalid and nothing verifies (revoked keys never count
+towards it). One key id must name exactly one pinned key, current or
+revoked. The threshold is never lowered by anything at run time; the
+owner raises it to 2 when the second production key is pinned.
+
+`publisher::check_signatures` takes the signature files (key id from the
+file name, bytes) and counts **each distinct, pinned, current key at most
+once**. A file counts only if:
+
+- its name's `KEYID` is a well-formed key id (16 characters `0-9A-F`);
+- the key id inside the signature equals the file name's `KEYID` and is a
+  pinned current key (it is checked against that one key only);
+- no earlier file already counted for that key;
+- it is at most `MAX_SIGNATURE_BYTES`, exactly the four minisign lines,
+  and verifies over exactly the package bytes with exactly the release
+  comment (id, version, sha256, size).
+
+Everything else is ignored, never counted, and reported with its reason:
+the same signature copied under a second key's name, two files of one key,
+an unknown key, a name that does not match the signature's key id, a
+wrong comment (other id, version or bytes), a malformed or oversized
+file. A file named for a **revoked** key whose signature verifies refuses
+the release outright (`RevokedKey`). Fewer than `threshold` counted keys
+refuses it (`BelowThreshold`, fail closed, with every ignored file's
+reason); more than eight files (`MAX_SIGNATURE_FILES`) refuses it too.
+
+`release sign` signs with one key per invocation and writes that key's
+file; the release workflow runs it once per key, in separate jobs, and
+publishes all files next to the package. `release verify` is the combine
+and check step.
+
+The agent fetches exactly one file per pinned **current** key id
+(`<package URL>.<KEYID>.minisig`, size-capped, from the same base as the
+package) and never a revoked key's. A missing or unreadable file is
+tolerated as long as the files found can still meet the threshold;
+otherwise the install is refused before verification and audited.
 
 ## Authenticity is not authorization
 
@@ -117,9 +163,12 @@ dependency installs alike):
    any plugin: root-signed key set authorizing `deckpilot`, verified
    `deckpilot` publisher record, pinned size, sha256, manifest hash and
    permissions (`expected.first_party`).
-2. The package (pinned digest) and `<package>.minisig` (at most
-   `MAX_SIGNATURE_BYTES`) are downloaded from the registry's release
-   location (`Registry::signature`). Where they were hosted never counts.
+2. The package (pinned digest) and one `<package>.<KEYID>.minisig` per
+   pinned current key id (each at most `MAX_SIGNATURE_BYTES`) are
+   downloaded from the registry's release location
+   (`Registry::signature`, `PluginService::official_signatures`). Missing
+   files are tolerated only while the threshold can still be met. Where
+   they were hosted never counts.
 3. `Official::verify`: `publisher::verify_release` with the claim taken
    from the registry's pins (id, version, sha256, size), the pinned keys,
    the compiled lock's `revoked`, the running host
@@ -151,8 +200,8 @@ dependency installs alike):
    the oldest is dropped); the agent's log carries each line's hash
    (`official audit line`). Refusals before a verification are audited
    too: `pins` refusing because nothing can be verified (no key, an invalid
-   lock, unreadable floors), and a signature that is missing or cannot be
-   downloaded.
+   lock, unreadable floors), and too few signature files found or
+   downloadable to meet the threshold.
 
    **Limits of the audit log.** It is tamper-evident, not tamper-proof: an
    edited, removed or reordered line breaks the chain, but whoever can
@@ -238,7 +287,8 @@ authorities, and each is required:
    that lists `deckpilot` as a verified publisher, and the registry root
    keys embedded in the application (`DECKPILOT_REGISTRY_ROOT_PUBKEYS`,
    [agent-integration.md](agent-integration.md#trusted-root-keys)).
-3. Each release published with its `<package>.minisig` next to the
+3. Each release published with a threshold of
+   `<package>.<KEYID>.minisig` files (one per signing key) next to the
    package in the plugin repository's release.
 
 The exception to "the registry never serves a bundled id" (X12) is
@@ -289,33 +339,64 @@ fail-closed floors, the hash chain), and
 `apps/agent/tests/plugins_registry_https.rs`
 (`first_party_plugins_need_the_root_authorization_and_a_verified_publisher`:
 an unsigned bundled id refused over HTTPS, the signed one installed; test
-keys through `DECKPILOT_TEST_PUBLISHER_KEYS`, feature `test-hooks` only).
+keys through `DECKPILOT_TEST_PUBLISHER_KEYS`, feature `test-hooks` only;
+three keys pinned with threshold 2: one file per key id fetched, a
+missing third tolerated, one signature or a copy under another key's name
+refused). The multi-signature rules themselves:
+`crates/deckpilot-plugin-registry/tests/publisher.rs` (two valid keys, one
+valid key, a signature duplicated under two names, two files of one key, a
+wrong publisher key, wrong id, version or bytes, a revoked key with and
+without a second valid key, a downgrade, missing files, a name and key id
+mismatch, a threshold above the pinned keys, too many files, the CLI) and
+`threshold_two_needs_two_distinct_pinned_keys` and
+`a_revoked_key_never_counts_with_threshold_two` in the agent's tests
+(registry metadata rewriting permissions or pinning other bytes still
+refused with two valid signatures).
 
 ## Keys
 
-Not created here. **Creating or rotating the production key needs the
-owner** (as for the registry keys, U-10). The intended handling:
+Not created here. **Creating or rotating the production keys needs the
+owner** (as for the registry keys, U-10). Two keys, threshold 2: a single
+stolen key or secret cannot sign a release. The intended handling:
 
-1. Offline, `deckpilot-registry keys generate --role publisher --out
-   publisher.key` with a password. Keep an offline backup of the
-   encrypted secret key.
-2. Store the encrypted secret key and its password as secrets of a
-   dedicated environment of `knittingcode/deckpilot-plugins` (proposed:
-   `official-release`, release tags only, required reviewer), never in a
-   repository, never in `knittingcode/deckpilot` (the release separation,
-   [distribution.md](distribution.md), forbids plugin signing here and
-   `check-release-separation.py` enforces it). The release workflow passes
-   them to `release sign --key-env … --password-env …`, so the secret never
-   touches the disk.
-3. Pin the public key in a reviewed pull request to
-   `publisher/first-party.json` (and the plugin repository's copy). It
+1. Offline, on two separate occasions (ideally two machines),
+   `deckpilot-registry keys generate --role publisher --out
+   publisher-a.key` and `... --out publisher-b.key`, each with its own
+   password. The output prints the public key; its key id is the one
+   minisign prints (`minisign public key <KEYID>` in the `.pub` file's
+   comment line). Keep an offline backup of each encrypted secret key,
+   apart from the other.
+2. Store them as secrets of the dedicated environment `official-release`
+   of `knittingcode/deckpilot-plugins` (release tags only, required
+   reviewer), never in a repository, never in `knittingcode/deckpilot`
+   (the release separation, [distribution.md](distribution.md), forbids
+   plugin signing here and `check-release-separation.py` enforces it):
+
+   | Secret | Content |
+   | --- | --- |
+   | `DECKPILOT_PUBLISHER_KEY_A` | the text of `publisher-a.key` (encrypted secret key) |
+   | `DECKPILOT_PUBLISHER_KEY_A_PASSWORD` | its password |
+   | `DECKPILOT_PUBLISHER_KEY_B` | the text of `publisher-b.key` |
+   | `DECKPILOT_PUBLISHER_KEY_B_PASSWORD` | its password |
+
+   The release workflow signs in two separate jobs, each with one key:
+   `deckpilot-registry release sign --package <id>-<version>.dpplugin
+   --id <id> --version <version> --key-env DECKPILOT_PUBLISHER_KEY_A
+   --password-env DECKPILOT_PUBLISHER_KEY_A_PASSWORD` (and `_B`), so the
+   secret never touches the disk and no job holds both keys. Each writes
+   `<id>-<version>.dpplugin.<KEYID>.minisig`; a final job collects both,
+   runs `release verify` against the pinned keys (threshold 2) and
+   publishes the package with both files.
+3. Pin both public keys and `"threshold": 2` in one reviewed pull request
+   to `publisher/first-party.json` (and the plugin repository's copy). It
    reaches users with an application release; nothing at run time can
-   change it.
+   change it. (Agent tests and `release verify --keys` use throwaway keys
+   only.)
 4. Rotation or compromise: move the key to `revokedKeys`, pin the new
-   one, and revoke the releases signed after the compromise in
-   `artifacts.json`. Until an application release carries the new keys,
-   builds simply cannot verify; no user installation trusts the key at
-   run time.
+   one, keep the threshold, and revoke the releases signed after the
+   compromise in `artifacts.json`. Until an application release carries
+   the new keys, builds simply cannot verify; no user installation trusts
+   the key at run time.
 
 ## Wave B: consuming an artifact
 

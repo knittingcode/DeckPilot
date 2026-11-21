@@ -63,19 +63,24 @@ DECKPILOT_REGISTRY_KEY_PASSWORD; never printed.
 
 First-party release artifacts (the publisher signature, crate::publisher):
   release sign --package FILE.dpplugin --id ID --version V (--key FILE | --key-env NAME)
-               --out FILE.minisig
+               [--out-dir DIR]
       Signs a deckpilot.* package as ID V (from the release tag; the package must
-      say the same) with the publisher key, after the verifier's own checks, which
-      run before the key is loaded. --key-env reads the secret key text from an
-      environment variable.
-  release verify --package FILE.dpplugin --signature FILE.minisig... --id ID --version V
+      say the same) with ONE publisher key, after the verifier's own checks, which
+      run before the key is loaded, and writes FILE.dpplugin.<KEYID>.minisig (KEYID:
+      the key's minisign key id, 16 uppercase hex) next to the package or in
+      --out-dir; never overwrites. Run once per key. --key-env reads the secret key
+      text from an environment variable.
+  release verify --package FILE.dpplugin [--signatures-dir DIR] --id ID --version V
                  --sha256 HEX --size N --app-version V --plugin-api MAJOR.MINOR
                  [--platform macos|windows|linux] [--keys FILE] [--released-pins FILE]
                  [--revocations FILE] [--audit FILE.jsonl] [--unpack DIR]
-      Verifies an artifact against the claim (id, version, sha256, size), the pinned
-      publisher keys (--keys: others, for tests), revocations, the host and the
-      released pins (rollback); appends the outcome to --audit; --unpack writes the
-      files of a verified artifact. Authenticity only: it grants no permission.
+      Reads every FILE.dpplugin.<KEYID>.minisig next to the package (or in
+      --signatures-dir), reports which keys counted and why the other files did
+      not, and verifies the artifact against the claim (id, version, sha256, size),
+      the threshold of distinct pinned publisher keys (--keys: others, for tests;
+      the output says so), revocations, the host and the released pins (rollback);
+      appends the outcome to --audit; --unpack writes the files of a verified
+      artifact. Authenticity only: it grants no permission.
 ";
 
 /// Where a command reads secrets and writes its output. Tests pass their
@@ -263,6 +268,24 @@ fn release_key(opts: &Opts, io: &mut Io<'_>) -> Result<SigningKey> {
         }
         _ => fail("give either --key FILE or --key-env NAME"),
     }
+}
+
+/// Writes a new file; an existing one is never overwritten.
+fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::AlreadyExists => PublishError(format!(
+                "{} already exists; refusing to overwrite",
+                path.display()
+            )),
+            _ => PublishError(format!("{}: {e}", path.display())),
+        })?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|e| PublishError(format!("{}: {e}", path.display())))
 }
 
 fn role_of(opts: &Opts, name: &str) -> Result<Option<Role>> {
@@ -602,13 +625,8 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
             let version: Version = opts
                 .parsed("version")?
                 .ok_or_else(|| PublishError("--version is required".into()))?;
-            let out = PathBuf::from(opts.required("out")?);
-            if out.exists() {
-                return fail(format!(
-                    "{} already exists; refusing to overwrite",
-                    out.display()
-                ));
-            }
+            let package_path = PathBuf::from(opts.required("package")?);
+            let out_dir = opts.path("out-dir")?;
             // Every check that parses the package runs before the secret
             // key is loaded, and the key is dropped before the signature is
             // verified.
@@ -619,10 +637,13 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
             let public = key.public().to_owned();
             drop(key);
             super::release::check_signed(&package, &signature, &public, &claim)?;
-            std::fs::write(&out, format!("{signature}\n"))
-                .map_err(|e| PublishError(format!("{}: {e}", out.display())))?;
+            let key_id = crate::publisher::key_id(&public)
+                .ok_or_else(|| PublishError("the signing key has no key id".into()))?;
+            let out = super::release::signature_path(&package_path, out_dir.as_deref(), &key_id)?;
+            write_new(&out, format!("{signature}\n").as_bytes())?;
             format!(
-                "signed {} {} (sha256 {}, {} bytes) with publisher key {} to {}",
+                "signed {} {} (sha256 {}, {} bytes) with publisher key {key_id} (fingerprint {}) \
+                 to {}",
                 claim.id,
                 claim.version,
                 claim.package.sha256,
@@ -633,14 +654,7 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
         }
         "release verify" => {
             let package = PathBuf::from(opts.required("package")?);
-            let signatures: Vec<PathBuf> = opts
-                .all("signature")
-                .into_iter()
-                .map(PathBuf::from)
-                .collect();
-            if signatures.is_empty() {
-                return fail("--signature is required (once per publisher key that signed)");
-            }
+            let signatures_dir = opts.path("signatures-dir")?;
             let claim = crate::publisher::ReleaseClaim {
                 id: plugin_id(&opts.required("id")?)?,
                 version: opts
@@ -673,7 +687,7 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
             opts.finish()?;
             super::release::verify(&super::release::VerifyRequest {
                 package: &package,
-                signatures: signatures.iter().map(PathBuf::as_path).collect(),
+                signatures_dir: signatures_dir.as_deref(),
                 keys: keys.as_deref(),
                 claim,
                 host,

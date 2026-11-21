@@ -132,6 +132,45 @@ pub fn key_identity(public_key_b64: &str) -> Result<[u8; 32], SigError> {
     Ok(key)
 }
 
+/// The minisign key id (8 bytes, little-endian) as minisign prints it: 16
+/// uppercase hex characters.
+fn format_key_id(raw: &[u8]) -> Option<String> {
+    let bytes: [u8; 8] = raw.get(2..10)?.try_into().ok()?;
+    Some(format!("{:016X}", u64::from_le_bytes(bytes)))
+}
+
+/// The minisign key id of a base64-wrapped minisign public key, as
+/// minisign prints it (16 uppercase hex characters).
+pub fn public_key_id(public_key_b64: &str) -> Result<String, SigError> {
+    let invalid = SigError::Signature(SignatureError::InvalidPublicKey);
+    key_identity(public_key_b64)?;
+    let text = STANDARD
+        .decode(public_key_b64.trim())
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .ok_or_else(|| invalid.clone())?;
+    let line = text.lines().nth(1).ok_or_else(|| invalid.clone())?;
+    let raw = STANDARD.decode(line.trim()).map_err(|_| invalid.clone())?;
+    format_key_id(&raw).ok_or(invalid)
+}
+
+/// The key id a base64 minisign signature names, **not verified** (the
+/// signature line's key number, as minisign prints it). Only used to match
+/// a signature file to the one pinned key it may be checked against.
+pub fn signature_key_id(signature_b64: &str) -> Result<String, SigError> {
+    let invalid = SigError::Signature(SignatureError::InvalidSignature);
+    // The strict four-line form first.
+    trusted_comment(signature_b64)?;
+    let text = STANDARD
+        .decode(signature_b64.trim())
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .ok_or_else(|| invalid.clone())?;
+    let line = text.split('\n').nth(1).ok_or_else(|| invalid.clone())?;
+    let raw = STANDARD.decode(line.trim()).map_err(|_| invalid.clone())?;
+    format_key_id(&raw).ok_or(invalid)
+}
+
 /// One key, exact comment.
 pub fn verify_exact(
     public_key_b64: &str,
