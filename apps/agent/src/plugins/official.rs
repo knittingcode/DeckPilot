@@ -16,7 +16,9 @@
 //! * **A rollback floor per plugin**, persisted in `<data dir>/plugin-official/
 //!   floors.json`: the highest release it ever verified for the plugin, and
 //!   its files. Never below it; the same version only with the same files.
-//!   The bundled copy this agent pins counts as a floor too. The floor is
+//!   The bundled copy this agent pins, the highest version a DeckPilot
+//!   release shipped on this platform (`released-pins.json`) and the
+//!   artifact lock count as floors too, all compiled in. The floor is
 //!   raised as soon as a release verified, before the store installs it, so
 //!   an interrupted install can be retried with the same bytes and nothing
 //!   older. An unreadable floor file refuses every official install
@@ -63,7 +65,7 @@ use deckpilot_plugin_registry::publisher::{
     ReleasePolicy, RevokedRelease, VerifiedRelease,
 };
 use deckpilot_plugin_registry::{InstalledVerdict, write_atomic};
-use deckpilot_plugin_store::{GrantSet, InstallSource, PluginRecord, VerdictSource};
+use deckpilot_plugin_store::{InstallSource, PluginRecord, VerdictSource};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -79,6 +81,11 @@ const FLOORS_VERSION: u32 = 1;
 /// The reviewed artifact lock of this build; its `revoked` list refuses
 /// releases at run time too.
 const ARTIFACT_LOCK: &str = include_str!("../../../../plugins/first-party/artifacts.json");
+/// What every DeckPilot release shipped per platform: the highest version
+/// of each plugin is a floor no registry release may go below.
+const RELEASED_PINS: &str = include_str!("../../../../plugins/first-party/released-pins.json");
+/// Rotated audit logs kept (`audit.jsonl.1` the newest).
+pub(super) const AUDIT_GENERATIONS: usize = 5;
 
 /// Test only (feature `test-hooks`): publisher keys read from this file
 /// instead of the pinned ones, so the end-to-end tests can sign releases
@@ -108,8 +115,13 @@ pub(super) struct GateReview {
     pub date: &'static str,
     /// Distinct publisher keys a privileged release needs; at least 2.
     pub min_threshold: u64,
-    /// Per plugin id, the privileged grant keys (`tools:git`, `resources`, …)
-    /// it may declare. Anything else stays refused.
+    /// Per plugin id, every privileged construct it may declare, as
+    /// [`deckpilot_plugin_store::privileged_constructs`] names them: the
+    /// privileged grant keys (`tools:git`, `resources`, `hostViews`, …) and
+    /// the other gated constructs by their labels ("a \`resource\`
+    /// parameter", "\`node.changesContext\`", "the host source \`…\`", "the
+    /// \`projects\` view", "\`statusItems\`", "\`dashboardCards\`"). Anything
+    /// else stays refused.
     pub plugins: &'static [(&'static str, &'static [&'static str])],
 }
 
@@ -119,21 +131,31 @@ pub(super) struct GateReview {
 /// fails until that review updates it too.
 pub(super) const PRIVILEGED_GATE: PrivilegedGate = PrivilegedGate::Closed;
 
+/// What the gate's opening path admitted, and the keys that signed it.
+#[derive(Debug)]
+pub(super) struct Admitted {
+    pub package: VerifiedPackage,
+    pub signers: Vec<String>,
+}
+
 /// The gate's opening path, for an artifact the verifier refused only
 /// because it declares privileged kinds (so its size, sha256, signatures
 /// and revocations already passed: [`publisher::verify_release`] checks
 /// those first). Closed: the refusal stands. Open: the review's
-/// conditions (threshold, plugin, the exact privileged keys), then the
-/// bundled reader rules (`verify_bundled_files`, the only reader that
-/// accepts the privileged kinds), compatibility and the floor.
+/// conditions (threshold, plugin, every privileged construct), the keys
+/// that actually signed (a threshold of them, counted again here), the
+/// registry's pins (manifest hash, permissions), then the bundled reader
+/// rules (`verify_bundled_files`, the only reader that accepts the
+/// privileged kinds), compatibility and the floor.
 pub(super) fn admit_privileged(
     gate: PrivilegedGate,
     refusal: PublisherError,
     keys: &PublisherKeys,
-    claim: &ReleaseClaim,
+    signatures: &[String],
+    expected: &ExpectedPackage,
     package: &[u8],
     policy: &ReleasePolicy<'_>,
-) -> Result<VerifiedPackage, PublisherError> {
+) -> Result<Admitted, PublisherError> {
     let PublisherError::PrivilegedGateClosed { .. } = &refusal else {
         return Err(refusal);
     };
@@ -146,23 +168,35 @@ pub(super) fn admit_privileged(
     let Some((_, allowed)) = review
         .plugins
         .iter()
-        .find(|(id, _)| *id == claim.id.as_str())
+        .find(|(id, _)| *id == expected.id.as_str())
     else {
         return Err(refusal);
     };
+    let comment = publisher::release_comment(&expected.id, &expected.version, &expected.package);
+    let signers: Vec<String> = keys
+        .keys
+        .iter()
+        .filter(|key| {
+            signatures.iter().any(|signature| {
+                deckpilot_plugin_registry::sig::verify_exact(key, signature, package, &comment)
+                    .is_ok()
+            })
+        })
+        .filter_map(|key| publisher::fingerprint(key))
+        .collect();
+    if u64::try_from(signers.len()).unwrap_or(0) < review.min_threshold.max(keys.threshold) {
+        return Err(refusal);
+    }
     let files = read_archive(package, policy.limits)?;
-    let expected = ExpectedFiles {
-        id: claim.id.clone(),
-        version: claim.version.clone(),
+    check_registry_pins(expected, &files)?;
+    let pinned = ExpectedFiles {
+        id: expected.id.clone(),
+        version: expected.version.clone(),
         files: digests(&files),
     };
-    let verified = verify_bundled_files(files, &expected, policy.limits)?;
-    let declared: BTreeSet<String> = GrantSet::from_manifest(verified.manifest())
-        .keys()
-        .filter(|key| key.is_first_party_only())
-        .map(ToString::to_string)
-        .collect();
-    if declared.iter().any(|key| !allowed.contains(&key.as_str())) {
+    let verified = verify_bundled_files(files, &pinned, policy.limits)?;
+    let constructs = deckpilot_plugin_store::privileged_constructs(verified.manifest());
+    if constructs.iter().any(|c| !allowed.contains(&c.as_str())) {
         return Err(refusal);
     }
     let host = policy.host.ok_or(refusal)?;
@@ -171,9 +205,45 @@ pub(super) fn admit_privileged(
         .check_compatibility(host)
         .map_err(PublisherError::Incompatible)?;
     if let Some(floor) = policy.floor {
-        check_floor(claim, floor, &digests(verified.files()))?;
+        let claim = ReleaseClaim {
+            id: expected.id.clone(),
+            version: expected.version.clone(),
+            package: expected.package.clone(),
+        };
+        check_floor(&claim, floor, &digests(verified.files()))?;
     }
-    Ok(verified)
+    Ok(Admitted {
+        package: verified,
+        signers,
+    })
+}
+
+/// The registry's pins that `verify_package` checks, for the opening path
+/// (which reads with the bundled rules instead): the manifest's sha256 and
+/// its permissions, exactly as the consent dialog shows them.
+fn check_registry_pins(expected: &ExpectedPackage, files: &Files) -> Result<(), PublisherError> {
+    let manifest = files
+        .get(deckpilot_plugin_package::MANIFEST)
+        .ok_or_else(|| PublisherError::Package("manifest.json is missing".into()))?;
+    if sha256(manifest) != expected.manifest_sha256 {
+        return Err(PublisherError::Package(
+            "manifest.json is not the one the registry pins".into(),
+        ));
+    }
+    if let Some(permissions) = &expected.permissions {
+        let value: serde_json::Value = serde_json::from_slice(manifest)
+            .map_err(|e| PublisherError::Package(format!("manifest.json: {e}")))?;
+        let declared = value
+            .get("permissions")
+            .cloned()
+            .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+        if declared != serde_json::Value::Array(permissions.clone()) {
+            return Err(PublisherError::Package(
+                "the manifest's permissions are not the ones the registry shows".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn digests(files: &Files) -> BTreeMap<String, PackageDigest> {
@@ -214,6 +284,11 @@ fn check_floor(
 struct FloorsFile {
     floors_version: u32,
     plugins: BTreeMap<PluginId, Floor>,
+    /// Every release this agent verified, by plugin and version: the
+    /// fingerprints of the keys that signed it. An installed registry copy
+    /// of an official plugin whose version is not here is not run.
+    #[serde(default)]
+    releases: BTreeMap<PluginId, BTreeMap<Version, Vec<String>>>,
 }
 
 impl Default for FloorsFile {
@@ -221,6 +296,7 @@ impl Default for FloorsFile {
         Self {
             floors_version: FLOORS_VERSION,
             plugins: BTreeMap::new(),
+            releases: BTreeMap::new(),
         }
     }
 }
@@ -307,14 +383,139 @@ pub(super) struct Delivery<'a> {
     pub now: DateTime<Utc>,
 }
 
-/// The publisher keys, the lock's revocations and the persisted floors.
+/// What the agent compiles in besides the keys: the artifact lock (its
+/// releases are minimum versions, its `revoked` refuses releases) and the
+/// floors of `released-pins.json` for the running platform.
+#[derive(Debug, Clone, Default)]
+pub(super) struct Compiled {
+    pub revoked: Vec<RevokedRelease>,
+    /// The highest version any DeckPilot release shipped on this platform,
+    /// with its files.
+    pub released: BTreeMap<PluginId, ReleaseFloor>,
+    /// The lock's releases: never below them, the same version only with
+    /// the same package.
+    pub locked: BTreeMap<PluginId, ReleaseClaim>,
+}
+
+/// `released-pins.json`, only what the floors need.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReleasedPins {
+    released_pins_version: u32,
+    releases: Vec<ReleasedRelease>,
+}
+
+#[derive(Deserialize)]
+struct ReleasedRelease {
+    platform: String,
+    plugins: Vec<ReleasedPlugin>,
+}
+
+#[derive(Deserialize)]
+struct ReleasedPlugin {
+    id: PluginId,
+    version: Version,
+    files: BTreeMap<String, PackageDigest>,
+}
+
+impl Compiled {
+    /// From the lock and released pins (JSON) for `platform` (none: no
+    /// released floors; an unknown platform verifies nothing anyway).
+    pub fn parse(
+        lock: &[u8],
+        released_pins: &[u8],
+        platform: Option<deckpilot_plugin_manifest::Platform>,
+    ) -> Result<Self, String> {
+        let lock = ArtifactLock::from_json(lock)
+            .map_err(|e| format!("the compiled artifact lock is invalid: {e}"))?;
+        let pins: ReleasedPins = serde_json::from_slice(released_pins)
+            .map_err(|e| format!("the compiled released pins are invalid: {e}"))?;
+        if pins.released_pins_version != 1 {
+            return Err(format!(
+                "the compiled released pins have releasedPinsVersion {}",
+                pins.released_pins_version
+            ));
+        }
+        let name = platform.map(|p| match p {
+            deckpilot_plugin_manifest::Platform::Macos => "macos",
+            deckpilot_plugin_manifest::Platform::Windows => "windows",
+            deckpilot_plugin_manifest::Platform::Linux => "linux",
+        });
+        let mut released: BTreeMap<PluginId, ReleaseFloor> = BTreeMap::new();
+        for release in pins.releases {
+            if Some(release.platform.as_str()) != name {
+                continue;
+            }
+            for plugin in release.plugins {
+                if released
+                    .get(&plugin.id)
+                    .is_none_or(|floor| floor.version < plugin.version)
+                {
+                    released.insert(
+                        plugin.id,
+                        ReleaseFloor {
+                            version: plugin.version,
+                            files: plugin.files,
+                        },
+                    );
+                }
+            }
+        }
+        let locked = lock
+            .plugins
+            .iter()
+            .map(|artifact| (artifact.id.clone(), artifact.claim()))
+            .collect();
+        Ok(Self {
+            revoked: lock.revoked,
+            released,
+            locked,
+        })
+    }
+
+    /// This build's.
+    fn this_build() -> Result<Self, String> {
+        Self::parse(
+            ARTIFACT_LOCK.as_bytes(),
+            RELEASED_PINS.as_bytes(),
+            deckpilot_plugin_manifest::Platform::current(),
+        )
+    }
+
+    /// Never below the lock's release; at its version only its package.
+    fn check_locked(&self, claim: &ReleaseClaim) -> Result<(), Refusal> {
+        let Some(locked) = self.locked.get(&claim.id) else {
+            return Ok(());
+        };
+        if claim.version < locked.version {
+            return Err(Refusal::Publisher(PublisherError::Rollback {
+                id: claim.id.clone(),
+                version: claim.version.clone(),
+                floor: locked.version.clone(),
+            }));
+        }
+        if claim.version == locked.version && claim.package != locked.package {
+            return Err(Refusal::Publisher(PublisherError::SameVersionOtherFiles {
+                id: claim.id.clone(),
+                version: claim.version.clone(),
+                files: "the package is not the one the artifact lock pins".into(),
+            }));
+        }
+        Ok(())
+    }
+}
+
+/// The publisher keys, the compiled lock and floors, and the persisted
+/// floors.
 #[derive(Debug)]
 pub(super) struct Official {
     keys: Result<PublisherKeys, String>,
-    revoked: Result<Vec<RevokedRelease>, String>,
+    compiled: Result<Compiled, String>,
     dir: PathBuf,
     floors: Mutex<Result<FloorsFile, String>>,
     gate: PrivilegedGate,
+    /// [`MAX_AUDIT_BYTES`], smaller in tests.
+    max_audit_bytes: u64,
 }
 
 impl Official {
@@ -322,17 +523,14 @@ impl Official {
     /// file named by [`TEST_KEYS_ENV`] instead), the compiled lock's
     /// revocations, and the floors in `dir`.
     pub fn open(dir: &Path) -> Self {
-        let revoked = ArtifactLock::from_json(ARTIFACT_LOCK.as_bytes())
-            .map(|lock| lock.revoked)
-            .map_err(|e| format!("the compiled artifact lock is invalid: {e}"));
-        Self::with(dir, pinned_keys(), revoked)
+        Self::with(dir, pinned_keys(), Compiled::this_build())
     }
 
-    /// With the given keys and revocations (tests).
+    /// With the given keys and compiled data (tests).
     pub fn with(
         dir: &Path,
         keys: Result<PublisherKeys, String>,
-        revoked: Result<Vec<RevokedRelease>, String>,
+        compiled: Result<Compiled, String>,
     ) -> Self {
         let floors = read_floors(&dir.join(FLOORS_FILE));
         if let Err(problem) = &floors {
@@ -340,10 +538,11 @@ impl Official {
         }
         Self {
             keys,
-            revoked,
+            compiled,
             dir: dir.to_path_buf(),
             floors: Mutex::new(floors),
             gate: PRIVILEGED_GATE,
+            max_audit_bytes: MAX_AUDIT_BYTES,
         }
     }
 
@@ -351,6 +550,13 @@ impl Official {
     #[cfg(test)]
     pub fn with_gate(mut self, gate: PrivilegedGate) -> Self {
         self.gate = gate;
+        self
+    }
+
+    /// With a smaller audit rotation size (tests of the rotation only).
+    #[cfg(test)]
+    pub fn with_audit_limit(mut self, bytes: u64) -> Self {
+        self.max_audit_bytes = bytes;
         self
     }
 
@@ -363,7 +569,7 @@ impl Official {
         if !keys.is_provisioned() {
             return Err(PublisherError::NotProvisioned.to_string());
         }
-        self.revoked.as_ref().map_err(Clone::clone)?;
+        self.compiled.as_ref().map_err(Clone::clone)?;
         self.lock_floors()
             .as_ref()
             .map(|_| ())
@@ -377,6 +583,7 @@ impl Official {
     }
 
     /// The floor recorded for `id`, if any.
+    #[cfg(test)]
     pub fn floor(&self, id: &PluginId) -> Option<Floor> {
         self.lock_floors()
             .as_ref()
@@ -403,19 +610,37 @@ impl Official {
             version: pin.version.clone(),
             files: pin.files.clone(),
         });
-        Ok(match (recorded, bundled) {
-            (None, other) | (other, None) => other,
-            (Some(a), Some(b)) if a.version > b.version => Some(a),
-            (Some(a), Some(b)) if a.version < b.version => Some(b),
-            (Some(a), Some(b)) if a.files == b.files => Some(a),
-            (Some(a), Some(_)) => {
-                return Err(Refusal::Publisher(PublisherError::SameVersionOtherFiles {
-                    id: id.clone(),
-                    version: a.version,
-                    files: "the recorded release and the bundled copy differ".into(),
-                }));
-            }
-        })
+        let released = self
+            .compiled
+            .as_ref()
+            .map_err(|e| Refusal::Unavailable(e.clone()))?
+            .released
+            .get(id)
+            .cloned();
+        let mut floor: Option<ReleaseFloor> = None;
+        for (what, candidate) in [
+            ("the recorded release", recorded),
+            ("the bundled copy", bundled),
+            ("a DeckPilot release (released-pins.json)", released),
+        ] {
+            let Some(candidate) = candidate else {
+                continue;
+            };
+            floor = match floor {
+                None => Some(candidate),
+                Some(current) if current.version > candidate.version => Some(current),
+                Some(current) if current.version < candidate.version => Some(candidate),
+                Some(current) if current.files == candidate.files => Some(current),
+                Some(current) => {
+                    return Err(Refusal::Publisher(PublisherError::SameVersionOtherFiles {
+                        id: id.clone(),
+                        version: current.version,
+                        files: format!("{what} has other files at that version"),
+                    }));
+                }
+            };
+        }
+        Ok(floor)
     }
 
     /// Verifies `delivery` and returns the package the store may install.
@@ -469,10 +694,11 @@ impl Official {
             .keys
             .as_ref()
             .map_err(|e| Refusal::Unavailable(e.clone()))?;
-        let revoked = self
-            .revoked
+        let compiled = self
+            .compiled
             .as_ref()
             .map_err(|e| Refusal::Unavailable(e.clone()))?;
+        let revoked = &compiled.revoked;
         let host = delivery.host.ok_or_else(|| {
             Refusal::Unavailable("the running DeckPilot's version or platform is unknown".into())
         })?;
@@ -487,6 +713,7 @@ impl Official {
             .map(|bytes| publisher::read_signature(bytes))
             .collect::<Result<Vec<_>, _>>()
             .map_err(Refusal::Publisher)?;
+        compiled.check_locked(claim)?;
         let floor = self.effective_floor(&claim.id, delivery.pin)?;
         let limits = Limits::default();
         let policy = ReleasePolicy {
@@ -502,23 +729,22 @@ impl Official {
                     (package, release.file_digests(), release.signers().to_vec())
                 }
                 Err(refusal @ PublisherError::PrivilegedGateClosed { .. }) => {
-                    let package = admit_privileged(
+                    let admitted = admit_privileged(
                         self.gate,
                         refusal,
                         keys,
-                        claim,
+                        &signatures,
+                        delivery.expected,
                         delivery.package,
                         &policy,
                     )
                     .map_err(Refusal::Publisher)?;
-                    let files = digests(package.files());
-                    // The verifier's refusal does not say which keys
-                    // signed; a threshold of these did.
-                    (package, files, keys.fingerprints())
+                    let files = digests(admitted.package.files());
+                    (admitted.package, files, admitted.signers)
                 }
                 Err(refusal) => return Err(Refusal::Publisher(refusal)),
             };
-        self.raise_floor(claim, files, &signers, delivery.now)?;
+        self.record_release(claim, files, &signers, delivery.now)?;
         Ok((package, signers))
     }
 
@@ -541,7 +767,10 @@ impl Official {
         Ok(package)
     }
 
-    fn raise_floor(
+    /// Records the verified release (its signers, for run-time revocation)
+    /// and raises the floor if it is higher. Saved before this returns; a
+    /// record that cannot be saved refuses the release.
+    fn record_release(
         &self,
         claim: &ReleaseClaim,
         files: BTreeMap<String, PackageDigest>,
@@ -552,24 +781,30 @@ impl Official {
         let floors = floors
             .as_mut()
             .map_err(|e| Refusal::Unavailable(e.clone()))?;
-        if floors
+        let mut next = floors.clone();
+        next.releases
+            .entry(claim.id.clone())
+            .or_default()
+            .insert(claim.version.clone(), signers.to_vec());
+        if next
             .plugins
             .get(&claim.id)
-            .is_some_and(|floor| floor.version >= claim.version)
+            .is_none_or(|floor| floor.version < claim.version)
         {
+            next.plugins.insert(
+                claim.id.clone(),
+                Floor {
+                    version: claim.version.clone(),
+                    package: claim.package.clone(),
+                    files,
+                    signers: signers.to_vec(),
+                    verified_at: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                },
+            );
+        }
+        if next == *floors {
             return Ok(());
         }
-        let mut next = floors.clone();
-        next.plugins.insert(
-            claim.id.clone(),
-            Floor {
-                version: claim.version.clone(),
-                package: claim.package.clone(),
-                files,
-                signers: signers.to_vec(),
-                verified_at: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            },
-        );
         let bytes = serde_json::to_vec_pretty(&next)
             .map_err(|e| Refusal::Unavailable(format!("the floors: {e}")))?;
         write_atomic(&self.dir.join(FLOORS_FILE), &bytes).map_err(|e| {
@@ -582,20 +817,57 @@ impl Official {
         Ok(())
     }
 
+    /// Audits a refusal that happened before a release could be verified
+    /// (`ready` refused before the download, or the signature could not be
+    /// downloaded): what is known of the release, and why.
+    pub fn refused_before_verification(
+        &self,
+        id: &PluginId,
+        version: Option<&Version>,
+        package: Option<&PackageDigest>,
+        why: &str,
+        now: DateTime<Utc>,
+    ) {
+        warn!(plugin = %id, version = ?version.map(ToString::to_string), %why,
+            "official release refused before verification");
+        self.audit(&AuditRecord {
+            at: now,
+            outcome: publisher::AuditOutcome::Refused,
+            id: id.to_string(),
+            version: version.map(ToString::to_string).unwrap_or_default(),
+            sha256: package.map(|p| p.sha256.to_string()).unwrap_or_default(),
+            size: package.map_or(0, |p| p.size),
+            signers: Vec::new(),
+            reason: Some(why.to_owned()),
+        });
+    }
+
     /// Appends `record` to the audit log, hash-chained: each line is
     /// `{"prev": <sha256 of the previous line>, "record": AuditRecord}`, the
-    /// first line of a log chains to the last line of the rotated one
-    /// (`audit.jsonl.1`, rotated above [`MAX_AUDIT_BYTES`]) or to
+    /// first line of a log chains to the last line of the newest rotated one
+    /// (`audit.jsonl.1`; above [`MAX_AUDIT_BYTES`] the log is rotated and
+    /// [`AUDIT_GENERATIONS`] old files are kept, the oldest dropped) or to
     /// [`GENESIS`]. Editing, removing or reordering a line breaks the chain
-    /// ([`check_audit_chain`]); it is tamper-evident, not tamper-proof (who
-    /// can write the data directory can rewrite the whole chain). A failure
-    /// is logged, never fatal: the agent's log has the outcome too.
+    /// ([`check_audit_chain`]).
+    ///
+    /// Limits (`publisher-signature.md`): tamper-evident, not tamper-proof.
+    /// Whoever can write the data directory can rewrite or truncate the
+    /// whole chain, or delete the files; the last line is anchored only by
+    /// its hash in the agent's log (`official audit line`), which the same
+    /// user can edit; the oldest generation's first line chains to a file
+    /// that is gone. A failure to write is logged, never fatal.
     fn audit(&self, record: &AuditRecord) {
         let path = self.dir.join(AUDIT_FILE);
         let result = (|| -> std::io::Result<()> {
             std::fs::create_dir_all(&self.dir)?;
-            let rotated = self.dir.join(format!("{AUDIT_FILE}.1"));
-            if std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_AUDIT_BYTES) {
+            let generation = |n: usize| self.dir.join(format!("{AUDIT_FILE}.{n}"));
+            let rotated = generation(1);
+            if std::fs::metadata(&path).is_ok_and(|m| m.len() > self.max_audit_bytes) {
+                for n in (1..AUDIT_GENERATIONS).rev() {
+                    if generation(n).exists() {
+                        std::fs::rename(generation(n), generation(n + 1))?;
+                    }
+                }
                 std::fs::rename(&path, &rotated)?;
             }
             let prev = last_line_hash(&path)?
@@ -623,10 +895,12 @@ impl Official {
     }
 
     /// The installed registry copies of official plugins this agent must
-    /// not run: their active version is revoked by the compiled lock, or the
-    /// release this agent verified for that version was signed by a key
-    /// that is now revoked. Bundled copies are trusted by the pins compiled
-    /// into the agent and are not affected.
+    /// not run, by version, with the reason: a version the compiled lock
+    /// revokes; one whose recorded release was signed by a key that is now
+    /// revoked; one this agent has no record of verifying (fail closed: a
+    /// deleted or reset floors file); and every version when the floors
+    /// cannot be read at all. Bundled copies are trusted by the pins
+    /// compiled into the agent and are not affected.
     pub fn revoked_installed(
         &self,
         records: &[PluginRecord],
@@ -641,7 +915,8 @@ impl Official {
                     .collect()
             })
             .unwrap_or_default();
-        let lock = self.revoked.as_deref().unwrap_or_default();
+        let compiled = self.compiled.as_ref();
+        let floors = self.lock_floors();
         let mut out = BTreeMap::new();
         for record in records {
             if !matches!(record.source, InstallSource::Registry { .. })
@@ -650,24 +925,49 @@ impl Official {
                 continue;
             }
             for version in record.versions.iter().map(|v| &v.version) {
-                if let Some(r) = lock
+                let key = (record.id.clone(), version.clone());
+                let compiled = match compiled {
+                    Ok(compiled) => compiled,
+                    Err(problem) => {
+                        out.insert(key, format!("this agent cannot check it: {problem}"));
+                        continue;
+                    }
+                };
+                if let Some(r) = compiled
+                    .revoked
                     .iter()
                     .find(|r| r.id == record.id && r.versions.contains(version))
                 {
                     out.insert(
-                        (record.id.clone(), version.clone()),
+                        key,
                         format!("the DeckPilot release is revoked: {}", r.reason),
                     );
                     continue;
                 }
-                if let Some(floor) = self.floor(&record.id)
-                    && floor.version == *version
-                    && floor.signers.iter().any(|s| revoked_keys.contains(s))
-                {
-                    out.insert(
-                        (record.id.clone(), version.clone()),
-                        "the DeckPilot release was signed by a revoked publisher key".into(),
-                    );
+                let floors = match floors.as_ref() {
+                    Ok(floors) => floors,
+                    Err(problem) => {
+                        out.insert(
+                            key,
+                            format!("this agent cannot read its record of the release: {problem}"),
+                        );
+                        continue;
+                    }
+                };
+                match floors.releases.get(&record.id).and_then(|r| r.get(version)) {
+                    None => {
+                        out.insert(
+                            key,
+                            "this agent has no record of verifying this DeckPilot release".into(),
+                        );
+                    }
+                    Some(signers) if signers.iter().any(|s| revoked_keys.contains(s)) => {
+                        out.insert(
+                            key,
+                            "the DeckPilot release was signed by a revoked publisher key".into(),
+                        );
+                    }
+                    Some(_) => {}
                 }
             }
         }

@@ -1280,6 +1280,37 @@ fn derived_grants_are_at_most_medium_tier_and_never_overwrite() {
     );
 }
 
+/// Derived grants are for copies shipped inside the app: a registry copy
+/// of a `deckpilot.*` id gets what the user grants, nothing derived.
+#[test]
+fn derived_grants_are_refused_for_a_registry_copy() {
+    let env = Env::new();
+    let mut manager = env.open();
+    let first_party = deckpilot_plugin_manifest::PluginId::parse("deckpilot.github-prs").unwrap();
+    let package = bundled_package(first_party.as_str(), "1.0.0", &with_notifications());
+    let low: std::collections::BTreeSet<GrantKey> = grants_of(&package)
+        .iter()
+        .filter(|(_, scope)| scope.tier() == Tier::Low)
+        .map(|(key, _)| key.clone())
+        .collect();
+    assert!(!low.is_empty());
+    manager
+        .install(
+            &package,
+            &InstallSource::Registry {
+                registry: "https://registry.example/".into(),
+            },
+            &Consent::none("user"),
+        )
+        .unwrap();
+    let result = manager.derive_grants(&first_party, &low, "migration:github-prs");
+    assert!(
+        matches!(result, Err(StoreError::SourceNotAllowed { .. })),
+        "{result:?}"
+    );
+    assert_eq!(manager.store().grants(&first_party).unwrap(), []);
+}
+
 /// Forgetting a migration's declines makes exactly those permissions
 /// undecided again: nothing is granted, and refusals and grants anybody
 /// else decided stay.

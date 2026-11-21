@@ -12,8 +12,8 @@ use deckpilot_plugin_package::{MANIFEST, PackageBuilder};
 use deckpilot_plugin_registry::RevokedVersions;
 use deckpilot_plugin_registry::publish::{KeyRole, SigningKey, generate_key};
 use deckpilot_plugin_store::{
-    Consent, CrashOnce, Failpoint, GrantKey, GrantStatus, ManagerOptions, Operation, PluginManager,
-    PluginState, StoreKey, UpdateOutcome,
+    Consent, CrashOnce, Failpoint, GrantKey, GrantSet, GrantStatus, ManagerOptions, Operation,
+    PluginManager, PluginState, StoreKey, UpdateOutcome,
 };
 use serde_json::{Value, json};
 
@@ -211,7 +211,17 @@ impl Env {
     }
 
     fn official_with(&self, keys: PublisherKeys, revoked: Vec<RevokedRelease>) -> Official {
-        Official::with(&self.state(), Ok(keys), Ok(revoked))
+        self.official_compiled(
+            keys,
+            Compiled {
+                revoked,
+                ..Compiled::default()
+            },
+        )
+    }
+
+    fn official_compiled(&self, keys: PublisherKeys, compiled: Compiled) -> Official {
+        Official::with(&self.state(), Ok(keys), Ok(compiled))
     }
 
     /// The bundle at `version` with `permissions`, pinned to its files.
@@ -1018,4 +1028,363 @@ fn a_refused_release_leaves_the_bundled_copy_untouched() {
     refusal(official.verify(&tampered.delivery(Some(&bundle), &host)));
     assert_eq!(state_of(&manager), before);
     assert!(official.floor(&id()).is_none());
+}
+
+// ------------------------------------------------- review fixes (2026-11-21)
+
+/// Install `version` (signed by `key`) from the registry, or update to it.
+fn install_or_update(manager: &mut PluginManager, official: &Official, release: &Release) {
+    let host = host();
+    let package = official.verify(&release.delivery(None, &host)).unwrap();
+    if manager.store().plugin(&id()).unwrap().is_some() {
+        let outcome = manager.update(&package, &registry_source()).unwrap();
+        assert!(
+            matches!(outcome, UpdateOutcome::Applied { .. }),
+            "{outcome:?}"
+        );
+    } else {
+        let all: Vec<GrantKey> = GrantSet::from_manifest(package.manifest())
+            .keys()
+            .cloned()
+            .collect();
+        manager
+            .install(&package, &registry_source(), &Consent::of(all, "user"))
+            .unwrap();
+    }
+}
+
+/// Finding 1: every verified version keeps its signers, so a rollback to an
+/// older version signed by a now-revoked key is refused, not only the
+/// floor version.
+#[test]
+fn a_rollback_to_a_release_signed_by_a_revoked_key_is_refused() {
+    let env = Env::new();
+    let second = Key::new(env.root.path(), "second.key");
+    let mut manager = env.open();
+    let both = env.official_with(keys(&[&env.key, &second], 1, &[]), Vec::new());
+    install_or_update(
+        &mut manager,
+        &both,
+        &Release::new(&env, "0.1.1", &notifications()),
+    );
+    let mut newer = Release::new(&env, "0.1.2", &notifications());
+    newer.signature = second.sign(&newer.package, "0.1.2");
+    install_or_update(&mut manager, &both, &newer);
+    assert_eq!(state_of(&manager).active().unwrap().version, v("0.1.2"));
+
+    // A later agent revokes the key that signed 0.1.1 only.
+    let later = env.official_with(keys(&[&second], 1, &[&env.key]), Vec::new());
+    let records = manager.store().plugins().unwrap();
+    let revoked = later.revoked_installed(&records);
+    assert_eq!(
+        revoked.keys().cloned().collect::<Vec<_>>(),
+        [(id(), v("0.1.1"))],
+        "{revoked:?}"
+    );
+    let verdicts = Verdicts {
+        official: &revoked,
+        registry: &NoVerdicts,
+    };
+    let refused = manager.rollback(&id(), &verdicts);
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(state_of(&manager).active().unwrap().version, v("0.1.2"));
+    // Without the revocation the rollback goes through.
+    let none = BTreeMap::new();
+    manager
+        .rollback(
+            &id(),
+            &Verdicts {
+                official: &none,
+                registry: &NoVerdicts,
+            },
+        )
+        .unwrap();
+    assert_eq!(state_of(&manager).active().unwrap().version, v("0.1.1"));
+    // ... and then the active version is the revoked one.
+    let records = manager.store().plugins().unwrap();
+    assert!(
+        later
+            .revoked_installed(&records)
+            .contains_key(&(id(), v("0.1.1")))
+    );
+}
+
+/// Finding 2: the floors compiled into the agent (released pins for this
+/// platform, the artifact lock) hold on a fresh install with nothing
+/// recorded and no bundled copy.
+#[test]
+fn compiled_floors_hold_on_a_fresh_install() {
+    let env = Env::new();
+    let host = host();
+    let shipped = files("0.3.0", &notifications(), "", |_| {});
+    let released_pins = json!({
+        "releasedPinsVersion": 1,
+        "releases": [{
+            "release": "0.9.0",
+            "platform": "linux",
+            "plugins": [{
+                "id": ID,
+                "version": "0.3.0",
+                "files": shipped
+                    .iter()
+                    .map(|(path, bytes)| (path.clone(), json!(digest(bytes))))
+                    .collect::<serde_json::Map<_, _>>()
+            }]
+        }, {
+            "release": "0.9.0",
+            "platform": "macos",
+            "plugins": [{ "id": ID, "version": "9.0.0", "files": {} }]
+        }]
+    });
+    let empty_lock = br#"{"artifactsVersion":1,"plugins":[],"revoked":[]}"#;
+    let compiled = Compiled::parse(
+        empty_lock,
+        &serde_json::to_vec(&released_pins).unwrap(),
+        Some(Platform::Linux),
+    )
+    .unwrap();
+    // Other platforms do not count.
+    assert_eq!(compiled.released[&id()].version, v("0.3.0"));
+    let official = env.official_compiled(keys(&[&env.key], 1, &[]), compiled);
+    assert!(matches!(
+        refusal(
+            official.verify(&Release::new(&env, "0.2.9", &notifications()).delivery(None, &host))
+        ),
+        Refusal::Publisher(PublisherError::Rollback { .. })
+    ));
+    assert!(matches!(
+        refusal(official.verify(
+            &Release::with(&env, "0.3.0", &notifications(), "-other", |_| {}).delivery(None, &host)
+        )),
+        Refusal::Publisher(PublisherError::SameVersionOtherFiles { .. })
+    ));
+    official
+        .verify(&Release::new(&env, "0.3.1", &notifications()).delivery(None, &host))
+        .unwrap();
+
+    // The lock: never below its release, at its version only its package.
+    let locked = Release::new(&env, "0.5.0", &notifications());
+    let lock = json!({
+        "artifactsVersion": 1,
+        "plugins": [{
+            "id": ID,
+            "version": "0.5.0",
+            "sha256": digest(&locked.package).sha256.to_string(),
+            "size": locked.package.len()
+        }],
+        "revoked": []
+    });
+    let other = Env::new();
+    let compiled = Compiled::parse(
+        &serde_json::to_vec(&lock).unwrap(),
+        br#"{"releasedPinsVersion":1,"releases":[]}"#,
+        Some(Platform::Linux),
+    )
+    .unwrap();
+    let official = other.official_compiled(keys(&[&env.key], 1, &[]), compiled);
+    let older = Release::new(&env, "0.4.9", &notifications());
+    assert!(matches!(
+        refusal(official.verify(&older.delivery(None, &host))),
+        Refusal::Publisher(PublisherError::Rollback { .. })
+    ));
+    let rebuilt = Release::with(&env, "0.5.0", &notifications(), "-rebuilt", |_| {});
+    assert!(matches!(
+        refusal(official.verify(&rebuilt.delivery(None, &host))),
+        Refusal::Publisher(PublisherError::SameVersionOtherFiles { .. })
+    ));
+    official.verify(&locked.delivery(None, &host)).unwrap();
+}
+
+#[test]
+fn this_builds_compiled_data_parses() {
+    Compiled::this_build().unwrap();
+    for platform in [Platform::Macos, Platform::Windows, Platform::Linux] {
+        Compiled::parse(
+            ARTIFACT_LOCK.as_bytes(),
+            RELEASED_PINS.as_bytes(),
+            Some(platform),
+        )
+        .unwrap();
+    }
+}
+
+/// Finding 7: revocation fails closed. A registry copy of an official
+/// plugin this agent has no record of verifying (the floors file deleted)
+/// or whose record cannot be read is not run.
+#[test]
+fn revocation_fails_closed_without_the_record() {
+    let env = Env::new();
+    let mut manager = env.open();
+    let official = env.official();
+    install_or_update(
+        &mut manager,
+        &official,
+        &Release::new(&env, "0.1.1", &notifications()),
+    );
+    let records = manager.store().plugins().unwrap();
+    assert!(official.revoked_installed(&records).is_empty());
+
+    std::fs::remove_file(env.state().join(FLOORS_FILE)).unwrap();
+    let deleted = env.official();
+    let revoked = deleted.revoked_installed(&records);
+    assert!(
+        revoked[&(id(), v("0.1.1"))].contains("no record"),
+        "{revoked:?}"
+    );
+
+    std::fs::write(env.state().join(FLOORS_FILE), b"garbage").unwrap();
+    let unreadable = env.official();
+    let revoked = unreadable.revoked_installed(&records);
+    assert!(
+        revoked[&(id(), v("0.1.1"))].contains("cannot read"),
+        "{revoked:?}"
+    );
+    // The quarantine follows.
+    let changes = manager
+        .apply_verdicts(&Verdicts {
+            official: &revoked,
+            registry: &NoVerdicts,
+        })
+        .unwrap();
+    assert_eq!(changes.len(), 1, "{changes:?}");
+    assert_eq!(state_of(&manager).state, PluginState::Quarantined);
+}
+
+/// Finding 8: refusals before verification are audited, and the rotation
+/// keeps several generations, chained across files.
+#[test]
+fn early_refusals_are_audited_and_rotation_keeps_generations() {
+    let env = Env::new();
+    let official = env.official().with_audit_limit(600);
+    official.refused_before_verification(
+        &id(),
+        Some(&v("0.1.1")),
+        None,
+        "refused before any download: test",
+        Utc::now(),
+    );
+    let audit = env.audit();
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0].record.outcome, publisher::AuditOutcome::Refused);
+    assert!(
+        audit[0]
+            .record
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("before any download")
+    );
+
+    for n in 0..40 {
+        official.refused_before_verification(&id(), None, None, &format!("line {n}"), Utc::now());
+    }
+    let generation = |n: usize| env.state().join(format!("{AUDIT_FILE}.{n}"));
+    for n in 1..=AUDIT_GENERATIONS {
+        assert!(generation(n).exists(), "generation {n}");
+    }
+    assert!(!generation(AUDIT_GENERATIONS + 1).exists());
+    // Oldest kept generation first, the live file last: one chain.
+    let mut prev: Option<String> = None;
+    for path in (1..=AUDIT_GENERATIONS)
+        .rev()
+        .map(generation)
+        .chain(std::iter::once(env.state().join(AUDIT_FILE)))
+    {
+        let text = std::fs::read_to_string(&path).unwrap();
+        let first: ChainedLine = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        let start = prev.clone().unwrap_or(first.prev.clone());
+        prev = Some(check_audit_chain(&text, &start).unwrap());
+    }
+}
+
+const STATUS_FIXTURE: &str = "Test fixture: privileged.";
+
+fn host_views_and_status_items(version: &str) -> Files {
+    files(
+        version,
+        &json!([{ "kind": "hostViews", "justification": STATUS_FIXTURE }]),
+        "",
+        |m| {
+            m["engines"]["pluginApi"] = json!("^1.9");
+            m["contributes"]["statusItems"] = json!(["activeProject"]);
+        },
+    )
+}
+
+static HOST_VIEWS_ONLY: GateReview = GateReview {
+    reviewer: "test",
+    date: "2026-11-21",
+    min_threshold: 2,
+    plugins: &[(ID, &["hostViews"])],
+};
+
+static HOST_VIEWS_AND_STATUS: GateReview = GateReview {
+    reviewer: "test",
+    date: "2026-11-21",
+    min_threshold: 2,
+    plugins: &[(ID, &["hostViews", "`statusItems`"])],
+};
+
+/// Finding 6: the opening path limits every privileged construct, keeps the
+/// registry's manifest and permission pins, and records the keys that
+/// actually signed.
+#[test]
+fn the_opening_path_limits_every_construct_and_records_the_real_signers() {
+    let env = Env::new();
+    let second = Key::new(env.root.path(), "second.key");
+    let third = Key::new(env.root.path(), "third.key");
+    let package = raw_package(&host_views_and_status_items("0.1.1"));
+    let expected = expected_for(&package, "0.1.1");
+    // Two of the three pinned keys sign.
+    let signatures = [
+        env.key.sign(&package, "0.1.1"),
+        second.sign(&package, "0.1.1"),
+    ];
+    let host = host();
+    let delivery = |expected| Delivery {
+        expected,
+        package: &package,
+        signatures: &signatures,
+        pin: None,
+        host: Some(&host),
+        now: Utc::now(),
+    };
+    let gated = |gate| {
+        env.official_with(keys(&[&env.key, &second, &third], 2, &[]), Vec::new())
+            .with_gate(gate)
+    };
+    // `statusItems` is not in the review: refused.
+    assert!(matches!(
+        gated(PrivilegedGate::Open(&HOST_VIEWS_ONLY)).verify(&delivery(&expected)),
+        Err(Refusal::Publisher(
+            PublisherError::PrivilegedGateClosed { .. }
+        ))
+    ));
+    // The registry's permissions are still checked on this path.
+    let mut relabeled = expected.clone();
+    relabeled.permissions = Some(Vec::new());
+    assert!(matches!(
+        gated(PrivilegedGate::Open(&HOST_VIEWS_AND_STATUS)).verify(&delivery(&relabeled)),
+        Err(Refusal::Publisher(PublisherError::Package(_)))
+    ));
+    let mut other_manifest = expected.clone();
+    other_manifest.manifest_sha256 = sha256(b"another manifest");
+    assert!(matches!(
+        gated(PrivilegedGate::Open(&HOST_VIEWS_AND_STATUS)).verify(&delivery(&other_manifest)),
+        Err(Refusal::Publisher(PublisherError::Package(_)))
+    ));
+    // Everything named: admitted, with exactly the two signers.
+    let open = gated(PrivilegedGate::Open(&HOST_VIEWS_AND_STATUS));
+    open.verify(&delivery(&expected)).unwrap();
+    let audit = env.audit();
+    let recorded = &audit.last().unwrap().record.signers;
+    let mut real = vec![
+        publisher::fingerprint(&env.key.public()).unwrap(),
+        publisher::fingerprint(&second.public()).unwrap(),
+    ];
+    real.sort();
+    let mut recorded = recorded.clone();
+    recorded.sort();
+    assert_eq!(recorded, real);
+    assert!(!recorded.contains(&publisher::fingerprint(&third.public()).unwrap()));
 }

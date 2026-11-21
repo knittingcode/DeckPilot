@@ -21,7 +21,11 @@ released either. 0.6.0 is the first version intended for publication.
   updated only as first-party releases signed by the DeckPilot publisher
   key built into the agent, on top of the registry's own signatures, with
   a rollback floor per plugin, revocations checked at every start and a
-  hash-chained audit log; a verified signature grants no permission. No
+  hash-chained audit log; a verified signature grants no permission.
+  Revocations also apply at enable, every run and rollback, and fail
+  closed when the agent has no record of a release; the releases
+  DeckPilot shipped are compiled-in minimum versions; module migrations
+  derive grants only for the copy shipped with the app. No
   publisher key is provisioned yet, so every such package is still
   refused and the bundled plugins keep coming from the application.
 

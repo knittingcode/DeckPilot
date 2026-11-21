@@ -1080,6 +1080,8 @@ async fn first_party_plugins_need_the_root_authorization_and_a_verified_publishe
         std::fs::read_to_string(env.paths.data_dir.join("plugin-official/audit.jsonl")).unwrap();
     // One verified release per install, hash-chained.
     assert_eq!(audit.matches("\"verified\"").count(), 2, "{audit}");
+    // The unsigned attempt is audited too (the signature was not found).
+    assert!(audit.contains("the publisher signature"), "{audit}");
     assert!(audit.contains("\"prev\":\"genesis\""), "{audit}");
 
     // Key set 3 withdraws the authorization: the update is refused before
@@ -1099,5 +1101,20 @@ async fn first_party_plugins_need_the_root_authorization_and_a_verified_publishe
     assert!(!server.log().contains(&update), "{:?}", server.log());
     assert_eq!(agent.state(FIRST_PARTY).await.0, "1.0.0");
     assert_eq!(agent.runtime().await.registry.unwrap().seq, Some(4));
+    agent.stop().await;
+
+    // The agent's record of the releases it verified is gone: at the next
+    // start its registry copies of official plugins are quarantined (fail
+    // closed), and enabling one is refused as revoked.
+    std::fs::remove_file(env.paths.data_dir.join("plugin-official/floors.json")).unwrap();
+    let agent = env.started(&registry, &server).await;
+    assert_eq!(agent.state(BUNDLED).await.1, PluginState::Quarantined);
+    let refused = agent
+        .request(Request::EnablePlugin {
+            plugin: BUNDLED.into(),
+            consent: vec![],
+        })
+        .await;
+    assert_eq!(reason_of(&refused), reason::REVOKED, "{refused:?}");
     agent.stop().await;
 }

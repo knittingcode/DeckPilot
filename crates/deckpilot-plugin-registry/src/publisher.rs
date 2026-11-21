@@ -705,11 +705,13 @@ fn check_signers(
         .collect())
 }
 
-/// The privileged-kinds gate: closed (see the module documentation).
+/// The privileged-kinds gate: closed (see the module documentation). A
+/// manifest that does not even parse is refused here, never waved through
+/// to a later check.
 fn check_gate(manifest_bytes: &[u8]) -> Result<(), PublisherError> {
-    if let Ok(manifest) = Manifest::from_slice(manifest_bytes)
-        && let Err(errors) = manifest.validate_first_party()
-    {
+    let manifest = Manifest::from_slice(manifest_bytes)
+        .map_err(|e| PublisherError::Package(format!("{MANIFEST}: {e}")))?;
+    if let Err(errors) = manifest.validate_first_party() {
         let usages: Vec<String> = errors
             .0
             .iter()
@@ -861,6 +863,16 @@ mod tests {
                 .unwrap()
                 .validate_first_party()
                 .unwrap();
+        }
+    }
+
+    #[test]
+    fn the_gate_refuses_a_manifest_that_does_not_parse() {
+        for bytes in [&b"{ not json"[..], b"{}", b"[]", b""] {
+            assert!(
+                matches!(check_gate(bytes), Err(PublisherError::Package(_))),
+                "{bytes:?}"
+            );
         }
     }
 
