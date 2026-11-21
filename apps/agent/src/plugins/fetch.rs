@@ -340,14 +340,17 @@ impl HttpsSource {
         Ok(bytes)
     }
 
-    /// The publisher signature published next to the pinned package
-    /// `pinned` (`<package>.minisig`, at most
+    /// The publisher signature file of the key `key_id` published next to
+    /// the pinned package `pinned` (`<package>.<KEYID>.minisig`, at most
     /// [`publisher::MAX_SIGNATURE_BYTES`]), from the same place the package
     /// comes from. Its content is checked by the publisher verifier; where
     /// it was hosted never counts.
     ///
     /// [`publisher::MAX_SIGNATURE_BYTES`]: deckpilot_plugin_registry::publisher::MAX_SIGNATURE_BYTES
-    pub fn signature(&self, pinned: &str) -> Result<Vec<u8>, DownloadError> {
+    pub fn signature(&self, pinned: &str, key_id: &str) -> Result<Vec<u8>, DownloadError> {
+        if !deckpilot_plugin_registry::publisher::is_key_id(key_id) {
+            return Err(DownloadError::Refused(format!("{key_id} is not a key id")));
+        }
         let relative = pinned
             .strip_prefix(DOWNLOAD_PREFIX)
             .and_then(plain_path)
@@ -360,9 +363,10 @@ impl HttpsSource {
                 Url::parse(DOWNLOAD_PREFIX).map_err(|e| DownloadError::Refused(e.to_string()))?
             }
         };
+        let name = deckpilot_plugin_registry::publisher::signature_file_name(relative, key_id);
         let url = base
-            .join(&format!("{relative}.minisig"))
-            .map_err(|e| DownloadError::Refused(format!("{relative}.minisig: {e}")))?;
+            .join(&name)
+            .map_err(|e| DownloadError::Refused(format!("{name}: {e}")))?;
         let limit = u64::try_from(deckpilot_plugin_registry::publisher::MAX_SIGNATURE_BYTES)
             .unwrap_or(u64::MAX);
         self.get(
@@ -373,7 +377,7 @@ impl HttpsSource {
         )
         .map_err(|e| match e {
             FetchError::NotFound => DownloadError::Unavailable(format!(
-                "{} (the publisher signature) was not found",
+                "{} (a publisher signature) was not found",
                 shown(&url)
             )),
             FetchError::Unavailable(m) => {

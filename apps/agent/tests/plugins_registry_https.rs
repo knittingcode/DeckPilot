@@ -176,11 +176,13 @@ impl Registry {
     }
 
     /// A `deckpilot.*` version, with the publishing tool's explicit option,
-    /// released with the (throwaway) first-party publisher signature next
-    /// to the package.
+    /// released with two (throwaway) first-party publisher signatures next
+    /// to the package, by keys A and B of the three pinned (threshold 2;
+    /// C's file is missing).
     fn add_first_party(&self, id: &str, version: &str) {
         self.add_unsigned_first_party(id, version);
-        self.sign_release(id, version);
+        self.sign_release(id, version, "publisher.key");
+        self.sign_release(id, version, "publisher-b.key");
     }
 
     /// A `deckpilot.*` version without the publisher signature.
@@ -188,13 +190,13 @@ impl Registry {
         self.add_with(id, version, &["--first-party"]);
     }
 
-    /// `<package>.minisig`, by the test's publisher key, in `releases/`.
-    fn sign_release(&self, id: &str, version: &str) {
+    /// `<package>.<KEYID>.minisig`, by the test's publisher key `key`, in
+    /// `releases/` next to the package (one `release sign` per key, as the
+    /// release workflow runs it).
+    fn sign_release(&self, id: &str, version: &str, key: &str) {
         let package = self
             .work()
             .join(Self::release_path(id, version).trim_start_matches('/'));
-        let mut signature = package.clone().into_os_string();
-        signature.push(".minisig");
         self.run(&[
             "release",
             "sign",
@@ -205,10 +207,15 @@ impl Registry {
             "--version",
             version,
             "--key",
-            &self.key("publisher.key"),
-            "--out",
-            &PathBuf::from(signature).display().to_string(),
+            &self.key(key),
         ]);
+    }
+
+    /// The served path of `key`'s signature file of a release.
+    fn signature_path(&self, id: &str, version: &str, key: &str) -> String {
+        let public = std::fs::read_to_string(self.keys().join(format!("{key}.pub"))).unwrap();
+        let key_id = deckpilot_plugin_registry::publisher::key_id(public.trim()).unwrap();
+        format!("{}.{key_id}.minisig", Self::release_path(id, version))
     }
 
     /// The publisher keys the agent pins in this test
@@ -360,14 +367,21 @@ impl Registry {
             dir: TempDir::new("plugins-https-registry"),
         };
         std::fs::create_dir_all(registry.keys()).unwrap();
-        for role in ["root", "index", "timestamp", "publisher"] {
+        for (role, name) in [
+            ("root", "root"),
+            ("index", "index"),
+            ("timestamp", "timestamp"),
+            ("publisher", "publisher"),
+            ("publisher", "publisher-b"),
+            ("publisher", "publisher-c"),
+        ] {
             registry.run(&[
                 "keys",
                 "generate",
                 "--role",
                 role,
                 "--out",
-                &registry.key(&format!("{role}.key")),
+                &registry.key(&format!("{name}.key")),
                 "--no-password",
             ]);
         }
@@ -396,14 +410,20 @@ impl Registry {
         registry.add(OTHER, "1.0.0");
         registry.publish();
         std::fs::copy(registry.work().join("roots.json"), registry.roots()).unwrap();
-        let publisher = std::fs::read_to_string(registry.keys().join("publisher.key.pub")).unwrap();
+        // Three publisher keys pinned, two of them must sign.
+        let public = |name: &str| {
+            std::fs::read_to_string(registry.keys().join(format!("{name}.key.pub")))
+                .unwrap()
+                .trim()
+                .to_owned()
+        };
         std::fs::write(
             registry.publisher_keys(),
             serde_json::to_vec(&json!({
                 "publisherKeysVersion": 1,
                 "publisher": "deckpilot",
-                "keys": [publisher.trim()],
-                "threshold": 1,
+                "keys": [public("publisher"), public("publisher-b"), public("publisher-c")],
+                "threshold": 2,
                 "revokedKeys": []
             }))
             .unwrap(),
@@ -1058,17 +1078,66 @@ async fn first_party_plugins_need_the_root_authorization_and_a_verified_publishe
     assert_eq!(plugin.summary.version, "1.0.0");
     assert!(server.log().contains(&release), "{:?}", server.log());
     assert_eq!(agent.installed().await, vec![FIRST_PARTY.to_owned()]);
+    // Exactly one signature file fetched per pinned key id, from the same
+    // base as the package; C's is missing (404), which the threshold of 2
+    // tolerates. The old single name is never asked for.
+    let log = server.log();
+    for key in ["publisher.key", "publisher-b.key", "publisher-c.key"] {
+        let path = registry.signature_path(FIRST_PARTY, "1.0.0", key);
+        assert_eq!(
+            log.iter().filter(|p| **p == path).count(),
+            1,
+            "{path}: {log:?}"
+        );
+    }
+    assert!(!log.contains(&format!("{release}.minisig")), "{log:?}");
 
     // An official plugin the agent bundles, without the publisher
-    // signature: refused, nothing installed (the registry's authorization
+    // signatures: refused, nothing installed (the registry's authorization
     // alone is not enough).
     let refused = agent.install(BUNDLED, "1.0.0").await;
     assert!(refused.is_err(), "{refused:?}");
     assert!(message_of(&refused).contains("minisig"), "{refused:?}");
+    assert!(
+        message_of(&refused).contains("0 signature file(s) found, 2 distinct key(s) required"),
+        "{refused:?}"
+    );
     assert_eq!(agent.installed().await, vec![FIRST_PARTY.to_owned()]);
-    // Signed by the publisher key this agent pins: installed, from the
-    // registry, with the first-party rules.
-    registry.sign_release(BUNDLED, "1.0.0");
+    // Signed by one pinned key: below the threshold, refused.
+    registry.sign_release(BUNDLED, "1.0.0", "publisher.key");
+    let refused = agent.install(BUNDLED, "1.0.0").await;
+    assert!(
+        message_of(&refused).contains("1 signature file(s) found, 2 distinct key(s) required"),
+        "{refused:?}"
+    );
+    // Key A's signature copied under key C's name: two files, one key.
+    let bundled_release = Registry::release_path(BUNDLED, "1.0.0");
+    let on_disk = |path: &str| registry.work().join(path.trim_start_matches('/'));
+    std::fs::copy(
+        on_disk(&registry.signature_path(BUNDLED, "1.0.0", "publisher.key")),
+        on_disk(&registry.signature_path(BUNDLED, "1.0.0", "publisher-c.key")),
+    )
+    .unwrap();
+    let refused = agent.install(BUNDLED, "1.0.0").await;
+    assert_eq!(reason_of(&refused), reason::INVALID_PACKAGE, "{refused:?}");
+    assert!(
+        message_of(&refused).contains("1 valid signature(s) from distinct pinned publisher keys"),
+        "{refused:?}"
+    );
+    assert!(
+        message_of(&refused).contains("is named for key"),
+        "{refused:?}"
+    );
+    std::fs::remove_file(on_disk(&registry.signature_path(
+        BUNDLED,
+        "1.0.0",
+        "publisher-c.key",
+    )))
+    .unwrap();
+    assert_eq!(agent.installed().await, vec![FIRST_PARTY.to_owned()]);
+    // Signed by a second pinned key: installed, from the registry, with
+    // the first-party rules.
+    registry.sign_release(BUNDLED, "1.0.0", "publisher-b.key");
     let Response::Plugin { plugin } = agent.install(BUNDLED, "1.0.0").await.unwrap() else {
         panic!("installed")
     };
@@ -1080,8 +1149,9 @@ async fn first_party_plugins_need_the_root_authorization_and_a_verified_publishe
         std::fs::read_to_string(env.paths.data_dir.join("plugin-official/audit.jsonl")).unwrap();
     // One verified release per install, hash-chained.
     assert_eq!(audit.matches("\"verified\"").count(), 2, "{audit}");
-    // The unsigned attempt is audited too (the signature was not found).
-    assert!(audit.contains("the publisher signature"), "{audit}");
+    // The unsigned attempts are audited too (the signatures were not found).
+    assert!(audit.contains("the publisher signatures"), "{audit}");
+    assert!(server.log().iter().any(|p| p.starts_with(&bundled_release)));
     assert!(audit.contains("\"prev\":\"genesis\""), "{audit}");
 
     // Key set 3 withdraws the authorization: the update is refused before

@@ -62,6 +62,11 @@ impl ThrowawayKey {
         STANDARD.encode(format!("untrusted comment: {comment}\n{key_line}\n"))
     }
 
+    /// The minisign key id, as minisign prints it (16 uppercase hex).
+    pub fn key_id(&self) -> String {
+        deckpilot_plugin_registry::publisher::key_id(&self.public).unwrap()
+    }
+
     /// Base64-wrapped minisign signature (Tauri format).
     pub fn sign(&self, data: &[u8], trusted_comment: &str) -> String {
         let signature = minisign::sign(
