@@ -121,7 +121,10 @@ E. **Revocation at run time.** `revoked_installed` covers registry copies
    every invocation) and `rollback` apply the official revocations too.
    Signers are recorded for every verified version; a registry copy whose
    version has no record, or whose record cannot be read, is not run
-   (fail closed). Check that a quarantined plugin cannot be enabled, and
+   (fail closed), except a retained version whose installed files match the
+   compiled bundled pin (`bundled_match`). A `floors.json` with unknown
+   fields is read but never rewritten (`read_floors`, `covered`).
+   Check that a quarantined plugin cannot be enabled, and
    that an official revocation cannot be lifted by a registry `Run`
    verdict while the agent still revokes it.
 F. **Authenticity is not authorization.** Nothing in `official.rs` writes

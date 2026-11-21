@@ -1112,14 +1112,28 @@ impl PluginService {
         }
     }
 
+    /// The installed versions of official registry copies this agent does
+    /// not run (`official.rs`), a retained bundled copy checked against the
+    /// pins compiled into the agent.
+    fn withheld(
+        &self,
+        records: &[PluginRecord],
+    ) -> BTreeMap<(PluginId, Version), official::Withheld> {
+        let (bundle, layout) = (&self.bundle, self.manager.layout());
+        self.official.withheld(records, &|record, version| {
+            official::bundled_match(bundle, layout, record, version)
+        })
+    }
+
     /// Applies the stored revocations to installed plugins (also offline).
     fn apply_verdicts(&mut self) {
         let records = self.manager.store().plugins().unwrap_or_default();
-        let revoked = self.official.revoked_installed(&records);
-        let Some(registry) = self.registry.as_ref() else {
-            // No registry: only the official revocations, which quarantine
-            // (nothing is lifted without the registry's verdicts).
-            for ((id, version), why) in &revoked {
+        let revoked = self.withheld(&records);
+        // The official ones first, with their own reasons; then (with a
+        // registry) the registry's verdicts with the official ones on top,
+        // so a registry `Run` never lifts them.
+        {
+            for ((id, version), withheld) in &revoked {
                 let quarantine = records.iter().any(|r| {
                     r.id == *id
                         && r.state != PluginState::Quarantined
@@ -1127,9 +1141,10 @@ impl PluginService {
                         && r.active().is_some_and(|a| a.version == *version)
                 });
                 if quarantine {
-                    match self.manager.quarantine(id, &format!("revoked: {why}")) {
+                    match self.manager.quarantine(id, &withheld.state_reason()) {
                         Ok(()) => {
-                            info!(plugin = %id, %version, %why, "official revocation applied");
+                            info!(plugin = %id, %version, why = %withheld.reason,
+                                "official plugin version not run");
                             self.stop_host(id);
                             self.sync_grants(id);
                             self.changed(id);
@@ -1140,6 +1155,8 @@ impl PluginService {
                     }
                 }
             }
+        }
+        let Some(registry) = self.registry.as_ref() else {
             return;
         };
         let verdicts = official::Verdicts {
@@ -1538,22 +1555,23 @@ impl PluginService {
         let Some(active) = record.active() else {
             return Ok(());
         };
-        let revoked = self
-            .official
-            .revoked_installed(std::slice::from_ref(record));
-        if let Some(why) = revoked.get(&(record.id.clone(), active.version.clone())) {
+        let revoked = self.withheld(std::slice::from_ref(record));
+        if let Some(withheld) = revoked.get(&(record.id.clone(), active.version.clone())) {
             self.stop_host(&record.id);
             if record.state != PluginState::Quarantined {
                 let _ = self
                     .manager
-                    .quarantine(&record.id, &format!("revoked: {why}"));
+                    .quarantine(&record.id, &withheld.state_reason());
                 self.sync_grants(&record.id);
                 self.changed(&record.id);
             }
             return Err(error(
                 ErrorCode::Failed,
-                reason::REVOKED,
-                format!("{} {} is not run: {why}", record.id, active.version),
+                withheld.ipc_reason(),
+                format!(
+                    "{} {} is not run: {}",
+                    record.id, active.version, withheld.reason
+                ),
             ));
         }
         let Some(registry) = self.registry.as_ref() else {
@@ -2189,7 +2207,23 @@ impl PluginService {
         // The version rolled back to must pass the official revocations
         // too (a revoked release, a revoked signer, no record of it).
         let records = self.manager.store().plugins().unwrap_or_default();
-        let revoked = self.official.revoked_installed(&records);
+        let revoked = self.withheld(&records);
+        // Refused with its own reason before the store is asked.
+        if let Some(previous) = records
+            .iter()
+            .find(|r| r.id == *id)
+            .and_then(PluginRecord::previous)
+            && let Some(withheld) = revoked.get(&(id.clone(), previous.version.clone()))
+        {
+            return Err(error(
+                ErrorCode::Failed,
+                withheld.ipc_reason(),
+                format!(
+                    "{id} cannot go back to {}: {}",
+                    previous.version, withheld.reason
+                ),
+            ));
+        }
         let verdicts = official::Verdicts {
             official: &revoked,
             registry: match self.registry.as_ref() {

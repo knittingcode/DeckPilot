@@ -1105,7 +1105,7 @@ async fn first_party_plugins_need_the_root_authorization_and_a_verified_publishe
 
     // The agent's record of the releases it verified is gone: at the next
     // start its registry copies of official plugins are quarantined (fail
-    // closed), and enabling one is refused as revoked.
+    // closed), and enabling one is refused.
     std::fs::remove_file(env.paths.data_dir.join("plugin-official/floors.json")).unwrap();
     let agent = env.started(&registry, &server).await;
     assert_eq!(agent.state(BUNDLED).await.1, PluginState::Quarantined);
@@ -1115,6 +1115,8 @@ async fn first_party_plugins_need_the_root_authorization_and_a_verified_publishe
             consent: vec![],
         })
         .await;
-    assert_eq!(reason_of(&refused), reason::REVOKED, "{refused:?}");
+    // Not a revocation: nothing vouches for it (accurate reason).
+    assert_eq!(reason_of(&refused), reason::INVALID_PACKAGE, "{refused:?}");
+    assert!(message_of(&refused).contains("no record"), "{refused:?}");
     agent.stop().await;
 }

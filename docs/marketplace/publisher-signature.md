@@ -182,7 +182,22 @@ reset floors file: **fail closed**), or if the floors cannot be read. It
 is quarantined like a registry `disable` verdict (`official::Verdicts` on
 top of the registry's verdicts; without a registry, quarantine only,
 nothing is lifted). Bundled copies are trusted by the compiled pins and
-are not affected. A revocation therefore
+are not affected. A retained version whose installed files are exactly the bundled copy
+this agent pins (the bundled version kept for rollback after the update
+to a registry release) is trusted like any bundled copy, so the rollback
+to it goes through; a retained copy whose files differ is not run. The
+reasons say which case it is: `revoked` (the lock, a revoked key) or
+`not verified` (`invalidPackage`: no record, unreadable records, files
+that differ from the pins).
+
+**`floors.json` across versions.** Unknown fields are tolerated for
+reading: a downgraded agent uses every floor and signer record it
+understands, so its revocation checks and the copies it can vouch for keep
+working. It never rewrites such a file, since that would drop what the
+newer agent recorded, so official installs are refused until a newer
+DeckPilot runs again. A different `floorsVersion` is refused entirely
+(fail closed: the known fields may mean something else in a new format),
+which quarantines registry copies of official plugins until it is fixed. A revocation therefore
 reaches users with an application release (the lock and the keys) or
 with the registry's own signed revocations, which apply as before.
 
