@@ -65,7 +65,7 @@ use deckpilot_plugin_registry::publisher::{
     ReleasePolicy, RevokedRelease, VerifiedRelease,
 };
 use deckpilot_plugin_registry::{InstalledVerdict, write_atomic};
-use deckpilot_plugin_store::{InstallSource, PluginRecord, VerdictSource};
+use deckpilot_plugin_store::{InstallSource, PluginRecord, VerdictSource, VersionRecord};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -280,7 +280,7 @@ fn check_floor(
 
 /// `floors.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct FloorsFile {
     floors_version: u32,
     plugins: BTreeMap<PluginId, Floor>,
@@ -303,7 +303,7 @@ impl Default for FloorsFile {
 
 /// The highest release of a plugin this agent verified.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct Floor {
     pub version: Version,
     pub package: PackageDigest,
@@ -513,6 +513,9 @@ pub(super) struct Official {
     compiled: Result<Compiled, String>,
     dir: PathBuf,
     floors: Mutex<Result<FloorsFile, String>>,
+    /// The floors file holds fields of a newer DeckPilot: read, never
+    /// rewritten (see `read_floors`).
+    floors_newer: Option<String>,
     gate: PrivilegedGate,
     /// [`MAX_AUDIT_BYTES`], smaller in tests.
     max_audit_bytes: u64,
@@ -532,15 +535,22 @@ impl Official {
         keys: Result<PublisherKeys, String>,
         compiled: Result<Compiled, String>,
     ) -> Self {
-        let floors = read_floors(&dir.join(FLOORS_FILE));
+        let (floors, floors_newer) = match read_floors(&dir.join(FLOORS_FILE)) {
+            Ok((floors, newer)) => (Ok(floors), newer),
+            Err(problem) => (Err(problem), None),
+        };
         if let Err(problem) = &floors {
             warn!(%problem, "official plugin floors unreadable: official installs are refused");
+        }
+        if let Some(problem) = &floors_newer {
+            warn!(%problem, "official installs are refused until a newer DeckPilot runs again");
         }
         Self {
             keys,
             compiled,
             dir: dir.to_path_buf(),
             floors: Mutex::new(floors),
+            floors_newer,
             gate: PRIVILEGED_GATE,
             max_audit_bytes: MAX_AUDIT_BYTES,
         }
@@ -570,6 +580,9 @@ impl Official {
             return Err(PublisherError::NotProvisioned.to_string());
         }
         self.compiled.as_ref().map_err(Clone::clone)?;
+        if let Some(problem) = &self.floors_newer {
+            return Err(problem.clone());
+        }
         self.lock_floors()
             .as_ref()
             .map(|_| ())
@@ -777,6 +790,9 @@ impl Official {
         signers: &[String],
         now: DateTime<Utc>,
     ) -> Result<(), Refusal> {
+        if let Some(problem) = &self.floors_newer {
+            return Err(Refusal::Unavailable(problem.clone()));
+        }
         let mut floors = self.lock_floors();
         let floors = floors
             .as_mut()
@@ -894,17 +910,37 @@ impl Official {
         }
     }
 
-    /// The installed registry copies of official plugins this agent must
-    /// not run, by version, with the reason: a version the compiled lock
-    /// revokes; one whose recorded release was signed by a key that is now
-    /// revoked; one this agent has no record of verifying (fail closed: a
-    /// deleted or reset floors file); and every version when the floors
-    /// cannot be read at all. Bundled copies are trusted by the pins
-    /// compiled into the agent and are not affected.
+    /// [`Official::withheld`] without bundled copies to check against
+    /// (every retained version needs a record of its own). Tests only.
+    #[cfg(test)]
     pub fn revoked_installed(
         &self,
         records: &[PluginRecord],
-    ) -> BTreeMap<(PluginId, Version), String> {
+    ) -> BTreeMap<(PluginId, Version), Withheld> {
+        self.withheld(records, &|_, _| BundledMatch::NotPinned)
+    }
+
+    /// The installed versions of registry copies of official plugins this
+    /// agent must not run, with the reason:
+    ///
+    /// - [`WithheldKind::Revoked`]: the compiled lock revokes the release,
+    ///   or the release this agent recorded for it was signed by a key that
+    ///   is now revoked;
+    /// - [`WithheldKind::Unverified`]: nothing vouches for it. No record of
+    ///   verifying it (a deleted or reset floors file), records that cannot
+    ///   be read, compiled data that is invalid, or a retained copy that
+    ///   claims to be the bundled version but whose files differ from the
+    ///   pins (fail closed).
+    ///
+    /// A version whose installed files are exactly the bundled copy this
+    /// agent pins (`bundled`: typically the bundled version retained for
+    /// rollback after the update to a registry release) is trusted like any
+    /// bundled copy. Bundled installs are never affected.
+    pub fn withheld(
+        &self,
+        records: &[PluginRecord],
+        bundled: &dyn Fn(&PluginRecord, &VersionRecord) -> BundledMatch,
+    ) -> BTreeMap<(PluginId, Version), Withheld> {
         let revoked_keys: BTreeSet<String> = self
             .keys
             .as_ref()
@@ -924,12 +960,21 @@ impl Official {
             {
                 continue;
             }
-            for version in record.versions.iter().map(|v| &v.version) {
+            for installed in &record.versions {
+                let version = &installed.version;
                 let key = (record.id.clone(), version.clone());
+                let not_bundled = match bundled(record, installed) {
+                    BundledMatch::Matches => continue,
+                    BundledMatch::Differs(why) => Some(why),
+                    BundledMatch::NotPinned => None,
+                };
                 let compiled = match compiled {
                     Ok(compiled) => compiled,
                     Err(problem) => {
-                        out.insert(key, format!("this agent cannot check it: {problem}"));
+                        out.insert(
+                            key,
+                            Withheld::unverified(format!("this agent cannot check it: {problem}")),
+                        );
                         continue;
                     }
                 };
@@ -940,7 +985,10 @@ impl Official {
                 {
                     out.insert(
                         key,
-                        format!("the DeckPilot release is revoked: {}", r.reason),
+                        Withheld::revoked(format!(
+                            "the DeckPilot release {version} is revoked: {}",
+                            r.reason
+                        )),
                     );
                     continue;
                 }
@@ -949,22 +997,35 @@ impl Official {
                     Err(problem) => {
                         out.insert(
                             key,
-                            format!("this agent cannot read its record of the release: {problem}"),
+                            Withheld::unverified(format!(
+                                "this agent cannot read its record of the releases: {problem}"
+                            )),
                         );
                         continue;
                     }
                 };
                 match floors.releases.get(&record.id).and_then(|r| r.get(version)) {
                     None => {
-                        out.insert(
-                            key,
-                            "this agent has no record of verifying this DeckPilot release".into(),
-                        );
+                        let why = match not_bundled {
+                            Some(why) => format!(
+                                "the installed copy of {version} is not the bundled copy this \
+                                 agent pins ({why}), and this agent has no record of verifying \
+                                 it as a DeckPilot release"
+                            ),
+                            None => format!(
+                                "this agent has no record of verifying {version} as a DeckPilot \
+                                 release, and no bundled copy of {version} to check it against"
+                            ),
+                        };
+                        out.insert(key, Withheld::unverified(why));
                     }
                     Some(signers) if signers.iter().any(|s| revoked_keys.contains(s)) => {
                         out.insert(
                             key,
-                            "the DeckPilot release was signed by a revoked publisher key".into(),
+                            Withheld::revoked(format!(
+                                "the DeckPilot release {version} was signed by a revoked \
+                                 publisher key"
+                            )),
                         );
                     }
                     Some(_) => {}
@@ -972,6 +1033,82 @@ impl Official {
             }
         }
         out
+    }
+}
+
+/// Whether an installed version is the bundled copy this agent pins.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum BundledMatch {
+    /// This agent pins no bundled copy of that version.
+    NotPinned,
+    /// Its installed files are exactly the pinned ones.
+    Matches,
+    /// Pinned, but the installed files differ (why).
+    Differs(String),
+}
+
+/// Checks the installed files of `version` against `bundle`'s pin of it.
+pub(super) fn bundled_match(
+    bundle: &super::bundled::Bundle,
+    layout: &deckpilot_plugin_store::Layout,
+    record: &PluginRecord,
+    version: &VersionRecord,
+) -> BundledMatch {
+    let Some(pin) = bundle.pins.pinned(&record.id, &version.version) else {
+        return BundledMatch::NotPinned;
+    };
+    match deckpilot_plugin_bundled::verify_installed(&layout.resolve(&version.install_dir), pin) {
+        Ok(()) => BundledMatch::Matches,
+        Err(e) => BundledMatch::Differs(e.to_string()),
+    }
+}
+
+/// Why an installed version is not run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum WithheldKind {
+    /// Revoked (by the lock or a revoked publisher key).
+    Revoked,
+    /// Nothing vouches for it.
+    Unverified,
+}
+
+/// An installed version this agent does not run, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Withheld {
+    pub kind: WithheldKind,
+    pub reason: String,
+}
+
+impl Withheld {
+    fn revoked(reason: String) -> Self {
+        Self {
+            kind: WithheldKind::Revoked,
+            reason,
+        }
+    }
+
+    fn unverified(reason: String) -> Self {
+        Self {
+            kind: WithheldKind::Unverified,
+            reason,
+        }
+    }
+
+    /// The IPC reason code: `revoked`, or `invalidPackage` for a copy
+    /// nothing vouches for.
+    pub fn ipc_reason(&self) -> &'static str {
+        match self.kind {
+            WithheldKind::Revoked => reason::REVOKED,
+            WithheldKind::Unverified => reason::INVALID_PACKAGE,
+        }
+    }
+
+    /// The state reason a quarantine records.
+    pub fn state_reason(&self) -> String {
+        match self.kind {
+            WithheldKind::Revoked => format!("revoked: {}", self.reason),
+            WithheldKind::Unverified => format!("not verified: {}", self.reason),
+        }
     }
 }
 
@@ -985,14 +1122,28 @@ fn pinned_keys() -> Result<PublisherKeys, String> {
     PublisherKeys::pinned().map_err(|e| e.to_string())
 }
 
-fn read_floors(path: &Path) -> Result<FloorsFile, String> {
+/// The floors file, and whether it holds fields this agent does not know
+/// (`Some(why)`: written by a newer DeckPilot).
+///
+/// Unknown fields are tolerated for **reading**: every floor and every
+/// signer record this agent knows is used as it is, so a downgraded agent
+/// keeps checking revocations and running the copies it can vouch for.
+/// Such a file is never **rewritten** by this agent (official installs
+/// are refused while it is), because rewriting would drop what the newer
+/// agent recorded. Another `floorsVersion` is refused entirely (fail
+/// closed): a newer format may change what the known fields mean.
+fn read_floors(path: &Path) -> Result<(FloorsFile, Option<String>), String> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(FloorsFile::default()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((FloorsFile::default(), None));
+        }
         Err(e) => return Err(format!("{}: {e}", path.display())),
     };
-    let floors: FloorsFile = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("{} is invalid ({e}); it is never reset", path.display()))?;
+    let invalid =
+        |e: serde_json::Error| format!("{} is invalid ({e}); it is never reset", path.display());
+    let raw: serde_json::Value = serde_json::from_slice(&bytes).map_err(invalid)?;
+    let floors: FloorsFile = serde_json::from_value(raw.clone()).map_err(invalid)?;
     if floors.floors_version != FLOORS_VERSION {
         return Err(format!(
             "{} has floorsVersion {}; this agent reads {FLOORS_VERSION}",
@@ -1000,7 +1151,29 @@ fn read_floors(path: &Path) -> Result<FloorsFile, String> {
             floors.floors_version
         ));
     }
-    Ok(floors)
+    let known = serde_json::to_value(&floors).map_err(|e| e.to_string())?;
+    let newer = (!covered(&raw, &known)).then(|| {
+        format!(
+            "{} holds records of a newer DeckPilot; this agent reads it but never rewrites it",
+            path.display()
+        )
+    });
+    Ok((floors, newer))
+}
+
+/// Whether everything in `original` is in `known` (objects by key,
+/// recursively; arrays and values exactly): `known` may add defaults.
+fn covered(original: &serde_json::Value, known: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    match (original, known) {
+        (Value::Object(a), Value::Object(b)) => a
+            .iter()
+            .all(|(key, value)| b.get(key).is_some_and(|other| covered(value, other))),
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| covered(x, y))
+        }
+        (a, b) => a == b,
+    }
 }
 
 /// The `prev` of the first line of a new audit chain.
@@ -1046,15 +1219,15 @@ pub(super) fn check_audit_chain(text: &str, first_prev: &str) -> Result<String, 
 
 /// The registry's verdicts with the official revocations on top.
 pub(super) struct Verdicts<'a> {
-    pub official: &'a BTreeMap<(PluginId, Version), String>,
+    pub official: &'a BTreeMap<(PluginId, Version), Withheld>,
     pub registry: &'a dyn VerdictSource,
 }
 
 impl VerdictSource for Verdicts<'_> {
     fn verdict(&self, id: &PluginId, version: &Version) -> InstalledVerdict {
         match self.official.get(&(id.clone(), version.clone())) {
-            Some(why) => InstalledVerdict::Disable {
-                reason: why.clone(),
+            Some(withheld) => InstalledVerdict::Disable {
+                reason: withheld.reason.clone(),
                 advisory: None,
             },
             None => self.registry.verdict(id, version),

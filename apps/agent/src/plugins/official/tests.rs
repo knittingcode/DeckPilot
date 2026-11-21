@@ -1228,7 +1228,7 @@ fn revocation_fails_closed_without_the_record() {
     let deleted = env.official();
     let revoked = deleted.revoked_installed(&records);
     assert!(
-        revoked[&(id(), v("0.1.1"))].contains("no record"),
+        revoked[&(id(), v("0.1.1"))].reason.contains("no record"),
         "{revoked:?}"
     );
 
@@ -1236,7 +1236,7 @@ fn revocation_fails_closed_without_the_record() {
     let unreadable = env.official();
     let revoked = unreadable.revoked_installed(&records);
     assert!(
-        revoked[&(id(), v("0.1.1"))].contains("cannot read"),
+        revoked[&(id(), v("0.1.1"))].reason.contains("cannot read"),
         "{revoked:?}"
     );
     // The quarantine follows.
@@ -1387,4 +1387,135 @@ fn the_opening_path_limits_every_construct_and_records_the_real_signers() {
     recorded.sort();
     assert_eq!(recorded, real);
     assert!(!recorded.contains(&publisher::fingerprint(&third.public()).unwrap()));
+}
+
+// ------------------------------------------------- re-review (N2, floors)
+
+fn make_writable_and_flip(path: &Path) {
+    let mut permissions = std::fs::metadata(path).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(path, permissions).unwrap();
+    let mut bytes = std::fs::read(path).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 1;
+    std::fs::write(path, bytes).unwrap();
+}
+
+/// N2: after the update from the bundle to a registry release, the
+/// retained bundled version has no release record but is the bundled copy
+/// this agent pins: it is trusted, and the rollback to it goes through. A
+/// tampered retained copy is still refused, with an accurate reason.
+#[test]
+fn the_retained_bundled_copy_is_trusted_and_a_tampered_one_is_not() {
+    for tampered in [false, true] {
+        let env = Env::new();
+        let bundle = env.bundle("0.1.0", &notifications());
+        let mut manager = seeded(&env, &bundle);
+        let official = env.official();
+        let host = host();
+        let release = Release::new(&env, "0.1.1", &notifications());
+        let package = official
+            .verify(&release.delivery(Some(&bundle), &host))
+            .unwrap();
+        manager.update(&package, &registry_source()).unwrap();
+        let record = state_of(&manager);
+        let previous = record.previous().unwrap().clone();
+        assert_eq!(previous.version, v("0.1.0"));
+        if tampered {
+            make_writable_and_flip(
+                &manager
+                    .layout()
+                    .resolve(&previous.install_dir)
+                    .join("plugin.wasm"),
+            );
+        }
+        let records = manager.store().plugins().unwrap();
+        let withheld = official.withheld(&records, &|record, version| {
+            bundled_match(&bundle, manager.layout(), record, version)
+        });
+        // Without the bundle to check against, it would have no record.
+        let unchecked = official.revoked_installed(&records);
+        assert_eq!(
+            unchecked[&(id(), v("0.1.0"))].kind,
+            WithheldKind::Unverified
+        );
+        let verdicts = Verdicts {
+            official: &withheld,
+            registry: &NoVerdicts,
+        };
+        if tampered {
+            let why = &withheld[&(id(), v("0.1.0"))];
+            assert_eq!(why.kind, WithheldKind::Unverified);
+            assert_eq!(why.ipc_reason(), reason::INVALID_PACKAGE);
+            assert!(
+                why.reason.contains("not the bundled copy this agent pins"),
+                "{why:?}"
+            );
+            assert!(!why.state_reason().starts_with("revoked"), "{why:?}");
+            assert!(manager.rollback(&id(), &verdicts).is_err());
+            assert_eq!(state_of(&manager).active().unwrap().version, v("0.1.1"));
+        } else {
+            assert!(withheld.is_empty(), "{withheld:?}");
+            manager.rollback(&id(), &verdicts).unwrap();
+            let rolled = state_of(&manager);
+            assert_eq!(rolled.active().unwrap().version, v("0.1.0"));
+            // Still trusted where it now runs.
+            let records = manager.store().plugins().unwrap();
+            assert!(
+                official
+                    .withheld(&records, &|record, version| {
+                        bundled_match(&bundle, manager.layout(), record, version)
+                    })
+                    .is_empty()
+            );
+        }
+    }
+}
+
+/// Info: a floors file with fields of a newer DeckPilot is read (its
+/// records keep working for revocation) but never rewritten (official
+/// installs are refused); another floorsVersion is refused entirely.
+#[test]
+fn floors_of_a_newer_agent_are_read_but_never_rewritten() {
+    let env = Env::new();
+    let mut manager = env.open();
+    let official = env.official();
+    install_or_update(
+        &mut manager,
+        &official,
+        &Release::new(&env, "0.1.1", &notifications()),
+    );
+    let path = env.state().join(FLOORS_FILE);
+    let mut floors: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    floors["newerRecords"] = json!({ "something": 1 });
+    floors["plugins"][ID]["newerField"] = json!(true);
+    let written = serde_json::to_vec_pretty(&floors).unwrap();
+    std::fs::write(&path, &written).unwrap();
+
+    let downgraded = env.official();
+    let records = manager.store().plugins().unwrap();
+    assert!(downgraded.revoked_installed(&records).is_empty());
+    assert!(
+        downgraded.ready().unwrap_err().contains("newer DeckPilot"),
+        "{:?}",
+        downgraded.ready()
+    );
+    let host = host();
+    assert!(matches!(
+        refusal(
+            downgraded.verify(&Release::new(&env, "0.1.2", &notifications()).delivery(None, &host))
+        ),
+        Refusal::Unavailable(_)
+    ));
+    assert_eq!(std::fs::read(&path).unwrap(), written, "never rewritten");
+
+    floors["floorsVersion"] = json!(2);
+    std::fs::write(&path, serde_json::to_vec(&floors).unwrap()).unwrap();
+    let other_format = env.official();
+    let withheld = other_format.revoked_installed(&records);
+    assert!(
+        withheld[&(id(), v("0.1.1"))].reason.contains("cannot read"),
+        "{withheld:?}"
+    );
 }
