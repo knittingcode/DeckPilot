@@ -22,7 +22,9 @@
 # Reproducible on one platform, like plugins/examples/build.sh: the pinned
 # toolchain (rust-toolchain.toml), the locked plugins/runtime workspace,
 # the `guest` profile, remapped source and Cargo paths, and no flags from
-# the calling environment. No package (.dpplugin) and no signature is
+# the calling environment. Independent of where the checkout is: the build
+# runs in a copy of the workspace rooted at the plugins directory (below),
+# so the same commit builds the same files on every machine of a platform. No package (.dpplugin) and no signature is
 # made: bundled plugins are trusted by the pins, never by a key.
 #
 # Needs cargo (with the wasm32-unknown-unknown target) and jq.
@@ -87,19 +89,50 @@ for entry in ${entries[@]+"${entries[@]}"}; do
 done
 
 if [ ${#crates[@]} -gt 0 ]; then
+  # Cargo hashes a path package into its -C metadata (and so into symbol
+  # hashes, type ids and the code layout of the module) by its path
+  # relative to the workspace root, but by its ABSOLUTE path when it lies
+  # outside that root, as plugins/first-party and plugins/examples do
+  # (members "../first-party/..." of plugins/runtime). A checkout at
+  # another path then builds other plugin.wasm files for the same
+  # sources. So the build runs in a copy of the workspace whose root is
+  # the plugins directory itself: runtime/, first-party/, examples/ and
+  # schemas/ under one Cargo.toml (plugins/runtime's, with its paths
+  # rebased), the same Cargo.lock and the pinned toolchain. Every member
+  # is then inside the root and nothing depends on where the checkout is.
+  stage="$target_dir/first-party-source"
+  rm -rf "$stage"
+  mkdir -p "$stage/plugins/runtime"
+  cp "$(dirname "$plugins")/rust-toolchain.toml" "$stage/"
+  cp -R "$runtime/crates" "$runtime/guest" "$stage/plugins/runtime/"
+  cp -R "$plugins/first-party" "$plugins/examples" "$plugins/schemas" "$stage/plugins/"
+  cp "$runtime/Cargo.lock" "$stage/plugins/Cargo.lock"
+  # Member and dependency paths: "../x" becomes "x", "x" becomes "runtime/x".
+  sed -e 's#^\( *\)"\.\./\([^"]*\)",#\1"\2",#' \
+    -e 't' \
+    -e 's#^\( *\)"\([^"]*\)",#\1"runtime/\2",#' \
+    -e 's#path = "\([^"]*\)"#path = "runtime/\1"#' \
+    "$runtime/Cargo.toml" | tr -d '\r' > "$stage/plugins/Cargo.toml"
+  # The members name their workspace (`workspace = "../../runtime"`):
+  # now the plugins directory.
+  find "$stage/plugins/first-party" "$stage/plugins/examples" -name Cargo.toml -print0 \
+    | while IFS= read -r -d '' manifest; do
+      sed -e 's#^workspace = "\(.*\)/runtime"#workspace = "\1"#' "$manifest" | tr -d '\r' > "$manifest.tmp"
+      mv "$manifest.tmp" "$manifest"
+    done
   cargo_home=${CARGO_HOME:-$HOME/.cargo}
-  native_plugins=$plugins
+  native_stage=$stage/plugins
   if command -v cygpath > /dev/null; then
-    native_plugins=$(cygpath -w "$plugins")
+    native_stage=$(cygpath -w "$stage/plugins")
     cargo_home=$(cygpath -w "$cargo_home")
     target_dir=$(cygpath -u "$target_dir")
   fi
   sep=$'\x1f'
-  flags="--remap-path-prefix=$native_plugins=/deckpilot/plugins${sep}--remap-path-prefix=$cargo_home=/cargo"
+  flags="--remap-path-prefix=$native_stage=/deckpilot/plugins${sep}--remap-path-prefix=$cargo_home=/cargo"
   args=()
   for crate in "${crates[@]}"; do args+=(--package "$crate"); done
   (
-    cd "$runtime"
+    cd "$stage/plugins"
     env -u RUSTFLAGS -u RUSTC_WRAPPER -u RUSTC_WORKSPACE_WRAPPER -u CARGO_BUILD_TARGET \
       CARGO_ENCODED_RUSTFLAGS="$flags" \
       cargo build --locked "${args[@]}" \

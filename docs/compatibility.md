@@ -13,7 +13,23 @@ page says what happens then and how it is tested.
 | Tag `v0.5.0-2` (signed draft test build, never published) | 0.5.0-2 | 4 | 5 |
 | Releases 0.6.0, 0.7.0, 0.8.0 and 0.8.1 | 0.6.0, 0.7.0, 0.8.0, 0.8.1 | 10 | 9 |
 | Release 0.9.0 | 0.9.0 | 11 | 10 |
+| Release 0.10.0 | 0.10.0 | 16 | 13 |
 | Current main | see `Cargo.toml` | 16 | 13 |
+
+Besides these, 0.10.0 provides plugin API 1.9 (0.9.0 provides 1.4): the
+permissions `tools`, `resources`, `projectContext` and `hostViews`, an
+action's `requiresPermissions` and visual assets, accepted only from
+DeckPilot's own bundled plugins
+([module-migration.md](marketplace/module-migration.md) §7, §11); older
+agents refuse a manifest that uses them. Git, Docker, Workspace, Projects,
+GitHub, GitLab and Jira are no longer built in: their bundled plugins take
+over, a 0.9.x configuration migrates through static descriptors after an
+encrypted backup (`deckpilot-pre-plugin-extraction-*.db`), and keys whose
+plugin is not active yet stay in the layouts as unavailable. The plugin
+store (`plugins.db`) goes from schema 5 to 6 (host-held tool settings); a
+0.9.x agent refuses the upgraded file and runs without plugins. The
+configuration database goes from schema 10 to 13 (folder controls, folder
+titles), each step after an encrypted backup.
 
 Current main speaks protocol 16: the Device Editor's live preview
 ([editor-navigation-and-simulation.md](editor-navigation-and-simulation.md#3-live-preview-and-navigation-sync)).

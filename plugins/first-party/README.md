@@ -98,7 +98,12 @@ for GitHub Enterprise).
 
 `released-pins.json` records what each release shipped, per platform
 (`macos`, `linux`, `windows`; `build.sh` is reproducible on one platform,
-and both macOS apps are built on the same runner). Format 1:
+and both macOS apps are built on the same runner). It does not depend on
+where the checkout is: Cargo hashes a member outside the workspace root
+(`../first-party/...` of `plugins/runtime`) by its absolute path into the
+code, so `build.sh` builds in a copy of the workspace rooted at `plugins/`,
+and a release's pins recorded on a developer's Mac match the runner's.
+Format 1:
 
 ```json
 { "releasedPinsVersion": 1,
