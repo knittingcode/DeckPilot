@@ -1571,6 +1571,10 @@ pub enum AgentEvent {
         profile: ProfileId,
         project: Option<ProjectId>,
         source: ProjectSource,
+        /// The plugin whose `project.select` or `project.cycle` made the
+        /// change (plugin API 1.9, X6); absent for every other change.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plugin: Option<String>,
     },
     /// Another profile became active. Since protocol 7.
     ProfileChanged {
@@ -2163,6 +2167,7 @@ mod tests {
                     profile,
                     project: None,
                     source: ProjectSource::Application,
+                    plugin: None,
                 },
                 "projectChanged",
             ),

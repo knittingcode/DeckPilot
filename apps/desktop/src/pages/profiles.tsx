@@ -36,6 +36,7 @@ import { useTitlebar } from "@/hooks/use-titlebar"
 import { api } from "@/lib/api"
 import { failureMessage, toastFailure } from "@/lib/failure"
 import { useAppContext } from "@/lib/app-context"
+import { PROJECTS_PLUGIN, useIsPluginActive } from "@/lib/plugin-features"
 import { formatShortTimestamp, formatTimestamp } from "@/lib/format"
 import type { ProfileSummary } from "@/lib/types"
 import { useOpenLayout } from "@/shell/open-layout"
@@ -57,6 +58,7 @@ export function ProfilesSettings() {
   const [dialog, setDialog] = useState<DialogState>(null)
   const { state } = useEditingProfile()
   const { open: openLayout, dialog: openDialog } = useOpenLayout()
+  const projectsActive = useIsPluginActive(PROJECTS_PLUGIN)
 
   const run = (operation: () => Promise<unknown>, message: string, failed: string) => {
     operation().then(
@@ -245,9 +247,11 @@ export function ProfilesSettings() {
               <Property label={t("workspace:profiles.editing.workflows")}>
                 {state.data.profile.workflows.length}
               </Property>
-              <Property label={t("workspace:profiles.editing.projects")}>
-                {state.data.profile.projects.length}
-              </Property>
+              {projectsActive && (
+                <Property label={t("workspace:profiles.editing.projects")}>
+                  {state.data.profile.projects.length}
+                </Property>
+              )}
             </PropertyList>
           </SettingsGroup>
           {state.data.issues.length > 0 && <ErrorNotice error={state.data.issues.join(" ")} />}

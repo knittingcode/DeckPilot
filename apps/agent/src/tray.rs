@@ -236,6 +236,8 @@ fn labels(status: Option<&AgentStatus>) -> Labels {
             .map(|text| text.text(l)),
         profiles: SystemText::TrayActiveProfile.text(l),
         no_profiles: SystemText::TrayNoProfiles.text(l),
+        // The agent sends no active project while no project context
+        // provider is active (the Projects plugin is off): no label then.
         project: status
             .and_then(|s| s.active_project.as_ref())
             .map(|project| {
@@ -409,6 +411,13 @@ mod tests {
         status.security = security;
         status.locale = locale.map(str::to_owned);
         status
+    }
+
+    #[test]
+    fn the_project_label_is_hidden_while_projects_are_off() {
+        let mut off = status(None, SecurityState::Unlocked);
+        off.active_project = None;
+        assert_eq!(labels(Some(&off)).project, None);
     }
 
     #[test]

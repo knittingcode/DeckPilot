@@ -1,0 +1,121 @@
+{
+  "outputs": {
+    "repository": "Folder repozytorium",
+    "projectKey": "Projekt",
+    "branch": "Gałąź",
+    "head": "Commit",
+    "detached": "Odłączony HEAD",
+    "unborn": "Brak commitów",
+    "upstream": "Gałąź śledzona",
+    "staged": "W indeksie",
+    "unstaged": "Poza indeksem",
+    "untracked": "Nieśledzone",
+    "conflicts": "Konflikty",
+    "clean": "Czysto",
+    "ahead": "Do przodu",
+    "behind": "Do tyłu",
+    "changed": "Zmienione ścieżki",
+    "files": "Pliki",
+    "truncated": "Lista skrócona",
+    "hash": "Skrót",
+    "shortHash": "Krótki skrót",
+    "author": "Autor",
+    "date": "Data",
+    "subject": "Temat",
+    "hasUpstream": "Ma gałąź śledzoną",
+    "source": "Źródło (pamięć lub sieć)",
+    "remote": "Zdalne repozytorium",
+    "trackingHead": "Ostatnio pobrany commit",
+    "remoteHead": "Commit zdalny",
+    "stale": "Zdalne zmieniło się od ostatniego pobrania"
+  },
+  "params": {
+    "repository": {
+      "label": "Repozytorium",
+      "description": "Zasób folderu. Puste: zasób repozytorium projektu."
+    },
+    "projectId": {
+      "label": "Projekt",
+      "description": "Czyje repozytorium, gdy nie wybrano repozytorium. Puste: bieżący projekt przepływu. Wybór nigdy nie zmienia aktywnego projektu."
+    },
+    "limit": {
+      "label": "Wymienione pliki",
+      "description": "Najwyżej tyle ścieżek na liście."
+    },
+    "refresh": {
+      "label": "Zapytaj zdalne repozytorium",
+      "description": "Wyłączone: to, co pobrano ostatnio, bez sieci. Włączone: pyta też zdalne repozytorium o jego gałąź (git ls-remote), co niczego lokalnie nie zmienia."
+    },
+    "application": {
+      "label": "Otwórz za pomocą",
+      "description": "Zasób aplikacji, na przykład edytor. Puste: menedżer plików."
+    }
+  },
+  "actions": {
+    "status": {
+      "name": "Stan repozytorium",
+      "description": "Gałąź, czy drzewo robocze jest czyste, liczby zmian i o ile gałąź wyprzedza swoją gałąź śledzoną lub za nią zostaje według ostatniego pobrania. Tylko lokalnie."
+    },
+    "branch": {
+      "name": "Bieżąca gałąź",
+      "description": "Pobrana gałąź i commit; zgłasza odłączony HEAD i gałąź bez commitów. Tylko lokalnie."
+    },
+    "changes": {
+      "name": "Zmienione pliki",
+      "description": "Ścieżki ze zmianami, po jednej w wierszu z ich stanem (jak `git status --short`), i liczby. Tylko lokalnie."
+    },
+    "last-commit": {
+      "name": "Ostatni commit",
+      "description": "Commit, na który wskazuje HEAD: skrót, autor, data i temat. Tylko lokalnie."
+    },
+    "remote-status": {
+      "name": "Stan zdalnego repozytorium",
+      "description": "Jak gałąź wypada wobec gałęzi śledzonej: do przodu i do tyłu według ostatniego pobrania, a na życzenie, czy zdalne repozytorium się od tego czasu zmieniło."
+    },
+    "open-repository": {
+      "name": "Otwórz repozytorium",
+      "description": "Otwiera folder repozytorium w menedżerze plików lub w aplikacji."
+    }
+  },
+  "category": "Git",
+  "plugin": {
+    "name": "Git",
+    "description": "Stan, gałąź, zmiany, ostatni commit i stan zdalny repozytoriów projektów. Nigdy nie zmienia repozytorium."
+  },
+  "dependencies": {
+    "projects": "Bez parametru repozytorium akcje używają zasobu repozytorium projektu przepływu; bez Projektów nie ma projektu i działają tylko klawisze z wybranym repozytorium."
+  },
+  "permissions": {
+    "tools": "Uruchamia Twój własny git w przypisanych folderach repozytoriów, aby odczytać ich stan, gałąź, ostatni commit i stan zdalny: git status, log -1, config --get zdalnego repozytorium i gałęzi scalania, remote, rev-parse. Nigdy nie zmienia repozytorium. Stan zdalny z opcją Zapytaj zdalne repozytorium uruchamia też git ls-remote, który używa Twojej tożsamości SSH i pomocników poświadczeń git, aby połączyć się ze zdalnymi repozytoriami skonfigurowanymi w repozytorium.",
+    "resources": "Używa folderów repozytoriów i aplikacji przypisanych na tym komputerze; podaje ścieżkę folderu jako wynik Folder repozytorium i otwiera go w menedżerze plików lub wybranej aplikacji, gdy naciśniesz Otwórz repozytorium.",
+    "profile": "Odczytuje klucz aktywnego projektu, aby podać, do którego projektu należy repozytorium.",
+    "device": "Pokazuje gałąź i to, czy drzewo robocze jest czyste, na klawiszach Stan repozytorium i Bieżąca gałąź, tak jak zastał je ostatni przebieg."
+  },
+  "settings": {
+    "repositoryRole": {
+      "label": "Zasób repozytorium",
+      "description": "Zasób projektu używany, gdy akcja nie wskazuje repozytorium."
+    },
+    "networkTimeoutSeconds": {
+      "label": "Limit czasu sieci (s)",
+      "description": "Dla odświeżania stanu zdalnego. Własny limit DeckPilota dla użycia sieci przez git nadal obowiązuje."
+    }
+  },
+  "errors": {
+    "not-found": "Folder repozytorium nie istnieje.",
+    "not-a-repository": "Folder nie jest repozytorium Git.",
+    "unsafe-repository": "Git odmawia, bo repozytorium należy do innego użytkownika (safe.directory).",
+    "git-not-found": "Nie znaleziono programu Git na tym komputerze.",
+    "git-failed": "Git zgłosił błąd.",
+    "project-not-in-profile": "Projekt nie należy do tego profilu.",
+    "no-commits": "Gałąź nie ma jeszcze commitów.",
+    "no-remote": "Zdalne repozytorium gałęzi śledzonej nie jest skonfigurowane.",
+    "network-failed": "Połączenie ze zdalnym repozytorium nie powiodło się.",
+    "cancelled": "Przebieg został zatrzymany.",
+    "resource-unbound": "Zasób nie jest przypisany na tym komputerze.",
+    "resource-role-missing": "Projekt nie określa zasobu repozytorium.",
+    "resource-kind-mismatch": "Zasób nie jest folderem (lub, dla Otwórz za pomocą, aplikacją).",
+    "resource-missing": "Zasób nie istnieje w tym profilu.",
+    "not-user-initiated": "Otwieranie jest dozwolone tylko w przebiegach uruchomionych przez Ciebie."
+  }
+}

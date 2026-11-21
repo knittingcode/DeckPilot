@@ -3,13 +3,13 @@
   "manifestVersion": 1,
   "id": "deckpilot.github",
   "name": "GitHub",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": {
     "id": "deckpilot",
     "name": "DeckPilot",
     "url": "https://github.com/knittingcode/deckpilot"
   },
-  "description": "Pull requests, review requests, checks and repositories from GitHub. Read-only.",
+  "description": "Pull requests, review requests, checks and repositories from GitHub or GitHub Enterprise Server. Read-only.",
   "repository": {
     "type": "git",
     "url": "https://github.com/knittingcode/deckpilot",
@@ -27,16 +27,18 @@
       "kind": "network",
       "hosts": ["api.github.com"],
       "methods": ["GET"],
-      "justification": "Reads your user, repositories, pull requests, review requests and checks from the GitHub API. Only reads; never changes anything on GitHub."
+      "userOrigins": [{ "setting": "apiUrl", "pathPrefix": true, "privateNetwork": true }],
+      "justification": "Reads your user, repositories, pull requests, review requests and checks from the GitHub API, or the GitHub Enterprise API you enter. Only reads; never changes anything on GitHub."
     },
     {
       "kind": "credentials",
       "refs": ["token"],
-      "justification": "Sends your GitHub token to api.github.com, and nowhere else, to read what the token may see."
+      "justification": "Sends your GitHub token to api.github.com or the GitHub Enterprise API you entered and allowed, and nowhere else, to read what the token may see."
     },
     {
       "kind": "openUrl",
       "hosts": ["github.com"],
+      "userOrigins": ["apiUrl"],
       "justification": "Opens a repository, a pull request or another GitHub page in your browser when you run Open on GitHub."
     }
   ],
@@ -314,7 +316,7 @@
         {
           "key": "apiUrl",
           "label": "API URL",
-          "description": "https://api.github.com. GitHub Enterprise and other hosts are not supported by this plugin yet; they keep using the built-in GitHub module. Only for this computer.",
+          "description": "https://api.github.com, or https://<host>/api/v3 for GitHub Enterprise Server. Only for this computer.",
           "required": true,
           "kind": { "type": "text", "maxLength": 512 },
           "default": { "type": "text", "value": "https://api.github.com" },
@@ -335,14 +337,15 @@
       {
         "key": "token",
         "label": "GitHub token",
-        "description": "A GitHub token with read access to what the actions read. Sent only to api.github.com, as a bearer token.",
+        "description": "A GitHub token with read access to what the actions read. Sent only to api.github.com or the GitHub Enterprise API you entered and allowed, as a bearer token.",
         "hosts": ["api.github.com"],
+        "userOrigin": "apiUrl",
         "schemes": ["bearer"],
         "setupUrl": "https://github.com/settings/personal-access-tokens"
       }
     ],
     "errorCodes": {
-      "invalid-api-url": "The configured API URL is not https://api.github.com.",
+      "invalid-api-url": "The configured API URL is not an https address of a GitHub API.",
       "invalid-repository": "The repository is not owner/name.",
       "invalid-ref": "The ref is not a branch, tag or commit name.",
       "unauthorized": "GitHub refused the token (401).",
@@ -351,7 +354,7 @@
       "rate-limited": "GitHub's rate limit is reached; the message says how long to wait.",
       "github-error": "Another error status from GitHub.",
       "invalid-response": "The answer is not the JSON expected, or too large.",
-      "url-not-allowed": "The page to open is not an https page on github.com.",
+      "url-not-allowed": "The page to open is not an https page on github.com or the GitHub Enterprise you entered.",
       "timed-out": "GitHub did not answer within the time limit of the settings."
     }
   }

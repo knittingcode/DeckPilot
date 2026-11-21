@@ -1,0 +1,121 @@
+{
+  "outputs": {
+    "repository": "Repository folder",
+    "projectKey": "Project",
+    "branch": "Branch",
+    "head": "Commit",
+    "detached": "Detached HEAD",
+    "unborn": "No commits yet",
+    "upstream": "Upstream",
+    "staged": "Staged",
+    "unstaged": "Not staged",
+    "untracked": "Untracked",
+    "conflicts": "Conflicts",
+    "clean": "Clean",
+    "ahead": "Ahead",
+    "behind": "Behind",
+    "changed": "Changed paths",
+    "files": "Files",
+    "truncated": "List truncated",
+    "hash": "Hash",
+    "shortHash": "Short hash",
+    "author": "Author",
+    "date": "Date",
+    "subject": "Subject",
+    "hasUpstream": "Has an upstream",
+    "source": "Source (cached or network)",
+    "remote": "Remote",
+    "trackingHead": "Last fetched commit",
+    "remoteHead": "Remote commit",
+    "stale": "Remote moved since the last fetch"
+  },
+  "params": {
+    "repository": {
+      "label": "Repository",
+      "description": "A folder resource. Empty: the project's repository resource."
+    },
+    "projectId": {
+      "label": "Project",
+      "description": "Whose repository, when no repository is set. Empty: the workflow's current project. Choosing one never changes the active project."
+    },
+    "limit": {
+      "label": "Files listed",
+      "description": "At most this many paths in the list."
+    },
+    "refresh": {
+      "label": "Ask the remote",
+      "description": "Off: what was last fetched, without the network. On: also asks the remote for its branch (git ls-remote), which changes nothing locally."
+    },
+    "application": {
+      "label": "Open with",
+      "description": "An application resource such as an editor. Empty: the file manager."
+    }
+  },
+  "actions": {
+    "status": {
+      "name": "Repository status",
+      "description": "Branch, whether the work tree is clean, counts of changes and how far the branch is ahead of or behind its upstream as last fetched. Local only."
+    },
+    "branch": {
+      "name": "Current branch",
+      "description": "The checked-out branch and commit; reports a detached HEAD and a branch without commits. Local only."
+    },
+    "changes": {
+      "name": "Changed files",
+      "description": "The paths with changes, one per line with their status (as `git status --short`), and counts. Local only."
+    },
+    "last-commit": {
+      "name": "Last commit",
+      "description": "The commit HEAD points to: hash, author name, date and subject. Local only."
+    },
+    "remote-status": {
+      "name": "Remote status",
+      "description": "How the branch compares with its upstream: ahead and behind as last fetched, and on request whether the remote has moved since."
+    },
+    "open-repository": {
+      "name": "Open repository",
+      "description": "Opens the repository folder in the file manager or an application."
+    }
+  },
+  "category": "Git",
+  "plugin": {
+    "name": "Git",
+    "description": "Status, branch, changes, last commit and remote state of project repositories. Never changes a repository."
+  },
+  "dependencies": {
+    "projects": "Without a repository parameter the actions use the repository resource of the workflow's project; without Projects there is no project, and only keys with a repository work."
+  },
+  "permissions": {
+    "tools": "Runs your own git in the repository folders you bound, to read their status, branch, last commit and remote state: git status, log -1, config --get of the branch's remote and merge, remote, rev-parse. Never changes a repository. Remote status with Ask the remote also runs git ls-remote, which uses your SSH identity and git credential helpers to contact the remotes your repository configures.",
+    "resources": "Uses the repository folders and applications you bound on this computer; reports the folder's path as the Repository folder output, and opens it in the file manager or the application you chose when you press Open repository.",
+    "profile": "Reads the active project's key to report which project a repository belongs to.",
+    "device": "Shows the branch, and whether the work tree is clean, on Repository status and Current branch keys, as their last run found it."
+  },
+  "settings": {
+    "repositoryRole": {
+      "label": "Repository resource",
+      "description": "The project resource used when an action names no repository."
+    },
+    "networkTimeoutSeconds": {
+      "label": "Network time limit (s)",
+      "description": "For refreshing the remote state. DeckPilot's own limit for git's network use still applies."
+    }
+  },
+  "errors": {
+    "not-found": "The repository folder does not exist.",
+    "not-a-repository": "The folder is not a Git repository.",
+    "unsafe-repository": "Git refuses the repository because another user owns it (safe.directory).",
+    "git-not-found": "Git was not found on this computer.",
+    "git-failed": "Git reported an error.",
+    "project-not-in-profile": "The project does not belong to this profile.",
+    "no-commits": "The branch has no commits yet.",
+    "no-remote": "The upstream's remote is not configured.",
+    "network-failed": "Contacting the remote failed.",
+    "cancelled": "The run was stopped.",
+    "resource-unbound": "The resource is not bound on this computer.",
+    "resource-role-missing": "The project does not define the repository resource.",
+    "resource-kind-mismatch": "The resource is not a folder (or, for Open with, an application).",
+    "resource-missing": "The resource does not exist in this profile.",
+    "not-user-initiated": "Opening is allowed only in runs you started."
+  }
+}

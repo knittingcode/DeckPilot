@@ -60,8 +60,9 @@ const GAP: Duration = Duration::from_millis(40);
 const HOLD_MARGIN: Duration = Duration::from_millis(40);
 /// Modules whose actions change only what DeckPilot itself shows or
 /// selects (pages, layouts, profiles, brightness, the active project): no
-/// confirmation for them.
-const LOCAL_MODULES: [&str; 2] = [deck::MODULE_ID, "projects"];
+/// confirmation for them. The Projects plugin's own ids and their legacy
+/// `projects.*` ids (the removed built-in's, WP-C6) both count.
+const LOCAL_MODULES: [&str; 3] = [deck::MODULE_ID, "projects", super::PROJECTS_PLUGIN];
 /// How deep confirmation follows workflows and picks into each other.
 const MAX_DEPTH: usize = 8;
 

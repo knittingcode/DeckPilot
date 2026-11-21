@@ -15,7 +15,8 @@ vi.mock("sonner", async () => (await import("@/test/toast")).sonnerModule)
 // The real module (with `AppContext`, which the variable picker reads), but a
 // fixed `useAppContext` for the editor.
 // The Work Session module is enabled unless a test turns it off.
-const enabledModules = vi.hoisted(() => ({ workSession: true }))
+// `noPlugins`: a build with plugins where none is installed (no Workflows plugin).
+const enabledModules = vi.hoisted(() => ({ workSession: true, noPlugins: false }))
 vi.mock("@/lib/app-context", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/app-context")>()),
   useActionModules: () =>
@@ -23,6 +24,7 @@ vi.mock("@/lib/app-context", async (importOriginal) => ({
   useAppContext: () => ({
     profiles: { activeProfileId: null, profiles: [] },
     refresh: vi.fn(),
+    ...(enabledModules.noPlugins ? { modules: [], pluginModules: [] } : {}),
   }),
 }))
 
@@ -195,7 +197,55 @@ beforeEach(() => {
   api.getGestureDefaults.mockResolvedValue({ doubleClickMs: 350, longPressMs: 800 })
   api.saveLayout.mockImplementation((_, saved) => Promise.resolve(savedByAgent(saved)))
 })
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  enabledModules.noPlugins = false
+  vi.unstubAllEnvs()
+})
+
+describe("gesture editor without the Workflows plugin", () => {
+  it("keeps a graph workflow on its gesture, read-only, and offers it nowhere else", async () => {
+    vi.stubEnv("VITE_DECKPILOT_PLUGINS", "1")
+    enabledModules.noPlugins = true
+    const graph = { version: 1, nodes: [], edges: [] }
+    const withGraph = {
+      ...view,
+      profile: {
+        ...view.profile,
+        workflows: [
+          { id: "deploy", name: "Deploy", steps: [], graph },
+          // A step workflow is a Multi Action, the key editor's own.
+          { id: "multi", name: "Multi", steps: [] },
+        ],
+      },
+    } as unknown as ProfileView
+    const user = userEvent.setup()
+    render(
+      <LayoutEditor
+        profileId="p"
+        view={withGraph}
+        model={mk2}
+        saved={layout}
+        onDirtyChange={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    )
+    await user.click(key("Key 2"))
+    // Still assigned and still running, only not editable here.
+    expect(describes("Key 2")).toContain("Double click: Deploy")
+    expect(
+      screen.getByText(/^Read-only: the Workflows plugin is off\. This workflow still runs/),
+    ).toBeInTheDocument()
+    // Not offered for another gesture; the Multi Action is.
+    await user.click(key("Key 3"))
+    await user.click(row("Double click"))
+    expect(await screen.findByRole("option", { name: "Multi" })).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    )
+    expect(screen.queryByRole("option", { name: /^Deploy/ })).not.toBeInTheDocument()
+  })
+})
 
 describe("gesture editor", () => {
   // Adding and removing are separate tests: each select round trip

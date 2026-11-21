@@ -1,7 +1,7 @@
 # Code the first-party plugins for a server the user enters share
-# (deckpilot.gitlab, deckpilot.jira): the few URLs they build and check
-# without a URL parser, the action's time limit counted with the server's
-# `Date` headers, and text helpers. A library only: it is compiled into
+# (deckpilot.gitlab, deckpilot.jira, deckpilot.github): the few URLs they
+# build and check without a URL parser, the action's time limit counted
+# with the server's `Date` headers, and text helpers. A library only: it is compiled into
 # each plugin's module, never bundled or installed by itself.
 #
 # A member of the plugins/runtime workspace (shared Cargo.lock and the

@@ -224,8 +224,21 @@ pub fn package(version: &str, permissions: &[Value]) -> VerifiedPackage {
 /// A first-party plugin as the application bundle ships it (unpacked
 /// files, verified against pins of exactly these files).
 pub fn bundled_package(id: &str, version: &str, permissions: &[Value]) -> VerifiedPackage {
+    bundled_package_with(id, version, permissions, |_| {})
+}
+
+/// [`bundled_package`] with the rest of the manifest changed by `edit`.
+pub fn bundled_package_with(
+    id: &str,
+    version: &str,
+    permissions: &[Value],
+    edit: impl FnOnce(&mut Value),
+) -> VerifiedPackage {
     let files: deckpilot_plugin_package::Files = [
-        ("manifest.json", manifest_json(id, version, permissions)),
+        (
+            "manifest.json",
+            manifest_json_with(id, version, permissions, edit),
+        ),
         (
             "plugin.wasm",
             deckpilot_plugin_package::wasm::minimal_abi_module_with_note(&format!(

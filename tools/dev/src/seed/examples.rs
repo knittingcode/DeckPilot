@@ -6,7 +6,7 @@
 use deckpilot_core::{
     ActionInstanceId, ActionParameters, ParameterValue, ProjectScope, ResourceRef, Workflow,
 };
-use deckpilot_modules::{docker, git, notifications, projects, system};
+use deckpilot_modules::{notifications, system};
 
 use super::{Builder, Result};
 
@@ -28,49 +28,49 @@ pub(super) fn actions(b: &mut Builder<'_>) -> Result<WorkActions> {
     Ok(WorkActions {
         project: b.action(
             "Active project",
-            projects::actions::current_id(),
+            super::actions::id(super::actions::CURRENT),
             &none(),
             "folder-kanban",
             Some("{project.key}"),
         )?,
         git_status: b.action(
             "Git status — current project",
-            git::actions::id(git::actions::STATUS),
+            super::actions::id("git.status"),
             &none(),
             "git-branch",
             Some("Git"),
         )?,
         git_changes: b.action(
             "Uncommitted changes — current project",
-            git::actions::id(git::actions::CHANGES),
+            super::actions::id("git.changes"),
             &none(),
             "list-checks",
             Some("Changes"),
         )?,
         docker_status: b.action(
             "Docker status",
-            docker::actions::id(docker::actions::STATUS),
+            super::actions::id("docker.status"),
             &none(),
             "container",
             Some("Docker"),
         )?,
         compose_status: b.action(
             "Services — current project",
-            docker::actions::id(docker::actions::COMPOSE_STATUS),
+            super::actions::id("docker.compose-status"),
             &none(),
             "server",
             Some("Services"),
         )?,
         compose_up: b.action(
             "Start services — current project",
-            docker::actions::id(docker::actions::COMPOSE_UP),
+            super::actions::id("docker.compose-up"),
             &none(),
             "play",
             Some("Up"),
         )?,
         compose_down: b.action(
             "Stop services — current project",
-            docker::actions::id(docker::actions::COMPOSE_DOWN),
+            super::actions::id("docker.compose-down"),
             &none(),
             "power",
             Some("Down"),

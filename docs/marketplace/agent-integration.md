@@ -205,8 +205,8 @@ configuration app ──IPC protocol 10──▶ agent service task ◀── ke
   windows or migrations; its variables are below. Each action is a
   `PluginActionHandler`:
   parameters and the node contract convert one to one from the manifest
-  (`cancellable` always, never `changesContext`); outputs are the declared
-  ones, as text.
+  (`cancellable` always, `changesContext` only as a first-party manifest
+  declares it, plugin API 1.9); outputs are the declared ones, as text.
   - *Never on the service task.* The handler `runs_detached`: a key bound
     to it makes the runtime return `RuntimeOutcome::ActionRequested`, and
     the agent runs `Runtime::detached_action` on a thread of its own (at
@@ -729,8 +729,12 @@ credential: "github.token" (or the module's configured id), slot:
 `openUrl:github.com` are derived and never listed. A GitHub Enterprise
 or private-host configuration is `notEligible` with the reason. Once
 `cutOver`, the stored `github.*` actions, keys and workflow nodes run in
-the plugin under their legacy ids (`route: plugin`); an agent without
-plugins, or with `route: builtin`, runs the built-in on the same data.
+the plugin under their legacy ids (`route: plugin`). Since WP-C5 and
+WP-C6 a removed built-in (`github`, `gitlab`, `jira`, `git`, `docker`,
+`workspace`, `projects`) is never reported `route: builtin`: until the
+plugin serves, its legacy ids are unavailable with `routeReason`, also in
+an agent without plugins; only an older app on the same data runs its
+built-in.
 
 GitLab's and Jira's migrations (P11) carry the server the user entered
 in the built-in (a self-managed GitLab, a Jira site). While they wait,

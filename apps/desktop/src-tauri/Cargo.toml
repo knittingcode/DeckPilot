@@ -57,6 +57,9 @@ deckpilot-keystore.workspace = true
 # HTTPS with a throwaway CA (the agent's test server), and plugins.db read
 # from outside.
 deckpilot-plugin-manifest.workspace = true
+# The bundled `default`-class first-party plugins a fresh install seeds
+# (the Workflows plugin owns the Workflows screens), staged with their pins.
+deckpilot-plugin-bundled.workspace = true
 deckpilot-plugin-registry = { workspace = true, features = ["publish"] }
 deckpilot-plugin-store.workspace = true
 hkdf.workspace = true

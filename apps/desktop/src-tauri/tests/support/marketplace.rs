@@ -29,7 +29,8 @@
 //! The artifacts come from the environment (see `docs/marketplace/e2e.md`):
 //! `DECKPILOT_E2E_AGENT_BIN` (an agent built with `plugins,test-hooks`),
 //! `DECKPILOT_E2E_PLUGIN_HOST` and `DECKPILOT_E2E_WASM_DIR` (the sample's
-//! `hello_weather.wasm`).
+//! `hello_weather.wasm`, and the bundled default plugins'
+//! `deckpilot_notifications.wasm` and `deckpilot_workflows.wasm`).
 
 #![allow(dead_code)]
 
@@ -409,6 +410,9 @@ pub struct Fixture {
     pub roots: Option<PathBuf>,
     pub agent_bin: PathBuf,
     pub plugin_host: PathBuf,
+    /// The bundled plugins as an installed app ships the `default`-class
+    /// ones a fresh install seeds ([`stage_bundled`]).
+    pub bundled: Bundled,
     /// The profile the scenario edits (active, with an MK.2 layout).
     pub profile: ProfileId,
     /// A profile nothing touches: it must come out unchanged.
@@ -486,6 +490,91 @@ const AGENT_VARIABLES: &[&str] = &[
     "DECKPILOT_TEST_PLUGIN_HTTP",
     "DECKPILOT_TEST_AGENT_ARGS",
 ];
+
+/// The bundled plugins of [`Fixture`]: their folder and the pins the agent
+/// is "compiled with" (`DECKPILOT_TEST_BUNDLED_PINS`).
+#[derive(Debug, Clone)]
+pub struct Bundled {
+    pub dir: PathBuf,
+    pub pins: PathBuf,
+}
+
+/// The first-party plugins of `plugins/first-party/bundled.json` with
+/// class `default`, staged as `plugins/first-party/build.sh` stages them:
+/// what a fresh install seeds and enables before the user opens the app
+/// (today `deckpilot.notifications` and `deckpilot.workflows`, which owns
+/// the Workflows screens; `module-migration.md` §11 D6). Their modules
+/// come from `DECKPILOT_E2E_WASM_DIR` (`<crate>.wasm`, built with the
+/// `guest` profile).
+fn stage_bundled(root: &Path) -> Bundled {
+    let first_party = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../plugins/first-party");
+    let wasm_dir = required_path("DECKPILOT_E2E_WASM_DIR");
+    let release: Value =
+        serde_json::from_slice(&std::fs::read(first_party.join("bundled.json")).unwrap()).unwrap();
+    let dir = root.join("resources/bundled");
+    let mut pinned = Vec::new();
+    for entry in release["plugins"].as_array().unwrap() {
+        if entry["class"] != "default" {
+            continue;
+        }
+        let source = first_party.join(entry["path"].as_str().unwrap());
+        let manifest: Value =
+            serde_json::from_slice(&std::fs::read(source.join("manifest.json")).unwrap()).unwrap();
+        let id = manifest["id"].as_str().unwrap().to_owned();
+        let target = dir.join(&id);
+        std::fs::create_dir_all(target.join("assets")).unwrap();
+        std::fs::create_dir_all(target.join("locales")).unwrap();
+        let mut files = vec!["manifest.json".to_owned(), "LICENSE".to_owned()];
+        files.extend(
+            manifest["icons"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .map(|(_, v)| v.as_str().unwrap().to_owned()),
+        );
+        files.extend(
+            manifest["locales"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|tag| format!("locales/{}.json", tag.as_str().unwrap())),
+        );
+        for file in files {
+            std::fs::copy(source.join(&file), target.join(&file)).unwrap();
+        }
+        let krate = crate_name(&source.join("Cargo.toml"));
+        let wasm = wasm_dir.join(format!("{}.wasm", krate.replace('-', "_")));
+        std::fs::copy(&wasm, target.join("plugin.wasm")).unwrap_or_else(|e| {
+            panic!("{}: {e} (build it with the guest profile)", wasm.display())
+        });
+        let version = semver::Version::parse(manifest["version"].as_str().unwrap()).unwrap();
+        pinned.push((
+            PluginId::parse(&id).unwrap(),
+            version,
+            deckpilot_plugin_bundled::BundleClass::Default,
+        ));
+    }
+    let pins = deckpilot_plugin_bundled::Pins::compute(&dir, &pinned).unwrap();
+    std::fs::write(dir.join("pins.json"), pins.to_json_pretty()).unwrap();
+    let pins_file = root.join("compiled-pins.json");
+    std::fs::write(&pins_file, pins.to_json_pretty()).unwrap();
+    Bundled {
+        dir,
+        pins: pins_file,
+    }
+}
+
+/// The `name` of a plugin's `Cargo.toml` `[package]` (its first `name =`
+/// line; first-party crates keep it there).
+fn crate_name(path: &Path) -> String {
+    let text = std::fs::read_to_string(path).unwrap();
+    text.lines()
+        .find_map(|line| {
+            let value = line.trim().strip_prefix("name")?.trim().strip_prefix('=')?;
+            Some(value.trim().trim_matches('"').to_owned())
+        })
+        .unwrap_or_else(|| panic!("{} names no crate", path.display()))
+}
 
 /// Canned answers for the only host the sample talks to.
 fn canned_http(dir: &Path) -> PathBuf {
@@ -569,6 +658,7 @@ impl Fixture {
         };
 
         // A password-protected configuration: no credential store involved.
+        let bundled = stage_bundled(root.path());
         let paths = AgentPaths::in_dir(root.path().join("data"));
         paths.create_dirs().unwrap();
         let key = Vault::new(&paths.database)
@@ -605,6 +695,7 @@ impl Fixture {
             roots,
             agent_bin,
             plugin_host,
+            bundled,
             profile: profile.id,
             baseline: baseline.id,
             artifacts,
@@ -626,6 +717,11 @@ impl Fixture {
             ("DECKPILOT_DATA_DIR", self.paths.data_dir.clone().into()),
             ("DECKPILOT_ENABLE_PLUGINS", "1".into()),
             ("DECKPILOT_PLUGIN_HOST", self.plugin_host.clone().into()),
+            ("DECKPILOT_BUNDLED_PLUGINS", self.bundled.dir.clone().into()),
+            (
+                "DECKPILOT_TEST_BUNDLED_PINS",
+                self.bundled.pins.clone().into(),
+            ),
         ];
         if let Some(local) = &self.local {
             env.push((
@@ -968,6 +1064,26 @@ pub fn hello() -> PluginId {
 }
 
 /// Polls `check` until it returns `Some`, for at most `timeout`.
+/// Waits until the app lists the bundled Workflows plugin enabled, as the
+/// main window's plugin list shows it once the agent seeded the bundled
+/// `default`-class plugins of a fresh install (the features they own follow
+/// that list, `PluginActions::feature`; the window lists the plugins again
+/// on every plugin change).
+pub fn wait_for_bundled_plugins<D: Driver + ?Sized>(d: &mut D) {
+    wait_until(
+        Duration::from_secs(60),
+        "the bundled Workflows plugin enabled",
+        || {
+            let plugins = d.ok("list_plugins", json!({}));
+            plugins
+                .as_array()?
+                .iter()
+                .any(|p| p["id"] == "deckpilot.workflows" && p["state"] == "enabled")
+                .then_some(())
+        },
+    );
+}
+
 pub fn wait_until<T>(timeout: Duration, what: &str, mut check: impl FnMut() -> Option<T>) -> T {
     let deadline = Instant::now() + timeout;
     loop {

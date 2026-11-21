@@ -485,6 +485,11 @@ pub struct ModuleRegistry {
     aliases: &'static [ActionAlias],
     /// Which migrated modules' legacy types go to their plugin.
     routing: LegacyRouting,
+    /// The saved settings of built-ins that are no longer compiled in, as
+    /// their stored `modules` rows say (set by the agent): what the alias
+    /// rules compare a stored parameter with ([`ParamRule::DropIfDefault`]
+    /// drops a per-action credential that names the module's own).
+    legacy_configs: BTreeMap<ModuleId, ActionParameters>,
 }
 
 impl fmt::Debug for ModuleRegistry {
@@ -502,6 +507,10 @@ impl fmt::Debug for ModuleRegistry {
             .field("variables", &self.variables)
             .field("aliases", &self.aliases.len())
             .field("routing", &self.routing)
+            .field(
+                "legacy_configs",
+                &self.legacy_configs.keys().collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -514,6 +523,7 @@ impl ModuleRegistry {
             variables: VariableRegistry::new(),
             aliases: ACTION_ALIASES,
             routing: LegacyRouting::default(),
+            legacy_configs: BTreeMap::new(),
         }
     }
 
@@ -547,6 +557,17 @@ impl ModuleRegistry {
 
     pub fn legacy_routing(&self) -> &LegacyRouting {
         &self.routing
+    }
+
+    /// Records the saved settings of `module`, a built-in that is no
+    /// longer compiled in (`module-migration.md` §11 D1, D2): its legacy
+    /// action types' alias rules compare stored parameters with them, as
+    /// they did with the built-in's own settings. Ignored for a registered
+    /// module, whose own settings count.
+    pub fn set_legacy_config(&mut self, module: ModuleId, config: ActionParameters) {
+        if !self.modules.contains_key(&module) {
+            self.legacy_configs.insert(module, config);
+        }
     }
 
     /// Registers a module with its default state.
@@ -897,16 +918,29 @@ impl ModuleRegistry {
             .map(|e| &e.module.manifest().name)
             .or_else(|| self.manifest(&module).map(|m| &m.name))
         {
-            Some(name) => format!("{name} (`{plugin_id}`)"),
-            None => format!("`{plugin_id}`"),
+            Some(name) if *name != plugin_id.as_str() => format!("{name} (`{plugin_id}`)"),
+            _ => format!("`{plugin_id}`"),
         };
         let withdrawn = || AliasOutcome::Unavailable {
             reason: format!("{name} is disabled"),
         };
+        // Not routed yet: the built-in's while it is compiled in. Once it
+        // is removed (the github, gitlab, jira, git, docker, workspace and
+        // projects built-ins, `module-migration.md` §11 D1, D2) there is
+        // nothing to fall back to: the plugin serves the legacy types when
+        // it can, else they are unavailable with the reason.
+        let removed = builtin.is_none() && self.manifest(&module).is_none();
         match self.routing.route(&module) {
-            LegacyRoute::Builtin => return AliasOutcome::Builtin,
+            LegacyRoute::Builtin if !removed => return AliasOutcome::Builtin,
             LegacyRoute::PluginWithdrawn => return withdrawn(),
-            LegacyRoute::Plugin => {}
+            LegacyRoute::AwaitingConsent => {
+                return AliasOutcome::Unavailable {
+                    reason: format!(
+                        "{name} waits for your consent: allow it in Settings › Plugins"
+                    ),
+                };
+            }
+            LegacyRoute::Builtin | LegacyRoute::Plugin => {}
         }
         let fault = match plugin {
             None => format!("{name} is not installed"),
@@ -930,6 +964,11 @@ impl ModuleRegistry {
                     )
                 }
             },
+        };
+        let fault = if removed {
+            format!("`{legacy}` now comes from {name}: {fault}")
+        } else {
+            fault
         };
         if builtin.is_some() {
             AliasOutcome::Fallback { reason: fault }
@@ -975,8 +1014,10 @@ impl ModuleRegistry {
                 AliasOutcome::Plugin => return Availability::Available,
                 AliasOutcome::Unavailable { .. } => {
                     let plugin = alias.plugin_id();
-                    let withdrawn =
-                        self.routing.route(&alias.module_id()) == LegacyRoute::PluginWithdrawn;
+                    let withdrawn = matches!(
+                        self.routing.route(&alias.module_id()),
+                        LegacyRoute::PluginWithdrawn | LegacyRoute::AwaitingConsent
+                    );
                     return match self.modules.get(&plugin) {
                         Some(entry) => Availability::ModuleDisabled {
                             name: entry.module.manifest().name.clone(),
@@ -1096,7 +1137,11 @@ impl ModuleRegistry {
             .action_handlers(&entry.config)
             .into_iter()
             .find(|handler| handler.definition().id.as_str() == alias.target)?;
-        let legacy_config = self.modules.get(&alias.module_id()).map(|e| &e.config);
+        let legacy_config = self
+            .modules
+            .get(&alias.module_id())
+            .map(|e| &e.config)
+            .or_else(|| self.legacy_configs.get(&alias.module_id()));
         let handler = AliasHandler::new(alias, target, self.builtin_type(alias), legacy_config);
         Some((plugin, &entry.module.manifest().capabilities, handler))
     }

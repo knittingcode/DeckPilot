@@ -159,7 +159,8 @@
     "back": "Wstecz",
     "openPage": "Otwórz {{page}}",
     "workSession": "Sesja pracy",
-    "workSessionController": "Sterowanie sesją pracy"
+    "workSessionController": "Sterowanie sesją pracy",
+    "workflowsOff": "wtyczka Przepływy pracy jest wyłączona"
   },
   "drag": {
     "action": "Akcja",
@@ -268,7 +269,8 @@
       "release": "Jego przypisanie do zwolnienia („{{target}}”) zostanie usunięte: klawisz z gestami nie może też reagować na zwolnienie.",
       "untilSaved": "Na urządzeniu nic się nie zmieni, dopóki nie zapiszesz układu.",
       "confirm": "Przełącz na gesty"
-    }
+    },
+    "readOnly": "Tylko do odczytu: {{reason}}. Ten przepływ pracy nadal działa z tego klawisza; można go znów wybrać lub zmienić po włączeniu wtyczki (Ustawienia › Wtyczki)."
   },
   "variables": {
     "references": "Odwołania",
@@ -405,7 +407,8 @@
       "encoder": "Odznacz pokrętło",
       "touchZone": "Odznacz strefę dotykową",
       "many": "Odznacz elementy sterujące"
-    }
+    },
+    "readOnly": "Tylko do odczytu: {{reason}}. Ten przepływ pracy nadal działa z tego klawisza; można go znów wybrać lub zmienić po włączeniu wtyczki (Ustawienia › Wtyczki)."
   },
   "pageNav": {
     "untitled": "Bez nazwy",

@@ -443,6 +443,54 @@ impl SqliteStore {
         Ok(Some(target))
     }
 
+    /// The encrypted, verified backup named `label` in the backup directory
+    /// (`deckpilot-<label>-<millis>.db`, next to the schema upgrade
+    /// backups), written now unless one exists already: the same copy,
+    /// check and rename as before a schema upgrade, kept until the user
+    /// removes it (never pruned with the upgrade backups). Returns its file
+    /// name, or `None` for a plain or in-memory database, which is never
+    /// copied. The agent takes `pre-plugin-extraction` before the first
+    /// cut-over of a module extracted to a plugin
+    /// (`docs/marketplace/module-migration.md` §7 X13).
+    ///
+    /// # Errors
+    ///
+    /// When `label` is not lowercase letters, digits and `-`, or the copy
+    /// cannot be written or verified (nothing is left behind then).
+    pub fn named_backup(&self, label: &str) -> Result<Option<String>> {
+        if label.is_empty()
+            || label.len() > 40
+            || !label
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
+            return Err(StorageError::Invalid(format!(
+                "`{label}` is not a backup label"
+            )));
+        }
+        let (Some(path), Encryption::Key(key)) = (&self.path, &self.encryption) else {
+            return Ok(None);
+        };
+        let dir = backup_dir(path);
+        let prefix = format!("deckpilot-{label}-");
+        if let Some(existing) = named_backups(&dir, &prefix).into_iter().next() {
+            return Ok(Some(existing));
+        }
+        std::fs::create_dir_all(&dir).map_err(StorageError::Io)?;
+        let version = self.schema_version()?;
+        let name = format!("{prefix}{}.db", now_millis());
+        let target = dir.join(&name);
+        let partial = partial_backup(&target);
+        let written = export_database(&self.connection, &partial, Some(key))
+            .and_then(|()| verify_copy(&partial, &Encryption::Key(key.clone()), version))
+            .and_then(|()| std::fs::rename(&partial, &target).map_err(StorageError::Io));
+        if let Err(error) = written {
+            remove_named_partials(&dir, &prefix);
+            return Err(error);
+        }
+        Ok(Some(name))
+    }
+
     /// Writes an encrypted, verified copy of the database to `target`.
     pub fn backup_to(&self, target: &Path) -> Result<()> {
         let Encryption::Key(key) = &self.encryption else {
@@ -1255,6 +1303,39 @@ fn remove_partial_backups(dir: &Path) {
         let name = entry.file_name().to_string_lossy().into_owned();
         // `….db.partial` and its side files (`….db.partial-journal`).
         if name.starts_with("deckpilot-schema") && name.contains(&format!(".db{PARTIAL_SUFFIX}")) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// The verified backups in `dir` whose name starts with `prefix`, oldest
+/// name first.
+fn named_backups(dir: &Path, prefix: &str) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| {
+            name.starts_with(prefix)
+                && Path::new(name)
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("db"))
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// Removes unverified copies of a named backup. Best effort.
+fn remove_named_partials(dir: &Path, prefix: &str) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(std::result::Result::ok) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with(prefix) && name.contains(&format!(".db{PARTIAL_SUFFIX}")) {
             let _ = std::fs::remove_file(entry.path());
         }
     }
@@ -3096,5 +3177,60 @@ mod tests {
         assert_eq!(store.module_states().unwrap(), ModuleStates::new());
         assert_eq!(store.setting("update.preferences").unwrap(), None);
         assert_eq!(store.load_profile(fresh.id).unwrap(), Some(fresh));
+    }
+
+    /// The named backup the agent takes before the first extraction
+    /// cut-over: encrypted with the database's key, verified, written
+    /// once (a second call names the first), never pruned with the
+    /// upgrade backups, and never for a plain database.
+    #[cfg(feature = "sqlcipher")]
+    #[test]
+    fn a_named_backup_is_encrypted_verified_and_written_once() {
+        let dir = temp_dir();
+        let path = dir.join("deckpilot.db");
+        let key = DatabaseKey::random().unwrap();
+        let encryption = Encryption::Key(key.clone());
+        let store = SqliteStore::open(&path, &encryption).unwrap();
+        store.save_profile(&sample_profile("Work")).unwrap();
+        let name = store
+            .named_backup("pre-plugin-extraction")
+            .unwrap()
+            .unwrap();
+        assert!(
+            name.starts_with("deckpilot-pre-plugin-extraction-")
+                && Path::new(&name).extension().is_some_and(|e| e == "db"),
+            "{name}"
+        );
+        store.save_profile(&sample_profile("Later")).unwrap();
+        assert_eq!(
+            store.named_backup("pre-plugin-extraction").unwrap(),
+            Some(name.clone())
+        );
+        let backups = backup_dir(&path);
+        let files: Vec<String> = std::fs::read_dir(&backups)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(files, std::slice::from_ref(&name));
+        // The copy opens with the same key only, and holds what was there.
+        let copy = SqliteStore::open(backups.join(&name), &encryption).unwrap();
+        assert_eq!(copy.list_profiles().unwrap().len(), 1);
+        assert!(matches!(
+            SqliteStore::open(
+                backups.join(&name),
+                &Encryption::Key(DatabaseKey::random().unwrap())
+            ),
+            Err(StorageError::InvalidKey)
+        ));
+        drop(copy);
+        // Never pruned with the upgrade backups.
+        prune_backups(&backups);
+        assert!(backups.join(&name).is_file());
+        assert!(store.named_backup("Bad label").is_err());
+        assert!(store.named_backup("../x").is_err());
+        let plain = SqliteStore::open_in_memory().unwrap();
+        assert_eq!(plain.named_backup("pre-plugin-extraction").unwrap(), None);
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

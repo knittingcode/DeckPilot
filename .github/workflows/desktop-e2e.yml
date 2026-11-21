@@ -128,6 +128,8 @@ jobs:
         run: |
           cargo build --locked -p deckpilot-plugin-host --bin deckpilot-plugin-host
           cargo build --locked -p hello-weather --target wasm32-unknown-unknown --profile guest
+          # The default-class first-party plugins a fresh install seeds.
+          cargo build --locked -p deckpilot-notifications -p deckpilot-workflows --target wasm32-unknown-unknown --profile guest
       # Copied out of target/: building the tests below replaces
       # target/debug/deckpilot-desktop with a build that expects the dev
       # server.
@@ -140,7 +142,9 @@ jobs:
           mkdir -p "$E2E/bin" "$E2E/wasm" "$E2E/artifacts"
           exe=""; if [ "$RUNNER_OS" = Windows ]; then exe=.exe; fi
           cp "target/debug/deckpilot-agent$exe" "$E2E/bin/"
-          cp plugins/runtime/target/wasm32-unknown-unknown/guest/hello_weather.wasm "$E2E/wasm/"
+          for wasm in hello_weather deckpilot_notifications deckpilot_workflows; do
+            cp "plugins/runtime/target/wasm32-unknown-unknown/guest/$wasm.wasm" "$E2E/wasm/"
+          done
           {
             echo "DECKPILOT_E2E_AGENT_BIN=$E2E/bin/deckpilot-agent$exe"
             echo "DECKPILOT_E2E_PLUGIN_HOST=$(native "$PWD")/plugins/runtime/target/debug/deckpilot-plugin-host$exe"

@@ -85,7 +85,8 @@
   },
   "list": {
     "none": "Ta wtyczka nie prosi o żadne uprawnienia.",
-    "publisherReason": "Uzasadnienie wydawcy:"
+    "publisherReason": "Uzasadnienie wydawcy:",
+    "optional": "Opcjonalne: wtyczka działa bez niego; potrzebują go tylko te akcje: {{actions}}."
   },
   "review": {
     "title": {
@@ -96,7 +97,7 @@
     "intro": {
       "install": "Sprawdź, co ta wtyczka może robić. Zaznacz każde uprawnienie, aby wyrazić na nie zgodę; później możesz odebrać uprawnienia w sekcji Zainstalowane.",
       "update": "Ta wersja prosi o więcej, niż przyznano. Zaznacz każde nowe lub rozszerzone uprawnienie, aby wyrazić na nie zgodę, odrzuć aktualizację albo anuluj, aby zdecydować później.",
-      "enable": "Wtyczka działa tylko ze wszystkimi uprawnieniami, które deklaruje. Zaznacz każde, które nie zostało jeszcze przyznane."
+      "enable": "Wtyczka działa tylko ze wszystkimi uprawnieniami, których potrzebuje. Zaznacz każde, które nie zostało jeszcze przyznane; opcjonalne jest potrzebne tylko akcjom, które je wymieniają."
     },
     "confirm": {
       "install": "Zainstaluj",
@@ -117,6 +118,7 @@
     "allow": "Zezwól",
     "allowNew": "Nowe: zezwól",
     "allowBroadened": "Rozszerzone: zezwól",
+    "allowOptional": "Opcjonalne: zezwól",
     "removed": "Już niewymagane"
   },
   "capability": {

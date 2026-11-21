@@ -309,6 +309,13 @@ export function PermissionList({
                   {grant.detail && (
                     <span className="text-xs text-muted-foreground">{grant.detail}</span>
                   )}
+                  {grant.optionalFor && (
+                    <span className="text-xs text-muted-foreground">
+                      {t("permissions:list.optional", {
+                        actions: grant.optionalFor.join(", "),
+                      })}
+                    </span>
+                  )}
                   {grant.justification && (
                     <span className="text-xs">
                       <span className="text-muted-foreground">

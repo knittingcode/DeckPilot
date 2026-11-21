@@ -1,0 +1,12 @@
+{
+  "plugin": {
+    "name": "Workflows",
+    "description": "The Workflows screen: build, edit and run the workflows of your profiles. Keys that run workflows keep working without it."
+  },
+  "permissions": {
+    "hostViews": "Shows DeckPilot's own Workflows screen and its entry in the navigation. It reads no data of its own."
+  },
+  "navigation": {
+    "workflows": "Workflows"
+  }
+}

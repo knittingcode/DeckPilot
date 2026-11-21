@@ -1,0 +1,12 @@
+{
+  "plugin": {
+    "name": "Przepływy pracy",
+    "description": "Ekran Przepływy pracy: twórz, edytuj i uruchamiaj przepływy pracy swoich profili. Klawisze uruchamiające przepływy działają także bez niego."
+  },
+  "permissions": {
+    "hostViews": "Pokazuje własny ekran Przepływy pracy DeckPilota i jego pozycję w nawigacji. Nie odczytuje żadnych danych."
+  },
+  "navigation": {
+    "workflows": "Przepływy pracy"
+  }
+}

@@ -11,6 +11,9 @@ import { CoreStatusItems } from "@/components/status-sources"
 import { StatusContext, type StatusStores, createStatusStores } from "@/hooks/use-status"
 import { AppContext, type AppContextValue } from "@/lib/app-context"
 import { SecurityContext } from "@/lib/security-context"
+import { pluginModules } from "@/lib/plugin-actions"
+import { pluginFeatures } from "@/lib/plugin-features"
+import { hostStatusItems } from "@/modules/host-views"
 import {
   FINISHED_VISIBLE_MS,
   NOTIFICATION_LIMIT,
@@ -20,7 +23,6 @@ import {
   visibility,
 } from "@/lib/status"
 import { agentState, deviceSummary, updateItem } from "@/lib/status-model"
-import { moduleInfo } from "@/lib/test-fixtures"
 import type {
   AgentConnection,
   DeviceInfo,
@@ -29,6 +31,7 @@ import type {
   UpdateState,
 } from "@/lib/types"
 import { moduleStatusItems } from "@/modules"
+import { projectsPlugin } from "@/test/first-party"
 import { updateState } from "@/test/fixtures"
 import { appContext } from "@/test/render"
 
@@ -122,10 +125,13 @@ function Shell({
   stores,
   value,
   modules = [],
+  plugins = [],
 }: {
   stores: StatusStores
   value: AppContextValue
   modules?: ModuleInfo[]
+  /** The installed plugins, as `usePluginModules` lists them. */
+  plugins?: ModuleInfo[]
 }) {
   return (
     <AppContext value={value}>
@@ -134,6 +140,9 @@ function Shell({
           <AppStatusBar stores={stores} />
           <CoreStatusItems />
           {moduleStatusItems(modules).map(({ key, component: Item }) => (
+            <Item key={key} />
+          ))}
+          {hostStatusItems(pluginFeatures(plugins, true)).map(({ key, component: Item }) => (
             <Item key={key} />
           ))}
         </StatusContext>
@@ -251,19 +260,23 @@ describe("status model", () => {
 })
 
 describe("status bar", () => {
-  it("shows agent, devices, profile and the active project of an enabled module", () => {
+  it("shows agent, devices, profile and the active project while Projects is active", () => {
     const stores = createStatusStores()
-    const projects = moduleInfo({ id: "projects" })
-    const { rerender } = render(<Shell stores={stores} value={context({})} modules={[projects]} />)
+    const projects = pluginModules([projectsPlugin()])
+    const { rerender } = render(<Shell stores={stores} value={context({})} plugins={projects} />)
     const bar = within(screen.getByRole("contentinfo", { name: "Status bar" }))
     expect(bar.getByText("Agent")).toBeInTheDocument()
     expect(bar.getByText("1 device")).toBeInTheDocument()
     expect(bar.getByText("Work")).toBeInTheDocument()
     expect(bar.getByText("SHOP")).toBeInTheDocument()
 
-    // Disabling the module removes its item.
+    // Disabling the plugin removes its item.
     rerender(
-      <Shell stores={stores} value={context({})} modules={[{ ...projects, enabled: false }]} />,
+      <Shell
+        stores={stores}
+        value={context({})}
+        plugins={pluginModules([projectsPlugin("disabled")])}
+      />,
     )
     expect(bar.queryByText("SHOP")).not.toBeInTheDocument()
 
@@ -272,7 +285,7 @@ describe("status bar", () => {
       activeProfile: { id: "p2", name: "Home" },
       activeProject: { id: "y", key: "LAB", name: "Lab", resources: {} },
     })
-    rerender(<Shell stores={stores} value={context({ agent: switched })} modules={[projects]} />)
+    rerender(<Shell stores={stores} value={context({ agent: switched })} plugins={projects} />)
     expect(bar.getByText("Home")).toBeInTheDocument()
     expect(bar.getByText("LAB")).toBeInTheDocument()
     expect(bar.queryByText("SHOP")).not.toBeInTheDocument()
@@ -282,7 +295,7 @@ describe("status bar", () => {
       <Shell
         stores={stores}
         value={context({ agent: agent({ activeProject: null }) })}
-        modules={[projects]}
+        plugins={projects}
       />,
     )
     expect(bar.queryByText("LAB")).not.toBeInTheDocument()

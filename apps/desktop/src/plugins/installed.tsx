@@ -37,7 +37,7 @@ import {
   storageText,
   type UpdateCandidate,
 } from "./model"
-import { grantOfInfo } from "./permissions"
+import { actionNamesOf, grantOfInfo } from "./permissions"
 import type {
   ActionParamValue,
   AvailablePlugin,
@@ -460,7 +460,9 @@ function InstalledItem({
         <div id={`${id}-more`} className="mt-3 grid gap-4 border-t pt-3">
           <PermissionList
             label={t("marketplace:installed.permissionsOf", { name: summary.name })}
-            grants={item.permissions.map(grantOfInfo)}
+            grants={item.permissions.map((info) =>
+              grantOfInfo(info, actionNamesOf(summary.actions)),
+            )}
             renderControl={(grant) => {
               const info = item.permissions.find((p) => p.key === grant.key)
               if (info?.status === "granted") {

@@ -1,4 +1,12 @@
 //! End-to-end tests of the agent with simulated devices and real IPC.
+//!
+//! The built-in Projects and Git modules are gone (`docs/marketplace/
+//! module-migration.md` §11 D1): without the Projects plugin (every build
+//! without the `plugins` feature, as here) nothing provides the project
+//! context, so switching projects is refused (`projectsOff`) while the
+//! profile's projects and the stored selection stay, and a run starts with
+//! the stored active project. The plugins' behaviour is tested in
+//! `plugins_projects.rs` and `plugins_git.rs`.
 
 use std::time::Duration;
 
@@ -12,7 +20,7 @@ use deckpilot_agent::{
 };
 use deckpilot_core::{
     ActionParameters, ActionRegistry, ActionStatus, CycleDirection, DeviceLayout, LayoutStatus,
-    ModuleSettings, Os, Profile, ProfileId, Project, ProjectKey,
+    ModuleSettings, Os, Profile, ProfileId, Project, ProjectCatalog, ProjectKey,
 };
 use deckpilot_device::mock::MockBackend;
 use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceId, models};
@@ -23,8 +31,7 @@ use deckpilot_ipc::{
     ServerMessage, SharedStream, ShutdownReason,
 };
 use deckpilot_keystore::MemoryKeyStore;
-use deckpilot_modules::projects::{ProjectCatalog, actions};
-use deckpilot_modules::{general, projects};
+use deckpilot_modules::general;
 use deckpilot_presence::{ScreenLockMonitor, ScriptedScreenLock};
 use deckpilot_storage::crypto::Password;
 use deckpilot_storage::vault::Vault;
@@ -89,8 +96,6 @@ fn temp_paths() -> AgentPaths {
     paths
 }
 
-/// A profile with SHOP, CMR and CMS, a project switcher on key 0, a log
-/// action on key 1 and a generated MK.2 layout.
 /// An encrypted database as the configuration app creates it on first run.
 fn create_database(paths: &AgentPaths) -> (SqliteStore, DatabaseKey) {
     let key = Vault::new(&paths.database)
@@ -117,6 +122,9 @@ async fn unlock_agent(paths: &AgentPaths, key: &DatabaseKey) {
     .await;
 }
 
+/// A profile with SHOP, CMR and CMS (CMR stored as the active project), a
+/// log action ("Ping", message `ping`) on key 0, a log action announcing
+/// the run's project ("Announce") on key 1 and a generated MK.2 layout.
 fn seed(paths: &AgentPaths) -> (Profile, DatabaseKey) {
     let (store, key) = create_database(paths);
     let registry = registry();
@@ -128,7 +136,14 @@ fn seed(paths: &AgentPaths) -> (Profile, DatabaseKey) {
     }
     profile.actions.push(
         registry
-            .create_instance("Next project", actions::next_id(), &ActionParameters::new())
+            .create_instance(
+                "Ping",
+                general::log_id(),
+                &ActionParameters::new().with(
+                    "message",
+                    deckpilot_core::ParameterValue::Text("ping".into()),
+                ),
+            )
             .unwrap(),
     );
     profile.actions.push(
@@ -147,6 +162,9 @@ fn seed(paths: &AgentPaths) -> (Profile, DatabaseKey) {
     profile.layouts.push(layout);
     store.save_profile(&profile).unwrap();
     store.set_active_profile(Some(profile.id)).unwrap();
+    store
+        .set_active_project(profile.id, Some(profile.projects[1].id))
+        .unwrap();
     (profile, key)
 }
 
@@ -343,16 +361,12 @@ impl TestAgent {
     }
 }
 
-fn active_key(status: &AgentStatus) -> Option<&str> {
-    status.active_project.as_ref().map(|p| p.key.as_str())
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn renders_layout_and_reports_status() {
     let agent = setup().await;
     assert!(agent.frames_shown(), "layout should be rendered on connect");
     let frames = agent.mock.frames(&agent.device);
-    // Key 0 (project switcher) and key 1 (log action) are bound; the rest are blank.
+    // Key 0 (ping) and key 1 (announce) are bound; the rest are blank.
     assert!(frames.contains_key(&ControlId::Key { index: 0 }));
     assert!(frames.contains_key(&ControlId::Key { index: 1 }));
     assert!(!frames.contains_key(&ControlId::Key { index: 2 }));
@@ -363,7 +377,12 @@ async fn renders_layout_and_reports_status() {
         status.active_profile.as_ref().map(|p| p.name.as_str()),
         Some("Work")
     );
-    assert_eq!(active_key(&status), Some("SHOP"));
+    // No Projects plugin: no project is shown, the stored one is kept.
+    assert_eq!(status.active_project, None);
+    assert_eq!(
+        agent.store().active_project(agent.work.id).unwrap(),
+        Some(agent.work.projects[1].id)
+    );
     assert_eq!(status.backend, "mock");
     assert_eq!(status.protocol, PROTOCOL_VERSION);
     // The build's distribution record, for the app's channel check (R6).
@@ -379,55 +398,57 @@ async fn renders_layout_and_reports_status() {
     agent.shutdown().await;
 }
 
+/// Waits for the next `ActionCompleted` event and returns its name and
+/// status.
+async fn next_completed(subscriber: &mut AgentClient) -> (String, ActionStatus) {
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    loop {
+        let event = tokio::time::timeout_at(deadline, subscriber.next_event())
+            .await
+            .expect("no action completed in time")
+            .unwrap();
+        if let AgentEvent::ActionCompleted { name, status, .. } = event {
+            return (name, status);
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn button_press_cycles_project_persists_and_notifies() {
+async fn button_press_runs_its_action_and_notifies() {
     let agent = setup().await;
     assert!(agent.frames_shown());
     let mut subscriber = agent.client().await;
     subscriber.subscribe().await.unwrap();
-    let writes_before = agent.mock.image_writes(&agent.device);
+    let before = agent.mock.frames(&agent.device);
 
-    // A tap is a press and a release; only the press is bound.
-    agent.mock.tap(&agent.device, ControlId::Key { index: 0 });
-
-    let mut completed = 0;
-    let deadline = tokio::time::Instant::now() + TIMEOUT;
-    let status = loop {
-        let event = tokio::time::timeout_at(deadline, subscriber.next_event())
-            .await
-            .unwrap()
-            .unwrap();
-        match event {
-            AgentEvent::ActionCompleted { name, status, .. } => {
-                assert_eq!(name, "Next project");
-                assert_eq!(status, ActionStatus::Succeeded);
-                completed += 1;
+    // A tap is a press and a release; only the press is bound: one run
+    // per tap.
+    for _ in 0..3 {
+        agent.mock.tap(&agent.device, ControlId::Key { index: 0 });
+        assert_eq!(
+            next_completed(&mut subscriber).await,
+            ("Ping".to_owned(), ActionStatus::Succeeded)
+        );
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let extra = tokio::time::timeout(Duration::from_millis(100), async {
+        loop {
+            if let Ok(AgentEvent::ActionCompleted { name, .. }) = subscriber.next_event().await {
+                return name;
             }
-            AgentEvent::State { status } if active_key(&status) == Some("CMR") => break status,
-            _ => {}
         }
-    };
-    assert_eq!(completed, 1);
-    assert_eq!(active_key(&status), Some("CMR"));
-    let stored = agent.store().active_project(agent.work.id).unwrap();
-    assert_eq!(stored, Some(agent.work.projects[1].id));
+    })
+    .await;
+    assert!(extra.is_err(), "an extra run: {extra:?}");
 
-    // The switcher key shows the project, so it is redrawn; unchanged keys are not.
+    // The keys look as before, and the stored project is untouched.
     assert!(
         agent
             .mock
-            .wait_for(&agent.device, TIMEOUT, |_, writes| writes > writes_before)
+            .wait_for(&agent.device, TIMEOUT, |frames, _| *frames == before)
     );
-    let redrawn = agent.mock.image_writes(&agent.device) - writes_before;
-    assert_eq!(redrawn, 1, "only the project switcher key changes");
-
-    // CMR -> CMS -> SHOP
-    for expected in ["CMS", "SHOP"] {
-        agent.mock.tap(&agent.device, ControlId::Key { index: 0 });
-        agent
-            .wait_for_status(|s| active_key(s) == Some(expected))
-            .await;
-    }
+    let stored = agent.store().active_project(agent.work.id).unwrap();
+    assert_eq!(stored, Some(agent.work.projects[1].id));
     agent.shutdown().await;
 }
 
@@ -486,31 +507,13 @@ async fn switches_profiles_without_restart() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn project_and_action_requests() {
+async fn action_requests_and_simulated_input() {
     let agent = setup().await;
+    let mut subscriber = agent.client().await;
+    subscriber.subscribe().await.unwrap();
     let mut client = agent.client().await;
-    let response = client
-        .request(Request::CycleProject {
-            direction: CycleDirection::Previous,
-        })
-        .await
-        .unwrap();
-    assert!(
-        matches!(response, Response::ActiveProject { project: Some(p) } if p.key.as_str() == "CMS")
-    );
 
-    let cmr = agent.work.projects[1].id;
-    client
-        .request(Request::SelectProject { project: cmr })
-        .await
-        .unwrap();
-    let Response::ActiveProject { project } =
-        client.request(Request::GetActiveProject).await.unwrap()
-    else {
-        panic!("expected project")
-    };
-    assert_eq!(project.unwrap().id, cmr);
-
+    // A run starts with the stored active project.
     let announce = agent.work.actions[1].id;
     let Response::ActionResult { result } = client
         .request(Request::RunAction { action: announce })
@@ -530,16 +533,14 @@ async fn project_and_action_requests() {
         })
         .await
         .unwrap();
-    agent
-        .wait_for_status(|s| active_key(s) == Some("CMS"))
-        .await;
+    let (name, status) = loop {
+        let completed = next_completed(&mut subscriber).await;
+        if completed.0 == "Ping" {
+            break completed;
+        }
+    };
+    assert_eq!((name.as_str(), status), ("Ping", ActionStatus::Succeeded));
 
-    let unknown = client
-        .request(Request::SelectProject {
-            project: deckpilot_core::ProjectId::new(),
-        })
-        .await;
-    assert!(matches!(unknown, Err(ClientError::Agent(e)) if e.code == ErrorCode::NotFound));
     let autostart = client.request(Request::GetAutostart).await;
     assert!(matches!(autostart, Err(ClientError::Agent(e)) if e.code == ErrorCode::Unsupported));
     agent.shutdown().await;
@@ -573,10 +574,13 @@ async fn recovers_from_unplug_and_replug() {
     assert!(agent.frames_shown(), "layout restored after reconnect");
 
     // Input works again on the new connection.
+    let mut subscriber = agent.client().await;
+    subscriber.subscribe().await.unwrap();
     agent.mock.tap(&agent.device, ControlId::Key { index: 0 });
-    agent
-        .wait_for_status(|s| active_key(s) == Some("CMR"))
-        .await;
+    assert_eq!(
+        next_completed(&mut subscriber).await,
+        ("Ping".to_owned(), ActionStatus::Succeeded)
+    );
     agent.shutdown().await;
 }
 
@@ -829,7 +833,7 @@ async fn single_instance_shutdown_and_client_reconnect() {
 async fn runs_workflows_over_ipc() {
     let agent = setup().await;
     let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
-    let workflow = deckpilot_core::Workflow::new("Switch and announce")
+    let workflow = deckpilot_core::Workflow::new("Ping and announce")
         .step(profile.actions[0].id, deckpilot_core::OnFailure::Stop)
         .step(profile.actions[1].id, deckpilot_core::OnFailure::Stop);
     let workflow_id = workflow.id;
@@ -848,10 +852,9 @@ async fn runs_workflows_over_ipc() {
         panic!("expected a workflow report")
     };
     assert_eq!(report.status, ActionStatus::Succeeded);
+    assert_eq!(report.steps[0].result.message, "ping");
+    // The run's project is the stored active project.
     assert_eq!(report.steps[1].result.message, "CMR");
-    agent
-        .wait_for_status(|s| active_key(s) == Some("CMR"))
-        .await;
     agent.shutdown().await;
 }
 
@@ -903,7 +906,14 @@ async fn renders_simulated_xl_and_plus_devices() {
     for _ in 0..3 {
         profile.actions.push(
             registry
-                .create_instance("Next", actions::next_id(), &ActionParameters::new())
+                .create_instance(
+                    "Ping",
+                    general::log_id(),
+                    &ActionParameters::new().with(
+                        "message",
+                        deckpilot_core::ParameterValue::Text("ping".into()),
+                    ),
+                )
                 .unwrap(),
         );
     }
@@ -1001,52 +1011,157 @@ async fn run_action(
 async fn disabled_modules_stop_their_actions_without_losing_them() {
     let agent = setup().await;
     let mut client = agent.client().await;
-    let next = agent.work.actions[0].id;
-    assert!(run_action(&mut client, next).await.is_success());
+    let ping = agent.work.actions[0].id;
+    assert!(run_action(&mut client, ping).await.is_success());
 
     // The configuration app disables the module and asks for a reload.
-    agent
-        .store()
-        .set_module_state(
-            &projects::module_id(),
-            &ModuleSettings {
-                enabled: false,
-                config: ActionParameters::new(),
-            },
-        )
-        .unwrap();
+    let disable = |enabled| {
+        agent
+            .store()
+            .set_module_state(
+                &general::module_id(),
+                &ModuleSettings {
+                    enabled,
+                    config: ActionParameters::new(),
+                },
+            )
+            .unwrap();
+    };
+    disable(false);
     client.request(Request::ReloadConfiguration).await.unwrap();
-    let result = run_action(&mut client, next).await;
+    let result = run_action(&mut client, ping).await;
     assert_eq!(result.status, ActionStatus::Failed);
     assert_eq!(
         result.message,
-        "this action is unavailable: the Projects module is disabled"
+        "this action is unavailable: the General module is disabled"
     );
-    let cycle = client
-        .request(Request::CycleProject {
-            direction: CycleDirection::Next,
-        })
-        .await;
-    assert!(matches!(cycle, Err(ClientError::Agent(e)) if e.message.contains("disabled")));
-    // The stored action is untouched.
+    // The stored actions and the stored selection are untouched.
     let stored = agent.store().load_profile(agent.work.id).unwrap().unwrap();
     assert_eq!(stored.actions, agent.work.actions);
-    assert_eq!(active_key(&agent.status().await), Some("CMR"));
+    assert_eq!(
+        agent.store().active_project(agent.work.id).unwrap(),
+        Some(agent.work.projects[1].id)
+    );
 
-    agent
-        .store()
-        .set_module_state(
-            &projects::module_id(),
-            &ModuleSettings {
-                enabled: true,
-                config: ActionParameters::new(),
-            },
-        )
-        .unwrap();
+    disable(true);
     client.request(Request::ReloadConfiguration).await.unwrap();
-    assert!(run_action(&mut client, next).await.is_success());
-    assert_eq!(active_key(&agent.status().await), Some("CMS"));
+    let result = run_action(&mut client, ping).await;
+    assert!(result.is_success(), "{}", result.message);
+    assert_eq!(result.message, "ping");
     agent.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn without_a_project_context_provider_project_requests_are_refused_and_workflows_run() {
+    let agent = setup().await;
+    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    let workflow = waiting_workflow(&profile, 10);
+    let workflow_id = workflow.id;
+    profile.workflows.push(workflow);
+    profile.layouts[0].pages[0]
+        .bindings
+        .push(deckpilot_core::ControlBinding {
+            control: ControlId::Key { index: 5 },
+            trigger: deckpilot_core::Trigger::Press,
+            target: deckpilot_core::BindingTarget::Workflow {
+                workflow: workflow_id,
+            },
+            label: None,
+            appearance: None,
+        });
+    // A key the built-in Projects module used to run, as 0.9 stored it.
+    let legacy = deckpilot_core::ActionInstance {
+        id: deckpilot_core::ActionInstanceId::new(),
+        name: "Next project".into(),
+        action_type: deckpilot_core::ActionTypeId::new("projects.next").unwrap(),
+        parameters: ActionParameters::new(),
+        description: String::new(),
+        icon: None,
+        label: None,
+    };
+    let legacy_id = legacy.id;
+    profile.actions.push(legacy);
+    agent.store().save_profile(&profile).unwrap();
+    // No Projects plugin: nothing provides the project context.
+    let mut events = agent.client().await;
+    events.subscribe().await.unwrap();
+    let mut client = agent.client().await;
+    client.request(Request::ReloadConfiguration).await.unwrap();
+    let cms = agent.work.projects[2].id;
+    for request in [
+        Request::GetActiveProject,
+        Request::SelectProject { project: cms },
+        Request::CycleProject {
+            direction: CycleDirection::Next,
+        },
+    ] {
+        let refused = client.request(request).await;
+        assert!(
+            matches!(&refused, Err(ClientError::Agent(e))
+                if e.reason.as_deref() == Some("projectsOff")
+                    && e.message.contains("the Projects plugin is not active")),
+            "{refused:?}"
+        );
+    }
+    assert_eq!(agent.status().await.active_project, None);
+    // The legacy key is unavailable with the reason, not an unknown type.
+    let result = run_action(&mut client, legacy_id).await;
+    assert_eq!(result.status, ActionStatus::Failed);
+    assert!(
+        result
+            .message
+            .contains("`projects.next` now comes from `deckpilot.projects`")
+            && result.message.contains("install it from the Marketplace"),
+        "{}",
+        result.message
+    );
+    // Nothing was deleted: the projects, the legacy key and the selection
+    // stay stored.
+    let stored = agent.store().load_profile(agent.work.id).unwrap().unwrap();
+    assert_eq!(stored.projects, agent.work.projects);
+    assert!(stored.actions.iter().any(|a| a.id == legacy_id));
+    assert_eq!(
+        agent.store().active_project(agent.work.id).unwrap(),
+        Some(agent.work.projects[1].id)
+    );
+    // A key that runs a workflow still runs it.
+    client
+        .request(Request::SimulateInput {
+            device: agent.device.clone(),
+            control: ControlId::Key { index: 5 },
+            input: ControlInput::Press,
+        })
+        .await
+        .unwrap();
+    let started = loop {
+        if let AgentEvent::ExecutionStarted { execution } =
+            tokio::time::timeout(TIMEOUT, events.next_event())
+                .await
+                .unwrap()
+                .unwrap()
+        {
+            break execution;
+        }
+    };
+    assert_eq!(started.workflow, workflow_id);
+    let (_, finished) = execution_events(&mut events, started.id).await;
+    assert_eq!(finished.state, deckpilot_core::ExecutionState::Succeeded);
+    agent.shutdown().await;
+}
+
+/// An "Announce" log action of `profile`: a run's message is its
+/// project's key.
+fn announce_action(name: &str) -> deckpilot_core::ActionInstance {
+    registry()
+        .create_instance(
+            name,
+            general::log_id(),
+            &ActionParameters::new().with(
+                "message",
+                deckpilot_core::ParameterValue::Text("{project.key}".into()),
+            ),
+        )
+        .unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1057,25 +1172,39 @@ async fn profiles_keep_their_own_projects_and_selection() {
         home.add_project(Project::new(ProjectKey::new(key).unwrap(), key))
             .unwrap();
     }
+    let announce_home = announce_action("Announce at home");
+    let announce_home_id = announce_home.id;
+    home.actions.push(announce_home);
     agent.store().save_profile(&home).unwrap();
-    let mut client = agent.client().await;
-    let cms = agent.work.projects[2].id;
-    client
-        .request(Request::SelectProject { project: cms })
-        .await
+    agent
+        .store()
+        .set_active_project(home.id, Some(home.projects[1].id))
         .unwrap();
+    let mut client = agent.client().await;
+    let refused = |response: &Result<Response, ClientError>| matches!(response, Err(ClientError::Agent(e)) if e.reason.as_deref() == Some("projectsOff"));
+    // Without the Projects plugin no profile switches its project.
+    let cms = agent.work.projects[2].id;
+    let select = client
+        .request(Request::SelectProject { project: cms })
+        .await;
+    assert!(refused(&select), "{select:?}");
 
     client
         .request(Request::SetActiveProfile { profile: home.id })
         .await
         .unwrap();
-    assert_eq!(active_key(&agent.status().await), Some("BLOG"));
-    // A project of the inactive profile cannot be selected.
-    let foreign = client
-        .request(Request::SelectProject { project: cms })
+    assert_eq!(agent.status().await.active_project, None);
+    let select = client
+        .request(Request::SelectProject {
+            project: home.projects[0].id,
+        })
         .await;
-    assert!(matches!(foreign, Err(ClientError::Agent(e)) if e.code == ErrorCode::NotFound));
-    assert_eq!(active_key(&agent.status().await), Some("BLOG"));
+    assert!(refused(&select), "{select:?}");
+    // Each profile's runs start with its own stored project.
+    assert_eq!(
+        run_action(&mut client, announce_home_id).await.message,
+        "GARDEN"
+    );
 
     client
         .request(Request::SetActiveProfile {
@@ -1083,7 +1212,20 @@ async fn profiles_keep_their_own_projects_and_selection() {
         })
         .await
         .unwrap();
-    assert_eq!(active_key(&agent.status().await), Some("CMS"));
+    assert_eq!(
+        run_action(&mut client, agent.work.actions[1].id)
+            .await
+            .message,
+        "CMR"
+    );
+    assert_eq!(
+        agent.store().active_project(agent.work.id).unwrap(),
+        Some(agent.work.projects[1].id)
+    );
+    assert_eq!(
+        agent.store().active_project(home.id).unwrap(),
+        Some(home.projects[1].id)
+    );
     agent.shutdown().await;
 }
 
@@ -1675,8 +1817,11 @@ async fn a_legacy_database_is_encrypted_with_a_system_key() {
 }
 
 /// A system-key configuration with an active profile, project and layout,
-/// as the user left it.
-fn system_configuration(paths: &AgentPaths, keys: &MemoryKeyStore) -> (Profile, ProjectKey) {
+/// as the user left it. Returns the profile and its stored active project.
+fn system_configuration(
+    paths: &AgentPaths,
+    keys: &MemoryKeyStore,
+) -> (Profile, deckpilot_core::ProjectId) {
     let key = Vault::new(&paths.database).initialize_system(keys).unwrap();
     let store = SqliteStore::open(&paths.database, &Encryption::Key(key)).unwrap();
     let mut profile = Profile::new("Work");
@@ -1693,13 +1838,15 @@ fn system_configuration(paths: &AgentPaths, keys: &MemoryKeyStore) -> (Profile, 
     store.set_active_profile(Some(profile.id)).unwrap();
     let cmr = profile.projects[1].id;
     store.set_active_project(profile.id, Some(cmr)).unwrap();
-    (profile, ProjectKey::new("CMR").unwrap())
+    (profile, cmr)
 }
 
-fn restored(status: &AgentStatus, profile: &Profile, project: &ProjectKey) -> bool {
+/// The profile and its layouts are back. No project is shown without the
+/// Projects plugin.
+fn restored(status: &AgentStatus, profile: &Profile) -> bool {
     status.security == SecurityState::Unlocked
         && status.active_profile.as_ref().map(|p| p.id) == Some(profile.id)
-        && status.active_project.as_ref().map(|p| &p.key) == Some(project)
+        && status.active_project.is_none()
         && status.devices.iter().any(|d| {
             matches!(&d.layout, LayoutStatus::Compatible { layout, .. } if *layout == profile.layouts[0].id)
         })
@@ -1715,13 +1862,17 @@ async fn unlocking_restores_profile_project_and_layouts() {
     mock.plug(&models::stream_deck_mk2(), "TEST-0001");
     // Login: the agent opens the configuration by itself.
     let running = start_agent_with(paths.clone(), mock.clone(), with_keys(&keys)).unwrap();
-    wait_for(&paths, |s| restored(s, &profile, &project)).await;
-    // After a lock and an unlock, everything is back as it was.
+    wait_for(&paths, |s| restored(s, &profile)).await;
+    // After a lock and an unlock, everything is back as it was, and the
+    // stored active project is kept.
     request(&paths, Request::Lock).await.unwrap();
     let locked = wait_for(&paths, |s| s.security == SecurityState::Locked).await;
     assert_eq!(locked.active_profile, None);
     request(&paths, Request::SystemUnlock).await.unwrap();
-    wait_for(&paths, |s| restored(s, &profile, &project)).await;
+    wait_for(&paths, |s| restored(s, &profile)).await;
+    let store =
+        SqliteStore::open(&paths.database, &Encryption::Key(agent_key(&paths).await)).unwrap();
+    assert_eq!(store.active_project(profile.id).unwrap(), Some(project));
     stop_agent(&paths, running).await;
 }
 
@@ -1918,7 +2069,7 @@ async fn start_workflow(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn runs_workflows_in_the_background_with_progress_and_history() {
     let agent = setup().await;
-    let workflow = deckpilot_core::Workflow::new("Switch and announce")
+    let workflow = deckpilot_core::Workflow::new("Ping and announce")
         .step(agent.work.actions[0].id, deckpilot_core::OnFailure::Stop)
         .step(agent.work.actions[1].id, deckpilot_core::OnFailure::Stop);
     let workflow_id = workflow.id;
@@ -1945,10 +2096,15 @@ async fn runs_workflows_in_the_background_with_progress_and_history() {
     assert_eq!(finished.state, deckpilot_core::ExecutionState::Succeeded);
     assert_eq!(finished.completed_nodes, 2);
     assert!(finished.finished_at.is_some());
-    // The workflow's project switch reached the agent.
-    agent
-        .wait_for_status(|s| active_key(s) == Some("CMR"))
-        .await;
+    // The run started with the stored active project and left it alone.
+    assert_eq!(finished.initial_project, Some(agent.work.projects[1].id));
+    assert!(
+        matches!(
+            finished.project,
+            None | Some(deckpilot_core::ProjectOutcome::Unchanged)
+        ),
+        "{finished:?}"
+    );
 
     let Response::Execution { execution } = client
         .request(Request::GetExecution {
@@ -1961,6 +2117,7 @@ async fn runs_workflows_in_the_background_with_progress_and_history() {
     };
     let nodes: Vec<_> = execution.nodes.iter().map(|n| n.node.to_string()).collect();
     assert_eq!(nodes, ["step_1", "step_2"]);
+    assert_eq!(execution.nodes[0].message, "ping");
     assert_eq!(execution.nodes[1].message, "CMR");
 
     // Recorded in the encrypted database.
@@ -2190,54 +2347,6 @@ async fn older_clients_do_not_receive_execution_events() {
     agent.shutdown().await;
 }
 
-/// A graph workflow: select `project`, wait `ms`, then announce the
-/// project of the run's context.
-fn select_wait_announce(
-    profile: &mut Profile,
-    project: &str,
-    ms: u32,
-    scope: deckpilot_core::ProjectScope,
-) -> deckpilot_core::Workflow {
-    let project_id = profile
-        .projects
-        .iter()
-        .find(|p| p.key.as_str() == project)
-        .unwrap()
-        .id;
-    let select = registry()
-        .create_instance(
-            &format!("Select {project}"),
-            actions::select_id(),
-            &ActionParameters::new().with(
-                actions::PROJECT_ID,
-                deckpilot_core::ParameterValue::Project(project_id),
-            ),
-        )
-        .unwrap();
-    let select_id = select.id;
-    profile.actions.push(select);
-    let mut workflow = deckpilot_core::Workflow::new(format!("Work on {project}"));
-    workflow.project_scope = Some(scope);
-    workflow.graph = Some(
-        serde_json::from_value(json!({
-            "version": 1,
-            "nodes": [
-                {"id": "start", "type": "trigger"},
-                {"id": "select", "type": "action", "action": select_id},
-                {"id": "wait", "type": "delay", "ms": ms},
-                {"id": "announce", "type": "action", "action": profile.actions[1].id},
-            ],
-            "edges": [
-                {"from": "start", "to": "select"},
-                {"from": "select", "to": "wait"},
-                {"from": "wait", "to": "announce"},
-            ],
-        }))
-        .unwrap(),
-    );
-    workflow
-}
-
 async fn execution(
     client: &mut AgentClient,
     id: deckpilot_core::ExecutionId,
@@ -2261,34 +2370,29 @@ fn announced(record: &deckpilot_core::ExecutionRecord) -> String {
         .unwrap_or_default()
 }
 
+/// Without the Projects plugin no run switches the project (switching runs
+/// in workflows: `plugins_projects.rs`); concurrent runs each start with
+/// the stored active project, and the application's stays.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn concurrent_runs_keep_their_own_project_context() {
+async fn concurrent_runs_start_with_the_stored_project() {
     let agent = setup().await;
     let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
-    let cmr = select_wait_announce(
-        &mut profile,
-        "CMR",
-        400,
-        deckpilot_core::ProjectScope::Execution,
-    );
-    let cms = select_wait_announce(
-        &mut profile,
-        "CMS",
-        100,
-        deckpilot_core::ProjectScope::Execution,
-    );
-    let (slow, fast) = (cmr.id, cms.id);
-    profile.workflows.extend([cmr, cms]);
+    let slow = waiting_workflow(&profile, 400);
+    let mut fast = waiting_workflow(&profile, 100);
+    fast.name = "Wait briefly and announce".into();
+    let (slow_id, fast_id) = (slow.id, fast.id);
+    profile.workflows.extend([slow, fast]);
     agent.store().save_profile(&profile).unwrap();
     let mut events = agent.client().await;
     events.subscribe().await.unwrap();
     let mut client = agent.client().await;
     client.request(Request::ReloadConfiguration).await.unwrap();
 
-    // Both run at the same time, each selecting another project.
-    let first = start_workflow(&mut client, slow).await;
-    let second = start_workflow(&mut client, fast).await;
-    assert_eq!(first.initial_project, second.initial_project);
+    let first = start_workflow(&mut client, slow_id).await;
+    let second = start_workflow(&mut client, fast_id).await;
+    let cmr = agent.work.projects[1].id;
+    assert_eq!(first.initial_project, Some(cmr));
+    assert_eq!(second.initial_project, Some(cmr));
     let mut finished = Vec::new();
     while finished.len() < 2 {
         if let AgentEvent::ExecutionFinished { execution } =
@@ -2300,119 +2404,15 @@ async fn concurrent_runs_keep_their_own_project_context() {
             finished.push(execution.id);
         }
     }
-    let first = execution(&mut client, first.id).await;
-    let second = execution(&mut client, second.id).await;
-    assert_eq!(announced(&first), "CMR");
-    assert_eq!(announced(&second), "CMS");
-    assert!(matches!(
-        first.summary.project,
-        Some(deckpilot_core::ProjectOutcome::KeptInRun { .. })
-    ));
-    // The application's active project never changed.
-    assert_eq!(active_key(&agent.status().await), Some("SHOP"));
-    agent.shutdown().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn only_permitted_runs_change_the_active_project_and_never_over_a_newer_choice() {
-    let agent = setup().await;
-    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
-    let workflow = select_wait_announce(
-        &mut profile,
-        "CMR",
-        300,
-        deckpilot_core::ProjectScope::Application,
-    );
-    let workflow_id = workflow.id;
-    profile.workflows.push(workflow);
-    // The same, waiting long enough that the user's choice below certainly
-    // arrives while it runs, also on a slow runner.
-    let mut slow = select_wait_announce(
-        &mut profile,
-        "CMR",
-        3000,
-        deckpilot_core::ProjectScope::Application,
-    );
-    slow.name = "Work on CMR slowly".into();
-    let slow_id = slow.id;
-    profile.workflows.push(slow);
-    agent.store().save_profile(&profile).unwrap();
-    let mut events = agent.client().await;
-    events.subscribe().await.unwrap();
-    let mut client = agent.client().await;
-    client.request(Request::ReloadConfiguration).await.unwrap();
-
-    // Nothing else changes the active project: the run's project is applied.
-    let run = start_workflow(&mut client, workflow_id).await;
+    for id in [first.id, second.id] {
+        let record = execution(&mut client, id).await;
+        assert_eq!(announced(&record), "CMR");
+    }
+    assert_eq!(agent.status().await.active_project, None);
     assert_eq!(
-        run.project_scope,
-        Some(deckpilot_core::ProjectScope::Application)
+        agent.store().active_project(agent.work.id).unwrap(),
+        Some(cmr)
     );
-    let (_, done) = execution_events(&mut events, run.id).await;
-    assert!(
-        matches!(
-            done.project,
-            Some(deckpilot_core::ProjectOutcome::Applied { .. })
-        ),
-        "{done:?}"
-    );
-    agent
-        .wait_for_status(|s| active_key(s) == Some("CMR"))
-        .await;
-
-    // The user picks another project while the run waits: their choice
-    // stands and the run records why it did not switch.
-    let cms = profile
-        .projects
-        .iter()
-        .find(|p| p.key.as_str() == "CMS")
-        .unwrap()
-        .id;
-    let shop = profile.projects[0].id;
-    client
-        .request(Request::SelectProject { project: shop })
-        .await
-        .unwrap();
-    let run = start_workflow(&mut client, slow_id).await;
-    // The run is waiting (its project already selected in its own
-    // context) when the user picks another one.
-    let mut early = Vec::new();
-    loop {
-        let event = within("the run's wait to begin", TIMEOUT, events.next_event())
-            .await
-            .unwrap();
-        let waiting = matches!(
-            &event,
-            AgentEvent::ExecutionProgress {
-                execution,
-                event: deckpilot_core::graph::ExecutionEvent::NodeStarted { node },
-                ..
-            } if *execution == run.id && node.as_str() == "wait"
-        );
-        assert!(
-            !matches!(&event, AgentEvent::ExecutionFinished { execution } if execution.id == run.id),
-            "the run ended before it waited: {event:?}"
-        );
-        early.push(event);
-        if waiting {
-            break;
-        }
-    }
-    client
-        .request(Request::SelectProject { project: cms })
-        .await
-        .unwrap();
-    let (later, done) = execution_events(&mut events, run.id).await;
-    match &done.project {
-        Some(deckpilot_core::ProjectOutcome::NotApplied { reason, .. }) => {
-            assert!(reason.contains("changed during the run"), "{reason}");
-        }
-        other => panic!(
-            "expected the run not to change the user's newer choice, got {other:?}; \
-             run: {done:?}; events: {early:?} {later:?}"
-        ),
-    }
-    assert_eq!(active_key(&agent.status().await), Some("CMS"));
     agent.shutdown().await;
 }
 
@@ -2618,135 +2618,6 @@ async fn system_commands_are_allowed_per_computer_and_their_output_is_not_kept()
     let stored = agent.store().load_profile(agent.work.id).unwrap().unwrap();
     assert!(stored.workflow(workflow).is_some());
     drop(client);
-    agent.shutdown().await;
-}
-
-/// Runs `git` for test setup in a temporary repository only.
-fn test_git(dir: &std::path::Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args([
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.invalid",
-            "-c",
-            "commit.gpgsign=false",
-            "-c",
-            "init.defaultBranch=main",
-        ])
-        .args(args)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env(
-            "GIT_CONFIG_GLOBAL",
-            if cfg!(windows) { "NUL" } else { "/dev/null" },
-        )
-        .output()
-        .unwrap();
-    assert!(status.status.success(), "{args:?}");
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn git_reads_the_repository_of_each_runs_own_project() {
-    let agent = setup().await;
-    // Temporary repositories for CMR and CMS, on separate branches.
-    let root = agent.paths.data_dir.join("repositories");
-    let mut machine = agent
-        .store()
-        .load_machine_config()
-        .unwrap()
-        .unwrap_or_else(|| deckpilot_core::MachineConfig::new(Os::current()));
-    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
-    for key in ["CMR", "CMS"] {
-        let dir = root.join(key.to_lowercase());
-        std::fs::create_dir_all(&dir).unwrap();
-        test_git(
-            &dir,
-            &["init", "-q", "-b", &format!("work-{}", key.to_lowercase())],
-        );
-        let resource =
-            deckpilot_core::ResourceKey::new(format!("{}.repo", key.to_lowercase())).unwrap();
-        machine.set_binding(deckpilot_core::MachineResourceBinding {
-            key: resource.clone(),
-            kind: deckpilot_core::ResourceKind::Directory,
-            value: dir.display().to_string(),
-        });
-        let project = profile
-            .projects
-            .iter_mut()
-            .find(|p| p.key.as_str() == key)
-            .unwrap();
-        project.resources.insert("repository".into(), resource);
-    }
-    agent.store().save_machine_config(&machine).unwrap();
-    // Each workflow selects its project, waits, then reads "the current
-    // project's" repository.
-    let status = registry()
-        .create_instance(
-            "Status",
-            deckpilot_modules::git::actions::id(deckpilot_modules::git::actions::STATUS),
-            &ActionParameters::new(),
-        )
-        .unwrap();
-    let status_id = status.id;
-    profile.actions.push(status);
-    let mut workflows = Vec::new();
-    for (key, ms) in [("CMR", 300), ("CMS", 50)] {
-        let mut workflow = select_wait_announce(
-            &mut profile,
-            key,
-            ms,
-            deckpilot_core::ProjectScope::Execution,
-        );
-        let graph = workflow.graph.as_mut().unwrap();
-        for node in &mut graph.nodes {
-            if let deckpilot_core::graph::NodeKind::Action { action, .. } = &mut node.kind
-                && node.id.as_str() == "announce"
-            {
-                *action = status_id;
-            }
-        }
-        workflows.push(workflow.id);
-        profile.workflows.push(workflow);
-    }
-    agent.store().save_profile(&profile).unwrap();
-    let mut events = agent.client().await;
-    events.subscribe().await.unwrap();
-    let mut client = agent.client().await;
-    client.request(Request::ReloadConfiguration).await.unwrap();
-
-    let first = start_workflow(&mut client, workflows[0]).await;
-    let second = start_workflow(&mut client, workflows[1]).await;
-    let mut finished = 0;
-    while finished < 2 {
-        if let AgentEvent::ExecutionFinished { .. } =
-            tokio::time::timeout(TIMEOUT, events.next_event())
-                .await
-                .unwrap()
-                .unwrap()
-        {
-            finished += 1;
-        }
-    }
-    for (id, key, branch) in [
-        (first.id, "CMR", "work-cmr"),
-        (second.id, "CMS", "work-cms"),
-    ] {
-        let record = execution(&mut client, id).await;
-        let status = node(&record, "announce");
-        assert_eq!(
-            status.status,
-            deckpilot_core::graph::NodeStatus::Succeeded,
-            "{:?}",
-            status.error
-        );
-        assert_eq!(status.output["projectKey"], key);
-        assert_eq!(status.output["branch"], branch);
-        assert_eq!(status.output["unborn"], "true");
-    }
-    assert_eq!(active_key(&agent.status().await), Some("SHOP"));
-    drop((events, client));
     agent.shutdown().await;
 }
 
@@ -3226,127 +3097,6 @@ async fn running_workflows_mark_and_redraw_only_their_keys() {
     // finished and when it ended; never the other 14 keys.
     let redrawn = agent.mock.image_writes(&agent.device) - writes;
     assert!((2..=5).contains(&redrawn), "{redrawn} images written");
-    agent.shutdown().await;
-}
-
-/// The git module with a fake `git` program that logs its calls and
-/// reports a clean `main` branch: no repository is read. Returns the log.
-#[cfg(unix)]
-fn fake_git(agent: &TestAgent) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-    let dir = agent.paths.data_dir.join("fake-git");
-    std::fs::create_dir_all(dir.join("shop")).unwrap();
-    let program = dir.join("git");
-    std::fs::write(
-        &program,
-        format!(
-            "#!/bin/sh\necho \"$@\" >> '{}'\nprintf '# branch.oid \
-             1234567890abcdef1234567890abcdef12345678\\0# branch.head main\\0'\n",
-            dir.join("calls.log").display()
-        ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-    agent
-        .store()
-        .set_module_state(
-            &deckpilot_modules::git::module_id(),
-            &ModuleSettings {
-                enabled: true,
-                config: ActionParameters::new().with(
-                    deckpilot_modules::git::EXECUTABLE,
-                    deckpilot_core::ParameterValue::Text(program.display().to_string()),
-                ),
-            },
-        )
-        .unwrap();
-    let mut machine = agent
-        .store()
-        .load_machine_config()
-        .unwrap()
-        .unwrap_or_else(|| deckpilot_core::MachineConfig::new(Os::current()));
-    machine.set_binding(deckpilot_core::MachineResourceBinding {
-        key: deckpilot_core::ResourceKey::new("shop.repository").unwrap(),
-        kind: deckpilot_core::ResourceKind::Directory,
-        value: dir.join("shop").display().to_string(),
-    });
-    agent.store().save_machine_config(&machine).unwrap();
-    dir.join("calls.log")
-}
-
-#[cfg(unix)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn module_states_are_shown_and_not_refreshed_more_often_than_allowed() {
-    use deckpilot_core::{ButtonState, FaceStyle, Indicator, KeyFace};
-    use deckpilot_modules::git::actions;
-
-    let agent = setup().await;
-    assert!(agent.frames_shown());
-    let calls = fake_git(&agent);
-    let mut profile = agent.store().load_profile(agent.work.id).unwrap().unwrap();
-    profile.projects[0].resources.insert(
-        "repository".into(),
-        deckpilot_core::ResourceKey::new("shop.repository").unwrap(),
-    );
-    let status = registry()
-        .create_instance(
-            "Repo",
-            actions::id(actions::STATUS),
-            &ActionParameters::new(),
-        )
-        .unwrap();
-    // The key shows the type's icon.
-    let git_icon = registry()
-        .definition(&status.action_type)
-        .and_then(|definition| definition.node.icon.clone());
-    assert!(git_icon.is_some());
-    let key = ControlId::Key { index: 6 };
-    profile.layouts[0].pages[0]
-        .bindings
-        .push(deckpilot_core::ControlBinding {
-            control: key,
-            trigger: deckpilot_core::Trigger::Press,
-            target: deckpilot_core::BindingTarget::action(status.id),
-            label: None,
-            appearance: None,
-        });
-    profile.actions.push(status);
-    agent.store().save_profile(&profile).unwrap();
-    let mut client = agent.client().await;
-    client.request(Request::ReloadConfiguration).await.unwrap();
-
-    // The key shows the branch and a clean work tree once Git answered.
-    let ready = key_image(
-        &KeyFace::new(FaceStyle::Action, "Repo")
-            .with_symbol(git_icon.as_deref())
-            .with_state(
-                &ButtonState::new()
-                    .with_detail("main")
-                    .with_indicator(Indicator::Ok),
-            ),
-    );
-    assert!(agent.mock.wait_for(&agent.device, TIMEOUT, |frames, _| {
-        frames.get(&key) == Some(&ready)
-    }));
-    let count = || {
-        std::fs::read_to_string(&calls)
-            .unwrap_or_default()
-            .lines()
-            .count()
-    };
-    assert_eq!(count(), 1);
-    let writes = agent.mock.image_writes(&agent.device);
-
-    // Events (key presses that run an action) do not make the provider run
-    // again within its interval, and nothing is redrawn.
-    for _ in 0..5 {
-        agent.mock.tap(&agent.device, ControlId::Key { index: 1 });
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    assert_eq!(count(), 1);
-    assert_eq!(agent.mock.image_writes(&agent.device), writes);
-    assert_eq!(agent.mock.frames(&agent.device)[&key], ready);
     agent.shutdown().await;
 }
 

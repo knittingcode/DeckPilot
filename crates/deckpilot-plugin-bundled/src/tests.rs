@@ -139,6 +139,16 @@ fn allowed_files() {
         "plugin.wasm",
         "LICENSE",
         "assets/icon-128.png",
+        // Plugin API 1.8 visual assets: PNG or JPEG, nested under assets/.
+        "assets/keys/a.png",
+        "assets/visual/Sky_Blue.jpg",
+        "assets/bg.jpeg",
+        // Plugin API 1.6 translations of canonical tags.
+        "locales/en.json",
+        "locales/pl.json",
+        "locales/pt-BR.json",
+        "locales/zh-Hant-TW.json",
+        "locales/es-419.json",
     ] {
         assert!(is_allowed_file(ok), "{ok}");
     }
@@ -149,13 +159,214 @@ fn allowed_files() {
         "plugin.wasm.minisig",
         "assets/.png",
         "assets/icon.svg",
-        "assets/keys/a.png",
+        "assets/icon.webp",
+        "assets/icon.PNG",
+        "assets/icon.png.js",
+        "assets/.hidden.png",
+        "assets/con.png",
+        "assets/x./a.png",
         "assets/../plugin.png",
+        "assets//a.png",
+        "assets\\a.png",
+        "icon.png",
+        "other/icon.png",
+        "locales/EN.json",
+        "locales/pl_PL.json",
+        "locales/pl-pl.json",
+        "locales/english.json",
+        "locales/en.yaml",
+        "locales/en.json.js",
+        "locales/x/en.json",
+        "locales/.json",
+        "locales/../en.json",
+        "assets/en.json",
         "pins.json",
         "index.json",
     ] {
         assert!(!is_allowed_file(bad), "{bad}");
     }
+}
+
+#[test]
+fn oversized_images_and_translations_are_refused_in_the_pins() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, pins) = bundle(dir.path());
+    let good = serde_json::to_value(&pins).unwrap();
+    let with = |file: &str, size: usize| {
+        let mut value = good.clone();
+        let mut digest = value["plugins"][0]["files"]["LICENSE"].clone();
+        digest["size"] = size.into();
+        value["plugins"][0]["files"][file] = digest;
+        Pins::parse(&serde_json::to_vec(&value).unwrap())
+    };
+    let locale = deckpilot_plugin_manifest::locale::MAX_LOCALE_FILE_BYTES;
+    let image = deckpilot_plugin_manifest::MAX_BACKGROUND_BYTES;
+    with("locales/pl.json", locale).unwrap();
+    with("assets/visual/sky.jpg", image).unwrap();
+    assert!(matches!(
+        with("locales/pl.json", locale + 1),
+        Err(BundleError::Pins(_))
+    ));
+    assert!(matches!(
+        with("assets/visual/sky.jpg", image + 1),
+        Err(BundleError::Pins(_))
+    ));
+    assert!(matches!(
+        with("locales/pl-pl.json", 10),
+        Err(BundleError::Pins(_))
+    ));
+}
+
+/// A PNG header of `width` x `height` (no image data: only the header is
+/// read).
+fn png(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+    bytes.extend(width.to_be_bytes());
+    bytes.extend(height.to_be_bytes());
+    bytes.extend([8, 6, 0, 0, 0, 0, 0, 0, 0]);
+    bytes
+}
+
+/// A JPEG with an APP0 segment and a frame header of `width` x `height`.
+fn jpeg(width: u16, height: u16) -> Vec<u8> {
+    let mut bytes = vec![0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00];
+    bytes.extend([0xff, 0xc0, 0x00, 0x0b, 0x08]);
+    bytes.extend(height.to_be_bytes());
+    bytes.extend(width.to_be_bytes());
+    bytes.extend([0x01, 0x01, 0x11, 0x00]);
+    bytes
+}
+
+const EN: &str = r#"{"plugin": {"name": "Bundled Example"}}"#;
+const PL: &str = r#"{"plugin": {"name": "Przykład wbudowany"}}"#;
+
+/// The fixture at plugin API 1.8 with translations (`locales/en.json`,
+/// `locales/pl.json`) and visual assets (a PNG icon and a JPEG
+/// background nested under `assets/visual/`), staged and pinned as
+/// `plugins/first-party/build.sh` does.
+fn localized_bundle(root: &Path) -> (PathBuf, Pins) {
+    let bundled = root.join(BUNDLED_DIR);
+    let dir = bundled.join(ID);
+    bundle(root);
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fixture_file("manifest.json")).unwrap();
+    manifest["engines"]["pluginApi"] = "^1.8".into();
+    manifest["name"] = "t:plugin.name".into();
+    manifest["locales"] = serde_json::json!(["en", "pl"]);
+    manifest["contributes"]["visualAssets"] = serde_json::json!({
+        "icons": [{"id": "wave", "name": "Wave", "asset": "assets/visual/wave.png"}],
+        "backgrounds": [
+            {"id": "sky", "name": "Sky", "type": "image", "asset": "assets/visual/sky.jpg"}
+        ]
+    });
+    std::fs::write(
+        dir.join(MANIFEST),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("assets/visual")).unwrap();
+    std::fs::create_dir_all(dir.join(LOCALES_DIR)).unwrap();
+    std::fs::write(dir.join("assets/visual/wave.png"), png(64, 64)).unwrap();
+    std::fs::write(dir.join("assets/visual/sky.jpg"), jpeg(400, 200)).unwrap();
+    std::fs::write(dir.join("locales/en.json"), EN).unwrap();
+    std::fs::write(dir.join("locales/pl.json"), PL).unwrap();
+    let pins = Pins::compute(
+        &bundled,
+        &[(id(), Version::new(0, 1, 0), BundleClass::Default)],
+    )
+    .unwrap();
+    std::fs::write(bundled.join(PINS_FILE), pins.to_json_pretty()).unwrap();
+    (bundled, pins)
+}
+
+#[test]
+fn translations_and_visual_assets_are_pinned_and_verify() {
+    let dir = tempfile::tempdir().unwrap();
+    let (bundled, pins) = localized_bundle(dir.path());
+    let text = std::fs::read(bundled.join(PINS_FILE)).unwrap();
+    assert_eq!(Pins::parse(&text).unwrap(), pins);
+    let pin = &pins.plugins[0];
+    assert_eq!(
+        pin.files.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "LICENSE",
+            "assets/icon-128.png",
+            "assets/visual/sky.jpg",
+            "assets/visual/wave.png",
+            "locales/en.json",
+            "locales/pl.json",
+            "manifest.json",
+            "plugin.wasm"
+        ]
+    );
+    let package = verify_bundled(&bundled.join(ID), pin).unwrap();
+    assert_eq!(package.files().len(), 8);
+    verify_installed(&bundled.join(ID), pin).unwrap();
+}
+
+#[test]
+fn tampered_or_extra_translations_and_visual_assets_are_refused() {
+    for file in ["locales/pl.json", "assets/visual/sky.jpg"] {
+        let dir = tempfile::tempdir().unwrap();
+        let (bundled, pins) = localized_bundle(dir.path());
+        let path = bundled.join(ID).join(file);
+        let mut bytes = std::fs::read(&path).unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0x01;
+        std::fs::write(&path, &bytes).unwrap();
+        refused(verify_bundled(&bundled.join(ID), &pins.plugins[0]), file);
+        refused(verify_installed(&bundled.join(ID), &pins.plugins[0]), file);
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (bundled, pins) = localized_bundle(dir.path());
+    let plugin = bundled.join(ID);
+    let pin = &pins.plugins[0];
+    // Unpinned files next to the pinned ones.
+    for (file, bytes) in [
+        ("locales/de.json", EN.as_bytes().to_vec()),
+        ("assets/visual/extra.png", png(8, 8)),
+        ("locales/notes.txt", b"x".to_vec()),
+    ] {
+        std::fs::write(plugin.join(file), bytes).unwrap();
+        refused(verify_bundled(&plugin, pin), file);
+        std::fs::remove_file(plugin.join(file)).unwrap();
+    }
+    // No directory under locales/ (translations are directly in it).
+    std::fs::create_dir(plugin.join("locales/nested")).unwrap();
+    refused(verify_bundled(&plugin, pin), "locales/nested");
+    std::fs::remove_dir(plugin.join("locales/nested")).unwrap();
+    // Another top-level directory.
+    std::fs::create_dir(plugin.join("scripts")).unwrap();
+    refused(verify_bundled(&plugin, pin), "scripts");
+    std::fs::remove_dir(plugin.join("scripts")).unwrap();
+    verify_bundled(&plugin, pin).unwrap();
+
+    // Pinned and allowed, but invalid for the package rules: a translation
+    // that is not a translation file, and a visual asset the manifest does
+    // not name (a bad release build that pinned whatever it staged).
+    std::fs::write(plugin.join("locales/pl.json"), "[]").unwrap();
+    let repinned = Pins::compute(
+        &bundled,
+        &[(id(), Version::new(0, 1, 0), BundleClass::Default)],
+    )
+    .unwrap();
+    let result = verify_bundled(&plugin, &repinned.plugins[0]);
+    assert!(
+        matches!(result, Err(BundleError::Package { .. })),
+        "{result:?}"
+    );
+    std::fs::write(plugin.join("locales/pl.json"), PL).unwrap();
+    std::fs::write(plugin.join("assets/visual/unnamed.png"), png(8, 8)).unwrap();
+    let repinned = Pins::compute(
+        &bundled,
+        &[(id(), Version::new(0, 1, 0), BundleClass::Default)],
+    )
+    .unwrap();
+    let result = verify_bundled(&plugin, &repinned.plugins[0]);
+    assert!(
+        matches!(result, Err(BundleError::Package { .. })),
+        "{result:?}"
+    );
 }
 
 #[test]

@@ -5,14 +5,13 @@
 //! that empty states stay visible during development.
 
 use deckpilot_core::{
-    ActionInstance, ActionInstanceId, ActionParameters, ActionRegistry, BindingTarget,
-    ControlBinding, DeviceLayout, LayoutPage, MachineConfig, MachineResourceBinding, OnFailure, Os,
-    ParameterValue, Profile, Project, ProjectKey, ResourceKey, ResourceKind, StepCondition,
-    Trigger, Workflow, WorkflowId,
+    ActionInstance, ActionInstanceId, ActionParameters, ActionRegistry, ActionTypeId,
+    BindingTarget, ControlBinding, DeviceLayout, LayoutPage, MachineConfig, MachineResourceBinding,
+    OnFailure, Os, ParameterValue, Profile, Project, ProjectCatalog, ProjectKey, ResourceKey,
+    ResourceKind, StepCondition, Trigger, Workflow, WorkflowId,
 };
 use deckpilot_device::{ControlId, TouchGesture, models};
 use deckpilot_modules::general;
-use deckpilot_modules::projects::{ProjectCatalog, actions};
 use deckpilot_storage::crypto::Password;
 use deckpilot_storage::provenance::{Provenance, ProvenanceEntity};
 use deckpilot_storage::vault::{DatabaseState, Vault};
@@ -23,6 +22,31 @@ use crate::session::DevPaths;
 mod examples;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+/// The stable legacy ids of the actions that moved to first-party plugins
+/// (`module-migration.md` §11): the seed stores them as a 0.9.x
+/// configuration did, and the agent routes them to the plugins through
+/// `ACTION_ALIASES` (unavailable, with the reason, while a plugin is off).
+mod actions {
+    use deckpilot_core::ActionTypeId;
+
+    pub const CYCLE: &str = "projects.cycle";
+    pub const SELECT: &str = "projects.select";
+    pub const CURRENT: &str = "projects.current";
+    pub const REPOSITORY: &str = "projects.repository";
+    pub const DOCUMENTATION: &str = "projects.documentation";
+    /// `projects.cycle`'s direction parameter and its values.
+    pub const DIRECTION: &str = "direction";
+    pub const NEXT_DIRECTION: &str = "next";
+    pub const PREVIOUS_DIRECTION: &str = "previous";
+
+    /// # Panics
+    ///
+    /// Never: the seed names only valid ids.
+    pub fn id(value: &str) -> ActionTypeId {
+        ActionTypeId::new(value).expect("a legacy action type id is valid")
+    }
+}
 
 struct Builder<'a> {
     registry: &'a ActionRegistry,
@@ -49,14 +73,39 @@ impl Builder<'_> {
         icon: &str,
         label: Option<&str>,
     ) -> Result<deckpilot_core::ActionInstanceId> {
-        let mut instance: ActionInstance =
+        let mut instance: ActionInstance = if self.registry.definition(&action_type).is_none()
+            && deckpilot_core::alias::alias_of(&action_type).is_some()
+        {
+            // A legacy id of a plugin's action: stored as given, never
+            // checked against a built-in that is gone.
+            legacy_instance(name, action_type, parameters)
+        } else {
             self.registry
-                .create_instance(name, action_type, parameters)?;
+                .create_instance(name, action_type, parameters)?
+        };
         instance.icon = Some(icon.to_owned());
         instance.label = label.map(str::to_owned);
         let id = instance.id;
         self.profile.actions.push(instance);
         Ok(id)
+    }
+}
+
+/// An instance of the legacy type `action_type` with `parameters` as
+/// given.
+fn legacy_instance(
+    name: &str,
+    action_type: ActionTypeId,
+    parameters: &ActionParameters,
+) -> ActionInstance {
+    ActionInstance {
+        id: ActionInstanceId::new(),
+        name: name.to_owned(),
+        action_type,
+        parameters: parameters.clone(),
+        description: String::new(),
+        icon: None,
+        label: None,
     }
 }
 
@@ -144,14 +193,14 @@ struct WorkIds {
 fn work_actions(b: &mut Builder<'_>) -> Result<WorkIds> {
     let next = b.action(
         "Next project",
-        actions::cycle_id(),
+        actions::id(actions::CYCLE),
         &cycle(actions::NEXT_DIRECTION),
         "chevron-right",
         Some("{project.key}"),
     )?;
     let previous = b.action(
         "Previous project",
-        actions::cycle_id(),
+        actions::id(actions::CYCLE),
         &cycle(actions::PREVIOUS_DIRECTION),
         "chevron-left",
         Some("Previous"),
@@ -160,7 +209,7 @@ fn work_actions(b: &mut Builder<'_>) -> Result<WorkIds> {
     // project (the current one) and two that pick a project explicitly.
     let mut selectors = vec![b.action(
         "Current project",
-        actions::select_id(),
+        actions::id(actions::SELECT),
         &ActionParameters::new(),
         "folder",
         Some("Now"),
@@ -170,7 +219,7 @@ fn work_actions(b: &mut Builder<'_>) -> Result<WorkIds> {
         let (id, key) = (project.id, project.key.to_string());
         selectors.push(b.action(
             &format!("Select {key}"),
-            actions::select_id(),
+            actions::id(actions::SELECT),
             &ActionParameters::new().with("project_id", ParameterValue::Project(id)),
             "folder",
             Some(&key),
@@ -179,7 +228,7 @@ fn work_actions(b: &mut Builder<'_>) -> Result<WorkIds> {
     // Generic types: the current project unless a project is chosen.
     let repository = b.action(
         "Repository — current project",
-        actions::repository_id(),
+        actions::id(actions::REPOSITORY),
         &ActionParameters::new(),
         "git-branch",
         Some("Repo {project.key}"),
@@ -187,14 +236,14 @@ fn work_actions(b: &mut Builder<'_>) -> Result<WorkIds> {
     let shop = b.profile.projects[0].id;
     let shop_repository = b.action(
         "Repository — SHOP",
-        actions::repository_id(),
+        actions::id(actions::REPOSITORY),
         &ActionParameters::new().with("project_id", ParameterValue::Project(shop)),
         "git-branch",
         Some("Repo SHOP"),
     )?;
     let docs = b.action(
         "Documentation — current project",
-        actions::documentation_id(),
+        actions::id(actions::DOCUMENTATION),
         &ActionParameters::new(),
         "book-open",
         Some("Docs"),
@@ -377,7 +426,7 @@ fn personal_profile(registry: &ActionRegistry) -> Result<Profile> {
     )?;
     b.action(
         "Next project",
-        actions::cycle_id(),
+        actions::id(actions::CYCLE),
         &cycle(actions::NEXT_DIRECTION),
         "chevron-right",
         Some("{project.key}"),
@@ -391,7 +440,7 @@ fn personal_profile(registry: &ActionRegistry) -> Result<Profile> {
     )?;
     let repository = b.action(
         "Repository — current project",
-        actions::repository_id(),
+        actions::id(actions::REPOSITORY),
         &ActionParameters::new(),
         "git-branch",
         None,
@@ -725,13 +774,20 @@ mod tests {
             }
         }
         assert!(keys.contains("work.action.next-project"));
-        // The seed uses the current catalog: no deprecated types.
+        // The seed uses the current catalog: no deprecated types; the
+        // legacy ids of the plugins' actions are stable aliases.
         let registry = deckpilot_modules::builtin(Os::current()).action_registry();
         for summary in store.list_profiles().unwrap() {
             let profile = store.load_profile(summary.id).unwrap().unwrap();
             for action in &profile.actions {
-                let definition = registry.definition(&action.action_type).unwrap();
-                assert!(!definition.deprecated, "{}", action.action_type);
+                match registry.definition(&action.action_type) {
+                    Some(definition) => assert!(!definition.deprecated, "{}", action.action_type),
+                    None => assert!(
+                        deckpilot_core::alias::alias_of(&action.action_type).is_some(),
+                        "{}",
+                        action.action_type
+                    ),
+                }
             }
         }
         drop(store);
@@ -759,21 +815,19 @@ mod tests {
             .map(|w| w.name.as_str())
             .collect();
         assert_eq!(graphs, ["Start Work", "End Work", "Project check"]);
+        // Their nodes come from the plugins (`projects`, `git`, `docker`):
+        // with the built-ins alone each is refused with the plugin's
+        // reason, never as an unknown type; the agent runs them once the
+        // plugins serve them (`apps/agent/tests/core_without_plugins.rs`).
         for workflow in work.workflows.iter().filter(|w| w.graph.is_some()) {
-            assert_eq!(
-                engine.check_runnable(&work, workflow.id),
-                Ok(()),
-                "{}",
-                workflow.name
-            );
-            let issues =
-                workflow
-                    .graph
-                    .as_ref()
-                    .unwrap()
-                    .validate(workflow.id, &work, engine.registry());
-            // No problems at all, not even warnings.
-            assert!(issues.is_empty(), "{}: {issues:?}", workflow.name);
+            match engine.check_runnable(&work, workflow.id) {
+                Ok(()) => {}
+                Err(error) => assert!(
+                    error.to_string().contains("now comes from `deckpilot."),
+                    "{}: {error}",
+                    workflow.name
+                ),
+            }
             // They never change the active project.
             assert_eq!(
                 workflow.project_scope,
@@ -785,8 +839,11 @@ mod tests {
             );
         }
         let registry = engine.registry();
+        let legacy =
+            |id: &deckpilot_core::ActionTypeId| deckpilot_core::alias::alias_of(id).is_some();
         assert_eq!(work.layouts.len(), 3);
-        // Every binding can run its action from its control.
+        // Every binding can run its action from its control (a plugin's
+        // legacy action is checked once its plugin serves it).
         for profile in [&work, &personal] {
             for layout in &profile.layouts {
                 assert_eq!(
@@ -800,13 +857,20 @@ mod tests {
         assert_eq!(work.workflows[0].name, personal.workflows[0].name);
         assert_ne!(work.workflows[0].id, personal.workflows[0].id);
         assert_ne!(work.workflows[0].steps, personal.workflows[0].steps);
-        // Every seeded action is valid in its own profile.
+        // Every seeded built-in action is valid in its own profile; a
+        // plugin's waits for it, with the reason.
         for profile in [&work, &personal] {
             for action in &profile.actions {
-                assert_eq!(
-                    registry.check_in_profile(action, profile),
-                    Vec::<String>::new()
-                );
+                let problems = registry.check_in_profile(action, profile);
+                if legacy(&action.action_type) {
+                    assert!(
+                        problems.iter().all(|p| p.contains("now comes from")),
+                        "{}: {problems:?}",
+                        action.name
+                    );
+                } else {
+                    assert_eq!(problems, Vec::<String>::new(), "{}", action.name);
+                }
             }
         }
     }

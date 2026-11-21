@@ -120,6 +120,35 @@ fn inventory(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// `stored <dir>`: the active profile's active project as stored in the
+/// database. The agent reports an active project only while the Projects
+/// plugin provides one; an upgrade must keep the stored choice either way.
+fn stored(dir: &Path) -> Result<(), String> {
+    let store = SqliteStore::open(dir.join("deckpilot.db"), &Encryption::Key(agent_key(dir)?))
+        .map_err(|e| e.to_string())?;
+    let project = match store.active_profile().map_err(|e| e.to_string())? {
+        Some(id) => {
+            let chosen = store.active_project(id).map_err(|e| e.to_string())?;
+            let profile = store.load_profile(id).map_err(|e| e.to_string())?;
+            chosen.and_then(|project| {
+                profile.and_then(|profile| {
+                    profile
+                        .projects
+                        .iter()
+                        .find(|p| p.id == project)
+                        .map(|p| p.key.to_string())
+                })
+            })
+        }
+        None => None,
+    };
+    println!(
+        "stored_active_project={}",
+        project.unwrap_or_else(|| "-".into())
+    );
+    Ok(())
+}
+
 /// `unlock <dir>`: unlocks the agent with the development password, as a
 /// user would by typing it.
 fn unlock(dir: &Path) -> Result<(), String> {
@@ -167,6 +196,7 @@ pub fn command(args: &[String]) -> Result<(), String> {
         "inventory" => inventory(&dir),
         "unlock" => unlock(&dir),
         "status" => status(&dir),
+        "stored" => stored(&dir),
         other => Err(format!("unknown validation command `{other}`")),
     }
 }

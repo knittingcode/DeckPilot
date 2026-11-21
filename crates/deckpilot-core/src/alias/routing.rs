@@ -84,8 +84,21 @@ fn the_shipped_table_routes_only_what_it_lists() {
     assert_eq!(statuses.len(), ACTION_ALIASES.len());
     for status in &statuses {
         assert_ne!(status.plugin, id("deckpilot.legacy"));
-        // Not routed by the agent: the built-in's, never the plugin's.
-        assert_eq!(status.outcome, AliasOutcome::Builtin, "{}", status.legacy);
+        // Not routed by the agent and no built-in registered here (the
+        // shipped modules are not): nothing to fall back to, unavailable
+        // with the plugin they now come from.
+        assert_eq!(
+            status.outcome,
+            AliasOutcome::Unavailable {
+                reason: format!(
+                    "`{}` now comes from `{}`: `{}` is not installed; install it from the \
+                     Marketplace",
+                    status.legacy, status.plugin, status.plugin
+                )
+            },
+            "{}",
+            status.legacy
+        );
     }
     assert_eq!(
         run(&registry, &fetch(), &message("hi")),
@@ -372,7 +385,8 @@ fn without_the_builtin_the_plugin_is_the_only_way() {
     );
 
     let missing = modules(false, None, migrated());
-    let reason = "`deckpilot.legacy` is not installed; install it from the Marketplace";
+    let reason = "`legacy.fetch` now comes from `deckpilot.legacy`: `deckpilot.legacy` is not \
+                  installed; install it from the Marketplace";
     assert_eq!(
         outcome(&missing),
         AliasOutcome::Unavailable {
@@ -393,7 +407,9 @@ fn without_the_builtin_the_plugin_is_the_only_way() {
     assert_eq!(
         outcome(&faulty),
         AliasOutcome::Unavailable {
-            reason: "the plugin's files were modified".into()
+            reason: "`legacy.fetch` now comes from Legacy plugin (`deckpilot.legacy`): the \
+                     plugin's files were modified"
+                .into()
         }
     );
     assert_eq!(
@@ -402,6 +418,93 @@ fn without_the_builtin_the_plugin_is_the_only_way() {
             module: id("deckpilot.legacy"),
             name: "Legacy plugin".into()
         }
+    );
+}
+
+/// A removed built-in (§11 D1, D2) that the agent never routed: there is
+/// no built-in to fall back to, so the plugin serves the legacy type when
+/// it can, and otherwise it is unavailable with the plugin it now comes
+/// from, never an unknown action type.
+#[test]
+fn a_removed_builtin_is_served_by_its_plugin_or_unavailable() {
+    let served = modules(false, Some(PluginFixture::new()), LegacyRouting::new());
+    assert_eq!(outcome(&served), AliasOutcome::Plugin);
+    assert_eq!(
+        run(&served, &fetch(), &message("hi")),
+        "plugin: hi [message]"
+    );
+    assert_eq!(served.availability(&fetch()), Availability::Available);
+
+    let missing = modules(false, None, LegacyRouting::new());
+    let reason = "`legacy.fetch` now comes from `deckpilot.legacy`: `deckpilot.legacy` is not \
+                  installed; install it from the Marketplace";
+    assert_eq!(
+        outcome(&missing),
+        AliasOutcome::Unavailable {
+            reason: reason.into()
+        }
+    );
+    assert_eq!(
+        run(&missing, &fetch(), &message("hi")),
+        format!("refused: action type `legacy.fetch` is unavailable: {reason}")
+    );
+
+    let faulty = modules(
+        false,
+        Some(PluginFixture::faulty("the plugin's files were modified")),
+        LegacyRouting::new(),
+    );
+    assert_eq!(
+        outcome(&faulty),
+        AliasOutcome::Unavailable {
+            reason: "`legacy.fetch` now comes from Legacy plugin (`deckpilot.legacy`): the \
+                     plugin's files were modified"
+                .into()
+        }
+    );
+    // Waiting for consent stays unavailable, with that reason.
+    let waiting = modules(
+        false,
+        Some(PluginFixture::new()),
+        LegacyRouting::new().with(id("legacy"), LegacyRoute::AwaitingConsent),
+    );
+    assert!(matches!(
+        outcome(&waiting),
+        AliasOutcome::Unavailable { reason } if reason.contains("waits for your consent")
+    ));
+}
+
+/// Without the built-in, its saved settings (the agent hands them over
+/// from the stored `modules` row) still decide the alias rules: a stored
+/// per-action credential that names the module's own is dropped, any
+/// other is refused, as while the built-in was compiled in.
+#[test]
+fn a_removed_builtins_saved_settings_still_drop_its_default_credential() {
+    let with = |credential: &str| {
+        message("hi").with("credential", ParameterValue::Text(credential.into()))
+    };
+    let mut registry = modules(false, Some(PluginFixture::new()), migrated());
+    assert!(run(&registry, &fetch(), &with(LEGACY_CREDENTIAL)).starts_with("refused"));
+    registry.set_legacy_config(
+        id("legacy"),
+        ActionParameters::new().with("credential", ParameterValue::Text(LEGACY_CREDENTIAL.into())),
+    );
+    assert_eq!(
+        run(&registry, &fetch(), &with(LEGACY_CREDENTIAL)),
+        "plugin: hi [message]"
+    );
+    assert_eq!(run(&registry, &fetch(), &with("")), "plugin: hi [message]");
+    assert!(run(&registry, &fetch(), &with("personal")).starts_with("refused"));
+    // A registered module's own settings count: the legacy ones are not
+    // recorded for it.
+    let mut builtin = modules(true, Some(PluginFixture::new()), migrated());
+    builtin.set_legacy_config(
+        id("legacy"),
+        ActionParameters::new().with("credential", ParameterValue::Text("other".into())),
+    );
+    assert_eq!(
+        run(&builtin, &fetch(), &with(LEGACY_CREDENTIAL)),
+        "plugin: hi [message]"
     );
 }
 
@@ -469,4 +572,240 @@ fn reserved_ids_never_register() {
     assert!(!id("deckpilot.github").is_reserved());
     assert!(!id("deckpilot.cores").is_reserved());
     assert!(!id("core").is_reserved());
+}
+
+/// The extraction set (`module-migration.md` §11 D2, D4): while the
+/// migration waits for the user's consent, the legacy type is unavailable
+/// with that reason, the built-in compiled in or not, the plugin there or
+/// not; the module's other types are not affected.
+#[test]
+fn a_migration_waiting_for_consent_leaves_the_type_unavailable() {
+    let waiting = LegacyRouting::new().with(id("legacy"), LegacyRoute::AwaitingConsent);
+    for (builtin, plugin) in [(true, true), (true, false), (false, true)] {
+        let registry = modules(builtin, plugin.then(PluginFixture::new), waiting.clone());
+        let name = if plugin { "Legacy plugin" } else { "Legacy" };
+        let reason = format!(
+            "{name} (`deckpilot.legacy`) waits for your consent: allow it in Settings › Plugins"
+        );
+        assert_eq!(
+            outcome(&registry),
+            AliasOutcome::Unavailable {
+                reason: reason.clone()
+            },
+            "{builtin} {plugin}"
+        );
+        assert_eq!(
+            run(&registry, &fetch(), &message("hi")),
+            format!("refused: action type `legacy.fetch` is unavailable: {reason}")
+        );
+        assert!(matches!(
+            registry.availability(&fetch()),
+            Availability::ModuleDisabled { .. }
+        ));
+        if builtin {
+            assert_eq!(
+                run(&registry, &other(), &message("hi")),
+                "builtin: hi [message]"
+            );
+        }
+    }
+}
+
+/// A handler that reports the parameters it got, `key=value` sorted.
+struct Keys(crate::ActionType);
+
+impl crate::ActionHandler for Keys {
+    fn definition(&self) -> &crate::ActionType {
+        &self.0
+    }
+
+    fn execute(
+        &self,
+        parameters: &ActionParameters,
+        _context: &ExecutionContext<'_>,
+    ) -> crate::ActionResult {
+        let keys: Vec<String> = parameters
+            .iter()
+            .map(|(key, value)| format!("{key}={}", serde_json::to_string(value).unwrap()))
+            .collect();
+        crate::ActionResult::success(keys.join(" "))
+    }
+}
+
+/// `Rename`, `Keep` and `Unsupported` as the alias handler applies them:
+/// the legacy type keeps the legacy key, the plugin gets its own; a kept
+/// parameter passes unchanged; an unsupported value is refused when saved
+/// and when run, never dropped; an empty one passes.
+#[test]
+fn renamed_kept_and_unsupported_parameters_reach_the_plugin_as_declared() {
+    use crate::{ParameterKind, ParameterSpec, ResourceKey, ResourceRef};
+    let spec = |key: &str, kind: ParameterKind| ParameterSpec {
+        key: key.into(),
+        label: key.into(),
+        description: None,
+        kind,
+        required: false,
+        default: None,
+    };
+    let mut plugin = plugin_fetch();
+    plugin.parameters = vec![
+        spec("repository", ParameterKind::Resource { kind: None }),
+        spec("projectId", ParameterKind::Project),
+        spec(
+            "projectName",
+            ParameterKind::Text {
+                multiline: false,
+                max_length: Some(64),
+            },
+        ),
+    ];
+    let alias = ActionAlias {
+        params: &[
+            ParamRule::Keep("repository"),
+            ParamRule::Rename("project_id", "projectId"),
+            ParamRule::Unsupported("projectName"),
+        ],
+        ..FIXTURE_ALIASES[0]
+    };
+    let handler = crate::registry::AliasHandler::new(&alias, Box::new(Keys(plugin)), None, None);
+    let keys: Vec<&str> = crate::ActionHandler::definition(&handler)
+        .parameters
+        .iter()
+        .map(|p| p.key.as_str())
+        .collect();
+    assert_eq!(keys, ["repository", "project_id", "projectName"]);
+    let profile = Profile::new("Work");
+    let project = crate::ProjectId::new();
+    let machine = MachineConfig::new(Os::Linux);
+    let context = ExecutionContext::new(&profile, None, &machine);
+    let repository = ParameterValue::Resource(ResourceRef::Fixed {
+        key: ResourceKey::new("shop.repo").unwrap(),
+    });
+    let stored = ActionParameters::new()
+        .with("repository", repository.clone())
+        .with("project_id", ParameterValue::Project(project))
+        .with("projectName", ParameterValue::Text(" ".into()));
+    let ran = crate::ActionHandler::execute(&handler, &stored, &context);
+    assert_eq!(
+        ran.status,
+        crate::ActionStatus::Succeeded,
+        "{}",
+        ran.message
+    );
+    assert_eq!(
+        ran.message,
+        format!(
+            "projectId={} projectName={} repository={}",
+            serde_json::to_string(&ParameterValue::Project(project)).unwrap(),
+            serde_json::to_string(&ParameterValue::Text(" ".into())).unwrap(),
+            serde_json::to_string(&repository).unwrap()
+        )
+    );
+    assert_eq!(crate::ActionHandler::validate(&handler, &stored), []);
+
+    let named = stored.with("projectName", ParameterValue::Text("shop".into()));
+    let refused = crate::ActionHandler::execute(&handler, &named, &context);
+    assert_eq!(refused.status, crate::ActionStatus::Failed);
+    assert!(
+        refused
+            .message
+            .starts_with("parameter `projectName` is not supported by the plugin providing"),
+        "{}",
+        refused.message
+    );
+    assert_eq!(crate::ActionHandler::validate(&handler, &named).len(), 1);
+    assert_eq!(
+        crate::ActionHandler::check(&handler, &named, &profile).len(),
+        1
+    );
+}
+
+/// `AtMost` as the alias handler applies it: a value up to the bound
+/// passes unchanged, a larger one is refused when saved and when run,
+/// never clamped; and the contract check takes the bound for the
+/// built-in's.
+#[test]
+fn a_capped_parameter_passes_up_to_its_bound_and_is_never_clamped() {
+    use crate::{ParameterKind, ParameterSpec};
+    let spec = |max: i64| ParameterSpec {
+        key: "line".into(),
+        label: "Line".into(),
+        description: None,
+        kind: ParameterKind::Integer {
+            min: Some(1),
+            max: Some(max),
+        },
+        required: false,
+        default: None,
+    };
+    let mut plugin = plugin_fetch();
+    plugin.parameters = vec![spec(1_000_000)];
+    let alias = ActionAlias {
+        params: &[ParamRule::AtMost("line", 1_000_000)],
+        ..FIXTURE_ALIASES[0]
+    };
+    let mut builtin = crate::testing::legacy_fetch();
+    builtin.parameters = vec![spec(10_000_000)];
+    let target = {
+        let mut target = plugin.clone();
+        target.node = builtin.node.clone();
+        target.node.cancellable = true;
+        target.controls = builtin.controls.clone();
+        target
+    };
+    let problems = super::incompatibilities(&alias, &builtin, &target);
+    assert!(
+        !problems.iter().any(|p| p.contains("`line`")),
+        "{problems:?}"
+    );
+    // Without the rule the plugin's bound is narrower.
+    let plain = ActionAlias {
+        params: &[],
+        ..FIXTURE_ALIASES[0]
+    };
+    assert!(
+        super::incompatibilities(&plain, &builtin, &target)
+            .contains(&"parameter `line`: its kind or constraints are narrower".to_owned())
+    );
+    // A plugin bound below the cap is still narrower.
+    let mut lower = target.clone();
+    lower.parameters = vec![spec(999)];
+    assert!(
+        super::incompatibilities(&alias, &builtin, &lower)
+            .contains(&"parameter `line`: its kind or constraints are narrower".to_owned())
+    );
+
+    let handler = crate::registry::AliasHandler::new(&alias, Box::new(Keys(plugin)), None, None);
+    let profile = Profile::new("Work");
+    let machine = MachineConfig::new(Os::Linux);
+    let context = ExecutionContext::new(&profile, None, &machine);
+    let within = ActionParameters::new().with("line", ParameterValue::Integer(1_000_000));
+    let ran = crate::ActionHandler::execute(&handler, &within, &context);
+    assert_eq!(
+        ran.status,
+        crate::ActionStatus::Succeeded,
+        "{}",
+        ran.message
+    );
+    assert_eq!(
+        ran.message,
+        format!(
+            "line={}",
+            serde_json::to_string(&ParameterValue::Integer(1_000_000)).unwrap()
+        )
+    );
+    let above = ActionParameters::new().with("line", ParameterValue::Integer(1_000_001));
+    let refused = crate::ActionHandler::execute(&handler, &above, &context);
+    assert_eq!(refused.status, crate::ActionStatus::Failed);
+    assert!(
+        refused
+            .message
+            .starts_with("parameter `line` is 1000001, above 1000000"),
+        "{}",
+        refused.message
+    );
+    assert_eq!(
+        crate::ActionHandler::check(&handler, &above, &profile).len(),
+        1
+    );
 }

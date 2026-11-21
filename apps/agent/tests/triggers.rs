@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use deckpilot_agent::{Agent, AgentError, AgentOptions, Clock, InstanceLock};
+use deckpilot_core::ProjectCatalog;
 use deckpilot_core::graph::{
     ErrorPolicy, GRAPH_VERSION, Mapping, Node, NodeId, NodeKind, Position, ValueKind,
     WorkflowGraph, WorkflowInput,
@@ -19,7 +20,6 @@ use deckpilot_device::mock::MockBackend;
 use deckpilot_device::models;
 use deckpilot_ipc::{AgentClient, AgentPaths, ClientKind, KeyMaterial, Request, Response};
 use deckpilot_modules::general;
-use deckpilot_modules::projects::ProjectCatalog;
 use deckpilot_storage::crypto::Password;
 use deckpilot_storage::vault::Vault;
 use deckpilot_storage::{ConfigStore, DatabaseKey, Encryption, SqliteStore};
@@ -311,16 +311,20 @@ async fn lifecycle_events_start_workflows_of_the_active_profile() {
         Some("deviceConnected")
     );
 
-    // The active project changes.
-    agent
+    // Without the Projects plugin the active project cannot change, so
+    // `projectChanged` never fires (with the plugin:
+    // `plugins_projects.rs`, `a_workflow_started_by_a_project_change_cannot_switch`).
+    let refused = AgentClient::connect(&agent.paths, ClientKind::Desktop)
+        .await
+        .unwrap()
         .request(Request::CycleProject {
             direction: CycleDirection::Next,
         })
         .await;
-    let runs = agent.wait_for_runs(on_project, 1).await;
-    assert_eq!(
-        runs[0].summary.trigger_detail.as_deref(),
-        Some("projectChanged")
+    assert!(
+        matches!(&refused, Err(deckpilot_ipc::ClientError::Agent(e))
+            if e.reason.as_deref() == Some("projectsOff")),
+        "{refused:?}"
     );
 
     // Paused triggers do not start their workflow; others still do.
@@ -339,8 +343,9 @@ async fn lifecycle_events_start_workflows_of_the_active_profile() {
     agent.mock.unplug(&device);
     agent.wait_for_runs(on_disconnect, 1).await;
     assert_eq!(agent.runs(on_connect).await.len(), 1);
-    // The agent started once.
+    // The agent started once; the project never changed.
     assert_eq!(agent.runs(on_start).await.len(), 1);
+    assert_eq!(agent.runs(on_project).await.len(), 0);
     // Recorded in history with the trigger kind.
     let stored = agent
         .store()

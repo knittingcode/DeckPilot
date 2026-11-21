@@ -467,6 +467,15 @@ pub struct PluginPermission {
     /// The manifest's justification, shown for consent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
+    /// Optional for enabling (plugin API 1.9: an action names it in
+    /// `requiresPermissions`): the plugin runs without it, and only the
+    /// actions in `actions` wait for it. Granted on its own; a high-tier
+    /// one is off until the user turns it on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional: bool,
+    /// The ids of the actions that need this optional permission.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
 }
 
 /// One action a plugin contributes.
@@ -487,8 +496,9 @@ pub struct PluginActionInfo {
     pub unavailable_reason: Option<String>,
     /// The action type exactly as the agent's engine registers it: the
     /// manifest's parameters and node contract, converted one to one
-    /// (`cancellable` always, never `changesContext`). The configuration
-    /// app offers it in its action editors and validates instances
+    /// (`cancellable` always, `changesContext` only as a first-party
+    /// manifest declares it). The configuration app offers it in its
+    /// action editors and validates instances
     /// against it. Present whether or not the action is available now;
     /// absent when the manifest action does not convert (the engine does
     /// not offer it either) and from agents that predate the field.
@@ -529,10 +539,25 @@ pub struct PluginSummary {
     pub health: Option<PluginHealth>,
     /// The active version's toolbar entries (`contributes.navigation`,
     /// plugin API 1.3), in manifest order, whatever the plugin's state:
-    /// the app shows them for enabled plugins only. Empty (left out) from
-    /// agents without [`feature::NAVIGATION`].
+    /// the app shows them for enabled plugins only. Entries that open one
+    /// of the app's own screens (view kinds `workflows` and `projects`,
+    /// plugin API 1.9, `hostViews`) are listed only while the plugin is
+    /// enabled. Empty (left out) from agents without
+    /// [`feature::NAVIGATION`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub navigation: Vec<PluginNavigationEntry>,
+    /// The status-bar items the app draws for the plugin
+    /// (`contributes.statusItems`, plugin API 1.9, `hostViews`), by their
+    /// manifest names (`activeProject`), only while the plugin is enabled.
+    /// A client ignores names it does not know. Empty (left out) otherwise
+    /// and from older agents.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub status_items: Vec<String>,
+    /// The dashboard cards the app draws for the plugin
+    /// (`contributes.dashboardCards`, plugin API 1.9, `hostViews`), as
+    /// [`PluginSummary::status_items`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dashboard_cards: Vec<String>,
     /// Installed only because this plugin needed it (feature
     /// [`feature::DEPENDENCIES`]); absent for a plugin the user installed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -954,9 +979,11 @@ pub enum MigrationRoute {
     /// The plugin handles them (the built-in takes over if the plugin
     /// breaks).
     Plugin,
-    /// The user disabled or uninstalled the plugin after the cut-over:
-    /// they are unavailable, with no fallback
-    /// ([`ModuleMigrationInfo::route_reason`] says why).
+    /// They are unavailable, with no fallback
+    /// ([`ModuleMigrationInfo::route_reason`] says why): the user disabled
+    /// or uninstalled the plugin after the cut-over, or (a module of the
+    /// extraction of 2026-11-20: git, docker, workspace, projects) its
+    /// migration waits for the user's consent or the user declined it.
     PluginWithdrawn,
     /// A route added by a newer agent.
     #[serde(other)]
@@ -1689,6 +1716,28 @@ mod tests {
         );
     }
 
+    /// Status items and dashboard cards (plugin API 1.9): read as none from
+    /// an older agent, left out when empty, kept as sent otherwise.
+    fn host_contributions_are_additive(summary: &PluginSummary) {
+        assert_eq!(summary.status_items, Vec::<String>::new());
+        assert_eq!(summary.dashboard_cards, Vec::<String>::new());
+        let json = serde_json::to_value(summary).unwrap();
+        assert!(json.get("statusItems").is_none());
+        assert!(json.get("dashboardCards").is_none());
+        let contributing = PluginSummary {
+            status_items: vec!["activeProject".into()],
+            dashboard_cards: vec!["activeProject".into()],
+            ..summary.clone()
+        };
+        let json = serde_json::to_value(&contributing).unwrap();
+        assert_eq!(json["statusItems"], serde_json::json!(["activeProject"]));
+        assert_eq!(json["dashboardCards"], serde_json::json!(["activeProject"]));
+        assert_eq!(
+            serde_json::from_value::<PluginSummary>(json).unwrap(),
+            contributing
+        );
+    }
+
     #[test]
     fn health_and_icon_are_additive() {
         let summary: PluginSummary = serde_json::from_value(serde_json::json!({
@@ -1728,6 +1777,7 @@ mod tests {
         );
         assert_eq!(serde_json::from_value::<PluginSummary>(json).unwrap(), sick);
         navigation_is_additive(&summary);
+        host_contributions_are_additive(&summary);
 
         let details: PluginDetails = serde_json::from_value(serde_json::json!({
             "summary": serde_json::to_value(&summary).unwrap(),
@@ -1784,6 +1834,8 @@ mod tests {
                     status: PermissionStatus::NotGranted,
                     scope: serde_json::json!({"type": "credential"}),
                     justification: Some("Reads your pull requests.".into()),
+                    optional: false,
+                    actions: Vec::new(),
                 },
                 import: Some(CredentialImport {
                     setting: "credential".into(),

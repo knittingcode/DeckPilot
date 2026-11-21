@@ -1,0 +1,116 @@
+{
+  "plugin": {
+    "name": "Projects",
+    "description": "Projects of a profile, their resources on this computer and actions that switch between them: the Projects screen, the active project in the status bar and on the dashboard."
+  },
+  "permissions": {
+    "projectContext": "Reads your profile's projects and switches the active project when you press a project key. Other actions then work on the project you chose.",
+    "resources": "Looks up a project's resources on this computer, with the folder or file they are bound to, for the resource actions.",
+    "profile": "Reads the active project and the project an action names.",
+    "hostViews": "Shows DeckPilot's own Projects screen, the active project in the status bar and its dashboard card."
+  },
+  "category": "Projects",
+  "actions": {
+    "cycle": {
+      "name": "Cycle projects",
+      "description": "Makes the next or previous project of the profile active."
+    },
+    "select": {
+      "name": "Select project",
+      "description": "Makes a project of the profile active. Without a project it reports the current one."
+    },
+    "current": {
+      "name": "Current project",
+      "description": "Reports the current project of the profile."
+    },
+    "repository": {
+      "name": "Project repository",
+      "description": "Resolves the repository of a project on this computer."
+    },
+    "documentation": {
+      "name": "Project documentation",
+      "description": "Resolves the documentation of a project on this computer."
+    },
+    "resolve-resource": {
+      "name": "Resolve project resource",
+      "description": "Resolves a named resource of a project on this computer."
+    },
+    "next": {
+      "name": "Next project",
+      "description": "Makes the next project of the profile active."
+    },
+    "previous": {
+      "name": "Previous project",
+      "description": "Makes the previous project of the profile active."
+    },
+    "active": {
+      "name": "Get active project",
+      "description": "Reports the active project of the profile."
+    }
+  },
+  "params": {
+    "direction": {
+      "label": "Direction",
+      "description": "Next or previous project in the profile's order. Whether the ends wrap around is a setting of the Projects plugin."
+    },
+    "projectId": {
+      "label": "Project",
+      "description": "Leave on “Current project” to use whichever project is active."
+    },
+    "resource": {
+      "label": "Resource",
+      "description": "The resource name in the project, for example repository or docs."
+    }
+  },
+  "outputs": {
+    "projectId": "Project id",
+    "projectKey": "Project key",
+    "projectName": "Project name",
+    "profileId": "Profile id",
+    "resource": "Resource name",
+    "resourceKey": "Resource key",
+    "kind": "Resource kind",
+    "value": "Value on this computer"
+  },
+  "settings": {
+    "wrapAround": {
+      "label": "Wrap around",
+      "description": "Next after the last project selects the first one, and vice versa."
+    }
+  },
+  "variables": {
+    "id": {
+      "name": "Project id",
+      "description": "Id of the project in the context"
+    },
+    "key": {
+      "name": "Project key",
+      "description": "Key of the project in the context"
+    },
+    "name": {
+      "name": "Project name",
+      "description": "Name of the project in the context"
+    }
+  },
+  "navigation": {
+    "projects": "Projects"
+  },
+  "errors": {
+    "no-projects": "This profile has no projects.",
+    "at-last-project": "Already at the last project.",
+    "at-first-project": "Already at the first project.",
+    "project-not-in-profile": "The project does not belong to the active profile.",
+    "projects-off": "No project context is available."
+  },
+  "messages": {
+    "only-project": "{{key}} is the only project",
+    "switched": "switched to {{key}}",
+    "selected": "selected {{key}}",
+    "is-active": "{{key}} is active",
+    "current": "{{key}} ({{name}})",
+    "no-active-project": "no project is active",
+    "not-in-profile": "the project does not belong to the active profile",
+    "no-resource": "no resource configured",
+    "resolved": "{{key}} {{role}}: {{value}}"
+  }
+}

@@ -38,25 +38,46 @@ import { TIMING_LIMITS, timingError, updateBinding, type TimingField } from "./m
 /** One option of the target selects; the layout editor's `TargetGroup`. */
 export interface GestureTargetGroup {
   label: string
-  options: { value: string; label: string; target: BindingTarget; unavailable?: string }[]
+  options: {
+    value: string
+    label: string
+    target: BindingTarget
+    unavailable?: string
+    /** With `unavailable`: it still runs, it only cannot be changed here. */
+    readOnly?: boolean
+  }[]
 }
 
-/** Why the option of `value` cannot be placed now, if it cannot. */
-function unavailableIn(groups: GestureTargetGroup[], value: string): string | undefined {
+/** The option of `value` when it cannot be placed now. */
+function unavailableIn(
+  groups: GestureTargetGroup[],
+  value: string,
+): { reason: string; readOnly: boolean } | undefined {
   for (const group of groups) {
     const found = group.options.find((o) => o.value === value)
-    if (found) return found.unavailable
+    if (found?.unavailable !== undefined) {
+      return { reason: found.unavailable, readOnly: found.readOnly === true }
+    }
+    if (found) return undefined
   }
   return undefined
 }
 
-/** Why a target already assigned cannot run now; it stays assigned. */
-function UnavailableNote({ reason }: { reason: string | undefined }) {
+/**
+ * Why a target already assigned cannot run now; it stays assigned. A
+ * read-only one does run, it only cannot be changed here.
+ */
+function UnavailableNote({ note }: { note: { reason: string; readOnly: boolean } | undefined }) {
   const { t } = useTranslation()
-  if (!reason) return null
+  if (!note) return null
   return (
-    <p className="text-xs text-destructive" role="note">
-      {t("editor:gesture.unavailable", { reason })}
+    <p
+      className={note.readOnly ? "text-xs text-muted-foreground" : "text-xs text-destructive"}
+      role="note"
+    >
+      {note.readOnly
+        ? t("editor:gesture.readOnly", { reason: note.reason })
+        : t("editor:gesture.unavailable", { reason: note.reason })}
     </p>
   )
 }
@@ -195,7 +216,7 @@ export function GestureCard(props: GestureCardProps) {
           props.onAssign(props.decode(value))
         }}
       />
-      <UnavailableNote reason={notes} />
+      <UnavailableNote note={notes} />
       <IncompatibleNote reason={binding ? props.notRun : undefined} />
       {binding && props.details && (
         <AssignmentDetails id={id} title={title} binding={binding} details={props.details} />

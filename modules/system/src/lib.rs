@@ -43,13 +43,13 @@ pub const ALLOW_COMMANDS: &str = "allowCommands";
 /// Stable error codes of the module's actions.
 pub mod codes {
     /// The URL is not a valid `http`, `https` or `mailto` address.
-    pub const INVALID_URL: &str = "invalid-url";
+    pub const INVALID_URL: &str = deckpilot_core::paths::codes::INVALID_URL;
     /// A relative path leaves its resource (`..`) or is absolute.
-    pub const INVALID_PATH: &str = "invalid-path";
+    pub const INVALID_PATH: &str = deckpilot_core::paths::codes::INVALID_PATH;
     /// Arguments are too many, too long or contain invalid characters.
     pub const INVALID_ARGUMENTS: &str = "invalid-arguments";
     /// The resolved file, folder or program does not exist.
-    pub const NOT_FOUND: &str = "not-found";
+    pub const NOT_FOUND: &str = deckpilot_core::paths::codes::NOT_FOUND;
     /// Running commands is not allowed on this computer.
     pub const COMMANDS_DISABLED: &str = "commands-disabled";
     /// The command finished with a non-zero exit code.

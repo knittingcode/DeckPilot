@@ -171,6 +171,14 @@ export interface GrantInfo {
   status: PermissionStatus
   scope: unknown
   justification?: string
+  /**
+   * Plugin API 1.9: optional for enabling (an action names it in
+   * `requiresPermissions`). The plugin runs without it; only `actions`
+   * wait for it.
+   */
+  optional?: boolean
+  /** The ids of the actions that need this optional permission. */
+  actions?: string[]
 }
 
 export interface PluginActionInfo {
@@ -218,6 +226,14 @@ export interface PluginSummary {
    * `dependencies` feature); absent for a plugin the user installed.
    */
   installedFor?: string
+  /**
+   * Status-bar items the app draws from core data (plugin API 1.9,
+   * `hostViews`, e.g. `activeProject`); listed only while the plugin is
+   * enabled. Absent when none and from older agents.
+   */
+  statusItems?: string[]
+  /** Dashboard cards the app draws from core data; like `statusItems`. */
+  dashboardCards?: string[]
 }
 
 /**

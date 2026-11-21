@@ -115,7 +115,7 @@ pub use failpoint::{CrashOnce, Failpoint, Failpoints, NoFailpoints, Operation};
 pub use grants::{
     Broadened, Consent, DeclaredGrant, GrantKey, GrantScope, GrantSet, GrantSource, GrantStatus,
     PRIVATE_NETWORK_KEY, PermissionDiff, StoredGrant, Tier, host_covers, missing_grants,
-    variable_covers,
+    missing_optional_grants, variable_covers,
 };
 pub use layout::{DATABASE_FILE, Layout, PLUGINS_DIR};
 pub use manager::{

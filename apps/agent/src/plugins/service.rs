@@ -26,7 +26,7 @@ use deckpilot_ipc::plugins::{
 use deckpilot_ipc::{ErrorCode, IpcError, Request, Response, plugin_answers};
 use deckpilot_plugin_abi::capability::{RunContext, RunTrigger};
 use deckpilot_plugin_abi::protocol::{Enforcement, SandboxReport};
-use deckpilot_plugin_abi::{ActionOutcome, Params};
+use deckpilot_plugin_abi::{ActionOutcome, ParamValue, Params};
 use deckpilot_plugin_broker::{
     AuditDecision, AuditRecord, AuditSink, Broker, RateLimits, SystemClock,
 };
@@ -53,6 +53,7 @@ use super::bundled::{self, Bundle};
 use super::convert;
 use super::data;
 use super::engine::CatalogPlugin;
+use super::executor::resources::InvocationResources;
 use super::executor::{DataAccess, Executor, Opener, OwnVariables, SharedData, Transport};
 use super::lane::{Done, Ended, Job, Lane, LaneEnd, LaneError, Reply, StateDone};
 use super::locales::Locales;
@@ -80,9 +81,16 @@ const INVALID_PARAMETERS: &str = "invalid-parameters";
 /// manifest's `locales`, `defaultLocale` and `t:` texts and `locale.get` and
 /// `locale.translate` (`docs/marketplace/sdk/localization.md`), 1.7 the
 /// actions' `editorNavigation` (`docs/editor-navigation-and-simulation.md`),
-/// 1.8 the actions' `title` (`docs/key-text.md`, "Plugin titles").
+/// 1.8 the actions' `title` (`docs/key-text.md`, "Plugin titles"), 1.9 the
+/// privileged kinds of DeckPilot's own bundled plugins (`tools`,
+/// `resources`, `projectContext`, `hostViews`, `openUrl.fromParams`,
+/// `resource` parameters, the `workflows` and `projects` views, status
+/// items and dashboard cards; `docs/marketplace/module-migration.md` §7)
+/// and their capability operations: `resource` parameters and
+/// `resource.resolve` are carried out, the others refused as not
+/// implemented until their host side lands (WP-A4 to WP-A6).
 /// A plugin whose manifest asks for a higher minor is `incompatible`.
-const PLUGIN_API: ApiLevel = ApiLevel::new(1, 8);
+const PLUGIN_API: ApiLevel = ApiLevel::new(1, 9);
 /// Longest any invocation may take, whatever the manifest says.
 const MAX_INVOCATION: Duration = Duration::from_secs(600);
 /// Where the registry's verified state is kept (outside `plugins/`,
@@ -420,6 +428,10 @@ struct Prepared {
     executor: Executor,
     /// The action's parameter schema, for validating the parameters.
     definition: deckpilot_core::ActionType,
+    /// The declared kinds of each `resource` parameter (plugin API 1.9).
+    resource_kinds: BTreeMap<String, Vec<deckpilot_plugin_abi::privileged::ResourceKind>>,
+    /// The active version, for the audit.
+    version: String,
 }
 
 /// Why the plugin store could not be opened.
@@ -548,6 +560,8 @@ impl PluginService {
             let touched = super::migration::start(&mut self.manager, &self.bundle, &snapshot);
             self.after_migration(&touched, &before, None);
         }
+        // The host-held tool settings the migration keeps (`tool.run`).
+        super::tool_settings::held(&self.manager);
         self.snapshot = Some(snapshot);
     }
 
@@ -650,7 +664,13 @@ impl PluginService {
             .filter(|known| !records.iter().any(|r| r.id == known.id))
             .map(|known| CatalogPlugin {
                 id: known.id.to_string(),
-                name: known.display_name,
+                // A translated name (`t:plugin.name`) cannot be shown once
+                // its locales are gone with the plugin: its id instead.
+                name: if known.display_name.is_empty() || known.display_name.starts_with("t:") {
+                    known.id.to_string()
+                } else {
+                    known.display_name
+                },
                 default_names: BTreeMap::new(),
                 version: known.last_version,
                 description: String::new(),
@@ -662,6 +682,9 @@ impl PluginService {
                 action_unavailable: BTreeMap::new(),
                 requires: Vec::new(),
                 visual_assets: Vec::new(),
+                project_context: false,
+                resources: false,
+                wrap_around: None,
             });
         let graph = self.graph();
         self.locales
@@ -675,7 +698,12 @@ impl PluginService {
                 let shown = self.locales.manifest(record.id.as_str(), active, &dir);
                 let manifest = &shown;
                 let grants = store.grants(&record.id).unwrap_or_default();
-                let (missing, action_unmet) = self.unmet(&active.manifest, &graph);
+                let (missing, mut action_unmet) = self.unmet(&active.manifest, &graph);
+                // An optional permission not granted (plugin API 1.9):
+                // only the actions that need it wait.
+                for (action, why) in convert::unmet_permissions(&active.manifest, &grants) {
+                    action_unmet.entry(action).or_insert(why);
+                }
                 let default_names = active
                     .manifest
                     .contributes
@@ -689,6 +717,18 @@ impl PluginService {
                     })
                     .filter(|(_, names)| !names.is_empty())
                     .collect();
+                let project_context = grants.iter().any(|g| {
+                    g.key.kind == deckpilot_plugin_manifest::PermissionKind::ProjectContext
+                        && g.key.key.is_empty()
+                        && g.status == deckpilot_plugin_store::GrantStatus::Granted
+                });
+                let wrap_around = project_context.then(|| {
+                    store
+                        .settings(&record.id)
+                        .ok()
+                        .and_then(|settings| settings.get("wrapAround")?.as_bool())
+                        .unwrap_or(true)
+                });
                 Some(CatalogPlugin {
                     id: record.id.to_string(),
                     name: manifest.name.clone(),
@@ -704,6 +744,13 @@ impl PluginService {
                         .collect(),
                     default_names,
                     visual_assets: self.drawable_assets(record, &dir),
+                    project_context,
+                    wrap_around,
+                    resources: grants.iter().any(|g| {
+                        g.key.kind == deckpilot_plugin_manifest::PermissionKind::Resources
+                            && g.key.key.is_empty()
+                            && g.status == deckpilot_plugin_store::GrantStatus::Granted
+                    }),
                 })
             })
             .chain(gone)
@@ -2330,6 +2377,12 @@ impl PluginService {
             if let Some(why) = convert::unavailable_with(&record, &grants) {
                 return Err(error(ErrorCode::Failed, reason::NOT_ENABLED, why));
             }
+            if let Some(why) = record
+                .active()
+                .and_then(|a| convert::unmet_permissions(&a.manifest, &grants).remove(action))
+            {
+                return Err(error(ErrorCode::Failed, reason::NOT_ENABLED, why));
+            }
         }
         self.check_verdict(&record)?;
         let active = record
@@ -2357,6 +2410,8 @@ impl PluginService {
         let node = declaration.node.clone().unwrap_or_default();
         let timeout = Duration::from_millis(node.timeout_ms()).min(MAX_INVOCATION);
         let outputs = super::lane::declared_outputs(&declaration);
+        let resource_kinds = super::executor::resources::declared(&declaration);
+        let version = active.manifest.version.to_string();
         let dir = self.manager.layout().resolve(&active.install_dir);
         // Notifications and dialogs are titled with the name the app shows.
         let name = self.locales.manifest(id.as_str(), active, &dir).name;
@@ -2390,7 +2445,8 @@ impl PluginService {
         .with_notifier(self.events.notifier.clone())
         .with_dialogs(self.events.dialogs.clone())
         .with_translator(translator)
-        .with_data(access);
+        .with_data(access)
+        .with_projects(self.events.projects.clone());
         Ok((
             record,
             Prepared {
@@ -2398,6 +2454,8 @@ impl PluginService {
                 outputs,
                 executor,
                 definition,
+                resource_kinds,
+                version,
             },
         ))
     }
@@ -2429,9 +2487,14 @@ impl PluginService {
             outputs,
             executor,
             definition,
+            ..
         } = prepared;
-        // Checked against the manifest before the host sees anything.
-        let params = match data::normalize_params(&definition, &params) {
+        // Checked against the manifest before the host sees anything. A
+        // resource parameter cannot be given here (no key or workflow
+        // resolves it).
+        let params = match data::missing_resource(&definition, |_| false)
+            .map_or_else(|| data::normalize_params(&definition, &params), Err)
+        {
             Ok(params) => params,
             Err(problem) => {
                 let _ = reply.send(Ok(Response::PluginActionResult {
@@ -2481,11 +2544,16 @@ impl PluginService {
         clippy::needless_pass_by_value,
         reason = "the worker hands its message's parameters over; they are validated into new ones"
     )]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one worker message, handed over field by field"
+    )]
     pub fn invoke_for_engine(
         &mut self,
         plugin: &str,
         action: &str,
         params: Params,
+        resources: InvocationResources,
         run: RunContext,
         abort: AbortSignal,
         reply: std::sync::mpsc::SyncSender<EngineReply>,
@@ -2507,17 +2575,37 @@ impl PluginService {
             outputs,
             executor,
             definition,
+            resource_kinds,
+            version,
         } = prepared;
-        let params = match data::normalize_params(&definition, &params) {
-            Ok(params) => params,
-            Err(message) => {
-                let _ = reply.try_send(Err(EngineFailure {
-                    code: INVALID_PARAMETERS.to_owned(),
-                    message,
-                }));
-                return;
-            }
+        let mut params =
+            match data::missing_resource(&definition, |key| resources.params.contains_key(key))
+                .map_or_else(|| data::normalize_params(&definition, &params), Err)
+            {
+                Ok(params) => params,
+                Err(message) => {
+                    let _ = reply.try_send(Err(EngineFailure {
+                        code: INVALID_PARAMETERS.to_owned(),
+                        message,
+                    }));
+                    return;
+                }
+            };
+        // Resource parameters reach the plugin as handles of this
+        // invocation only (plugin API 1.9, X1); with the Projects feature
+        // off no project role resolves.
+        let resources = if self.projects_enabled() {
+            resources
+        } else {
+            resources.without_projects()
         };
+        let (executor, handles) =
+            executor.with_resources(record.id.as_str(), &version, resource_kinds, resources);
+        params.extend(
+            handles
+                .into_iter()
+                .map(|(key, handle)| (key, ParamValue::String(handle))),
+        );
         let id = record.id.to_string();
         let name = action.to_owned();
         let done: Done = Box::new(move |result| {
@@ -2544,11 +2632,28 @@ impl PluginService {
         }
     }
 
+    /// Whether the Projects feature is on: the Projects plugin
+    /// (`deckpilot.projects`) is enabled, the only project context provider
+    /// since the built-in `projects` module is gone (WP-C6; as the agent's
+    /// `Agent::project_context_active`). Only then do plugins' project
+    /// roles resolve.
+    fn projects_enabled(&self) -> bool {
+        PluginId::parse(crate::service::PROJECTS_PLUGIN).is_ok_and(|id| {
+            self.manager
+                .store()
+                .plugin(&id)
+                .ok()
+                .flatten()
+                .is_some_and(|record| record.state == PluginState::Enabled)
+        })
+    }
+
     /// The state of a key bound to a plugin action, for the engine's live
     /// key states (`key_state.rs`). Prepared like an action of the engine
     /// (enabled, granted, verdict, the declaration); asked only while the
     /// plugin's lane is idle, with [`STATE_CALL_TIMEOUT`] of wall clock
-    /// and a run nobody started. The answer goes to `reply`; a failed
+    /// and a run nobody started (of the key `scope`, which the plugin
+    /// reads with `run.context`). The answer goes to `reply`; a failed
     /// state call is not written to the plugin's failure log (a key
     /// shows it), only a crash counts, in the supervisor.
     ///
@@ -2562,6 +2667,7 @@ impl PluginService {
         plugin: &str,
         action: &str,
         params: Params,
+        scope: Option<String>,
         abort: AbortSignal,
         reply: std::sync::mpsc::SyncSender<StateReply>,
     ) {
@@ -2595,7 +2701,9 @@ impl PluginService {
                 action: action.to_owned(),
                 params,
                 timeout: super::key_state::STATE_CALL_TIMEOUT,
-                executor: prepared.executor.with_run(RunContext::unknown()),
+                executor: prepared
+                    .executor
+                    .with_run(RunContext::unknown().with_key_scope(scope)),
                 abort,
                 reply: Reply::State(done),
             }),

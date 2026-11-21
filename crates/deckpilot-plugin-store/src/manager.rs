@@ -228,6 +228,7 @@ impl PluginManager {
         let id = package.manifest().id.clone();
         store::check_source(&id, source)?;
         let declared = GrantSet::from_manifest(package.manifest());
+        check_privileged_source(&id, &declared, source)?;
         check_consent(&id, &declared, consent)?;
         if *source == InstallSource::Bundled {
             check_bundled_consent(&id, &declared, consent)?;
@@ -321,7 +322,8 @@ impl PluginManager {
 
     // ------------------------------------------------------- enable, disable
 
-    /// `Disabled → Enabled`. Every declared grant must be granted (with at
+    /// `Disabled → Enabled`. Every declared grant but the optional ones
+    /// (`requiresPermissions`, plugin API 1.9) must be granted (with at
     /// least the declared scope) and the files must match their record;
     /// a mismatch marks the plugin `Broken`.
     pub fn enable(&mut self, id: &PluginId) -> Result<()> {
@@ -610,6 +612,45 @@ impl PluginManager {
     /// count.
     pub fn record_migration(&mut self, step: &MigrationStep) -> Result<ModuleMigration> {
         self.tx(|tx, ctx| store::record_migration(tx, step, ctx.now))
+    }
+
+    /// Stores the host-held value `key` (schema 6; `None` removes it).
+    /// Returns whether it changed. Host-held values belong to the agent:
+    /// no plugin reads or writes them.
+    ///
+    /// # Errors
+    ///
+    /// For a key of more than 64 characters or with control characters,
+    /// and when the store refuses.
+    pub fn set_host_setting(
+        &mut self,
+        key: &str,
+        value: Option<&serde_json::Value>,
+    ) -> Result<bool> {
+        if key.is_empty() || key.len() > 64 || key.chars().any(char::is_control) {
+            return Err(StoreError::InvalidData(format!(
+                "`{key}` is not a host setting key"
+            )));
+        }
+        if self.store.host_setting(key)?.as_ref() == value {
+            return Ok(false);
+        }
+        let json = value
+            .map(|v| serde_json::to_string(v).map_err(StoreError::record))
+            .transpose()?;
+        self.tx(|tx, ctx| {
+            match &json {
+                Some(json) => tx.execute(
+                    "INSERT INTO host_settings (key, value_json, updated_at) VALUES (?1, ?2, ?3)
+                     ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json,
+                         updated_at = excluded.updated_at",
+                    rusqlite::params![key, json, ctx.now],
+                )?,
+                None => tx.execute("DELETE FROM host_settings WHERE key = ?1", [key])?,
+            };
+            Ok(())
+        })?;
+        Ok(true)
     }
 
     /// The user's Retry of a migration: back to `Pending` with no failed
@@ -935,6 +976,7 @@ impl PluginManager {
     ) -> Result<UpdateOutcome> {
         let id = package.manifest().id.clone();
         store::check_source(&id, source)?;
+        check_privileged_source(&id, &GrantSet::from_manifest(package.manifest()), source)?;
         let pending = pending_version(package)?;
         self.tx(|tx, ctx| {
             ensure_idle(tx, &id)?;
@@ -1534,6 +1576,26 @@ fn check_consent(id: &PluginId, declared: &GrantSet, consent: &Consent) -> Resul
     }
 }
 
+/// Plugin API 1.9's privileged kinds (`tools`, `resources`,
+/// `projectContext`, `hostViews`, `openUrl.fromParams`) come only with a
+/// plugin shipped inside the app (X12 in
+/// `docs/marketplace/module-migration.md` §7). The manifest rules already
+/// refuse them for every other package; this keeps a store caller from
+/// recording them from another source all the same.
+fn check_privileged_source(
+    id: &PluginId,
+    declared: &GrantSet,
+    source: &InstallSource,
+) -> Result<()> {
+    if *source != InstallSource::Bundled && declared.keys().any(GrantKey::is_first_party_only) {
+        return Err(StoreError::SourceNotAllowed {
+            id: id.clone(),
+            origin: source.as_str(),
+        });
+    }
+    Ok(())
+}
+
 /// Seeding a bundled plugin grants low-tier permissions only (recorded as
 /// `derived`); a medium- or high-tier one waits for the user's consent.
 fn check_bundled_consent(id: &PluginId, declared: &GrantSet, consent: &Consent) -> Result<()> {
@@ -1717,9 +1779,13 @@ fn activate(
     candidate: &GrantSet,
     consent: Option<&Consent>,
 ) -> Result<Vec<String>> {
+    // An optional grant the update adds or broadens waits for its own
+    // consent, as on install: without it the update applies and only the
+    // actions naming it stay unavailable.
     let missing: Vec<GrantKey> = diff
         .escalations()
         .into_iter()
+        .filter(|key| !candidate.is_optional(key))
         .filter(|key| consent.is_none_or(|c| !c.keys.contains(key)))
         .collect();
     if !missing.is_empty() {
@@ -1891,6 +1957,38 @@ mod tests {
 
     fn state(manager: &PluginManager, plugin: &str) -> PluginState {
         manager.store().plugin(&id(plugin)).unwrap().unwrap().state
+    }
+
+    // ---------------------------------------------------------- host-held
+
+    /// Host-held values (schema 6): stored, replaced, removed, kept across
+    /// a reopen, and never a plugin's (no plugin row is needed).
+    #[test]
+    fn host_settings_are_the_agents_own() {
+        let env = Env::new();
+        let mut manager = env.open();
+        let key = "tools.git";
+        assert_eq!(manager.store().host_setting(key).unwrap(), None);
+        let value = serde_json::json!({"gitExecutable": "/opt/git/bin/git"});
+        assert!(manager.set_host_setting(key, Some(&value)).unwrap());
+        assert!(!manager.set_host_setting(key, Some(&value)).unwrap());
+        drop(manager);
+        let mut manager = env.open();
+        assert_eq!(manager.store().host_setting(key).unwrap(), Some(value));
+        let other = serde_json::json!({"networkTimeoutSeconds": 60});
+        assert!(manager.set_host_setting(key, Some(&other)).unwrap());
+        assert_eq!(manager.store().host_setting(key).unwrap(), Some(other));
+        assert!(manager.set_host_setting(key, None).unwrap());
+        assert_eq!(manager.store().host_setting(key).unwrap(), None);
+        assert!(!manager.set_host_setting(key, None).unwrap());
+        for bad in ["", "a\nb", &"x".repeat(65)] {
+            assert!(
+                manager
+                    .set_host_setting(bad, Some(&serde_json::json!(1)))
+                    .is_err()
+            );
+        }
+        assert_eq!(manager.store().schema_version().unwrap(), 6);
     }
 
     // ------------------------------------------------------- install source

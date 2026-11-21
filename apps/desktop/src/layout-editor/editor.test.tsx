@@ -248,21 +248,10 @@ describe("LayoutEditor", { timeout: 20_000 }, () => {
     await user.click(control("Key 2"))
     const deselect = screen.getByRole("button", { name: "Deselect key" })
     expect(deselect.closest("[data-slot=inspector-deselect]")).not.toBeNull()
-    // Its tooltip (Radix positions it with a ResizeObserver, absent in jsdom).
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    )
-    try {
-      await user.hover(deselect)
-      expect(await screen.findByRole("tooltip", { name: "Deselect key" })).toBeInTheDocument()
-    } finally {
-      vi.unstubAllGlobals()
-    }
+    // Its tooltip (Radix positions it with the ResizeObserver of the test
+    // setup, src/test/setup.ts).
+    await user.hover(deselect)
+    expect(await screen.findByRole("tooltip", { name: "Deselect key" })).toBeInTheDocument()
     await user.click(deselect)
     expect(control("Key 2")).toHaveAttribute("aria-pressed", "false")
     expect(screen.getByRole("region", { name: "Inspector" }).textContent).toBe("")
@@ -285,7 +274,8 @@ describe("LayoutEditor", { timeout: 20_000 }, () => {
     })
     try {
       const user = renderEditor()
-      await user.click(control("Klawisz 1"))
+      // The canvas is drawn in Polish once the language change rendered.
+      await user.click(await screen.findByRole("button", { name: "Klawisz 1" }))
       const inspector = screen.getByRole("region", { name: "Klawisz 1 – ustawienia" })
       expect(within(inspector).queryByText("Klawisz 1")).not.toBeInTheDocument()
       await user.click(screen.getByRole("button", { name: "Odznacz klawisz" }))

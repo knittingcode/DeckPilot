@@ -26,6 +26,10 @@ with a setting and a credential slot added), and:
   trusts (`DECKPILOT_TEST_REGISTRY_CA`);
 - canned HTTP for `api.open-meteo.com` (`DECKPILOT_TEST_PLUGIN_HTTP`): the
   plugin never reaches the network;
+- the bundled `default`-class first-party plugins (`deckpilot.notifications`,
+  `deckpilot.workflows`) staged as an installed app ships them, with pins
+  (`DECKPILOT_BUNDLED_PLUGINS`, `DECKPILOT_TEST_BUNDLED_PINS`), so the
+  agent seeds them like on a fresh install;
 - a simulated Stream Deck MK.2 in the agent (`--mock-devices mk2`). The app
   starts the agent without arguments; with the test hooks the agent also
   reads them from `DECKPILOT_TEST_AGENT_ARGS`.
@@ -106,12 +110,17 @@ Build the artifacts (from the repository root):
 cargo build -p deckpilot-agent --features plugins,test-hooks --bin deckpilot-agent
 (cd plugins/runtime &&
   cargo build --locked -p deckpilot-plugin-host --bin deckpilot-plugin-host &&
-  cargo build --locked -p hello-weather --target wasm32-unknown-unknown --profile guest)
+  cargo build --locked -p hello-weather --target wasm32-unknown-unknown --profile guest &&
+  cargo build --locked -p deckpilot-notifications -p deckpilot-workflows --target wasm32-unknown-unknown --profile guest)
 mkdir -p /tmp/dp-e2e && cp target/debug/deckpilot-agent /tmp/dp-e2e/
 export DECKPILOT_E2E_AGENT_BIN=/tmp/dp-e2e/deckpilot-agent
 export DECKPILOT_E2E_PLUGIN_HOST=$PWD/plugins/runtime/target/debug/deckpilot-plugin-host
 export DECKPILOT_E2E_WASM_DIR=$PWD/plugins/runtime/target/wasm32-unknown-unknown/guest
 ```
+
+`DECKPILOT_E2E_WASM_DIR` must hold `hello_weather.wasm` and the bundled
+default plugins' `deckpilot_notifications.wasm` and
+`deckpilot_workflows.wasm`.
 
 The command layer (any platform):
 

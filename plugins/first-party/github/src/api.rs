@@ -2,12 +2,15 @@
 //! are used, how the token is named, how answers and failures are read,
 //! how far lists are paged, and the action's time limit.
 //!
-//! A port of the built-in module's `modules/github/src/api.rs`, with the
+//! A port of the former built-in `github` module's API code (removed in
+//! WP-C5), with the
 //! differences a sandboxed plugin has (`docs/marketplace/module-migration.md`
 //! §6 and `plugins/first-party/github/README.md`):
 //!
-//! * only `https://api.github.com` (the manifest's one `network` origin)
-//!   and `https://github.com` pages (its one `openUrl` origin);
+//! * the API is `https://api.github.com` (the manifest's `network` host)
+//!   or the GitHub Enterprise Server API the user entered in `apiUrl`
+//!   (`https://<host>/api/v3`) and allowed (its user-origin slot); pages
+//!   are opened on `https://github.com` or on that server;
 //! * the token is the credential slot [`TOKEN_SLOT`], injected by the
 //!   agent as a bearer token; it never enters this module;
 //! * lists are read 50 items per page (an answer is at most 512 KiB) for
@@ -16,15 +19,15 @@
 //! * there is no clock in a guest: the time limit and rate-limit waits are
 //!   counted with the `Date` headers of GitHub's answers.
 
+use deckpilot_first_party_support::{Server, WebPage};
 use deckpilot_plugin_sdk::prelude::*;
 use serde_json::Value;
 
-use crate::urls;
-
-/// The only API origin: the manifest's `network` permission.
+/// GitHub's API: the default of the `apiUrl` setting and the manifest's
+/// `network` host.
 pub const API: &str = "https://api.github.com";
-/// The only web origin pages are opened on: the `openUrl` permission.
-pub const WEB: &str = urls::WEB_BASE;
+/// GitHub's web host, the manifest's `openUrl` host.
+pub const WEB: &str = "https://github.com/";
 /// The credential slot (`contributes.credentials[0].key`).
 pub const TOKEN_SLOT: &str = "token";
 /// Settings (`contributes.settings.fields`).
@@ -42,7 +45,7 @@ const USER_AGENT: &str = concat!("DeckPilot-GitHub/", env!("CARGO_PKG_VERSION"))
 /// Largest answer the agent hands to a plugin.
 const MAX_ANSWER_KIB: usize = 512;
 
-/// Stable error codes, the built-in module's (`deckpilot_module_github::codes`);
+/// Stable error codes, the former built-in `github` module's (WP-C5);
 /// each is declared in `manifest.json` `contributes.errorCodes`.
 pub mod codes {
     pub const INVALID_API_URL: &str = "invalid-api-url";
@@ -145,27 +148,50 @@ pub fn check_ref(text: &str) -> Result<&str, Failure> {
     }
 }
 
-/// Checks the API URL setting: `https://api.github.com` only. GitHub
-/// Enterprise (Cloud or Server) and every other host keep the built-in
-/// module until user-entered origins exist (G2).
-pub fn api_base(text: &str) -> Result<(), Failure> {
-    if urls::is_api(text) {
-        return Ok(());
-    }
-    Err(fail(
-        codes::INVALID_API_URL,
-        "the GitHub API URL must be https://api.github.com; GitHub Enterprise and other hosts \
-         use the built-in GitHub module (Settings › Modules › GitHub); set it in Settings › \
-         Plugins › GitHub",
-    ))
+/// The API's base from the `apiUrl` setting: an https address without a
+/// user name, query or fragment (`https://api.github.com`, or
+/// `https://<host>/api/v3` for GitHub Enterprise Server). The agent
+/// normalizes the setting when it is saved and allows requests only to
+/// api.github.com or to the server the user allowed; a plain `http`
+/// address on this computer, which the built-in accepts, is not reachable
+/// for a plugin.
+pub fn api_base(text: &str) -> Result<Server, Failure> {
+    Server::parse(text).ok_or_else(|| {
+        fail(
+            codes::INVALID_API_URL,
+            "the GitHub API URL must be an https address such as https://api.github.com or \
+             https://<host>/api/v3, without a user name, query or fragment; set it in \
+             Settings › Plugins › GitHub",
+        )
+    })
 }
 
-/// A page to open: https, on github.com, without credentials.
-pub fn web_url(text: &str) -> Result<urls::WebPage, Failure> {
-    urls::web_page(text).ok_or_else(|| {
+/// The web address that belongs to an API, as the built-in derives it:
+/// `github.com` for `api.github.com`, `<x>.ghe.com` for `api.<x>.ghe.com`,
+/// the same host for GitHub Enterprise Server (`https://<host>/api/v3`);
+/// always the host's root.
+pub fn web_base(api: &Server) -> Server {
+    let host = api.host();
+    let web_host = if host == "api.github.com" {
+        "github.com"
+    } else if let Some(name) = host
+        .strip_prefix("api.")
+        .filter(|rest| rest.ends_with(".ghe.com"))
+    {
+        name
+    } else {
+        host
+    };
+    let origin = api.origin().replacen(host, web_host, 1);
+    Server::parse(&origin).unwrap_or_else(|| api.without_suffix(api.path()))
+}
+
+/// A page to open: https, on the GitHub web host, without credentials.
+pub fn web_url(text: &str, web: &Server) -> Result<WebPage, Failure> {
+    web.page(text).ok_or_else(|| {
         fail(
             codes::URL_NOT_ALLOWED,
-            "only https pages on github.com can be opened",
+            format!("only https pages on {} can be opened", web.host()),
         )
     })
 }
@@ -288,6 +314,8 @@ pub struct List {
 pub struct Api<'c, 'h> {
     ctx: &'c mut Context<'h>,
     token: SecretHandle,
+    api: Server,
+    web: Server,
     timeout: u64,
     /// The `Date` of the first answer and of the latest one.
     first_date: Option<u64>,
@@ -297,6 +325,7 @@ pub struct Api<'c, 'h> {
 impl std::fmt::Debug for Api<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Api")
+            .field("api", &self.api)
             .field("timeout", &self.timeout)
             .finish_non_exhaustive()
     }
@@ -330,7 +359,7 @@ impl<'c, 'h> Api<'c, 'h> {
     /// Checks the settings and that a token is stored.
     pub fn connect(ctx: &'c mut Context<'h>) -> Result<Self, Failure> {
         let settings = settings(ctx)?;
-        api_base(&settings.api_url)?;
+        let api = api_base(&settings.api_url)?;
         let token = SecretHandle::slot(TOKEN_SLOT)?;
         if !ctx.has_credential(&token)? {
             return Err(fail(
@@ -342,16 +371,22 @@ impl<'c, 'h> Api<'c, 'h> {
         Ok(Self {
             ctx,
             token,
+            web: web_base(&api),
+            api,
             timeout: settings.timeout,
             first_date: None,
             latest_date: None,
         })
     }
 
-    /// An API URL: these path segments (each encoded) and query.
-    #[allow(clippy::unused_self)] // Read as `api.endpoint(…)`, like the built-in.
+    /// The web address of the GitHub this API belongs to, ending in `/`.
+    pub fn web(&self) -> String {
+        self.web.root()
+    }
+
+    /// An API URL: the base, these path segments (each encoded) and query.
     pub fn endpoint(&self, segments: &[&str], query: &[(&str, &str)]) -> String {
-        urls::endpoint(segments, query)
+        self.api.endpoint(segments, query)
     }
 
     /// Fails once the time limit has passed since the first answer.
@@ -395,7 +430,7 @@ impl<'c, 'h> Api<'c, 'h> {
             )
         })?;
         let next = match response.link("next") {
-            Some(link) if urls::on_api(link) => Some(link.trim().to_owned()),
+            Some(link) if self.api.contains(link) => Some(link.trim().to_owned()),
             Some(_) => {
                 return Err(fail(
                     codes::INVALID_RESPONSE,

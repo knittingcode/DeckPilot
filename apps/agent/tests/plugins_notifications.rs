@@ -1058,7 +1058,7 @@ async fn a_fresh_install_gets_the_plugin_on_first_launch() {
         .unwrap_or_else(|| panic!("not seeded\n{}", agent.log()));
     assert_eq!(summary.state, PluginState::Enabled, "{}", agent.log());
     assert_eq!(summary.origin, PluginOrigin::Bundled);
-    assert_eq!(summary.version, "0.1.0");
+    assert_eq!(summary.version, "0.1.1");
     assert_eq!(
         summary
             .actions
@@ -1300,13 +1300,13 @@ async fn removing_or_disabling_the_plugin_sticks_across_restarts_and_upgrades() 
     assert_eq!(env.shown().len(), shown, "no fallback to the built-in");
     agent.stop().await;
 
-    // 3. An app update bundles 0.1.1: still disabled, still 0.1.0.
-    env.stage(Some("0.1.1"));
+    // 3. An app update bundles 0.1.2: still disabled, still 0.1.1.
+    env.stage(Some("0.1.2"));
     let agent = env.start(true).await;
     let summary = agent.plugin().await.unwrap();
     assert_eq!(
         (summary.state, summary.version.as_str()),
-        (PluginState::Disabled, "0.1.0")
+        (PluginState::Disabled, "0.1.1")
     );
     assert!(
         agent.log().contains("disabled by the user"),
@@ -1411,7 +1411,7 @@ async fn a_removed_or_broken_plugin_is_restored_from_the_bundle() {
     };
     assert_eq!(plugin.summary.state, PluginState::Enabled);
     assert_eq!(plugin.summary.origin, PluginOrigin::Bundled);
-    assert_eq!(plugin.summary.version, "0.1.0");
+    assert_eq!(plugin.summary.version, "0.1.1");
     assert_eq!(env.plugin_store().tombstone(&plugin_id).unwrap(), None);
     let mut seen = Vec::new();
     let deadline = tokio::time::Instant::now() + SETTLE;
@@ -1483,7 +1483,7 @@ async fn a_removed_or_broken_plugin_is_restored_from_the_bundle() {
         .data_dir
         .join("plugins")
         .join(ID)
-        .join("0.1.0")
+        .join("0.1.1")
         .join("plugin.wasm");
     let mut permissions = std::fs::metadata(&wasm).unwrap().permissions();
     #[allow(clippy::permissions_set_readonly_false)]

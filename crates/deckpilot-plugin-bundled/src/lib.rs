@@ -2,9 +2,11 @@
 //! bundle (`docs/marketplace/module-migration.md` §4).
 //!
 //! A bundled plugin is an app component, not a package: unpacked files
-//! `bundled/<id>/manifest.json`, `plugin.wasm`, `LICENSE` and the icons the
-//! manifest names (`assets/<name>.png`) in the installer's resources, next
-//! to `bundled/pins.json`, never a `.dpplugin`.
+//! `bundled/<id>/manifest.json`, `plugin.wasm`, `LICENSE`, the images the
+//! manifest names under `assets/` (its icons and, plugin API 1.8, its
+//! `contributes.visualAssets`) and its translations (`locales/<tag>.json`,
+//! plugin API 1.6) in the installer's resources, next to
+//! `bundled/pins.json`, never a `.dpplugin`.
 //! The release build writes the pins (`plugins/first-party/build.sh`): id,
 //! version, class, and the size and sha256 of every file.
 //!
@@ -31,10 +33,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use deckpilot_plugin_manifest::{PackageDigest, PluginId};
+use deckpilot_plugin_manifest::locale::{LocaleTag, MAX_LOCALE_FILE_BYTES};
+use deckpilot_plugin_manifest::{MAX_BACKGROUND_BYTES, PackageDigest, PluginId, VisualFormat};
 use deckpilot_plugin_package::{
     ARTIFACT, ExpectedFiles, Files, LICENSE, Limits, MANIFEST, PackageError, VerifiedPackage,
-    sha256, verify_bundled_files,
+    check_entry_path, sha256, verify_bundled_files,
 };
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -49,30 +52,59 @@ pub const BUNDLED_DIR: &str = "bundled";
 pub const PINS_FILE: &str = "pins.json";
 /// The only pins format.
 pub const PINS_VERSION: u32 = 1;
-/// The files every bundled plugin has. Besides them only its icons
-/// ([`is_allowed_file`]); every file is pinned.
+/// The files every bundled plugin has. Besides them only its images and
+/// translations ([`is_allowed_file`]); every file is pinned.
 pub const FILES: [&str; 3] = [MANIFEST, ARTIFACT, LICENSE];
-/// The directory of a bundled plugin's icons (the manifest's `icons`,
-/// which the manifest contract requires).
+/// The directory of a bundled plugin's images: the manifest's `icons`
+/// (which the manifest contract requires) and its
+/// `contributes.visualAssets` files (plugin API 1.8).
 pub const ICONS_DIR: &str = "assets";
+/// The directory of a bundled plugin's translations (plugin API 1.6).
+pub const LOCALES_DIR: &str = deckpilot_plugin_manifest::locale::LOCALES_DIR;
 
-/// Whether a bundled plugin may contain `path`: one of [`FILES`], or a PNG
-/// icon directly in [`ICONS_DIR`] (`assets/icon-128.png`). Nothing else:
-/// no archive, no signature, no script.
+/// Whether a bundled plugin may contain `path`: one of [`FILES`]; a PNG or
+/// JPEG under [`ICONS_DIR`] (`assets/icon-128.png`,
+/// `assets/backgrounds/sky.jpg`) whose path a package may contain
+/// ([`check_entry_path`]); or the translation file of a canonical locale
+/// tag directly in [`LOCALES_DIR`] (`locales/pl.json`, `locales/pt-BR.json`).
+/// Nothing else: no archive, no signature, no script, no SVG. The package
+/// rules ([`verify_bundled`]) then accept only the files the manifest
+/// names, each checked against its use.
 pub fn is_allowed_file(path: &str) -> bool {
     if FILES.contains(&path) {
         return true;
     }
-    // Lowercase only: `.PNG` is not allowed.
-    path.strip_prefix("assets/")
-        .and_then(|name| name.strip_suffix(".png"))
-        .is_some_and(|stem| {
-            !stem.is_empty()
-                && stem
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        })
+    if check_entry_path(path).is_err() {
+        return false;
+    }
+    if let Some(name) = path
+        .strip_prefix(LOCALES_DIR)
+        .and_then(|rest| rest.strip_prefix('/'))
+    {
+        return name
+            .strip_suffix(".json")
+            .is_some_and(|tag| LocaleTag::parse_canonical(tag).is_ok());
+    }
+    path.strip_prefix(ICONS_DIR)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .is_some_and(|name| VisualFormat::of_path(name).is_some())
 }
+
+/// The largest file a bundled plugin may pin at `path` (an allowed file):
+/// a translation at most [`MAX_LOCALE_FILE_BYTES`], an image at most
+/// [`MAX_BACKGROUND_BYTES`] (the largest visual asset; the package rules
+/// check each image against its own use). `None`: the package limits apply.
+pub fn max_file_bytes(path: &str) -> Option<u64> {
+    let limit = if path.starts_with(&format!("{LOCALES_DIR}/")) {
+        MAX_LOCALE_FILE_BYTES
+    } else if path.starts_with(&format!("{ICONS_DIR}/")) {
+        MAX_BACKGROUND_BYTES
+    } else {
+        return None;
+    };
+    u64::try_from(limit).ok()
+}
+
 /// The publisher of every bundled plugin.
 pub const FIRST_PARTY_PUBLISHER: &str = deckpilot_plugin_manifest::FIRST_PARTY_PUBLISHER;
 
@@ -86,10 +118,15 @@ pub const FIRST_PARTY_PUBLISHER: &str = deckpilot_plugin_manifest::FIRST_PARTY_P
 /// without `DECKPILOT_BUNDLED_PINS` pins nothing and would refuse nothing;
 /// [`is_bundled_id`] also covers whatever the pins of a build name.
 pub const BUNDLED_PLUGIN_IDS: &[&str] = &[
+    "deckpilot.docker",
+    "deckpilot.git",
     "deckpilot.github",
     "deckpilot.gitlab",
     "deckpilot.jira",
     "deckpilot.notifications",
+    "deckpilot.projects",
+    "deckpilot.workflows",
+    "deckpilot.workspace",
 ];
 
 /// Whether `id` is a bundled plugin: in [`BUNDLED_PLUGIN_IDS`] or pinned
@@ -241,9 +278,18 @@ impl Pins {
             }
             if let Some(other) = pin.files.keys().find(|f| !is_allowed_file(f)) {
                 return Err(BundleError::Pins(format!(
-                    "{} pins {other}: a bundled plugin is {FILES:?} and its icons in {ICONS_DIR}/ only",
+                    "{} pins {other}: a bundled plugin is {FILES:?}, its PNG or JPEG images \
+                     in {ICONS_DIR}/ and its translations {LOCALES_DIR}/<tag>.json only",
                     pin.id
                 )));
+            }
+            for (file, digest) in &pin.files {
+                if let Some(limit) = max_file_bytes(file).filter(|limit| digest.size > *limit) {
+                    return Err(BundleError::Pins(format!(
+                        "{} pins {file} with {} bytes (at most {limit})",
+                        pin.id, digest.size
+                    )));
+                }
             }
         }
         Ok(pins)
@@ -279,15 +325,8 @@ impl Pins {
         for (id, version, class) in plugins {
             let dir = bundled_dir.join(id.as_str());
             let mut names: Vec<String> = FILES.iter().map(|f| (*f).to_owned()).collect();
-            let icons = dir.join(ICONS_DIR);
-            if icons.is_dir() {
-                for entry in std::fs::read_dir(&icons).map_err(|e| BundleError::io(&icons, &e))? {
-                    let entry = entry.map_err(|e| BundleError::io(&icons, &e))?;
-                    names.push(format!(
-                        "{ICONS_DIR}/{}",
-                        entry.file_name().to_string_lossy()
-                    ));
-                }
+            for sub in [ICONS_DIR, LOCALES_DIR] {
+                list_files(&dir.join(sub), sub, &mut names)?;
             }
             let mut files = BTreeMap::new();
             for name in names {
@@ -325,12 +364,30 @@ impl Pins {
     }
 }
 
+/// The files under `dir` (if it exists), as `<prefix>/<relative path>`.
+fn list_files(dir: &Path, prefix: &str, names: &mut Vec<String>) -> Result<(), BundleError> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(dir).map_err(|e| BundleError::io(dir, &e))? {
+        let entry = entry.map_err(|e| BundleError::io(dir, &e))?;
+        let name = format!("{prefix}/{}", entry.file_name().to_string_lossy());
+        if entry.path().is_dir() {
+            list_files(&entry.path(), &name, names)?;
+        } else {
+            names.push(name);
+        }
+    }
+    Ok(())
+}
+
 fn len(bytes: &[u8]) -> u64 {
     u64::try_from(bytes.len()).unwrap_or(u64::MAX)
 }
 
 /// Reads the files of `pin` from `dir` and checks them against the pin:
-/// `dir` (and `assets/` in it) are directories, not links; `dir` holds
+/// `dir` (and `assets/`, its subdirectories and `locales/` in it) are
+/// directories, not links; `dir` holds
 /// exactly the pinned files, each a regular file (no link) whose size is
 /// checked before it is read and whose sha256 is checked after.
 pub fn read_pinned(dir: &Path, pin: &Pin) -> Result<Files, BundleError> {
@@ -361,8 +418,15 @@ fn read_level(dir: &Path, prefix: &str, pin: &Pin, files: &mut Files) -> Result<
             ));
         };
         let metadata = std::fs::symlink_metadata(&path).map_err(|e| BundleError::io(&path, &e))?;
-        if prefix.is_empty() && name == ICONS_DIR && metadata.file_type().is_dir() {
-            read_level(&path, &format!("{ICONS_DIR}/"), pin, files)?;
+        // Images may be nested under `assets/`; translations are directly
+        // in `locales/`. Any other directory is refused below as unpinned.
+        let descend = if prefix.is_empty() {
+            name == ICONS_DIR || name == LOCALES_DIR
+        } else {
+            prefix.starts_with(&format!("{ICONS_DIR}/"))
+        };
+        if descend && metadata.file_type().is_dir() {
+            read_level(&path, &format!("{name}/"), pin, files)?;
             continue;
         }
         let Some(digest) = pin.file(&name) else {

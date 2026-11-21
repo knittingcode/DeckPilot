@@ -9,7 +9,7 @@ import { useTranslation } from "@/i18n"
 
 import { PermissionList, PublisherLine } from "./components"
 import { pluginErrorSentence } from "./dialog-error"
-import type { Grant } from "./permissions"
+import { type Grant, optionalOnByDefault } from "./permissions"
 import type { PublisherInfo } from "./types"
 
 /**
@@ -48,7 +48,10 @@ const CONFIRM = {
 /**
  * Asks for consent before an install, an update that asks for more, or
  * enabling a plugin. Every permission that needs consent has its own
- * check; "Allow all" is a separate, explicit action. The consent sent is
+ * check; "Allow all" is a separate, explicit action. An optional
+ * permission (plugin API 1.9: only some actions need it) has its own check
+ * too but never blocks the confirm; it starts checked unless it is high
+ * tier, which stays off until the user allows it. The consent sent is
  * exactly the set of checked keys. The dialog keeps focus until closed.
  */
 export function PermissionReviewDialog({
@@ -59,10 +62,14 @@ export function PermissionReviewDialog({
   onClose: () => void
 }) {
   const { t } = useTranslation()
-  const [checked, setChecked] = useState<Set<string>>(new Set())
+  const pending = request.items.filter((i) => i.state !== "granted")
+  const [checked, setChecked] = useState<Set<string>>(
+    () => new Set(pending.filter((i) => optionalOnByDefault(i.grant)).map((i) => i.grant.key)),
+  )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const required = request.items.filter((i) => i.state !== "granted").map((i) => i.grant.key)
+  const required = pending.filter((i) => !i.grant.optionalFor).map((i) => i.grant.key)
+  const optional = pending.filter((i) => i.grant.optionalFor).map((i) => i.grant.key)
   const missing = required.filter((key) => !checked.has(key)).length
   const states = new Map(request.items.map((i) => [i.grant.key, i.state]))
 
@@ -85,7 +92,7 @@ export function PermissionReviewDialog({
   }
 
   const submit = () => {
-    finish(request.confirm(required.filter((key) => checked.has(key))))
+    finish(request.confirm([...required, ...optional].filter((key) => checked.has(key))))
   }
 
   const names = { name: request.name, version: request.version }
@@ -210,9 +217,11 @@ export function PermissionReviewDialog({
               <label htmlFor={id} className="text-xs">
                 {state === "broadened"
                   ? t("permissions:review.allowBroadened")
-                  : request.mode === "update"
-                    ? t("permissions:review.allowNew")
-                    : t("permissions:review.allow")}
+                  : grant.optionalFor
+                    ? t("permissions:review.allowOptional")
+                    : request.mode === "update"
+                      ? t("permissions:review.allowNew")
+                      : t("permissions:review.allow")}
               </label>
             </div>
           )

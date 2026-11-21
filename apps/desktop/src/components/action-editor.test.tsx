@@ -8,8 +8,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { ActionEditor } from "./action-editor"
 import type { ActionInstance, ActionType, ModuleInfo, Project } from "@/lib/types"
 import { i18n } from "@/i18n"
+import { pluginModules } from "@/lib/plugin-actions"
 import { api, resetApi } from "@/test/api-mock"
 import { installDomStubs } from "@/test/dom"
+import { projectsPlugin } from "@/test/first-party"
 
 vi.mock("@/lib/api", async () => (await import("@/test/api-mock")).apiModule)
 vi.mock("sonner", async () => (await import("@/test/toast")).sonnerModule)
@@ -99,28 +101,36 @@ function renderEditor(
 }
 
 describe("ActionEditor", () => {
-  it("mentions project placeholders only with the Projects module", () => {
-    const hint = /to show the active project on the key/
-    // Projects not installed.
-    renderEditor(null)
-    expect(screen.queryByText(hint)).not.toBeInTheDocument()
-    expect(screen.getByLabelText("Name")).not.toHaveAttribute(
-      "placeholder",
-      expect.stringMatching(/project/i),
-    )
-    cleanup()
-    // Installed but disabled.
-    renderEditor(null, 0, [
-      module("general", "General", [logType]),
-      module("projects", "Projects", [], false),
-    ])
-    expect(screen.queryByText(hint)).not.toBeInTheDocument()
-    cleanup()
-    renderEditor(null, 0, [
-      module("general", "General", [logType]),
-      module("projects", "Projects", []),
-    ])
-    expect(screen.getByText(hint)).toBeInTheDocument()
+  it("mentions project placeholders only with the Projects plugin", () => {
+    vi.stubEnv("VITE_DECKPILOT_PLUGINS", "1")
+    try {
+      const hint = /to show the active project on the key/
+      // Projects not installed (and no built-in module provides them).
+      renderEditor(null, 0, [
+        module("general", "General", [logType]),
+        module("projects", "Projects", []),
+      ])
+      expect(screen.queryByText(hint)).not.toBeInTheDocument()
+      expect(screen.getByLabelText("Name")).not.toHaveAttribute(
+        "placeholder",
+        expect.stringMatching(/project/i),
+      )
+      cleanup()
+      // Installed but disabled.
+      renderEditor(null, 0, [
+        module("general", "General", [logType]),
+        ...pluginModules([projectsPlugin("disabled")]),
+      ])
+      expect(screen.queryByText(hint)).not.toBeInTheDocument()
+      cleanup()
+      renderEditor(null, 0, [
+        module("general", "General", [logType]),
+        ...pluginModules([projectsPlugin()]),
+      ])
+      expect(screen.getByText(hint)).toBeInTheDocument()
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   beforeEach(() => {

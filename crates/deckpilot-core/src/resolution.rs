@@ -381,6 +381,62 @@ pub struct Resolved {
     pub parameters: ActionParameters,
     /// The sensitive values that went into them.
     pub redactor: Redactor,
+    /// Where each configured or defaulted value came from.
+    pub provenance: Provenances,
+}
+
+/// Where a resolved parameter value came from. Only a [`Literal`] is a
+/// value the user wrote into the configuration as it reaches the handler;
+/// what may only act on a value the user typed (a plugin's
+/// `url.openParam`, plugin API 1.9) accepts nothing else.
+///
+/// [`Literal`]: Provenance::Literal
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Provenance {
+    /// Written as it is in the instance or in a binding's or step's
+    /// overrides.
+    Literal,
+    /// The parameter's default from the action's definition.
+    Default,
+    /// A template expanded with variables.
+    Template,
+    /// A reference to a variable.
+    Reference,
+    /// A workflow node's value: a mapping from another node's output may
+    /// have produced it ([`Provenances::mapped`]).
+    Mapped,
+}
+
+/// The [`Provenance`] of each parameter by key; a key it does not name
+/// has none (for example a value the handler filled in itself).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Provenances(BTreeMap<String, Provenance>);
+
+impl Provenances {
+    /// Where the value of `key` came from.
+    pub fn get(&self, key: &str) -> Option<Provenance> {
+        self.0.get(key).copied()
+    }
+
+    /// Whether the value of `key` is one the user wrote as it is.
+    pub fn is_literal(&self, key: &str) -> bool {
+        self.get(key) == Some(Provenance::Literal)
+    }
+
+    /// The provenance of each key, as given.
+    pub fn from_entries(entries: impl IntoIterator<Item = (String, Provenance)>) -> Self {
+        Self(entries.into_iter().collect())
+    }
+
+    /// The same with every key of `overrides` as [`Provenance::Mapped`]:
+    /// the overrides of a workflow node, which carry its mapped values.
+    #[must_use]
+    pub fn mapped(mut self, overrides: &ActionParameters) -> Self {
+        for (key, _) in overrides.iter() {
+            self.0.insert(key.clone(), Provenance::Mapped);
+        }
+        self
+    }
 }
 
 /// Why the parameters could not be resolved. The message names parameters
@@ -425,18 +481,26 @@ pub fn resolve_parameters(
     let mut errors = Vec::new();
     let mut literal = configured.clone();
     // Defaults may be references too; resolve what normalize would fill.
-    let mut values: Vec<(String, ParameterValue)> = configured
+    let mut values: Vec<(String, ParameterValue, bool)> = configured
         .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
+        .map(|(key, value)| (key.clone(), value.clone(), false))
         .collect();
     for spec in &definition.parameters {
         if configured.get(&spec.key).is_none()
             && let Some(default) = &spec.default
         {
-            values.push((spec.key.clone(), default.clone()));
+            values.push((spec.key.clone(), default.clone(), true));
         }
     }
-    for (key, value) in values {
+    let mut provenance = Provenances::default();
+    for (key, value, default) in values {
+        let source = match &value {
+            _ if default => Provenance::Default,
+            ParameterValue::Reference(_) => Provenance::Reference,
+            ParameterValue::Template(_) => Provenance::Template,
+            _ => Provenance::Literal,
+        };
+        provenance.0.insert(key.clone(), source);
         if value.is_literal() {
             continue;
         }
@@ -479,6 +543,7 @@ pub fn resolve_parameters(
     Ok(Resolved {
         parameters,
         redactor,
+        provenance,
     })
 }
 

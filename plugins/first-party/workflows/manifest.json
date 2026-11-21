@@ -1,0 +1,44 @@
+{
+  "$schema": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json",
+  "manifestVersion": 1,
+  "id": "deckpilot.workflows",
+  "name": "t:plugin.name",
+  "version": "0.1.0",
+  "publisher": {
+    "id": "deckpilot",
+    "name": "DeckPilot",
+    "url": "https://github.com/knittingcode/deckpilot"
+  },
+  "description": "t:plugin.description",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/knittingcode/deckpilot",
+    "directory": "plugins/first-party/workflows"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["workflows", "automation"],
+  "categories": ["productivity"],
+  "engines": { "deckpilot": ">=0.10.0 <1.0.0", "pluginApi": "^1.9", "sdk": "0.1.0" },
+  "runtime": { "kind": "wasm", "abi": 1 },
+  "entry": "src/lib.rs",
+  "icons": { "128": "assets/icon-128.png" },
+  "defaultLocale": "en",
+  "locales": ["en", "pl"],
+  "permissions": [
+    {
+      "kind": "hostViews",
+      "justification": "t:permissions.hostViews"
+    }
+  ],
+  "contributes": {
+    "navigation": [
+      {
+        "id": "workflows",
+        "label": "t:navigation.workflows",
+        "icon": "assets/icon-128.png",
+        "view": "workflows"
+      }
+    ],
+    "views": [{ "id": "workflows", "kind": "workflows", "context": "profile" }]
+  }
+}

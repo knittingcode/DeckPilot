@@ -30,10 +30,12 @@ pub mod layout;
 pub mod module;
 pub mod notify;
 pub mod pages;
+pub mod paths;
 pub mod platform;
 pub mod process;
 pub mod profile;
 pub mod project;
+pub mod project_catalog;
 pub mod registry;
 pub mod resolution;
 pub mod resource;
@@ -124,6 +126,7 @@ pub use project::{
     ActiveProjectContext, CycleDirection, Project, ProjectContextError, ProjectKey,
     ProjectStepError, ProjectSwitcher,
 };
+pub use project_catalog::{CatalogError, ProjectCatalog};
 pub use registry::{ActionHandler, ActionRegistry, AliasHandler, LayoutNavigation, RegistryError};
 pub use resource::{
     MachineConfig, MachineResourceBinding, ResolveError, ResourceKey, ResourceKind, ResourceRef,

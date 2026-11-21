@@ -49,6 +49,10 @@ mod registry;
 #[cfg(feature = "plugins")]
 mod service;
 #[cfg(feature = "plugins")]
+mod tool_settings;
+#[cfg(feature = "plugins")]
+mod tools;
+#[cfg(feature = "plugins")]
 mod variables;
 #[cfg(feature = "plugins")]
 mod worker;
@@ -357,7 +361,12 @@ impl PluginRuntime {
     /// Starts the worker when built with plugins and enabled. `changed` is
     /// called (on the worker's thread) whenever the installed plugins or
     /// their availability changed, so the agent registers
-    /// [`PluginRuntime::modules`] again.
+    /// [`PluginRuntime::modules`] again. Plugins' project operations
+    /// (plugin API 1.9) reach the agent through `commands`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the agent's channels, handed over one by one"
+    )]
     pub(crate) fn new(
         settings: PluginSettings,
         data_dir: &std::path::Path,
@@ -366,6 +375,7 @@ impl PluginRuntime {
         dialogs: &std::sync::Arc<crate::plugin_dialogs::PluginDialogs>,
         notifier: std::sync::Arc<dyn deckpilot_core::notify::Notifier>,
         changed: std::sync::Arc<dyn Fn() + Send + Sync>,
+        commands: tokio::sync::mpsc::UnboundedSender<crate::service::Command>,
     ) -> Self {
         #[cfg(feature = "plugins")]
         {
@@ -378,6 +388,9 @@ impl PluginRuntime {
                         plugins: plugin_events.clone(),
                         notifier,
                         dialogs: dialogs.clone(),
+                        projects: Some(std::sync::Arc::new(
+                            crate::service::plugin_projects::AgentProjects::new(commands),
+                        )),
                     },
                     changed,
                 )
@@ -386,7 +399,15 @@ impl PluginRuntime {
         }
         #[cfg(not(feature = "plugins"))]
         {
-            let _ = (data_dir, events, plugin_events, dialogs, notifier, changed);
+            let _ = (
+                data_dir,
+                events,
+                plugin_events,
+                dialogs,
+                notifier,
+                changed,
+                commands,
+            );
             Self { settings }
         }
     }
@@ -413,9 +434,14 @@ impl PluginRuntime {
 
     /// Hands the module migration engine what `deckpilot.db` says about
     /// the modules with an alias block (`modules`: the built-in modules
-    /// just loaded, before plugins are registered). Reads `deckpilot.db`,
-    /// never writes it; nothing is read while no alias exists. The first
-    /// snapshot after the plugin store opened runs the migration.
+    /// just loaded, before plugins are registered). Reads `deckpilot.db`
+    /// and never changes it; nothing is read while no alias exists. The
+    /// first snapshot after the plugin store opened runs the migration.
+    ///
+    /// When a module of the extraction set is in use here, the encrypted
+    /// backup `pre-plugin-extraction` of `deckpilot.db` is written first,
+    /// once (a copy next to the database; `module-migration.md` §7 X13):
+    /// its first cut-over waits for it.
     pub(crate) fn migrate(
         &self,
         store: &deckpilot_storage::SqliteStore,
@@ -425,7 +451,19 @@ impl PluginRuntime {
         if let Some(worker) = &self.worker {
             match migration::LegacySnapshot::read(store, modules) {
                 Ok(snapshot) if snapshot.modules.is_empty() => {}
-                Ok(snapshot) => worker.migrate(snapshot),
+                Ok(mut snapshot) => {
+                    if snapshot.needs_backup() {
+                        snapshot.backup = match store.named_backup(migration::BACKUP_LABEL) {
+                            Ok(file) => file.map(Ok),
+                            Err(error) => {
+                                tracing::warn!(%error,
+                                    "deckpilot.db cannot be backed up before the move to plugins");
+                                Some(Err(error.to_string()))
+                            }
+                        };
+                    }
+                    worker.migrate(snapshot);
+                }
                 Err(error) => {
                     tracing::warn!(%error, "the modules that can migrate cannot be read");
                 }
@@ -439,6 +477,19 @@ impl PluginRuntime {
     /// (`modules`, before plugins are registered), for plugins that depend
     /// on one of them.
     pub(crate) fn builtins(&self, modules: &deckpilot_core::ModuleRegistry) {
+        // The user's git and docker settings, which `tool.run` uses (the
+        // host's, never a plugin's), as the built-in modules keep them.
+        #[cfg(feature = "plugins")]
+        {
+            let infos = modules.modules();
+            let config = |id: &str| {
+                infos
+                    .iter()
+                    .find(|m| m.manifest.id.as_str() == id)
+                    .map(|m| &m.config_values)
+            };
+            tool_settings::builtins(config("git"), config("docker"));
+        }
         #[cfg(feature = "plugins")]
         if let Some(worker) = &self.worker {
             let builtins = modules
@@ -471,6 +522,24 @@ impl PluginRuntime {
             return worker.legacy_routing();
         }
         deckpilot_core::alias::LegacyRouting::default()
+    }
+
+    /// The `wrapAround` setting of the project-context provider (the
+    /// Projects plugin, `deckpilot.projects`), if one holds
+    /// `projectContext`; `None` without one, without the `plugins` feature
+    /// and while locked.
+    pub(crate) fn project_wrap_around(&self, provider: &str) -> Option<bool> {
+        #[cfg(feature = "plugins")]
+        if let Some(worker) = &self.worker {
+            return worker
+                .catalog()
+                .into_iter()
+                .find(|plugin| plugin.id == provider)
+                .and_then(|plugin| plugin.wrap_around);
+        }
+        #[cfg(not(feature = "plugins"))]
+        let _ = provider;
+        None
     }
 
     /// The visual assets of the enabled plugins keys may draw now

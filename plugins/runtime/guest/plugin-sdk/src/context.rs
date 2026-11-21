@@ -25,6 +25,9 @@ use serde_json::Value;
 use crate::definition::is_camel_key;
 use crate::output::{PluginError, codes};
 
+#[path = "privileged.rs"]
+mod privileged;
+
 /// Longest log line the host accepts; longer lines are cut (at a character
 /// boundary) by [`Context::log`].
 pub const MAX_LOG_LEN: usize = deckpilot_plugin_abi::limits::MAX_LOG_LEN;
@@ -828,6 +831,28 @@ impl<'a> Context<'a> {
     pub fn run_context(&mut self) -> Result<RunContext, CapabilityError> {
         let v = self.call("run.context", &CapabilityRequest::RunContext(NoArgs {}))?;
         serde_json::from_value(v).map_err(|_| malformed("run.context", "a run context"))
+    }
+
+    /// Which key this is, for its key state (plugin API 1.9,
+    /// [`RunContext::key_scope`]): a token of the invocation's resource
+    /// bindings, the same in the key's state call (where `run.context` is
+    /// answered too) and in every run with the same bindings. `None` when
+    /// the action has no `resource` parameter or the agent does not say.
+    /// Keep a key's state under it and the action's own parameters.
+    ///
+    /// ```
+    /// use deckpilot_plugin_sdk::testing::MockHost;
+    /// use deckpilot_plugin_sdk::CallResult;
+    ///
+    /// let scope = "0123456789abcdef0123456789abcdef";
+    /// let mut host = MockHost::new(move |_| CallResult::Ok(serde_json::json!({
+    ///     "trigger": "other", "keyScope": scope,
+    /// })));
+    /// let mut ctx = host.context();
+    /// assert_eq!(ctx.key_scope().as_deref(), Some(scope));
+    /// ```
+    pub fn key_scope(&mut self) -> Option<String> {
+        self.run_context().ok()?.bounded().key_scope
     }
 
     /// The time now: the agent's wall clock (UTC) and the local UTC offset

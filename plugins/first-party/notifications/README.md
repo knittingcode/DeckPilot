@@ -69,3 +69,15 @@ actions unavailable (no fallback to the built-in, §5.2); the choice sticks
 across restarts and app updates (a tombstone) until the user enables or
 installs it again. A user who had turned the built-in module off gets the
 plugin turned off too, once, at the upgrade.
+
+## Versions
+
+A changed plugin gets a new version (`manifest.json`, `Cargo.toml` and
+`plugins/runtime/Cargo.lock`): an installation keeps its copy unless the
+bundled version is higher, and refuses a copy whose files differ from the
+pins of the same version (`../README.md`, "Versions").
+
+| Version | Shipped in | What changed |
+| --- | --- | --- |
+| 0.1.0 | DeckPilot 0.7.0 to 0.9.0 | The first release |
+| 0.1.1 | the next DeckPilot release | Rebuilt with the current plugin SDK (`deckpilot-plugin-sdk`); the manifest and the actions are unchanged |

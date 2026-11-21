@@ -185,9 +185,114 @@ released either. 0.6.0 is the first version intended for publication.
   `contributes.visualAssets`): PNG icons, PNG or JPEG images and gradients,
   packaged, signed and checked like every other package file; no plugin
   code runs for them.
+- Plugin API 1.9, the platform for moving Git, Docker, Workspace, Projects
+  and Workflows into DeckPilot's own plugins (reviewed in
+  `docs/marketplace/module-migration.md` §7): manifest permissions `tools`
+  (brokered `git` and `docker` limited to an allowlist of subcommands and
+  options, with denylisted flags refused, separate network and modify
+  grants), `resources`, `projectContext` and `hostViews`,
+  `openUrl.fromParams`, `resource` parameters and the `workflows` and
+  `projects` views, with their grant tiers, capability operations, broker
+  checks and SDK calls. Only plugins shipped inside the app can declare
+  them; third-party and registry packages are refused. The agent carries
+  out `resource` parameters and `resource.resolve` (opaque handles bound to
+  one invocation and plugin, labels only, the declared kinds only, project
+  roles only with an active project and Projects on, audited) and answers
+  the other operations as not implemented.
+- Plugin API 1.9's project context: `project.current` and `project.list`
+  (ids, keys and names of the active profile's projects), and
+  `project.select` and `project.cycle` only in runs the user started, never
+  from a lifecycle event or a schedule, so a plugin cannot loop on the
+  switch it caused. A switch is applied like one from the app and its
+  `projectChanged` event names the plugin. `profile.read` answers the
+  granted scopes. Variables a plugin declares with a `host:project.id`,
+  `.key` or `.name` source carry the project in the context, published by
+  DeckPilot only while the plugin is enabled and holds `projectContext`.
+  Every operation needs an active Projects feature and is audited.
+- Plugin API 1.9's `tool.run`, carried out by the agent: the user's own
+  `git` or `docker` (the executable, context and time limits set for the
+  built-in Git and Docker modules, or the agent's `PATH`, plus Homebrew's
+  and Docker Desktop's folders on macOS; the file must be named `git` or
+  `docker`), never a shell, with every argument
+  checked again at run time against the denylists, the host's table, the
+  manifest policy and the plugin's own declaration (a manifest can only
+  narrow), typed values that never start with `-`, and a canonical
+  command line with the host's fixed prefix (`-C <handle> --no-pager
+  --no-optional-locks` and hardening configuration: no `gpg` on `log`, no
+  `ext::`, `file://` or remote helper transports, no credential prompts;
+  docker's `--context`, and the compose file, folder and project name
+  taken from the binding, never from the plugin). git works only on the
+  bound folder's own repository (never one above it), compose only on a
+  compose file inside the bound folder. The working directory is a
+  resource handle of the invocation; the environment is an allowlist (no credentials, no git or
+  compose overrides, `SSH_AUTH_SOCK` only for `ls-remote` with
+  `tools:git:network` or an `ssh://` docker engine). `ls-remote` contacts
+  only a remote `git remote` lists. Time limits per class (10 s local git,
+  20 s network, 30 s docker reads, 300 s docker changes; the plugin may
+  only shorten them), output caps (128 KiB, 64 KiB for logs, 16 KiB of
+  errors), URL credentials (userinfo and token or password query
+  parameters) removed from the output, at most 4 runs per
+  plugin and one modifying run at a time; the process group is stopped on
+  the deadline, an abort and a revoked grant. Docker changes need
+  `tools:docker:modify` (off by default) and a run the user or their work
+  session started. Every run is audited by subcommand, option names,
+  handle label, exit status and byte counts, never by value. A program that
+  leaves its process group no longer keeps a run waiting past its time
+  limit.
+- Plugin API 1.9: optional permissions. An action can name the sub-grants
+  it needs (`requiresPermissions`: `tools:docker:modify`,
+  `tools:git:network`, `resources:open`, `resources:paths`,
+  `projectContext:select`, `openUrl:from-params`); the plugin is enabled
+  without them, and only the actions naming one wait for it ("needs the
+  permission …") until it is granted. The consent dialog and Settings ›
+  Plugins show each one with its own switch, off by default when it is
+  high risk. Docker's Compose up, down and restart name
+  `tools:docker:modify`, so the Docker plugin's reads work without it.
+- Plugin API 1.9: docker's `ps`, `logs` of a container, `version` and
+  `context show` run without a resource, in an empty folder of the
+  agent's own (the Docker plugin's status, containers and logs no longer
+  need a Docker environment or a project); `resource.open` opens a file or
+  folder inside a bound folder (`path`, kept inside it, links included),
+  so the Workspace plugin's `path` works as the built-in's; a key state
+  call can read which key it is (`run.context`'s `keyScope`), so Git and
+  Docker keys that differ only in their resources keep their own state,
+  and Compose up and down keys show their toggle again.
 
 ### Changed
 
+- The GitHub, GitLab, Jira, Git, Docker, Workspace and Projects built-in
+  modules are replaced by their bundled first-party plugins
+  (`deckpilot.github`, `.gitlab`, `.jira`, `.git`, `.docker`, `.workspace`,
+  `.projects`), now their only implementation
+  (`docs/integration-modules.md`, "Moved to first-party plugins"). Existing
+  keys, actions and workflows keep their ids and are never rewritten: they
+  run again once the plugin is allowed (installed, enabled and, where it
+  asks, consented in Settings › Plugins), and until then they are
+  unavailable with the reason; there is no built-in fallback. An upgrade
+  from 0.9.x migrates as before. Settings, credentials, projects and
+  resource bindings are preserved. A build or a start without plugins has
+  no project switching: the agent refuses it with "the Projects plugin is
+  not active", and nothing is deleted.
+- In builds with plugins, Workflows and Projects are what their plugins
+  make them: the Workflows screen and its navigation entry only while
+  `deckpilot.workflows` is enabled, and the Projects screen, the active
+  project in the status bar, its dashboard card and every project control
+  (project parameters, `{project.*}` hints, "while project" conditions, a
+  workflow's project permission) only while `deckpilot.projects` is.
+  Enabling or disabling the
+  plugin shows or hides them at once. Nothing is deleted: keys that run
+  workflows still run them, and graph workflows already on keys show
+  read-only with the reason; Multi Actions stay the key editor's own. The
+  agent refuses project requests while no project context is active
+  (`projectsOff`), the app refuses workflow and project management while
+  the plugin is off (`invalid.pluginFeatureOff`), and plugin answers carry
+  the new optional `statusItems` and `dashboardCards` (no protocol
+  change). Git, Docker, Workspace, GitHub, GitLab, Jira and Projects no
+  longer have module cards or settings pages there: their plugins' pages
+  replace them. Builds without plugins keep the Workflows screen.
+- This computer's resource bindings moved from the Projects screen to
+  **Settings › Resources**, which works without the Projects plugin (the
+  core's `system.open-*` launchers use them).
 - The key header: clicking the key preview opens one menu with an **Icon**
   and a **Background** section (library, import, paste, remove; background
   library, custom colour, reset to the device default); the Background row
@@ -221,6 +326,11 @@ released either. 0.6.0 is the first version intended for publication.
 
 ### Fixed
 
+- The Notifications, GitLab and Jira plugins that come with DeckPilot are
+  now version 0.1.1: they were rebuilt with the current plugin SDK under
+  0.1.0, so an installation upgraded from 0.9.0 would have kept its 0.1.0
+  copy and shown the plugin as broken. A release check now refuses a
+  bundled plugin with the version of a released one but other files.
 - *Choose from icon library…* showed only the icons imported into the
   profile, so on a new installation it was empty: the library had no
   built-in collection and plugins' icons were never listed.

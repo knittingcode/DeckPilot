@@ -86,7 +86,7 @@
 //! | --- | --- | --- |
 //! | [`SDK_VERSION`] | this crate's semver | breaking Rust API changes bump the major (the minor while 0.x) |
 //! | [`API_LEVEL`] | 1.0 | plugin API level (design §6.5) a plugin needs by default |
-//! | [`LATEST_API_LEVEL`] | 1.6 | highest plugin API level this SDK implements |
+//! | [`LATEST_API_LEVEL`] | 1.9 | highest plugin API level this SDK implements |
 //! | [`ABI_VERSION`] | 1 | guest ABI; checked at compile time |
 #![deny(unsafe_code)]
 
@@ -110,6 +110,13 @@ pub use output::{ActionResult, IntoValue, Output, PluginError, codes};
 
 pub use deckpilot_plugin_abi::capability::{AuthScheme, Header, LogLevel, NotifySeverity};
 pub use deckpilot_plugin_abi::describe::{ParamKind, PluginDescriptor};
+/// The types of plugin API 1.9's operations ([`Context::resource_param`],
+/// [`Context::run_tool`], [`Context::current_project`],
+/// [`Context::profile`]…).
+pub use deckpilot_plugin_abi::privileged::{
+    CycleDirection, EditorPlan, Position, ProfileInfo, ProjectInfo, ResourceHandle, ResourceKind,
+    ResourceOpen, ResourceResolve, Tool, ToolOutput,
+};
 pub use deckpilot_plugin_abi::state::{
     KeyState, StateAccent as Accent, StateFailure, StateGlyph as Glyph,
     StateIndicator as Indicator, StateOutcome,
@@ -158,8 +165,18 @@ pub const API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 0 };
 /// ([`Action::controls`]), 1.4 nothing for the guest (manifest
 /// dependencies), 1.5 standard dialogs ([`Context::dialog`]), 1.6 the
 /// app's language and the plugin's own translations ([`Context::locale`],
-/// [`Context::t`]; `locales` in the manifest).
-pub const LATEST_API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 6 };
+/// [`Context::t`]; `locales` in the manifest), 1.7 and 1.8 nothing for the
+/// guest (manifest-only), 1.9 the operations of DeckPilot's own bundled
+/// plugins ([`Context::run_tool`], [`Context::resource_param`],
+/// [`Context::current_project`]…) and [`Context::profile`].
+pub const LATEST_API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 9 };
+
+/// The plugin API level that introduced [`Context::resource_param`],
+/// [`Context::run_tool`], [`Context::open_url_param`], the project
+/// operations and [`Context::profile`]: a plugin that uses them needs it.
+/// All but [`Context::profile`] need permissions only DeckPilot's own
+/// plugins shipped inside the app can declare.
+pub const PRIVILEGED_API_LEVEL: ApiLevel = ApiLevel { major: 1, minor: 9 };
 
 /// The plugin API level that introduced [`Context::locale`],
 /// [`Context::t`] and the manifest's `locales`: a plugin that uses them

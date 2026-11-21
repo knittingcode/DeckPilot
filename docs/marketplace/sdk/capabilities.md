@@ -421,15 +421,147 @@ let nonce = ctx.random_bytes(16)?;         // 1 to 64 bytes
   default generators) still do not link or panic in the guest; seed a
   deterministic generator from `ctx.random_u64()`.
 
+## Plugin API 1.9: resources, tools and the project context
+
+Plugin API 1.9 adds the operations DeckPilot's own git, docker, workspace
+and projects plugins need (`plugins/runtime/crates/abi/src/privileged.rs`;
+reviewed in
+[module-migration.md §7](../module-migration.md#plugin-api-19-security-reviews-2026-11-20)).
+All but `profile.read` need permissions only **first-party plugins shipped
+inside the app** can declare ([permissions](permissions.md#plugin-api-19-first-party-bundled-plugins-only));
+for every other plugin they are denied. They need
+`"engines": { "pluginApi": "^1.9" }` (`PRIVILEGED_API_LEVEL` in the SDK).
+
+**Status: the ABI, the SDK and the broker's decisions are in place; the
+agent carries out `resource` parameters, `resource.resolve` and
+`tool.run`.** Every
+other allowed call is answered `unsupported-op` ("… is not implemented by
+this version of DeckPilot", `CapabilityErrorKind::Unsupported`) until its
+host side lands (WP-A4 to WP-A6 of the extraction). A refused
+`resource.resolve` starts its message with the reason code:
+`no-active-project` (`unavailable`; also with the Projects feature off),
+`resource-not-set` (`unavailable`), `resource-unbound`,
+`resource-role-missing`, `not-found` (`failed`), `resource-kind-mismatch`
+and `not-permitted` (`not-permitted`), `throttled`.
+
+The agent also carries out the project operations and `profile.read`. They
+read and switch only the active profile's projects, and only while a
+project context provider is active (the Projects feature). A refusal
+starts its message with the reason code: `projects-off`, `locked`,
+`no-active-profile` and `unavailable` (`unavailable`); `not-found`,
+`no-projects`, `at-last-project` and `at-first-project` (`failed`); and
+`not-permitted` (`not-permitted`) for a switch in a run the user did not
+start. `project.select` and `project.cycle` answer the new project. The
+app's `projectChanged` event names the plugin. `profile.read` without an
+active project has no `project`; that is not an error. In a workflow run a
+switch is the run's, as a built-in project action's: only an action whose
+node declares `changesContext` may switch, nothing changes until it
+succeeds, the nodes after it run in the selected project, and the
+workflow's project scope decides whether the active project follows at its
+end; `project.current` and `profile.read` answer the run's project there.
+`resource.resolve`'s `role` is the role name the user gave the project's
+resource (not blank, no control character, at most 1,024 bytes).
+
+The agent also carries out `tool.run`. It checks the array again before
+anything runs: the denylists first (every option before `--`, as `--x`,
+`--x=v`, `--x v`, `-xv` and each letter of `-xyz`), then the host's table
+(`apps/agent/src/plugins/tools/{git,docker}.rs`), then the plugin's own
+declaration; every value and positional fills a typed slot (a ref, a
+`branch.<ref>.remote|merge` key, a remote name `git remote` lists, a
+container, service or project name, `--tail` 1-1000, a `--since`), never
+a path, a URL or anything starting with `-`. The working directory is a
+handle: a `directory` for git, which must be the repository's own
+folder, with its git directory inside it or a linked worktree's (git
+never looks above it; a `.git` file or link to another repository, a
+submodule and a bare repository are refused: `not-a-repository`,
+`tool-outside-binding`); a `directory` or compose `file` for `docker
+compose`; for docker's other commands also a `dockerEnvironment`, whose
+context is used. For compose the host adds `--project-directory`, `-f`
+(the bound file, or the folder's own `compose.yaml`, `compose.yml`,
+`docker-compose.yaml` or `docker-compose.yml`) and `--project-name` (the
+file's `name:`, else the folder's name); a plugin never passes them. A
+`git log` format must start with `format:` or `tformat:`. Limits: 10 s for git's local reads, the user's
+network time limit (default 20 s) for `ls-remote`, 30 s for docker's
+reads, the user's change time limit (default 300 s) for docker's changes;
+`timeoutMs` only shortens them, and the invocation's deadline always
+applies. Output is capped at 128 KiB (64 KiB for logs; 16 KiB of standard
+error), `truncated` says so, and URL userinfo is removed. A non-zero exit
+is a result, not an error. A refusal starts with its reason code:
+`tool-option-denied`, `tool-subcommand-denied`, `tool-not-allowed`,
+`tool-not-declared`, `tool-invalid-cwd` and `tool-outside-binding`
+(`not-permitted`),
+`tool-invalid-argument` (`bad-request`), `not-user-initiated`
+(`not-permitted`), `tool-unknown-remote`, `tool-executable-invalid`,
+`not-a-repository`, `timed-out`, `cancelled` and `revoked` (`failed`),
+`tool-not-found`
+(`unavailable`).
+
+| Operation | `Context` | Needs | Run origin | Rate |
+| --- | --- | --- | --- | --- |
+| `resource.resolve {param \| role, projectId?, kinds}` → `{handle, kind, label, displayPath?}` | `resource_param`, `resource_role`, `resolve_resource` | `resources`; `displayPath` only with `resources:paths` | any | 20 per invocation |
+| `resource.open {handle, with?, position?, editor?}` | `open_resource` | `resources:open` | user-started | 1 per second, 5 per invocation |
+| `tool.run {tool, args, cwd, timeoutMs?}` → `{exit, stdout, stderr, truncated, durationMs}` | `run_tool` | `tools:git` or `tools:docker`; `ls-remote` also `tools:git:network`; docker's `start`, `stop`, `restart`, `compose up`, `compose down`, `compose restart` also `tools:docker:modify` | any; with `modify` user-started or a work session the user started | 20 starts per second; with `modify` 6 per minute |
+| `url.openParam {param, index?}` | `open_url_param` | `openUrl:from-params` | user-started | as `url.open`, 10 per invocation |
+| `project.current` → project or `null`, `project.list` → `{projects}` | `current_project`, `projects` | `projectContext` | any | |
+| `project.select {id}`, `project.cycle {direction, wrap?}` | `select_project`, `cycle_project` | `projectContext:select` | user-started (never a lifecycle event, so no loop on `ProjectChanged`) | 2 per second |
+| `profile.read` → `{profile?, project?}` | `profile` | `profile` with the `read` scopes (every publisher) | any | |
+
+- A resource **handle** is 128 random bits (32 lowercase hex characters),
+  bound to the plugin and the invocation; the guest never receives a path
+  (unless `resources:paths`). A `resource` parameter of an action reaches
+  the guest as such a handle (a string parameter value) when it resolved to
+  a binding of one of its declared kinds; otherwise it is absent and
+  `resource.resolve {param}` says why. The label is the binding's key. A
+  binding of kind `directory`, `application` or `dockerEnvironment` is that
+  kind; one of kind `other` whose value is an absolute path is a `file`. A
+  `directory` or `file` must exist. A role resolves in the run's project,
+  or with `projectId` in a project the action's own project parameter
+  names.
+- `tool.run` takes an **argument array**, never a shell string, starting
+  with the subcommand (an array that starts with an option is refused,
+  `NoSubcommand`). The working directory is a handle. The executable, the
+  environment and the fixed options (`-C <dir> --no-pager …`) are the
+  host's; the agent checks every array against the host policy the
+  manifest declared a subset of
+  ([`tools`](permissions.md#tools)).
+- `resource.open` opens the folder or file of a handle with the
+  application of another handle of kind `application` (a binding the user
+  chose) or with the system's default handler; `editor` picks the host's
+  argument plan for `position`. The plugin never names a program, an
+  argument or a path. A handle of kind `url` (a project's URL role,
+  resolved with `resource.resolve {role, kinds: ["url"]}`) opens in the
+  default browser only, without `with`, `position` or `editor`, under the
+  URL rules of `url.openParam`; the guest sees its label, never the
+  address. Refusals start with `not-user-initiated`, `not-permitted`,
+  `resource-kind-mismatch`, `invalid-application`, `not-found`,
+  `invalid-position`, `invalid-url`, `bad-request` or `throttled`.
+- `url.openParam` opens the literal value the user stored in the
+  invocation's own parameter (http or https, no userinfo, at most 2,048
+  bytes, no template output): the plugin never passes a URL. The value must
+  be printable ASCII (an internationalized host in its `xn--` form), with
+  its host written exactly as parsed (no percent-encoded or numeric
+  shorthand host, no backslash). Private and local hosts open. Only a
+  value the user wrote as it is opens, in any run the user started (a
+  workflow's included); a default, a template, a variable or a workflow
+  node's mapped value is `url-param-not-literal`. Other refusals: `invalid-url`,
+  `url-param-missing`, `url-param-index`, `not-user-initiated`,
+  `throttled`.
+- No operation is available in a [state call](actions.md#key-state).
+- Every call, allowed or denied, is audited by operation, never by value.
+
 ## What there is not (ABI 1)
 
-No file system, process, clipboard, keychain or shell access, ever. No
+No file system, process, clipboard, keychain or shell access, ever (plugin
+API 1.9's `tool.run` is not process access: DeckPilot's own bundled
+plugins name `git` or `docker` and an argument array, and the agent's
+policy builds and checks the command). No
 ambient clock or random source: `std::time::SystemTime::now()` and random
 number generators that read the system fail or panic in the guest; the
 time and random bytes come from the agent ([Time](#time),
 [Randomness](#randomness)). No sleep and no timers. No reading of the
-active profile or project (the run context names what started the run and
-how its workflow run is going, nothing more), of variables, no device
+active profile or project before plugin API 1.9's `profile.read` (the run
+context names what started the run and how its workflow run is going,
+nothing more), no reading of variables, no device
 access, no timers or background work, no streaming HTTP, no WebSockets.
 The JavaScript design (`plugins/sdk-js`) declares several of these; ABI 1
 does not implement them.

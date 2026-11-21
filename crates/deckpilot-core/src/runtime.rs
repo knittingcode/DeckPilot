@@ -910,6 +910,7 @@ impl Engine {
         let Resolved {
             parameters,
             redactor,
+            provenance,
         } = match resolve_parameters(
             handler.definition(),
             &configured,
@@ -955,6 +956,13 @@ impl Engine {
             progress: &redact_progress,
             summary: control.summary.clone(),
         });
+        // A workflow node's overrides carry its mapped values, which a
+        // handler must not take for values the user typed.
+        let provenance = match (outputs, overrides) {
+            (Some(_), Some(overrides)) => provenance.mapped(overrides),
+            _ => provenance,
+        };
+        let base = base.with_provenance(&provenance);
         let execution = match &redacted_control {
             Some(control) => base.with_control(control),
             None => base,

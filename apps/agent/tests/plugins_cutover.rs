@@ -1,34 +1,38 @@
-//! The GitHub cut-over (`docs/marketplace/module-migration.md` §9, P9) end
-//! to end, through the real agent, the real sandboxed plugin host, real
+//! The GitHub cut-over (`docs/marketplace/module-migration.md` §9, P9, and
+//! §11 D1: the built-in `github` module is removed from the app) end to
+//! end, through the real agent, the real sandboxed plugin host, real
 //! storage and IPC, each test in its own data directory (feature
-//! `plugins`):
+//! `plugins`). What it proves: a 0.9.x configuration migrates to the
+//! plugin **without the built-in**, and nothing runs anywhere until the
+//! plugin can serve it.
 //!
-//! * an alpha.3-style `deckpilot.db`: the built-in `github` module saved
+//! * a 0.9.x (alpha.3-style) `deckpilot.db`: the `github` module row saved
 //!   and enabled with GitHub's API URL, its token stored as the credential
 //!   `github.token`, a profile with an MK.2 key bound to
-//!   `github.pull-requests` and a workflow node running `github.checks`;
+//!   `github.pull-requests` and a workflow node running `github.checks`
+//!   (legacy ids). The agent has no `github` built-in: the migration reads
+//!   that row through the frozen descriptors;
 //! * the shipped alias block (`ACTION_ALIASES`) and migration plan, and
 //!   `plugins/first-party/github` built to wasm and bundled as the
 //!   release bundles it (class `migration`, pinned with
 //!   `DECKPILOT_TEST_BUNDLED_PINS`);
 //! * GitHub never answers: the plugin's requests get canned answers
-//!   (`DECKPILOT_TEST_PLUGIN_HTTP`, which logs the credential header the
-//!   agent injected), and the built-in's go to a stand-in GitHub on
-//!   127.0.0.1 that records them (`DECKPILOT_TEST_BUILTIN_GITHUB_API`,
-//!   feature `test-hooks`: the module's stored settings, and so the
-//!   migration's eligibility, are untouched). Which of the two got a
-//!   request says which implementation ran;
+//!   (`DECKPILOT_TEST_PLUGIN_HTTP`, which logs every request with the
+//!   credential header the agent injected), so the log is everything sent;
+//! * until the plugin serves (consent pending or declined, plugins off,
+//!   plugin disabled or uninstalled) the legacy key and node are
+//!   unavailable with a clear reason, the agent keeps answering, and
+//!   nothing is sent; once consented the same stored key and node run in
+//!   the plugin with the imported token;
 //! * the consent, Retry, disable and uninstall come through the app's
-//!   requests.
+//!   requests; `deckpilot.db` is never rewritten and restarts redo nothing.
 #![cfg(feature = "plugins")]
 
 mod support;
 
-use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use deckpilot_core::{
@@ -139,7 +143,7 @@ fn artifacts() -> &'static Artifacts {
 
 // ------------------------------------------------------- GitHub's answers
 
-/// GitHub's answer to `GET <path>`, for both implementations: open pull
+/// GitHub's answer to `GET <path>`, for the plugin: open pull
 /// requests of `octo/site` and the checks of its `main`.
 fn answer(path: &str) -> (u16, Value) {
     match path {
@@ -208,98 +212,6 @@ fn plugin_routes() -> Value {
     ])
 }
 
-/// The stand-in GitHub for the built-in, on 127.0.0.1: [`answer`], and
-/// every request it got with its `authorization` header.
-struct StandIn {
-    port: u16,
-    stop: Arc<AtomicBool>,
-    seen: Arc<Mutex<Vec<String>>>,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
-
-impl StandIn {
-    fn start() -> Self {
-        let listener = support::http::bind_local();
-        let port = listener.local_addr().unwrap().port();
-        listener.set_nonblocking(true).unwrap();
-        let stop = Arc::new(AtomicBool::new(false));
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let thread = {
-            let (stop, seen) = (stop.clone(), seen.clone());
-            std::thread::spawn(move || {
-                while !stop.load(Ordering::SeqCst) {
-                    match listener.accept() {
-                        Ok((stream, _)) => {
-                            let _ = stream.set_nonblocking(false);
-                            serve(stream, &seen);
-                        }
-                        Err(_) => std::thread::sleep(Duration::from_millis(2)),
-                    }
-                }
-            })
-        };
-        Self {
-            port,
-            stop,
-            seen,
-            thread: Some(thread),
-        }
-    }
-
-    fn base(&self) -> String {
-        format!("http://127.0.0.1:{}", self.port)
-    }
-
-    fn seen(&self) -> Vec<String> {
-        self.seen.lock().unwrap().clone()
-    }
-}
-
-impl Drop for StandIn {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-    }
-}
-
-fn serve(stream: std::net::TcpStream, seen: &Mutex<Vec<String>>) {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    if reader.read_line(&mut line).is_err() {
-        return;
-    }
-    let target = line.split(' ').nth(1).unwrap_or("/").to_owned();
-    let mut authorization = String::new();
-    loop {
-        let mut header = String::new();
-        if reader.read_line(&mut header).unwrap_or(0) == 0 || header == "\r\n" {
-            break;
-        }
-        if let Some((name, value)) = header.split_once(':')
-            && name.eq_ignore_ascii_case("authorization")
-        {
-            value.trim().clone_into(&mut authorization);
-        }
-    }
-    let path = target.split('?').next().unwrap_or("/").to_owned();
-    seen.lock()
-        .unwrap()
-        .push(format!("{path}\t{authorization}"));
-    let (status, body) = answer(&path);
-    let body = body.to_string();
-    let mut stream = reader.into_inner();
-    let _ = write!(
-        stream,
-        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nDate: {DATE}\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    let _ = stream.flush();
-}
-
 // ---------------------------------------------------------- environment
 
 /// How one agent start is set up.
@@ -323,13 +235,12 @@ struct Env {
     dir: TempDir,
     paths: AgentPaths,
     key: DatabaseKey,
-    standin: StandIn,
     pull_requests: ActionInstanceId,
     checks_workflow: WorkflowId,
 }
 
 impl Env {
-    /// An alpha.3 configuration with `api_url` as the module's API URL.
+    /// A 0.9.x configuration with `api_url` as the module's API URL.
     fn new(name: &str, api_url: &str) -> Self {
         let dir = TempDir::new(name);
         let paths = AgentPaths::in_dir(dir.path().join("data"));
@@ -339,7 +250,6 @@ impl Env {
             dir,
             paths,
             key,
-            standin: StandIn::start(),
             pull_requests: ActionInstanceId::new(),
             checks_workflow: WorkflowId::new(),
         };
@@ -353,7 +263,8 @@ impl Env {
         env
     }
 
-    /// The built-in module saved and enabled, its token stored, and a
+    /// The (now removed) built-in module saved and enabled as 0.9.x saved
+    /// it, its token stored, and a
     /// profile with a key bound to `github.pull-requests` and a workflow
     /// node running `github.checks`.
     fn write_alpha3(&mut self, api_url: &str) {
@@ -505,7 +416,6 @@ impl Env {
                 "DECKPILOT_TEST_PLUGIN_OPEN_URL",
                 self.dir.path().join("opened.txt"),
             )
-            .env("DECKPILOT_TEST_BUILTIN_GITHUB_API", self.standin.base())
             .env_remove("DECKPILOT_TEST_LEGACY_FIXTURE")
             .env_remove("DECKPILOT_TEST_MIGRATION_DECISIONS")
             .env_remove("DECKPILOT_TEST_MIGRATION_EXIT")
@@ -596,51 +506,34 @@ impl Env {
         }
     }
 
-    /// Which implementation answered the requests made since `before`:
-    /// the stand-in's and the plugin's new requests.
-    fn since(&self, before: &Traffic) -> Traffic {
-        Traffic {
-            builtin: self.standin.seen()[before.builtin.len()..].to_vec(),
-            plugin: self.plugin_log().lines().collect::<Vec<_>>()[before.plugin.len()..]
-                .iter()
-                .map(|l| (*l).to_owned())
-                .collect(),
-        }
+    /// Everything sent so far: one line per request of the plugin (there
+    /// is no built-in left to send anything).
+    fn sent(&self) -> Vec<String> {
+        self.plugin_log().lines().map(str::to_owned).collect()
     }
 
-    fn traffic(&self) -> Traffic {
-        Traffic {
-            builtin: self.standin.seen(),
-            plugin: self.plugin_log().lines().map(str::to_owned).collect(),
-        }
+    /// What was sent after the first `before` requests.
+    fn since(&self, before: usize) -> Sent {
+        Sent(self.sent()[before..].to_vec())
     }
 
-    /// Presses the key until `side` serves it (the routing reaches the
+    /// Presses the key until the plugin serves it (the routing reaches the
     /// registry a moment after the migration step is recorded); returns
-    /// the requests it made. The other side must never see one.
-    async fn press_until(&self, agent: &Agent, device: &DeviceId, side: Side) -> Traffic {
+    /// the requests it made.
+    async fn press_until_served(&self, agent: &Agent, device: &DeviceId) -> Sent {
         let deadline = Instant::now() + SETTLE;
         loop {
-            let before = self.traffic();
+            let before = self.sent().len();
             let (name, status) = agent.press(device).await;
-            let new = self.since(&before);
+            let new = self.since(before);
             assert_eq!(name, "Open pull requests");
-            match side {
-                Side::Builtin if !new.builtin.is_empty() => {
-                    assert_eq!(status, ActionStatus::Succeeded, "{new:?}\n{}", agent.log());
-                    assert_eq!(new.plugin, Vec::<String>::new());
-                    return new;
-                }
-                Side::Plugin if !new.plugin.is_empty() => {
-                    assert_eq!(status, ActionStatus::Succeeded, "{new:?}\n{}", agent.log());
-                    assert_eq!(new.builtin, Vec::<String>::new());
-                    return new;
-                }
-                _ => {}
+            if !new.0.is_empty() {
+                assert_eq!(status, ActionStatus::Succeeded, "{new:?}\n{}", agent.log());
+                return new;
             }
             assert!(
                 Instant::now() < deadline,
-                "{side:?} never served the key: {status:?}, {new:?}\n{}",
+                "the plugin never served the key: {status:?}\n{}",
                 agent.log()
             );
             tokio::time::sleep(Duration::from_millis(200)).await;
@@ -648,8 +541,8 @@ impl Env {
     }
 
     /// Runs the workflow; its node's requests.
-    async fn run_checks(&self, agent: &Agent) -> Traffic {
-        let before = self.traffic();
+    async fn run_checks(&self, agent: &Agent) -> Sent {
+        let before = self.sent().len();
         let record = agent.run_workflow(self.checks_workflow).await;
         assert_eq!(
             record.summary.state,
@@ -657,38 +550,45 @@ impl Env {
             "{record:#?}\n{}",
             agent.log()
         );
-        self.since(&before)
+        self.since(before)
+    }
+
+    /// The legacy key and the workflow node are unavailable, with a reason
+    /// that contains `why`: running the action fails with it, the key
+    /// press fails, the workflow does not start (its node names it), the
+    /// agent keeps answering, and nothing is sent anywhere. The reason.
+    async fn assert_unavailable(&self, agent: &Agent, device: &DeviceId, why: &str) -> String {
+        let reason = agent.wait_unavailable(self.pull_requests, why).await;
+        let before = self.sent().len();
+        let (name, status) = agent.press(device).await;
+        assert_eq!(name, "Open pull requests");
+        assert_eq!(status, ActionStatus::Failed);
+        let refused = agent
+            .request(Request::StartWorkflow {
+                workflow: self.checks_workflow,
+            })
+            .await
+            .expect_err("the workflow does not start")
+            .to_string();
+        assert!(refused.contains(why), "{refused}");
+        let Response::Status { .. } = agent.ok(Request::GetStatus).await else {
+            panic!("the agent answers")
+        };
+        assert_eq!(self.since(before), Sent::default(), "nothing was sent");
+        reason
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Side {
-    Builtin,
-    Plugin,
-}
-
-/// Requests each implementation made: `<path>\t<authorization>` for the
-/// built-in, `<url>\tauthorization: …` for the plugin.
+/// Requests the plugin made: `<url>\tauthorization: …`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct Traffic {
-    builtin: Vec<String>,
-    plugin: Vec<String>,
-}
+struct Sent(Vec<String>);
 
-impl Traffic {
-    fn assert_builtin(&self, path: &str) {
-        assert_eq!(self.plugin, Vec::<String>::new(), "{self:?}");
-        assert!(!self.builtin.is_empty(), "{self:?}");
-        for line in &self.builtin {
-            assert!(line.starts_with(path), "{line}");
-            assert!(line.ends_with(&format!("\tBearer {TOKEN}")), "{line}");
-        }
-    }
-
+impl Sent {
+    /// Requests of the plugin, to `url` below GitHub's API, each with the
+    /// token the user stored with 0.9.x.
     fn assert_plugin(&self, url: &str) {
-        assert_eq!(self.builtin, Vec::<String>::new(), "{self:?}");
-        assert!(!self.plugin.is_empty(), "{self:?}");
-        for line in &self.plugin {
+        assert!(!self.0.is_empty(), "{self:?}");
+        for line in &self.0 {
             assert!(line.starts_with(&format!("{API}{url}")), "{line}");
             assert!(
                 line.ends_with(&format!("\tauthorization: Bearer {TOKEN}")),
@@ -823,21 +723,29 @@ impl Agent {
         }
     }
 
-    /// Runs the key's action until it is unavailable; why.
-    async fn wait_unavailable(&self, action: ActionInstanceId) -> String {
+    /// Runs the key's action until it is unavailable for a reason that
+    /// contains `why` (the routing settles a moment after a step); the
+    /// reason. It never runs meanwhile: nothing serves it.
+    async fn wait_unavailable(&self, action: ActionInstanceId, why: &str) -> String {
         let deadline = Instant::now() + SETTLE;
         loop {
-            let why = match self.request(Request::RunAction { action }).await {
+            let reason = match self.request(Request::RunAction { action }).await {
                 Err(ClientError::Agent(error)) => Some(error.message),
                 Ok(Response::ActionResult { result }) if result.status == ActionStatus::Failed => {
                     Some(result.message)
                 }
                 Ok(_) | Err(_) => None,
             };
-            if let Some(why) = why {
-                return why;
+            if let Some(reason) = &reason
+                && reason.contains(why)
+            {
+                return reason.clone();
             }
-            assert!(Instant::now() < deadline, "still available\n{}", self.log());
+            assert!(
+                Instant::now() < deadline,
+                "not unavailable because of {why:?}: {reason:?}\n{}",
+                self.log()
+            );
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
@@ -935,17 +843,21 @@ const CHECKS: &str = "/repos/octo/site/commits/main/";
 
 // ---------------------------------------------------------------- tests
 
-/// An alpha.3 GitHub user upgrades to a build with plugins: the bundled
-/// plugin is seeded and pinned, the settings copied, and the token waits
-/// for the user's consent while the built-in keeps serving. Approved
-/// through IPC, the key and the workflow node run in the plugin with the
-/// imported token. `deckpilot.db` is byte-identical, so a build without
-/// plugins still runs the built-in. The user disabling the plugin makes
-/// the legacy actions unavailable, with no fallback; uninstalling it and
-/// upgrading again does not bring it back.
+/// Why the legacy types are unavailable while the migration waits.
+const WAITS: &str = "`deckpilot.github`) waits for your consent";
+
+/// A 0.9.x GitHub user upgrades to a build without the built-in: the
+/// bundled plugin is seeded and pinned, the settings copied, and the token
+/// waits for the user's consent; meanwhile the stored key and node are
+/// unavailable (nothing sent). Approved through IPC, the same key and
+/// workflow node run in the plugin with the imported token.
+/// `deckpilot.db` is byte-identical; a build with plugins off has nothing
+/// to run them with (unavailable, saying where they come from now). The
+/// user disabling the plugin makes them unavailable again; uninstalling
+/// it and upgrading again does not bring it back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)] // one upgrade, step by step
-async fn an_alpha3_github_user_moves_to_the_plugin_after_consent() {
+async fn a_0_9_github_user_moves_to_the_plugin_after_consent() {
     let env = Env::new("plugins-cutover-alpha3", API);
     let before = env.legacy();
     let id = PluginId::parse(PLUGIN).unwrap();
@@ -955,10 +867,21 @@ async fn an_alpha3_github_user_moves_to_the_plugin_after_consent() {
     let waiting = agent
         .wait_listed(ipc::MigrationPhase::AwaitingConsent)
         .await;
-    eprintln!("step 1: {:?}, route {:?}", waiting.phase, waiting.route);
+    eprintln!(
+        "step 1: {:?}, route {:?}: {:?}",
+        waiting.phase, waiting.route, waiting.route_reason
+    );
     assert_eq!(waiting.plugin, PLUGIN);
     assert_eq!(waiting.module_name, "GitHub");
-    assert_eq!(waiting.route, MigrationRoute::Builtin);
+    // No built-in to fall back to: unavailable until the user decides.
+    assert_eq!(waiting.route, MigrationRoute::PluginWithdrawn);
+    assert!(
+        waiting
+            .route_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("waits for your consent")),
+        "{waiting:?}"
+    );
     let legacy: Vec<&str> = waiting.aliases.iter().map(|a| a.legacy.as_str()).collect();
     assert_eq!(
         legacy,
@@ -971,9 +894,14 @@ async fn an_alpha3_github_user_moves_to_the_plugin_after_consent() {
             "github.open",
         ]
     );
-    let [item] = waiting.consent.as_slice() else {
-        panic!("only the token waits: {waiting:?}");
+    // The token, and the `apiUrl` slot (a GitHub Enterprise Server the
+    // user may enter later; it allows no server now), as for GitLab.com.
+    let [slot, item] = waiting.consent.as_slice() else {
+        panic!("the token and the slot wait: {waiting:?}");
     };
+    assert_eq!(slot.key, "network:user-origin:apiUrl");
+    assert_eq!(slot.decision, ConsentDecision::Pending);
+    assert_eq!(slot.origin, None, "no server is asked for");
     assert_eq!(item.key, "credentials:token");
     assert_eq!(item.decision, ConsentDecision::Pending);
     assert_eq!(item.permission.tier, ipc::PermissionTier::High);
@@ -984,7 +912,7 @@ async fn an_alpha3_github_user_moves_to_the_plugin_after_consent() {
             credential: CREDENTIAL.into(),
             slot: "token".into(),
             hosts: vec!["api.github.com".into()],
-            user_origin: None,
+            user_origin: Some("apiUrl".into()),
         })
     );
     assert_eq!(agent.plugin_origin().await, Some(PluginOrigin::Bundled));
@@ -1010,8 +938,13 @@ async fn an_alpha3_github_user_moves_to_the_plugin_after_consent() {
         [
             ("network:api.github.com".into(), "migration:github".into()),
             ("openUrl:github.com".into(), "migration:github".into()),
+            (
+                "openUrl:user-origin:apiUrl".into(),
+                "migration:github".into()
+            ),
         ],
-        "derived: the built-in's origin and web host; never the token"
+        "derived: the built-in's origin and web host, and opening pages of a server the \
+         user allows (which opens nothing before one is allowed); never the token"
     );
     assert_eq!(store.credentials(&id).unwrap(), [], "nothing imported yet");
     let settings = store.settings(&id).unwrap();
@@ -1019,20 +952,20 @@ async fn an_alpha3_github_user_moves_to_the_plugin_after_consent() {
     assert_eq!(settings["timeoutSeconds"], json!(20));
     drop(store);
 
-    // Meanwhile the built-in serves the key and the node, with the token
-    // of `github.token`.
+    // Meanwhile the stored key and node are unavailable, saying why.
     let device = agent.device().await;
-    env.press_until(&agent, &device, Side::Builtin)
-        .await
-        .assert_builtin(SEARCH);
-    env.run_checks(&agent).await.assert_builtin(CHECKS);
-    eprintln!("step 1: the key and the node ran the built-in");
+    let why = env.assert_unavailable(&agent, &device, WAITS).await;
+    eprintln!("step 1: the key and the node are unavailable: {why}");
+    assert_eq!(env.sent(), Vec::<String>::new(), "nothing was sent");
 
     // 2. The user approves in the app's consent dialog.
-    let done = agent.decide(&["credentials:token"], &[]).await;
+    let done = agent
+        .decide(&["credentials:token", "network:user-origin:apiUrl"], &[])
+        .await;
     eprintln!("step 2: {:?}, route {:?}", done.phase, done.route);
     assert_eq!(done.phase, ipc::MigrationPhase::CutOver, "{done:?}");
     assert_eq!(done.route, MigrationRoute::Plugin);
+    assert_eq!(done.route_reason, None);
     assert_eq!(agent.plugin_state().await, Some(PluginState::Enabled));
     assert_eq!(
         env.plugin_store().credentials(&id).unwrap().len(),
@@ -1040,8 +973,9 @@ async fn an_alpha3_github_user_moves_to_the_plugin_after_consent() {
         "the token, imported into the slot"
     );
 
-    // The same key and node now run the plugin, with the imported token.
-    env.press_until(&agent, &device, Side::Plugin)
+    // The same stored key and node now run the plugin, with the imported
+    // token.
+    env.press_until_served(&agent, &device)
         .await
         .assert_plugin(SEARCH);
     env.run_checks(&agent).await.assert_plugin(CHECKS);
@@ -1052,57 +986,54 @@ async fn an_alpha3_github_user_moves_to_the_plugin_after_consent() {
     assert_eq!(env.legacy(), before);
     eprintln!("step 3: deckpilot.db unchanged");
 
-    // 4. An older build (plugins off) on the same data: the built-in.
+    // 4. Plugins off on the same data: nothing can run them, and the
+    // reason says where they come from now.
     let agent = env.start(Start { plugins_off: true }).await;
     let device = agent.device().await;
-    env.press_until(&agent, &device, Side::Builtin)
-        .await
-        .assert_builtin(SEARCH);
-    env.run_checks(&agent).await.assert_builtin(CHECKS);
+    let why = env
+        .assert_unavailable(&agent, &device, "now comes from")
+        .await;
+    eprintln!("step 4: plugins off: {why}");
+    assert!(
+        why.contains("`github.pull-requests`") && why.contains(PLUGIN),
+        "{why}"
+    );
     agent.stop().await;
-    eprintln!("step 4: plugins off, the built-in ran");
 
     // 5. Upgrading again: still the plugin, nothing redone.
     let agent = env.start(Start::default()).await;
     let device = agent.device().await;
-    env.press_until(&agent, &device, Side::Plugin)
+    env.press_until_served(&agent, &device)
         .await
         .assert_plugin(SEARCH);
     assert_eq!(env.migration().unwrap().phase, MigrationPhase::CutOver);
+    let info = agent.listed().await;
+    assert_eq!(info.consent, [], "nothing asked again: {info:?}");
 
-    // 6. The user disables the plugin: unavailable, no fallback.
+    // 6. The user disables the plugin: unavailable, nothing to fall back to.
     agent
         .ok(Request::DisablePlugin {
             plugin: PLUGIN.into(),
         })
         .await;
-    let why = agent.wait_unavailable(env.pull_requests).await;
+    let why = env
+        .assert_unavailable(&agent, &device, "`deckpilot.github`) is disabled")
+        .await;
     eprintln!("step 6: disabled: {why}");
-    assert!(why.contains("disabled"), "{why}");
     let info = agent.listed().await;
     assert_eq!(info.route, MigrationRoute::PluginWithdrawn, "{info:?}");
-    let before_press = env.traffic();
-    let (_, status) = agent.press(&device).await;
-    assert_eq!(status, ActionStatus::Failed);
-    // The workflow does not start: its node names the disabled plugin.
-    let refused = agent
-        .request(Request::StartWorkflow {
-            workflow: env.checks_workflow,
+
+    // 6b. Enabled again: the plugin serves again.
+    agent
+        .ok(Request::EnablePlugin {
+            plugin: PLUGIN.into(),
+            consent: Vec::new(),
         })
+        .await;
+    env.press_until_served(&agent, &device)
         .await
-        .unwrap_err();
-    eprintln!("step 6: the workflow: {refused}");
-    assert!(
-        refused
-            .to_string()
-            .contains("`deckpilot.github`) is disabled"),
-        "{refused}"
-    );
-    assert_eq!(
-        env.since(&before_press),
-        Traffic::default(),
-        "neither implementation ran"
-    );
+        .assert_plugin(SEARCH);
+    assert_eq!(agent.listed().await.route, MigrationRoute::Plugin);
 
     // 7. The user uninstalls it; an upgrade does not bring it back.
     agent
@@ -1111,23 +1042,26 @@ async fn an_alpha3_github_user_moves_to_the_plugin_after_consent() {
             keep: deckpilot_ipc::plugins::PluginRetention::default(),
         })
         .await;
-    agent.wait_unavailable(env.pull_requests).await;
+    agent.wait_unavailable(env.pull_requests, PLUGIN).await;
     agent.stop().await;
     env.stage();
     for _ in 0..2 {
         let agent = env.start(Start::default()).await;
-        let why = agent.wait_unavailable(env.pull_requests).await;
+        let device = agent.device().await;
+        let why = env.assert_unavailable(&agent, &device, PLUGIN).await;
         assert_eq!(agent.plugin_state().await, None, "{}", agent.log());
         let info = agent.listed().await;
         eprintln!(
-            "step 7: after uninstall and upgrade: {:?}, route {:?}: {why}",
-            info.phase, info.route
+            "step 7: after uninstall and upgrade: {:?}, route {:?} ({:?}): {why}",
+            info.phase, info.route, info.route_reason
         );
         assert_eq!(info.route, MigrationRoute::PluginWithdrawn, "{info:?}");
-        let quiet = env.traffic();
-        let (_, status) = agent.press(&agent.device().await).await;
-        assert_eq!(status, ActionStatus::Failed);
-        assert_eq!(env.since(&quiet), Traffic::default());
+        assert!(
+            info.route_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("uninstalled")),
+            "{info:?}"
+        );
         agent.stop().await;
     }
     assert_eq!(
@@ -1139,81 +1073,156 @@ async fn an_alpha3_github_user_moves_to_the_plugin_after_consent() {
     assert_eq!(env.legacy(), before);
 }
 
-/// A GitHub Enterprise user stays on the built-in: not eligible (G2),
-/// nothing installed, the key served by the built-in.
+/// A GitHub Enterprise user is asked for the token **and the server**
+/// (the `apiUrl` slot), never derived; the stored key and node are
+/// unavailable until both are allowed, and declining the server keeps
+/// them unavailable (saying so), across restarts, with nothing sent. The
+/// full upgrade to the plugin at that server is
+/// `plugins_cutover_servers.rs`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_github_enterprise_user_keeps_the_builtin() {
-    let env = Env::new("plugins-cutover-ghe", "https://ghe.example.com/api/v3");
+async fn a_github_enterprise_user_is_asked_for_the_server() {
+    const GHE: &str = "https://ghe.example.com/api/v3";
+    let env = Env::new("plugins-cutover-ghe", GHE);
+    let id = PluginId::parse(PLUGIN).unwrap();
     let before = env.legacy();
     let agent = env.start(Start::default()).await;
-    let info = agent.wait_listed(ipc::MigrationPhase::NotEligible).await;
-    eprintln!("GHE: {:?}: {:?}", info.phase, info.reason);
-    assert!(
-        info.reason.as_deref().is_some_and(|r| r.contains("apiUrl")),
-        "{info:?}"
+    let info = agent
+        .wait_listed(ipc::MigrationPhase::AwaitingConsent)
+        .await;
+    eprintln!("GHE: {:?}: {:?}", info.phase, info.consent);
+    let pending: Vec<&str> = info
+        .consent
+        .iter()
+        .filter(|i| i.decision == ConsentDecision::Pending)
+        .map(|i| i.key.as_str())
+        .collect();
+    for key in [
+        "credentials:token",
+        "network:user-origin:apiUrl",
+        "network:api.github.com",
+        "openUrl:github.com",
+    ] {
+        assert!(pending.contains(&key), "{key} is not asked: {pending:?}");
+    }
+    let server = info
+        .consent
+        .iter()
+        .find(|i| i.key == "network:user-origin:apiUrl")
+        .and_then(|i| i.origin.as_ref())
+        .unwrap();
+    assert_eq!(server.origin, GHE);
+    assert!(!server.private_network);
+    assert_eq!(info.route, MigrationRoute::PluginWithdrawn);
+    assert_eq!(env.plugin_store().credentials(&id).unwrap(), []);
+    assert_eq!(
+        env.plugin_store().user_origins(&id).unwrap().len(),
+        0,
+        "no server allowed"
     );
-    assert_eq!(info.route, MigrationRoute::Builtin);
-    assert_eq!(info.consent, []);
-    assert_eq!(agent.plugin_state().await, None, "never installed");
     let device = agent.device().await;
-    env.press_until(&agent, &device, Side::Builtin)
-        .await
-        .assert_builtin(SEARCH);
-    env.run_checks(&agent).await.assert_builtin(CHECKS);
+    env.assert_unavailable(&agent, &device, WAITS).await;
+
+    // Everything but the server: declined, still unavailable.
+    let others: Vec<&str> = pending
+        .iter()
+        .copied()
+        .filter(|k| *k != "network:user-origin:apiUrl")
+        .collect();
+    let declined = agent.decide(&others, &["network:user-origin:apiUrl"]).await;
+    eprintln!(
+        "GHE declined: {:?}: {:?}; route {:?}: {:?}",
+        declined.phase, declined.reason, declined.route, declined.route_reason
+    );
+    assert_eq!(declined.phase, ipc::MigrationPhase::NotEligible);
+    assert!(declined.can_retry);
+    assert!(
+        declined
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("its keys are unavailable until you ask again")),
+        "{declined:?}"
+    );
+    assert_eq!(declined.route, MigrationRoute::PluginWithdrawn);
+    assert!(
+        declined
+            .route_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("you declined what deckpilot.github needs")),
+        "{declined:?}"
+    );
+    assert_eq!(
+        env.plugin_store().user_origins(&id).unwrap().len(),
+        0,
+        "no server allowed"
+    );
+    env.assert_unavailable(&agent, &device, PLUGIN).await;
     agent.stop().await;
     // Again at the next start.
     let agent = env.start(Start::default()).await;
-    assert_eq!(agent.listed().await.phase, ipc::MigrationPhase::NotEligible);
+    let info = agent.listed().await;
+    assert_eq!(info.phase, ipc::MigrationPhase::NotEligible);
+    assert_eq!(info.route, MigrationRoute::PluginWithdrawn);
     let device = agent.device().await;
-    env.press_until(&agent, &device, Side::Builtin)
-        .await
-        .assert_builtin(SEARCH);
+    env.assert_unavailable(&agent, &device, PLUGIN).await;
     agent.stop().await;
     assert_eq!(env.legacy(), before);
-    assert_eq!(env.plugin_log(), "", "the plugin never ran");
+    assert_eq!(env.plugin_log(), "", "nothing was ever sent");
 }
 
-/// The user declines the token: the built-in keeps serving, across
-/// restarts, without asking again, until Retry asks again.
+/// The user declines the token: the stored key and node stay
+/// unavailable (saying the user declined), across restarts, without
+/// asking again, until Retry asks again; approved, the plugin serves.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn declining_keeps_the_builtin_until_retry() {
+async fn declining_keeps_the_legacy_types_unavailable_until_retry() {
     let env = Env::new("plugins-cutover-decline", API);
     let id = PluginId::parse(PLUGIN).unwrap();
     let agent = env.start(Start::default()).await;
     agent
         .wait_listed(ipc::MigrationPhase::AwaitingConsent)
         .await;
-    let declined = agent.decide(&[], &["credentials:token"]).await;
+    let declined = agent
+        .decide(&["network:user-origin:apiUrl"], &["credentials:token"])
+        .await;
     eprintln!("declined: {:?}: {:?}", declined.phase, declined.reason);
     assert_eq!(declined.phase, ipc::MigrationPhase::NotEligible);
     assert!(declined.can_retry);
-    assert_eq!(declined.route, MigrationRoute::Builtin);
+    assert_eq!(declined.route, MigrationRoute::PluginWithdrawn);
     assert_eq!(env.plugin_store().credentials(&id).unwrap(), []);
     let device = agent.device().await;
-    env.press_until(&agent, &device, Side::Builtin)
-        .await
-        .assert_builtin(SEARCH);
+    env.assert_unavailable(&agent, &device, PLUGIN).await;
     agent.stop().await;
 
     let agent = env.start(Start::default()).await;
     let info = agent.listed().await;
     assert_eq!(info.phase, ipc::MigrationPhase::NotEligible, "{info:?}");
-    assert_eq!(info.consent[0].decision, ConsentDecision::Declined);
+    let token = |info: &ModuleMigrationInfo| {
+        info.consent
+            .iter()
+            .find(|i| i.key == "credentials:token")
+            .map(|i| i.decision)
+    };
+    assert_eq!(token(&info), Some(ConsentDecision::Declined), "{info:?}");
     let device = agent.device().await;
-    env.press_until(&agent, &device, Side::Builtin)
-        .await
-        .assert_builtin(SEARCH);
-    env.run_checks(&agent).await.assert_builtin(CHECKS);
+    env.assert_unavailable(&agent, &device, PLUGIN).await;
+    assert_eq!(env.sent(), Vec::<String>::new(), "nothing was sent");
 
     let again = agent.retry().await;
     eprintln!("retry: {:?}", again.phase);
     assert_eq!(again.phase, ipc::MigrationPhase::AwaitingConsent);
-    assert_eq!(again.consent[0].decision, ConsentDecision::Pending);
+    assert_eq!(token(&again), Some(ConsentDecision::Pending), "{again:?}");
     assert_eq!(env.plugin_store().credentials(&id).unwrap(), []);
-    let done = agent.decide(&["credentials:token"], &[]).await;
+    env.assert_unavailable(&agent, &device, WAITS).await;
+    let pending: Vec<&str> = again
+        .consent
+        .iter()
+        .filter(|i| i.decision == ConsentDecision::Pending)
+        .map(|i| i.key.as_str())
+        .collect();
+    let done = agent.decide(&pending, &[]).await;
     assert_eq!(done.phase, ipc::MigrationPhase::CutOver, "{done:?}");
-    env.press_until(&agent, &device, Side::Plugin)
+    env.press_until_served(&agent, &device)
         .await
         .assert_plugin(SEARCH);
+    env.run_checks(&agent).await.assert_plugin(CHECKS);
     agent.stop().await;
 }

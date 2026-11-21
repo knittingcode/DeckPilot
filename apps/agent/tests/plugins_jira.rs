@@ -1,6 +1,7 @@
-//! `deckpilot.jira` against the built-in `jira` module it replaces
-//! (`docs/marketplace/module-migration.md` §9, P11), on the same Jira
-//! answers (feature `plugins`):
+//! `deckpilot.jira`, the first-party plugin that replaced the removed
+//! built-in `jira` module (`docs/marketplace/module-migration.md` §9,
+//! P11), as a regression test of every action on known Jira answers
+//! (feature `plugins`):
 //!
 //! * the plugin (`plugins/first-party/jira`) is built to wasm with the
 //!   `guest` profile and bundled as an installed application ships it;
@@ -9,26 +10,25 @@
 //!   every action runs in the real sandboxed host, invoked over IPC like
 //!   the configuration app does;
 //! * its HTTP goes to canned answers (`DECKPILOT_TEST_PLUGIN_HTTP`, feature
-//!   `test-hooks`) and its opened pages to a file
+//!   `test-hooks`) built from one function ([`answer`]) for exactly the
+//!   requests the scenarios make (the searches' templates and pages, as
+//!   the built-in sent them), and its opened pages to a file
 //!   (`DECKPILOT_TEST_PLUGIN_OPEN_URL`): never a real Jira, never a
-//!   browser;
-//! * the built-in runs in this process against a stand-in Jira on
-//!   127.0.0.1 (its site, allowed on a private host) that serves the same
-//!   answers from the same function ([`answer`]), with a recording
-//!   launcher. It runs first: the plugin's canned answers are exactly the
-//!   requests the built-in sent, so a request the built-in does not make
-//!   has no answer;
-//! * every action's result is compared: the same status, message, outputs
-//!   and error code, and the same requests in the same order. Where the
-//!   two cannot agree the difference is listed in [`DIFFERENT_MESSAGES`]
-//!   with its reason (and in `plugins/first-party/jira/README.md`);
+//!   browser. A request beyond those has no answer, and fails the test;
+//! * every scenario's result is checked: status, error code, and on
+//!   success the message and the key outputs. The plugin was proven to
+//!   answer exactly as the built-in did, with the same requests, before
+//!   the built-in was removed (§11 D2); these expectations are those
+//!   answers. Its action definitions are checked against the built-in's
+//!   frozen 0.9.0 contract (`crates/deckpilot-modules/legacy/jira.json`),
+//!   as the cut-over's aliases need;
 //! * twice: Jira Cloud (REST API 3, Basic, token-paged search) and a Data
 //!   Center under a path (REST API 2, Bearer, totals);
 //! * Jira has no fixed host: nothing is sent, and no page opens, before
 //!   the user allowed the server, after the site changed or after the
 //!   consent was revoked;
 //! * network failures (a name that does not resolve, a certificate that
-//!   is not trusted) report the built-in's transport code on both sides.
+//!   is not trusted) end in the transport's code and retryability.
 //!
 //! The plugin is pinned here as a `default`-class plugin and invoked by its
 //! own action types: `migration`-class plugins are installed only by the
@@ -36,24 +36,17 @@
 //! after a computer's migration is cut over.
 #![cfg(feature = "plugins")]
 
-#[path = "support/https.rs"]
-mod https;
 #[path = "support/parity.rs"]
 mod parity;
 mod support;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::fmt::Write as _;
 use std::time::Duration;
 
-use base64::Engine as _;
-use deckpilot_core::alias::{self, ActionAlias, ParamRule};
-use deckpilot_core::launch::RecordingLauncher;
-use deckpilot_core::{ActionParameters, ModuleRegistry, Os, ParameterValue};
 use deckpilot_ipc::plugins::{PluginActionOutcome, PluginSecret, PluginState, UserOriginStatus};
 use deckpilot_ipc::{Request, Response};
-use deckpilot_modules::jira;
-use parity::{Answer, Outcome, Server, blocking, compare, json_answer, query};
+use parity::{Answer, Expect, json_answer, query};
 use serde_json::{Value, json};
 
 const PLUGIN: parity::Plugin = parity::Plugin {
@@ -67,8 +60,7 @@ const GRANTS: &[&str] = &[
     "credentials:credential",
     "openUrl:user-origin:siteUrl",
 ];
-/// What the user stores for Jira Cloud (`email:api-token`), for the plugin
-/// and for the built-in.
+/// What the user stores for Jira Cloud (`email:api-token`).
 const CLOUD_SECRET: &str = "dev@example.com:ATATT-parity-5e1d-not-a-real-token";
 /// A Data Center personal access token.
 const DC_SECRET: &str = "dc-pat-parity-93ab-not-a-real-token";
@@ -79,23 +71,8 @@ const DC: &str = "https://jira.example.com/jira";
 /// What the plugin answers may use of the IPC message limit.
 const ANSWER_BUDGET: usize = deckpilot_ipc::framing::MAX_MESSAGE_BYTES / 2;
 
-/// Failures whose message differs, by scenario, and why. The code is the
-/// same.
-const DIFFERENT_MESSAGES: &[(&str, &str)] = &[
-    (
-        "issue WEB-401",
-        "the built-in names the credential id (`jira.token`); the plugin has a slot, not an id",
-    ),
-    (
-        "myself without a credential",
-        "the built-in names the credential id and Settings › HTTP › Credentials; the plugin \
-         names its slot in Settings › Plugins › Jira",
-    ),
-    (
-        "myself without a site",
-        "each names where its site is set: Settings › Modules › Jira, Settings › Plugins › Jira",
-    ),
-];
+/// The built-in's frozen 0.9.0 contract.
+const CONTRACT: &str = include_str!("../../../crates/deckpilot-modules/legacy/jira.json");
 
 // --------------------------------------------------------- Jira's answers
 
@@ -215,10 +192,9 @@ fn issue(key: &str) -> Answer {
     }
 }
 
-/// The stand-in Jira: the answer to `GET <site><target>`, where `target`
-/// is the path below the site with the query. The plugin's answers and
-/// the built-in's (on 127.0.0.1) come from here, so both see the same
-/// data. REST API 3 answers as Jira Cloud, 2 as a Data Center.
+/// Jira's answer to `GET <site><target>`, where `target` is the path below
+/// the site with the query: the plugin's canned answers come from here.
+/// REST API 3 answers as Jira Cloud, 2 as a Data Center.
 fn answer(_site: &str, target: &str) -> Answer {
     let path = target.split('?').next().unwrap();
     let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
@@ -240,256 +216,304 @@ fn answer(_site: &str, target: &str) -> Answer {
 
 // ------------------------------------------------------------ scenarios
 
-/// An action, its parameters, and a name for messages.
+/// An action, its parameters, a name for messages, and what it ends in.
 struct Scenario {
     name: &'static str,
     action: &'static str,
     params: Value,
+    expect: Expect,
 }
 
-fn scenario(name: &'static str, action: &'static str, params: Value) -> Scenario {
+fn scenario(name: &'static str, action: &'static str, params: Value, expect: Expect) -> Scenario {
     Scenario {
         name,
         action,
         params,
+        expect,
     }
 }
 
 /// Every read action, on success and on each failure Jira can answer.
+/// `{site}` in an expectation is the Jira site.
+#[allow(clippy::too_many_lines)] // one list
 fn readings() -> Vec<Scenario> {
-    let issue = |name, key: &str| scenario(name, "issue", json!({ "issue": key }));
+    let issue = |name, key: &str, expect| scenario(name, "issue", json!({ "issue": key }), expect);
+    let failed = Expect::Failed;
     vec![
-        scenario("myself", "myself", json!({})),
-        issue("issue WEB-12", "web-12"),
-        issue("issue OPS-1 (fallbacks)", " OPS-1 "),
-        issue("issue not a key", "WEB"),
-        issue("issue WEB-404", "WEB-404"),
-        issue("issue WEB-403", "WEB-403"),
-        issue("issue WEB-500", "WEB-500"),
-        issue("issue WEB-429", "WEB-429"),
-        issue("issue WEB-401", "WEB-401"),
-        issue("issue WEB-200 (not JSON)", "WEB-200"),
-        issue("issue WEB-201 (another shape)", "WEB-201"),
-        scenario("issues assigned to you", "issues", json!({})),
+        scenario(
+            "myself",
+            "myself",
+            json!({}),
+            Expect::Ok(
+                "signed in to Jira as Dev Eloper",
+                &[
+                    ("displayName", "Dev Eloper"),
+                    ("account", "5b10ac8d82e05b22cc7d4ef5"),
+                    ("timeZone", "Europe/Warsaw"),
+                ],
+            ),
+        ),
+        issue(
+            "issue WEB-12",
+            "web-12",
+            Expect::Ok(
+                "WEB-12: In Progress",
+                &[
+                    ("key", "WEB-12"),
+                    ("summary", "Fix the  login page"),
+                    ("status", "In Progress"),
+                    ("statusCategory", "in-progress"),
+                    ("type", "Bug"),
+                    ("priority", "High"),
+                    ("assignee", "Dev  Eloper"),
+                    ("updated", "2026-11-15T08:00:00.000+0100"),
+                    ("url", "{site}/browse/WEB-12"),
+                ],
+            ),
+        ),
+        issue(
+            "issue OPS-1 (fallbacks)",
+            " OPS-1 ",
+            Expect::Ok(
+                "OPS-1: Done",
+                &[
+                    ("key", "OPS-1"),
+                    ("summary", ""),
+                    ("status", "Done"),
+                    ("statusCategory", "done"),
+                    ("url", "{site}/browse/OPS-1"),
+                ],
+            ),
+        ),
+        issue("issue not a key", "WEB", failed("invalid-issue-key")),
+        issue("issue WEB-404", "WEB-404", failed("not-found")),
+        issue("issue WEB-403", "WEB-403", failed("forbidden")),
+        issue("issue WEB-500", "WEB-500", failed("jira-error")),
+        issue("issue WEB-429", "WEB-429", failed("rate-limited")),
+        issue("issue WEB-401", "WEB-401", failed("unauthorized")),
+        issue(
+            "issue WEB-200 (not JSON)",
+            "WEB-200",
+            failed("invalid-response"),
+        ),
+        issue(
+            "issue WEB-201 (another shape)",
+            "WEB-201",
+            failed("invalid-response"),
+        ),
+        scenario(
+            "issues assigned to you",
+            "issues",
+            json!({}),
+            Expect::Ok(
+                "3 issues assigned to you",
+                &[
+                    ("count", "3"),
+                    ("countExact", "true"),
+                    ("listed", "3"),
+                    ("truncated", "false"),
+                    ("firstKey", "WEB-999"),
+                    ("firstUrl", "{site}/browse/WEB-999"),
+                    (
+                        "items",
+                        "WEB-999 Fix the  login page [In Review] (@Dev 1)\n\
+                         WEB-998 Task number 2 [To Do] (@Dev 2)\n\
+                         WEB-997 Task number 3 [In Review] (unassigned)",
+                    ),
+                ],
+            ),
+        ),
         scenario(
             "issues of a project, 5 listed",
             "issues",
             json!({"project": "web", "limit": 5}),
+            Expect::Ok(
+                "130 issues assigned to you in WEB",
+                &[
+                    ("count", "130"),
+                    ("countExact", "true"),
+                    ("listed", "5"),
+                    ("truncated", "true"),
+                    ("firstKey", "WEB-999"),
+                    ("firstUrl", "{site}/browse/WEB-999"),
+                ],
+            ),
         ),
         scenario(
             "issues of a project, 100 listed",
             "issues",
             json!({"project": "WEB", "limit": 100, "includeDone": true}),
+            Expect::Ok(
+                "130 issues assigned to you in WEB",
+                &[
+                    ("count", "130"),
+                    ("countExact", "true"),
+                    ("listed", "100"),
+                    ("truncated", "true"),
+                    ("firstKey", "WEB-999"),
+                    ("firstUrl", "{site}/browse/WEB-999"),
+                ],
+            ),
         ),
         scenario(
             "issues of a saved filter",
             "issues",
             json!({"source": "filter", "filterId": 12345, "includeDone": true}),
+            Expect::Ok(
+                "7 issues in filter 12345",
+                &[
+                    ("count", "7"),
+                    ("countExact", "true"),
+                    ("listed", "7"),
+                    ("truncated", "false"),
+                    ("firstKey", "WEB-999"),
+                    ("firstUrl", "{site}/browse/WEB-999"),
+                ],
+            ),
         ),
         scenario(
             "issues of a filter with more than are counted",
             "issues",
             json!({"source": "filter", "filterId": 777}),
+            Expect::Ok(
+                "at least 500 issues in filter 777",
+                &[
+                    ("count", "500"),
+                    ("countExact", "false"),
+                    ("listed", "20"),
+                    ("truncated", "true"),
+                    ("firstKey", "WEB-999"),
+                    ("firstUrl", "{site}/browse/WEB-999"),
+                ],
+            ),
         ),
         scenario(
             "issues of a filter that does not exist",
             "issues",
             json!({"source": "filter", "filterId": 999}),
+            failed("jira-error"),
         ),
         scenario(
             "issues of a filter without its number",
             "issues",
             json!({"source": "filter"}),
+            failed("invalid-parameters"),
         ),
         scenario(
             "issues of a project that is no key",
             "issues",
             json!({"project": "A\" OR 1=1"}),
+            failed("invalid-project"),
         ),
     ]
 }
 
-/// Issues whose request gets no answer, and the transport's code: canned
-/// for the plugin, real for the built-in (a name under `.invalid`, which
-/// never resolves; a local HTTPS server whose throwaway CA the built-in
-/// does not trust).
+/// Issues whose request gets no answer, and the transport's code (a name
+/// that never resolves, a certificate that is not trusted), canned.
 const NETWORK_FAILURES: &[(&str, &str)] = &[("NET-1", "dns-failed"), ("NET-2", "tls-failed")];
 
-// ------------------------------------------------------------- built-in
+/// The issues the scenarios read.
+const ISSUES: &[&str] = &[
+    "WEB-12", "OPS-1", "WEB-404", "WEB-403", "WEB-500", "WEB-429", "WEB-401", "WEB-200", "WEB-201",
+];
 
-/// The built-in module, configured with `config` and the launcher, as the
-/// agent registers it.
-fn builtin(config: &ActionParameters, launcher: &Arc<RecordingLauncher>) -> ModuleRegistry {
-    let mut modules = ModuleRegistry::new(Os::current());
-    modules
-        .register(Box::new(jira::JiraModule::with_launcher(launcher.clone())))
-        .unwrap();
-    modules.set_config(&jira::module_id(), config).unwrap();
-    modules
-}
+/// The searches the scenarios make: saved filter, project, done issues
+/// included, issues listed.
+const SEARCHES: &[(Option<i64>, Option<&str>, bool, usize)] = &[
+    (None, None, false, 20),
+    (None, Some("WEB"), false, 5),
+    (None, Some("WEB"), true, 100),
+    (Some(12345), None, true, 20),
+    (Some(777), None, false, 20),
+    (Some(999), None, false, 20),
+];
 
-fn config(site: &str, deployment: &str) -> ActionParameters {
-    ActionParameters::new()
-        .with(jira::SITE_URL, ParameterValue::Text(site.to_owned()))
-        .with(
-            jira::DEPLOYMENT,
-            ParameterValue::Choice(deployment.to_owned()),
-        )
-        .with(jira::ALLOW_PRIVATE, ParameterValue::Boolean(true))
-}
+/// The fields read for a list.
+const LIST_FIELDS: &str = "summary,status,assignee";
+/// Cloud counts by pages of keys: how many, and how large.
+const COUNT_PAGES: usize = 5;
+const COUNT_PAGE_SIZE: usize = 100;
 
-fn run_builtin(
-    modules: &ModuleRegistry,
-    action: &str,
-    params: &Value,
-    secret: Option<&str>,
-) -> Outcome {
-    parity::run_builtin(
-        modules,
-        &format!("jira.{action}"),
-        &parity::parameters(params, &["source"]),
-        jira::DEFAULT_CREDENTIAL,
-        secret,
-    )
-}
-
-/// The aliases the cut-over adds (`crates/deckpilot-modules/tests/contracts.rs`).
-fn jira_alias(action: &str) -> ActionAlias {
-    let legacy: &'static str = Box::leak(format!("jira.{action}").into_boxed_str());
-    let target: &'static str = Box::leak(format!("{ID}.{action}").into_boxed_str());
-    ActionAlias {
-        legacy,
-        target,
-        module: "jira",
-        plugin: ID,
-        since: "0.6.0",
-        params: if action == "open" {
-            &[]
-        } else {
-            &[ParamRule::DropIfDefault("credential")]
-        },
+/// The search's JQL, as Jira's search templates make it.
+fn jql(filter: Option<i64>, project: Option<&str>, include_done: bool) -> String {
+    let mut jql = filter.map_or_else(
+        || "assignee = currentUser()".to_owned(),
+        |id| format!("filter = {id}"),
+    );
+    if let Some(project) = project {
+        let _ = write!(jql, " AND project = \"{project}\"");
     }
+    if !include_done {
+        jql.push_str(" AND statusCategory != Done");
+    }
+    jql.push_str(" ORDER BY updated DESC");
+    jql
 }
 
-/// One Jira: the site the user enters for the plugin, the built-in's
-/// stand-in for it, and what is asked of both.
-struct Deployment {
-    /// `cloud` or `data-center`.
-    kind: &'static str,
-    /// The plugin's site.
-    site: &'static str,
-    secret: &'static str,
-    /// The `Authorization` header a request carries.
-    authorization: String,
-    server: Server,
-    scenarios: Vec<Scenario>,
-    /// What the built-in answered, in the order of `scenarios`.
-    builtin: Vec<Outcome>,
+fn search_target(cloud: bool, jql: &str, size: usize, fields: &str, token: Option<&str>) -> String {
+    let mut query = url::form_urlencoded::Serializer::new(String::new());
+    query.extend_pairs([
+        ("jql", jql),
+        ("maxResults", &size.to_string()),
+        ("fields", fields),
+    ]);
+    if let Some(token) = token {
+        query.append_pair("nextPageToken", token);
+    }
+    let path = if cloud {
+        "/rest/api/3/search/jql"
+    } else {
+        "/rest/api/2/search"
+    };
+    format!("{path}?{}", query.finish())
 }
 
-impl Deployment {
-    /// Starts the stand-in and runs every scenario on the built-in.
-    fn start(
-        kind: &'static str,
-        site: &'static str,
-        secret: &'static str,
-        only: Option<&[&str]>,
-        launcher: &Arc<RecordingLauncher>,
-    ) -> Self {
-        let prefix = site
-            .strip_prefix("https://")
-            .and_then(|rest| rest.find('/').map(|at| &rest[at..]))
-            .unwrap_or("");
-        let server = Server::start(prefix, answer, "authorization");
-        let modules = builtin(&config(&server.base(), kind), launcher);
-        let scenarios: Vec<Scenario> = readings()
-            .into_iter()
-            .filter(|s| only.is_none_or(|only| only.contains(&s.name)))
-            .collect();
-        let local = format!("{}/", server.base());
-        let shown = format!("{site}/");
-        let builtin = scenarios
-            .iter()
-            .map(|s| {
-                blocking(|| run_builtin(&modules, s.action, &s.params, Some(secret)))
-                    .replacing(&local, &shown)
-            })
-            .collect();
-        let authorization = if kind == "cloud" {
-            format!(
-                "Basic {}",
-                base64::engine::general_purpose::STANDARD.encode(secret)
-            )
-        } else {
-            format!("Bearer {secret}")
-        };
-        Self {
-            kind,
-            site,
-            secret,
-            authorization,
-            server,
-            scenarios,
-            builtin,
+fn next_token(answer: &Answer) -> Option<String> {
+    let body: Value = serde_json::from_str(&answer.body).ok()?;
+    body["nextPageToken"].as_str().map(str::to_owned)
+}
+
+/// The canned answers of the plugin's HTTP on `site`: [`answer`] for every
+/// request of the scenarios (on Cloud, a search with more issues than
+/// listed is counted by pages of keys). Longest first: the canned
+/// transport takes the first route whose URL starts the request's.
+fn routes(site: &str, cloud: bool) -> Vec<Value> {
+    let api = if cloud { "/rest/api/3" } else { "/rest/api/2" };
+    let mut targets = vec![format!("{api}/myself")];
+    // An issue's answer does not depend on its query.
+    targets.extend(ISSUES.iter().map(|key| format!("{api}/issue/{key}?")));
+    for (filter, project, include_done, size) in SEARCHES {
+        let jql = jql(*filter, *project, *include_done);
+        let first = search_target(cloud, &jql, *size, LIST_FIELDS, None);
+        let more = cloud && next_token(&answer(site, &first)).is_some();
+        targets.push(first);
+        if more {
+            let mut token = None;
+            for _ in 0..COUNT_PAGES {
+                let target = search_target(cloud, &jql, COUNT_PAGE_SIZE, "key", token.as_deref());
+                token = next_token(&answer(site, &target));
+                targets.push(target);
+                if token.is_none() {
+                    break;
+                }
+            }
         }
     }
-
-    /// What the built-in asked its stand-in for, in order.
-    fn asked(&self) -> Vec<String> {
-        self.server
-            .seen()
-            .iter()
-            .map(|line| {
-                let (target, authorization) = line.split_once('\t').unwrap();
-                assert_eq!(authorization, self.authorization, "{target}");
-                assert!(!target.starts_with("OUTSIDE"), "{line}");
-                target.to_owned()
-            })
-            .collect()
+    targets.sort_by_key(|t| std::cmp::Reverse(t.len()));
+    targets.dedup();
+    let mut routes: Vec<Value> = Vec::new();
+    if cloud {
+        routes.extend(NETWORK_FAILURES.iter().map(|(issue, code)| {
+            json!({"url": format!("{site}{api}/issue/{issue}?"), "status": 0, "body": "",
+                   "fail": code})
+        }));
     }
-
-    /// The canned answers of the plugin's HTTP: exactly what the built-in
-    /// asked for, at the plugin's site. Longest first (the canned
-    /// transport takes the first route whose URL starts the request's).
-    fn routes(&self) -> Vec<Value> {
-        let mut targets = self.asked();
-        targets.sort_by_key(|t| std::cmp::Reverse(t.len()));
-        targets.dedup();
-        targets
-            .iter()
-            .map(|target| {
-                let a = answer(self.site, target);
-                json!({"url": format!("{}{target}", self.site), "status": a.status,
-                       "headers": a.headers, "body": a.body})
-            })
-            .collect()
-    }
-
-    /// The plugin sent exactly the built-in's requests, in order, each
-    /// with the credential in this deployment's scheme, and nothing to
-    /// another server.
-    fn same_requests(&self, sent: &[String]) {
-        let scheme = if self.kind == "cloud" {
-            "Basic"
-        } else {
-            "Bearer"
-        };
-        let targets: Vec<String> = sent
-            .iter()
-            .map(|line| {
-                let (url, credential) = line.split_once('\t').unwrap_or((line, ""));
-                assert_eq!(
-                    credential,
-                    format!("authorization: {scheme} {}", self.secret),
-                    "{url}"
-                );
-                url.strip_prefix(self.site)
-                    .unwrap_or_else(|| panic!("{url} is not on {}", self.site))
-                    .to_owned()
-            })
-            .collect();
-        assert_eq!(targets, self.asked(), "{}", self.kind);
-    }
+    routes.extend(targets.iter().map(|target| {
+        let a = answer(site, target);
+        json!({"url": format!("{site}{target}"), "status": a.status, "headers": a.headers,
+               "body": a.body})
+    }));
+    routes
 }
 
 /// The scenarios repeated on the Data Center: what depends on the
@@ -506,47 +530,75 @@ const ON_DATA_CENTER: &[&str] = &[
     "issues of a filter with more than are counted",
 ];
 
-/// What one comparison covered: scenario, whether it succeeded, its code.
-type Compared = Vec<(&'static str, bool, Option<String>)>;
+/// What one run covered: scenario, whether it succeeded, its code.
+type Covered = Vec<(&'static str, bool, Option<&'static str>)>;
 
-/// The plugin's side of a comparison.
+/// The plugin under test.
 struct Side<'a> {
     env: &'a parity::Env,
     agent: &'a parity::Agent,
     pace: &'a parity::Pace,
+    routes: &'a [Value],
 }
 
 impl Side<'_> {
-    /// Every scenario of `deployment` on the plugin, against what the
-    /// built-in answered.
-    async fn compare(&self, deployment: &Deployment, problems: &mut Vec<String>) -> Compared {
-        let mut compared = Vec::new();
-        for (s, builtin) in deployment.scenarios.iter().zip(&deployment.builtin) {
+    /// The scenarios (all, or those named in `only`) on the Jira at
+    /// `site`; `expect` overrides a scenario's expectation by name.
+    async fn check(
+        &self,
+        site: &str,
+        only: Option<&[&str]>,
+        expect: &[(&str, Expect)],
+        problems: &mut Vec<String>,
+    ) -> Covered {
+        let vars = [("{site}", site)];
+        let mut covered = Vec::new();
+        for s in readings() {
+            if only.is_some_and(|only| !only.contains(&s.name)) {
+                continue;
+            }
+            let wanted = expect
+                .iter()
+                .find(|(name, _)| *name == s.name)
+                .map_or(s.expect, |(_, e)| *e);
             self.pace.room_for(self.env, 8).await;
-            let plugin = self.agent.invoke(s.action, &s.params).await;
-            compare(s.name, builtin, &plugin, DIFFERENT_MESSAGES, problems);
-            compared.push((s.name, builtin.ok, builtin.code.clone()));
+            let outcome = self.agent.invoke(s.action, &s.params).await;
+            parity::check(s.name, &outcome, wanted, &vars, problems);
+            covered.push((s.name, wanted.ok(), wanted.code()));
         }
-        compared
+        covered
     }
 
-    /// Open on both sides: the same page opened, shown without its
-    /// query. (One page per 2 s for a plugin.)
-    async fn compare_opens(
+    /// Opens pages, one per 2 s (a plugin's limit).
+    async fn check_opens(
         &self,
-        opens: &ModuleRegistry,
-        pages: &[(&'static str, Value)],
+        pages: &[(&'static str, Value, Expect)],
         problems: &mut Vec<String>,
-    ) -> Compared {
-        let mut compared = Vec::new();
-        for (name, params) in pages {
+    ) -> Covered {
+        let mut covered = Vec::new();
+        for (name, params, expect) in pages {
             tokio::time::sleep(Duration::from_millis(2_100)).await;
-            let plugin = self.agent.invoke("open", params).await;
-            let builtin = blocking(|| run_builtin(opens, "open", params, None));
-            compare(name, &builtin, &plugin, DIFFERENT_MESSAGES, problems);
-            compared.push((*name, builtin.ok, builtin.code));
+            let outcome = self.agent.invoke("open", params).await;
+            parity::check(name, &outcome, *expect, &[], problems);
+            covered.push((*name, expect.ok(), expect.code()));
         }
-        compared
+        covered
+    }
+
+    /// What the plugin sent: only to `site`, each with the credential in
+    /// the deployment's `scheme`, and only what the scenarios ask for.
+    fn sent_only_to(&self, sent: &[String], site: &str, scheme: &str, secret: &str) {
+        assert_ne!(sent.len(), 0);
+        for line in sent {
+            let (url, credential) = line.split_once('\t').unwrap_or((line, ""));
+            assert!(url.starts_with(&format!("{site}/rest/api/")), "{line}");
+            assert_eq!(
+                credential,
+                format!("authorization: {scheme} {secret}"),
+                "{url}"
+            );
+        }
+        assert_eq!(parity::unrouted(sent, self.routes), Vec::<String>::new());
     }
 
     /// Enters `site` (and the deployment) in the plugin's settings: saved
@@ -611,44 +663,22 @@ impl Side<'_> {
 
 // ---------------------------------------------------------------- test
 
-/// Every action of `deckpilot.jira` against the built-in, on the same
-/// answers: identical results and requests, the documented differences
-/// aside; on Jira Cloud and on a Data Center.
+/// Every action of `deckpilot.jira` on known answers, with the results
+/// the built-in gave; on Jira Cloud and on a Data Center.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[allow(clippy::too_many_lines)] // the steps of one comparison, in order
-async fn the_plugin_answers_as_the_builtin_does() {
-    let launcher = Arc::new(RecordingLauncher::new());
-    // The built-in first: what it asks for is what the plugin may ask for.
-    let cloud = Deployment::start("cloud", CLOUD, CLOUD_SECRET, None, &launcher);
-    let dc = Deployment::start(
-        "data-center",
-        DC,
-        DC_SECRET,
-        Some(ON_DATA_CENTER),
-        &launcher,
-    );
-    assert_eq!(dc.scenarios.len(), ON_DATA_CENTER.len());
-    let mut routes: Vec<Value> = NETWORK_FAILURES
-        .iter()
-        .map(|(issue, code)| {
-            json!({"url": format!("{CLOUD}/rest/api/3/issue/{issue}?"), "status": 0,
-                   "body": "", "fail": code})
-        })
-        .collect();
-    routes.extend(cloud.routes());
-    routes.extend(dc.routes());
-    let env = parity::Env::new(PLUGIN, &routes);
+#[allow(clippy::too_many_lines)] // the steps of one run, in order
+async fn the_plugin_answers_as_the_builtin_did() {
+    let mut canned = routes(CLOUD, true);
+    canned.extend(routes(DC, false));
+    let env = parity::Env::new(PLUGIN, &canned);
     let agent = env.start().await;
     let pace = parity::Pace::start();
-    let plugin_side = Side {
+    let under_test = Side {
         env: &env,
         agent: &agent,
         pace: &pace,
+        routes: &canned,
     };
-    let opens = builtin(
-        &ActionParameters::new().with(jira::SITE_URL, ParameterValue::Text(CLOUD.into())),
-        &launcher,
-    );
 
     // Seeded, waiting for the user's consent to its permissions.
     let summary = match agent.request(Request::ListPlugins).await.unwrap() {
@@ -660,22 +690,10 @@ async fn the_plugin_answers_as_the_builtin_does() {
     };
     assert_ne!(summary.state, PluginState::Enabled, "{}", agent.log());
 
-    // The definitions as the agent's engine registers them: §5.3's rules
-    // hold against the built-in's, the check the registry makes before it
-    // routes a legacy type to the plugin.
-    let registry = opens.action_registry();
-    let mut problems = Vec::new();
-    for action in &summary.actions {
-        let definition = action.definition.as_ref().expect("every action converts");
-        let alias = jira_alias(&action.action);
-        let builtin = registry
-            .definition(&alias.legacy_id())
-            .unwrap_or_else(|| panic!("{} is not a built-in action", alias.legacy));
-        for problem in alias::incompatibilities(&alias, builtin, definition) {
-            problems.push(format!("{}: {problem}", alias.legacy));
-        }
-    }
+    // The definitions as the agent's engine registers them hold §5.3's
+    // rules against the built-in's frozen ones.
     assert_eq!(summary.actions.len(), 4);
+    let problems = parity::contract_problems("jira", ID, CONTRACT, &summary.actions);
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 
     agent
@@ -696,56 +714,86 @@ async fn the_plugin_answers_as_the_builtin_does() {
         other => panic!("unexpected {other:?}"),
     }
 
-    // No site yet: neither side sends anything.
-    let name = "myself without a site";
-    let unset = builtin(&ActionParameters::new(), &launcher);
-    let plugin = agent.invoke("myself", &json!({})).await;
-    let without = blocking(|| run_builtin(&unset, "myself", &json!({}), Some(CLOUD_SECRET)));
-    assert_eq!(plugin.code.as_deref(), Some("invalid-site-url"));
-    compare(name, &without, &plugin, DIFFERENT_MESSAGES, &mut problems);
+    // No site yet: nothing is sent; the plugin says where to set it.
+    let mut problems = Vec::new();
+    let unset = agent.invoke("myself", &json!({})).await;
+    parity::check(
+        "myself without a site",
+        &unset,
+        Expect::Failed("invalid-site-url"),
+        &[],
+        &mut problems,
+    );
+    assert!(
+        unset.message.contains("Settings › Plugins › Jira"),
+        "{unset:?}"
+    );
 
     // ---- Jira Cloud. The site entered, not allowed: nothing is sent, no
     // page opens; the plugin says where to allow it.
-    plugin_side
+    under_test
         .enter(CLOUD, "https://Team.Atlassian.net/", "cloud")
         .await;
-    plugin_side.refused("before the consent").await;
+    under_test.refused("before the consent").await;
     let refused = agent.invoke("myself", &json!({})).await;
     assert_eq!(
         refused.message,
         "the Jira site team.atlassian.net is not allowed for this plugin; allow it in Settings \
          › Plugins › Jira › Configure"
     );
-    // Allowed, no credential yet.
-    plugin_side.allow(CLOUD).await;
-    let name = "myself without a credential";
-    let plugin = agent.invoke("myself", &json!({})).await;
-    let cloud_reads = builtin(&config(&cloud.server.base(), "cloud"), &launcher);
-    let without = blocking(|| run_builtin(&cloud_reads, "myself", &json!({}), None));
-    assert_eq!(plugin.code.as_deref(), Some("credential-missing"));
-    compare(name, &without, &plugin, DIFFERENT_MESSAGES, &mut problems);
-    plugin_side.store(CLOUD_SECRET).await;
+    // Allowed, no credential yet: the plugin names its slot.
+    under_test.allow(CLOUD).await;
+    let without = agent.invoke("myself", &json!({})).await;
+    parity::check(
+        "myself without a credential",
+        &without,
+        Expect::Failed("credential-missing"),
+        &[],
+        &mut problems,
+    );
+    assert!(
+        without.message.contains("Settings › Plugins › Jira"),
+        "{without:?}"
+    );
+    under_test.store(CLOUD_SECRET).await;
     assert_eq!(env.sent().len(), 0);
 
-    let mut compared = plugin_side.compare(&cloud, &mut problems).await;
+    let mut covered = under_test.check(CLOUD, None, &[], &mut problems).await;
     let pages = [
-        ("open an issue", json!({"issue": " web-12 "})),
+        (
+            "open an issue",
+            json!({"issue": " web-12 "}),
+            Expect::Ok(
+                "opened https://team.atlassian.net/browse/WEB-12",
+                &[("url", "https://team.atlassian.net/browse/WEB-12")],
+            ),
+        ),
         (
             "open a page",
             json!({"url": " https://Team.Atlassian.net/issues/?filter=12345#top "}),
+            // Shown without its query.
+            Expect::Ok(
+                "opened https://team.atlassian.net/issues/",
+                &[("url", "https://team.atlassian.net/issues/")],
+            ),
         ),
         (
             "open another site",
             json!({"url": "https://other.atlassian.net/browse/WEB-12"}),
+            Expect::Failed("url-not-allowed"),
         ),
-        ("open what is no issue", json!({"issue": "nope"})),
-        ("open nothing", json!({})),
+        (
+            "open what is no issue",
+            json!({"issue": "nope"}),
+            Expect::Failed("invalid-issue-key"),
+        ),
+        (
+            "open nothing",
+            json!({}),
+            Expect::Failed("invalid-issue-key"),
+        ),
     ];
-    compared.extend(
-        plugin_side
-            .compare_opens(&opens, &pages, &mut problems)
-            .await,
-    );
+    covered.extend(under_test.check_opens(&pages, &mut problems).await);
     let on_cloud = [
         "https://team.atlassian.net/browse/WEB-12",
         "https://team.atlassian.net/issues/?filter=12345#top",
@@ -758,7 +806,7 @@ async fn the_plugin_answers_as_the_builtin_does() {
         agent.log()
     );
     // The scenarios cover success and every failure code of the module.
-    let codes: BTreeSet<_> = compared.iter().filter_map(|(_, _, c)| c.clone()).collect();
+    let codes: BTreeSet<_> = covered.iter().filter_map(|(_, _, c)| *c).collect();
     for code in [
         "invalid-issue-key",
         "invalid-project",
@@ -773,47 +821,73 @@ async fn the_plugin_answers_as_the_builtin_does() {
     ] {
         assert!(codes.contains(code), "no scenario ends in {code}");
     }
-    assert!(compared.iter().filter(|(_, ok, _)| *ok).count() >= 9);
-    let sent_to_cloud = env.sent();
-    cloud.same_requests(&sent_to_cloud);
+    assert!(covered.iter().filter(|(_, ok, _)| *ok).count() >= 9);
+    under_test.sent_only_to(&env.sent(), CLOUD, "Basic", CLOUD_SECRET);
 
     pace.room_for(&env, 3).await;
-    network_failures(&env, &agent).await;
+    network_failures(&agent).await;
     let sent_to_cloud = env.sent();
 
     // ---- a Data Center under a path: another site, another credential.
     // The changed site ends the consent at once.
-    plugin_side.enter(DC, DC, "data-center").await;
-    plugin_side.store(DC_SECRET).await;
-    plugin_side.refused("after the site changed").await;
-    plugin_side.allow(DC).await;
-    let before = problems.len();
-    plugin_side.compare(&dc, &mut problems).await;
-    let dc_opens = builtin(
-        &ActionParameters::new().with(jira::SITE_URL, ParameterValue::Text(DC.into())),
-        &launcher,
-    );
+    under_test.enter(DC, DC, "data-center").await;
+    under_test.store(DC_SECRET).await;
+    under_test.refused("after the site changed").await;
+    under_test.allow(DC).await;
+    // A Data Center names the user by their user name, and gives the
+    // search's total: no counting by pages.
+    let on_data_center = [
+        (
+            "myself",
+            Expect::Ok(
+                "signed in to Jira as Dev Eloper",
+                &[("displayName", "Dev Eloper"), ("account", "dev")],
+            ),
+        ),
+        (
+            "issues of a filter with more than are counted",
+            Expect::Ok(
+                "620 issues in filter 777",
+                &[
+                    ("count", "620"),
+                    ("countExact", "true"),
+                    ("listed", "20"),
+                    ("truncated", "true"),
+                    ("firstKey", "WEB-999"),
+                    ("firstUrl", "{site}/browse/WEB-999"),
+                ],
+            ),
+        ),
+    ];
+    let on_dc = under_test
+        .check(DC, Some(ON_DATA_CENTER), &on_data_center, &mut problems)
+        .await;
+    assert_eq!(on_dc.len(), ON_DATA_CENTER.len());
     let pages = [
         (
             "open an issue of the Data Center",
             json!({"issue": "OPS-7"}),
+            Expect::Ok(
+                "opened https://jira.example.com/jira/browse/OPS-7",
+                &[("url", "https://jira.example.com/jira/browse/OPS-7")],
+            ),
         ),
         (
             "open a page beside the Data Center",
             json!({"url": "https://jira.example.com/confluence/Home"}),
+            Expect::Failed("url-not-allowed"),
         ),
         (
             "open the Cloud site from the Data Center",
             json!({"url": "https://team.atlassian.net/browse/WEB-12"}),
+            Expect::Failed("url-not-allowed"),
         ),
     ];
-    plugin_side
-        .compare_opens(&dc_opens, &pages, &mut problems)
-        .await;
+    under_test.check_opens(&pages, &mut problems).await;
     assert!(
-        problems.len() == before,
+        problems.is_empty(),
         "{}\n{}",
-        problems[before..].join("\n"),
+        problems.join("\n"),
         agent.log()
     );
     assert_eq!(
@@ -821,14 +895,7 @@ async fn the_plugin_answers_as_the_builtin_does() {
         ["https://jira.example.com/jira/browse/OPS-7"]
     );
     let sent = env.sent();
-    dc.same_requests(&sent[sent_to_cloud.len()..]);
-    // Everything both sides opened, in order: the same pages.
-    let started: Vec<String> = launcher
-        .plans()
-        .iter()
-        .map(|p| p.args.last().unwrap().clone())
-        .collect();
-    assert_eq!(env.opened(), started);
+    under_test.sent_only_to(&sent[sent_to_cloud.len()..], DC, "Bearer", DC_SECRET);
 
     // The consent revoked: refused on the very next call.
     agent
@@ -837,7 +904,7 @@ async fn the_plugin_answers_as_the_builtin_does() {
             setting: "siteUrl".into(),
         })
         .await;
-    plugin_side.refused("after the consent was revoked").await;
+    under_test.refused("after the consent was revoked").await;
 
     // Neither secret is in a log line.
     let log = agent.log();
@@ -849,33 +916,12 @@ async fn the_plugin_answers_as_the_builtin_does() {
 }
 
 /// No answer at all: a name that does not resolve and a certificate that
-/// is not trusted end in the built-in's transport codes on both sides,
-/// with the transport's retryability for the plugin (`dns-failed`
-/// retryable, `tls-failed` not). The messages are each side's
-/// explanation of the same failure; neither names the secret.
-async fn network_failures(env: &parity::Env, agent: &parity::Agent) {
-    let launcher = Arc::new(RecordingLauncher::new());
-    let root = env.dir.path().join("https-root");
-    std::fs::create_dir_all(&root).unwrap();
-    let untrusted = https::HttpsServer::start(&root);
-    let unresolved = builtin(&config("https://jira.invalid", "cloud"), &launcher);
-    let untrusted_site = builtin(
-        &config(&format!("https://127.0.0.1:{}", untrusted.port), "cloud"),
-        &launcher,
-    );
+/// is not trusted end in the transport's codes, with its retryability
+/// (`dns-failed` retryable, `tls-failed` not), and a message that does
+/// not name the secret.
+async fn network_failures(agent: &parity::Agent) {
     for (issue, code) in NETWORK_FAILURES {
         let params = json!({ "issue": issue });
-        let modules = if *code == "dns-failed" {
-            &unresolved
-        } else {
-            &untrusted_site
-        };
-        let builtin = blocking(|| run_builtin(modules, "issue", &params, Some(CLOUD_SECRET)));
-        assert_eq!(
-            builtin.code.as_deref(),
-            Some(*code),
-            "the built-in: {builtin:?}"
-        );
         let outcome = agent.invoke_raw("issue", &params).await;
         eprintln!("network {issue}: {outcome:?}");
         let PluginActionOutcome::Failed {
@@ -888,9 +934,8 @@ async fn network_failures(env: &parity::Env, agent: &parity::Agent) {
         };
         assert_eq!(plugin_code, code, "{outcome:?}");
         assert_eq!(*retryable, *code == "dns-failed", "{outcome:?}");
-        for text in [message.as_deref().unwrap_or_default(), &builtin.message] {
-            assert!(!text.contains("ATATT"), "{text}");
-            assert_ne!(text, "");
-        }
+        let message = message.as_deref().unwrap_or_default();
+        assert!(!message.contains("ATATT"), "{message}");
+        assert_ne!(message, "");
     }
 }

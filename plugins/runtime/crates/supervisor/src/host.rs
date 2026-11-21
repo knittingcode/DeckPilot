@@ -721,7 +721,9 @@ impl PluginHost {
                             Ask::Action => {
                                 self.session.authorize_in(&request, executor.run_context())
                             }
-                            Ask::State => self.session.authorize_state(&request),
+                            Ask::State => self
+                                .session
+                                .authorize_state_in(&request, executor.run_context()),
                         };
                         match decision {
                             Decision::Allow(allowed) => {

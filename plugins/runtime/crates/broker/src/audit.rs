@@ -16,8 +16,9 @@ pub struct AuditRecord {
     pub at_ms: u64,
     pub plugin: PluginId,
     pub op: &'static str,
-    /// `https://host[:port]` for network operations and `url.open`; `None`
-    /// otherwise.
+    /// `https://host[:port]` for network operations and `url.open`; for
+    /// `tool.run` the tool and its subcommand (`git status`, never another
+    /// argument); `None` otherwise.
     pub target: Option<String>,
     pub decision: AuditDecision,
 }

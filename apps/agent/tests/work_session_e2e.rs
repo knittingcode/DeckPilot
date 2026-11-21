@@ -51,10 +51,10 @@ use deckpilot_device::mock::MockBackend;
 use deckpilot_device::{ConnectionState, ControlId, ControlInput, DeviceId, models};
 use deckpilot_ipc::{AgentPaths, Request, Response};
 use deckpilot_modules::general;
-use deckpilot_storage::DatabaseKey;
 use deckpilot_storage::work_sessions::{
     GapKind, HistoryQuery, IntervalEnd, SessionStatus, WorkSessionSettings, WorkSessionSummary,
 };
+use deckpilot_storage::{ConfigStore, DatabaseKey};
 use serde_json::{Value, json};
 use support::{TIMEOUT, TempDir, TestAgent, data_dir, graph, graph_workflow};
 
@@ -235,6 +235,11 @@ impl Fixture {
         store
             .save_work_session_settings(&settings, clock.now_ms())
             .unwrap();
+        // The project is stored as the active one: without the Projects
+        // plugin nothing switches it, and runs start with it.
+        store
+            .set_active_project(profile.id, Some(profile.projects[0].id))
+            .unwrap();
         drop(store);
         let mock = MockBackend::new();
         let device = mock.plug(&models::stream_deck_mk2(), "E2E-0001");
@@ -250,8 +255,8 @@ impl Fixture {
         }
     }
 
-    /// A running, unlocked agent with the MK.2 connected and the project
-    /// selected.
+    /// A running, unlocked agent with the MK.2 connected (the project is
+    /// the stored active one).
     async fn agent(&self) -> TestAgent {
         let agent = TestAgent::start_with_gestures(
             &self.paths,
@@ -262,12 +267,6 @@ impl Fixture {
         );
         agent.unlock().await;
         self.wait_connected(&agent, true).await;
-        agent
-            .request(Request::SelectProject {
-                project: self.profile.projects[0].id,
-            })
-            .await
-            .unwrap();
         agent
     }
 

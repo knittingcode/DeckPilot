@@ -2,7 +2,8 @@
 //! are used, how the credential is named, how answers and failures are
 //! read, and the action's time limit.
 //!
-//! A port of the built-in module's `modules/jira/src/api.rs`, with the
+//! A port of the former built-in `jira` module's API code (removed in
+//! WP-C5), with the
 //! differences a sandboxed plugin has (`plugins/first-party/jira/README.md`):
 //!
 //! * the site is the server the user entered in `siteUrl` and allowed (the
@@ -32,7 +33,7 @@ pub const MAX_PAGES: usize = 5;
 /// Issues asked for per page when counting (their keys only).
 pub const PER_PAGE: usize = 100;
 
-/// Stable error codes, the built-in module's (`deckpilot_module_jira::codes`);
+/// Stable error codes, the former built-in `jira` module's (WP-C5);
 /// each is declared in `manifest.json` `contributes.errorCodes`.
 pub mod codes {
     pub const INVALID_SITE_URL: &str = "invalid-site-url";

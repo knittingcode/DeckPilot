@@ -72,11 +72,12 @@ At most 64 actions (`MAX_ACTIONS`). Each:
 | `description` | yes | 1-300 characters |
 | `category` | yes | 1-32 characters (the group in the editors' pickers) |
 | `parameters` | yes | ≤ 32 (`MAX_PARAMS`); see [actions.md](actions.md#parameters) |
-| `node` | no | Workflow node contract: `version` (≥ 1), `icon` (`[a-z0-9-]{1,64}`), `outputs` (≤ 32), `timeoutMs` (1,000-600,000, default 30,000: the invocation's wall-clock limit), `retrySafe`, `idempotent`, `effect` (`readOnly`, `opens`, `modifies`; a warning when `modifies` is `retrySafe`). `cancellable` is accepted; the agent treats every plugin action as cancellable. There is no `changesContext` |
+| `node` | no | Workflow node contract: `version` (≥ 1), `icon` (`[a-z0-9-]{1,64}`), `outputs` (≤ 32), `timeoutMs` (1,000-600,000, default 30,000: the invocation's wall-clock limit), `retrySafe`, `idempotent`, `effect` (`readOnly`, `opens`, `modifies`; a warning when `modifies` is `retrySafe`). `cancellable` is accepted; the agent treats every plugin action as cancellable. `changesContext` (plugin API 1.9, first-party bundled plugins with `projectContext.select` only): the action selects a project, so a workflow node after it runs in that project and a workflow without a saved project scope changes the active one, as the built-in project actions |
 | `requiresProject`, `deprecated`, `replacedBy` | no | `replacedBy` names another action of this plugin and needs `deprecated: true` |
 | `state` | no | Key state refresh (`onEvents` or `every` with `intervalSeconds` 1-86,400; needs `effect: readOnly`). From plugin API 1.2 the agent asks the action's state handler for keys shown on a device ([actions.md](actions.md#key-state)), never more often than every 5 s; it needs the `device` permission with `state: true`. An agent below 1.2 accepts it and asks nothing |
 | `device` | no | `{ "requires": [...] }`. Accepted, not used: it never makes an action bindable to a dial or a touch strip (use `controls`) |
 | `requiresDependencies` | no | Plugin API 1.4: ids of declared `dependencies` (usually optional ones) the action needs; while one is missing or off, only this action is unavailable ([dependencies.md](../dependencies.md#1-the-manifest)) |
+| `requiresPermissions` | no | Plugin API 1.9, first-party: declared sub-grants the action needs (`tools:git:network`, `tools:docker:modify`, `resources:open`, `resources:paths`, `projectContext:select`, `openUrl:from-params`). Each one named is optional: the plugin is enabled without it, and while it is not granted only the actions naming it are unavailable. An action of any effect may then declare `state` (from 1.9; a state call only reads) |
 | `controls` | no | Plugin API 1.3: the controls and inputs the action can be bound to; see [Controls](#controls). Without it: keys only |
 | `editorNavigation` | no | Plugin API 1.7: what running the action does to the page or layout a device shows, for the Device Editor's preview; see [Editor navigation](#editor-navigation) |
 | `title` | no | Plugin API 1.8: suggestions for the action's keys' titles; see [Titles](#titles) |
@@ -180,6 +181,7 @@ The plugin's own variables, published with `Context::publish_variable`
 | `valueType` | `{ "type": "string" \| "integer" \| "boolean" \| "json" }`; a published value of another type is refused |
 | `scope` | `machine`, `profile` or `project`. **Only `machine` can be published in this version**; the others are refused with `unavailable` |
 | `requires`, `sensitive`, `deprecated` | Optional; `requires` only `["project"]` |
+| `source` | Plugin API 1.9, first-party plugins shipped inside the app with the `projectContext` permission only: `host:project.id`, `host:project.key` or `host:project.name`. DeckPilot computes the value (the project in the context; scope `project`, type `string`) while the plugin is enabled and holds `projectContext`; publishing it is refused (`not-permitted`) |
 
 ## `contributes.settings`
 

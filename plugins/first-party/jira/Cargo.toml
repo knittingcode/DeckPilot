@@ -9,7 +9,7 @@
 [package]
 name = "deckpilot-jira"
 description = "DeckPilot's first-party Jira plugin: read-only issues, saved filters and your assignments"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.90"
 license = "Apache-2.0"

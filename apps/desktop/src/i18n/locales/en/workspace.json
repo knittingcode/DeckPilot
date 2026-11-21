@@ -122,10 +122,6 @@
       "title": "Projects",
       "description": "Projects of this profile and their resources on this machine"
     },
-    "tabs": {
-      "projects": "Projects",
-      "machine": "This machine"
-    },
     "option": "{{key}} · {{project}}",
     "status": {
       "ok": "Found",
@@ -236,7 +232,9 @@
       "removeTitle": "Remove the mapping for {{key}}?",
       "removeDescription": "Actions using this resource cannot resolve it on this machine until it is mapped again.",
       "removeConfirm": "Remove",
-      "removeFailed": "The mapping for {{key}} was not removed"
+      "removeFailed": "The mapping for {{key}} was not removed",
+      "moved": "This computer's resource bindings are in Settings.",
+      "open": "Open Settings › Resources"
     },
     "binding": {
       "browseFailed": "The file browser did not open",

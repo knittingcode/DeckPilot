@@ -707,3 +707,122 @@ fn a_plugin_registers_only_inside_its_namespace() {
         }
     );
 }
+
+/// WP-C2: `projects.current.*` moved with the `projects` module to
+/// `deckpilot.projects` (`plugins.deckpilot.projects.current.*`). The
+/// module's own while it provides it; the plugin's once the module is
+/// disabled or gone and the plugin declares it, available or not; as
+/// before (the module unavailable) with neither. The core aliases
+/// (`system.project.current.*`) chain to it.
+#[test]
+fn moved_module_variables_resolve_as_the_plugins() {
+    let profile = Profile::new("Work");
+    let projects = module("projects");
+    let plugin = module("deckpilot.projects");
+    let legacy = |registry: &mut VariableRegistry| {
+        registry
+            .register_module(
+                &projects,
+                &[text("projects.current.key")],
+                fixed(VariableValue::String("BUILTIN".into())),
+            )
+            .unwrap();
+    };
+    let declared = |registry: &mut VariableRegistry| {
+        registry
+            .register_module(
+                &plugin,
+                &[text("plugins.deckpilot.projects.current.key")],
+                fixed(VariableValue::String("PLUGIN".into())),
+            )
+            .unwrap();
+    };
+    let value = |text: &str| Resolution::Value {
+        value: VariableValue::String(text.into()),
+        source: ValueSource::System,
+        sensitive: false,
+    };
+    let unavailable = |owner: &str| Resolution::Unavailable {
+        owner: owner.into(),
+    };
+
+    // Every alias names a moved id of its module, under the plugin's
+    // namespace, and keeps parsing in its legacy namespace.
+    for alias in MODULE_VARIABLE_ALIASES {
+        let legacy_id = VariableId::new(alias.legacy).unwrap();
+        let canonical = VariableId::new(alias.canonical).unwrap();
+        assert_eq!(
+            legacy_id.namespace(),
+            module_namespace(&module(alias.module))
+        );
+        assert!(MODULE_NAMESPACES.contains(&legacy_id.namespace()));
+        assert_eq!(
+            canonical.owner_namespace(),
+            module_namespace(&module(alias.plugin))
+        );
+        assert_eq!(canonical.plugin_owner(), Some(module(alias.plugin)));
+        assert_eq!(
+            canonical.as_str().strip_suffix(legacy_id.name()).unwrap(),
+            "plugins.deckpilot.projects."
+        );
+        assert_eq!(module_variable_alias(&legacy_id), Some(&alias));
+        assert_eq!(module_variable_alias(&canonical), None);
+    }
+    for alias in ALIASES.iter().filter(|a| a.owner == "projects") {
+        let canonical = VariableId::new(alias.canonical).unwrap();
+        assert!(
+            module_variable_alias(&canonical).is_some(),
+            "{}",
+            alias.canonical
+        );
+    }
+
+    // Both: the module's.
+    let mut both = VariableRegistry::new();
+    legacy(&mut both);
+    declared(&mut both);
+    assert_eq!(
+        resolve(&both, "projects.current.key", &profile),
+        value("BUILTIN")
+    );
+    assert_eq!(
+        resolve(&both, "plugins.deckpilot.projects.current.key", &profile),
+        value("PLUGIN")
+    );
+    // The module disabled: the plugin's; the plugin disabled too: the
+    // plugin is what is unavailable.
+    both.set_available(&projects, Some("disabled".into()));
+    assert_eq!(
+        resolve(&both, "projects.current.key", &profile),
+        value("PLUGIN")
+    );
+    both.set_available(&plugin, Some("disabled".into()));
+    assert_eq!(
+        resolve(&both, "projects.current.key", &profile),
+        unavailable("deckpilot.projects")
+    );
+    // The module gone (WP-C6): the plugin's.
+    let mut plugin_only = VariableRegistry::new();
+    declared(&mut plugin_only);
+    assert_eq!(
+        resolve(&plugin_only, "projects.current.key", &profile),
+        value("PLUGIN")
+    );
+    // Neither: as before.
+    let mut module_only = VariableRegistry::new();
+    legacy(&mut module_only);
+    module_only.set_available(&projects, Some("disabled".into()));
+    assert_eq!(
+        resolve(&module_only, "projects.current.key", &profile),
+        unavailable("projects")
+    );
+    assert_eq!(
+        resolve(&VariableRegistry::new(), "projects.current.key", &profile),
+        unavailable("projects")
+    );
+    // Other ids of the namespace are not aliased.
+    assert_eq!(
+        resolve(&plugin_only, "projects.current.other", &profile),
+        unavailable("projects")
+    );
+}

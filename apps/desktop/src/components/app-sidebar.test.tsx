@@ -5,6 +5,8 @@ import { cleanup, screen } from "@testing-library/react"
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { pluginModules } from "@/lib/plugin-actions"
+import { projectsPlugin, workflowsPlugin } from "@/test/first-party"
 import { installDomStubs } from "@/test/dom"
 import { renderWithApp } from "@/test/render"
 
@@ -14,6 +16,7 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanup()
+  vi.unstubAllEnvs()
 })
 
 describe("main navigation", () => {
@@ -37,5 +40,34 @@ describe("main navigation", () => {
       expect(screen.queryByRole("button", { name })).not.toBeInTheDocument()
     }
     expect(screen.queryByRole("button", { name: /Choose the profile/ })).not.toBeInTheDocument()
+  })
+})
+
+describe("main navigation in a build with plugins", () => {
+  it("shows Workflows and Projects only while their plugins are enabled", async () => {
+    vi.stubEnv("VITE_DECKPILOT_PLUGINS", "1")
+    const onNavigate = vi.fn()
+    const { user, rerender, context } = renderWithApp(
+      <AppSidebar current="designer" onNavigate={onNavigate} />,
+      { modules: [], pluginModules: [] },
+    )
+    expect(screen.queryByRole("button", { name: "Workflows" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Projects" })).not.toBeInTheDocument()
+
+    rerender(<AppSidebar current="designer" onNavigate={onNavigate} />, {
+      ...context,
+      pluginModules: pluginModules([workflowsPlugin(), projectsPlugin()]),
+    })
+    await user.click(screen.getByRole("button", { name: "Workflows" }))
+    expect(onNavigate).toHaveBeenCalledWith("workflows")
+    await user.click(screen.getByRole("button", { name: "Projects" }))
+    expect(onNavigate).toHaveBeenCalledWith("projects/projects")
+
+    rerender(<AppSidebar current="designer" onNavigate={onNavigate} />, {
+      ...context,
+      pluginModules: pluginModules([workflowsPlugin("disabled"), projectsPlugin("disabled")]),
+    })
+    expect(screen.queryByRole("button", { name: "Workflows" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Projects" })).not.toBeInTheDocument()
   })
 })

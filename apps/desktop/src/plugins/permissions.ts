@@ -63,6 +63,11 @@ export interface Grant {
   title: string
   detail: string
   justification?: string
+  /**
+   * Optional for enabling: granted on its own, the names of the actions
+   * that need it. A high-tier one is off until the user turns it on.
+   */
+  optionalFor?: string[]
 }
 
 /** `https://host[:port]`, or a description of a wildcard pattern. */
@@ -289,11 +294,27 @@ function scopeFacts(scope: unknown): Facts {
 }
 
 /** A permission as the agent reports it, in plain language; its tier is the agent's. */
-export function grantOfInfo(info: GrantInfo): Grant {
+export function grantOfInfo(info: GrantInfo, actionNames: Record<string, string> = {}): Grant {
   const grant: Grant = { key: info.key, ...describe(info.key, scopeFacts(info.scope)) }
   grant.tier = info.tier
   if (info.justification) grant.justification = info.justification
+  if (info.optional) {
+    grant.optionalFor = (info.actions ?? []).map((id) => actionNames[id] ?? id)
+  }
   return grant
+}
+
+/** The names of a plugin's actions by id, for [`grantOfInfo`]. */
+export function actionNamesOf(actions: { action: string; name: string }[]): Record<string, string> {
+  return Object.fromEntries(actions.map((a) => [a.action, a.name]))
+}
+
+/**
+ * Whether an optional permission starts checked in a consent dialog: a
+ * high-tier one never does (it is off until the user allows it).
+ */
+export function optionalOnByDefault(grant: Grant): boolean {
+  return grant.optionalFor !== undefined && grant.tier !== "high"
 }
 
 export function grantsByTier<T extends { tier: RiskTier }>(grants: T[]) {

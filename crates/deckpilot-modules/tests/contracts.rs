@@ -1,4 +1,12 @@
-//! Contract tests over every built-in module and action type.
+//! Contract tests over every built-in module and action type, and of the
+//! first-party plugins against the built-ins they replaced.
+//!
+//! The built-ins that moved to plugins (`github`, `gitlab`, `jira`, `git`,
+//! `docker`, `workspace`, `projects`) are removed (`module-migration.md`
+//! §11 D1, D2). Their contracts, as 0.9.0 declared them, are frozen in
+//! `crates/deckpilot-modules/legacy/<id>.json` (written from the crates
+//! before they were removed); [`first_party`] holds each plugin to its
+//! frozen contract, so the legacy action types keep meaning what they did.
 //!
 //! The checks are generic: they read manifests, action type definitions and
 //! parameter schemas, and run every action twice on a fixture profile that
@@ -26,10 +34,7 @@ use deckpilot_core::{
     Profile, Progress, Project, ProjectId, ProjectKey, ResourceKey, ResourceRef, Secret,
     SettingScope,
 };
-use deckpilot_modules::{
-    builtin, deck, docker, general, git, github, gitlab, http, jira, notifications, projects,
-    system, work_session, workspace,
-};
+use deckpilot_modules::{builtin, deck, general, http, notifications, system, work_session};
 
 /// The planted secret: no result may ever contain it.
 const SECRET: &str = "contract-PLANTED-s3cret-7f3a9c";
@@ -45,11 +50,6 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Accepted findings: subject (module or action type id), check, reason.
 const KNOWN: &[(&str, &str, &str)] = &[
     // Heuristic limits.
-    (
-        "gitlab.merge-requests",
-        "action-effect",
-        "“merge requests” is a noun here; the action only lists them",
-    ),
     (
         "general.wait",
         "run-denied-succeeds",
@@ -174,18 +174,11 @@ fn modules(launcher: &Arc<RecordingLauncher>) -> Vec<Box<dyn FeatureModule>> {
     let opener: Arc<dyn Launcher> = launcher.clone();
     vec![
         Box::new(deck::DeckModule::new()),
-        Box::new(docker::DockerModule::new()),
         Box::new(general::GeneralModule::new()),
-        Box::new(git::GitModule::with_launcher(opener.clone())),
-        Box::new(github::GithubModule::with_launcher(opener.clone())),
-        Box::new(gitlab::GitlabModule::with_launcher(opener.clone())),
         Box::new(http::HttpModule::new()),
-        Box::new(jira::JiraModule::with_launcher(opener.clone())),
         Box::new(notifications::NotificationsModule::new()),
-        Box::new(projects::ProjectsModule::new()),
-        Box::new(system::SystemModule::with_launcher(opener.clone())),
+        Box::new(system::SystemModule::with_launcher(opener)),
         Box::new(work_session::WorkSessionModule::new()),
-        Box::new(workspace::WorkspaceModule::with_launcher(opener)),
     ]
 }
 
@@ -1327,6 +1320,84 @@ mod first_party {
 
     use super::*;
 
+    /// A removed built-in as its frozen contract
+    /// (`crates/deckpilot-modules/legacy/<id>.json`): its manifest and
+    /// action types, served as a module whose handlers only describe
+    /// (nothing of it runs any more).
+    struct Frozen {
+        manifest: ModuleManifest,
+        action_types: Vec<ActionType>,
+    }
+
+    /// Describes a frozen action type; never runs.
+    struct Described(ActionType);
+
+    impl ActionHandler for Described {
+        fn definition(&self) -> &ActionType {
+            &self.0
+        }
+
+        fn execute(
+            &self,
+            _parameters: &ActionParameters,
+            _context: &ExecutionContext<'_>,
+        ) -> ActionResult {
+            ActionResult::error("removed", "the built-in was removed")
+        }
+    }
+
+    impl FeatureModule for Frozen {
+        fn manifest(&self) -> &ModuleManifest {
+            &self.manifest
+        }
+
+        fn action_handlers(&self, _config: &ActionParameters) -> Vec<Box<dyn ActionHandler>> {
+            self.action_types
+                .iter()
+                .map(|t| Box::new(Described(t.clone())) as Box<dyn ActionHandler>)
+                .collect()
+        }
+    }
+
+    macro_rules! frozen {
+        ($id:literal) => {{
+            let text = include_str!(concat!("../legacy/", $id, ".json"));
+            let mut json: Value = serde_json::from_str(text).expect("a frozen contract parses");
+            let frozen = Frozen {
+                manifest: serde_json::from_value(json["manifest"].take())
+                    .expect("the frozen manifest parses"),
+                action_types: serde_json::from_value(json["actionTypes"].take())
+                    .expect("the frozen action types parse"),
+            };
+            assert_eq!(frozen.manifest.id.as_str(), $id);
+            frozen
+        }};
+    }
+
+    /// The setting keys of the removed built-ins that these checks name.
+    mod github {
+        pub const CREDENTIAL: &str = "credential";
+        pub const ALLOW_PRIVATE: &str = "allowPrivateHost";
+    }
+    mod gitlab {
+        pub const CREDENTIAL: &str = "credential";
+        pub const API_URL: &str = "apiUrl";
+        pub const ALLOW_PRIVATE: &str = "allowPrivateHost";
+    }
+    mod jira {
+        pub const CREDENTIAL: &str = "credential";
+        pub const SITE_URL: &str = "siteUrl";
+        pub const ALLOW_PRIVATE: &str = "allowPrivateHost";
+    }
+    mod git {
+        pub const EXECUTABLE: &str = "gitExecutable";
+    }
+    mod docker {
+        pub const EXECUTABLE: &str = "dockerExecutable";
+        pub const CONTEXT: &str = "context";
+        pub const ALLOW_STATE_CHANGES: &str = "allowStateChanges";
+    }
+
     /// The `github` aliases the cut-over (P9) added to `ACTION_ALIASES`,
     /// written out again so a change to the shipped block shows here:
     /// the per-action `credential` override is dropped when it names the
@@ -1379,6 +1450,21 @@ mod first_party {
         manifest
     }
 
+    /// A plugin API 1.9 manifest, valid only as a bundled first-party
+    /// plugin (the first-party publisher gate, X12).
+    fn bundled_manifest(text: &str) -> Manifest {
+        let manifest = Manifest::from_json(text).expect("the manifest parses");
+        manifest
+            .validate_bundled()
+            .expect("the manifest is a valid bundled first-party manifest");
+        assert!(
+            manifest.validate_first_party().is_err(),
+            "{} is valid only as a bundled plugin",
+            manifest.id
+        );
+        manifest
+    }
+
     fn snake_case(key: &str) -> String {
         let mut out = String::with_capacity(key.len() + 4);
         for c in key.chars() {
@@ -1418,18 +1504,29 @@ mod first_party {
 
     /// A manifest action as the agent registers it
     /// (`apps/agent/src/plugins/engine.rs` `action_type`): every plugin
-    /// action is cancellable and never changes the run's project.
+    /// action is cancellable; it changes the run's project only when its
+    /// node declares `changesContext` (plugin API 1.9, with
+    /// `projectContext.select`); its controls are the manifest's.
     fn plugin_type(plugin: &str, action: &deckpilot_plugin_manifest::Action) -> ActionType {
         let parameters = action
             .parameters
             .iter()
-            .map(|p| core_spec(serde_json::to_value(p).unwrap()))
+            .map(|p| match &p.kind {
+                deckpilot_plugin_manifest::ParameterKind::Resource { kinds } => {
+                    resource_spec(p, kinds)
+                }
+                _ => core_spec(serde_json::to_value(p).unwrap()),
+            })
             .collect();
         let mut node: NodeSpec = action.node.as_ref().map_or_else(NodeSpec::default, |n| {
             serde_json::from_value(serde_json::to_value(n).unwrap()).expect("the node converts")
         });
         node.cancellable = true;
-        node.changes_context = false;
+        node.changes_context = action
+            .node
+            .as_ref()
+            .and_then(|n| n.changes_context)
+            .unwrap_or(false);
         node.timeout_ms = action
             .node
             .as_ref()
@@ -1445,8 +1542,39 @@ mod first_party {
             parameters,
             requires_project: action.requires_project.unwrap_or(false),
             deprecated: action.deprecated.unwrap_or(false),
-            controls: None,
+            controls: action
+                .controls
+                .as_ref()
+                .map(|controls| deckpilot_core::ActionControls {
+                    bindings: controls.as_sets(),
+                }),
             node,
+        }
+    }
+
+    /// A `resource` parameter (plugin API 1.9) as the agent converts it
+    /// (`apps/agent/src/plugins/engine.rs` `resource_spec`): one kind for
+    /// the editor when the manifest accepts exactly one the core knows,
+    /// else any; no default.
+    fn resource_spec(
+        parameter: &deckpilot_plugin_manifest::Parameter,
+        kinds: &[deckpilot_plugin_manifest::ResourceKind],
+    ) -> ParameterSpec {
+        use deckpilot_core::ResourceKind as Core;
+        use deckpilot_plugin_manifest::ResourceKind as Declared;
+        let kind = match kinds {
+            [Declared::Directory] => Some(Core::Directory),
+            [Declared::Application] => Some(Core::Application),
+            [Declared::DockerEnvironment] => Some(Core::DockerEnvironment),
+            _ => None,
+        };
+        ParameterSpec {
+            key: parameter.key.clone(),
+            label: parameter.label.clone(),
+            description: parameter.description.clone(),
+            kind: ParameterKind::Resource { kind },
+            required: parameter.required,
+            default: None,
         }
     }
 
@@ -1500,7 +1628,7 @@ mod first_party {
     fn the_github_plugin_honours_the_builtin_contract() {
         let manifest = manifest(GITHUB_MANIFEST);
         assert_eq!(manifest.id.as_str(), "deckpilot.github");
-        let module = github::GithubModule::new();
+        let module = frozen!("github");
         let builtin = builtin_types(&module);
 
         // Every built-in action has its alias, and every plugin action is
@@ -1587,7 +1715,7 @@ mod first_party {
     /// credential slot `token`, filled by the migration's credential
     /// import) and the private-network switch (G3; a computer with it on
     /// keeps the built-in, `not_eligible`).
-    fn github_settings(module: &github::GithubModule, manifest: &Manifest) {
+    fn github_settings(module: &Frozen, manifest: &Manifest) {
         let config = &module.manifest().config;
         let scopes = &module.manifest().portability.settings;
         let mut kept = Vec::new();
@@ -1825,7 +1953,7 @@ mod first_party {
     fn the_gitlab_plugin_honours_the_builtin_contract() {
         let manifest = manifest(GITLAB_MANIFEST);
         assert_eq!(manifest.id.as_str(), "deckpilot.gitlab");
-        let module = gitlab::GitlabModule::new();
+        let module = frozen!("gitlab");
         honours_the_contract(GITLAB, &manifest, &module);
         mirrors_the_settings(
             &module,
@@ -1917,7 +2045,7 @@ mod first_party {
     fn the_jira_plugin_honours_the_builtin_contract() {
         let manifest = manifest(JIRA_MANIFEST);
         assert_eq!(manifest.id.as_str(), "deckpilot.jira");
-        let module = jira::JiraModule::new();
+        let module = frozen!("jira");
         honours_the_contract(JIRA, &manifest, &module);
         mirrors_the_settings(&module, &manifest, &[jira::ALLOW_PRIVATE, jira::CREDENTIAL]);
         entered_server(&manifest, jira::SITE_URL, "credential", &[]);
@@ -2034,11 +2162,350 @@ mod first_party {
         );
     }
 
+    const GIT_MANIFEST: &str = include_str!("../../../plugins/first-party/git/manifest.json");
+    const DOCKER_MANIFEST: &str = include_str!("../../../plugins/first-party/docker/manifest.json");
+    const WORKSPACE_MANIFEST: &str =
+        include_str!("../../../plugins/first-party/workspace/manifest.json");
+    const PROJECTS_MANIFEST: &str =
+        include_str!("../../../plugins/first-party/projects/manifest.json");
+
+    /// What the extraction's cut-over (WP-C1) checks of a module and its
+    /// plugin, from the shipped block of `ACTION_ALIASES`: every built-in
+    /// action has its alias and every plugin action is the target of one;
+    /// §5.3's rules hold under the alias's parameter rules
+    /// (`alias::incompatibilities`, which the agent's health check and the
+    /// registry check before routing); each rule names what it claims (a
+    /// `Keep` a resource on both sides, a `Rename` the built-in's key and
+    /// the plugin's, an `Unsupported` a parameter both declare); no
+    /// built-in parameter is lost, none is a credential; and the plugin's
+    /// settings are the module's but for `not_kept` (the host's or a
+    /// grant's now).
+    #[allow(clippy::too_many_lines)] // One contract, check by check.
+    fn honours_the_extraction_contract(
+        manifest: &Manifest,
+        module: &dyn FeatureModule,
+        not_kept: &[&str],
+    ) -> Vec<&'static ActionAlias> {
+        let name = module.manifest().id.to_string();
+        let aliases: Vec<&'static ActionAlias> =
+            ACTION_ALIASES.iter().filter(|a| a.module == name).collect();
+        let builtin = builtin_types(module);
+        assert_eq!(
+            aliases.iter().map(|a| a.legacy).collect::<BTreeSet<_>>(),
+            builtin.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            "every built-in action of {name} has its alias"
+        );
+        let plugin: BTreeMap<String, ActionType> = manifest
+            .contributes
+            .actions()
+            .iter()
+            .map(|a| {
+                let t = plugin_type(manifest.id.as_str(), a);
+                (t.id.to_string(), t)
+            })
+            .collect();
+        assert_eq!(
+            aliases.iter().map(|a| a.target).collect::<BTreeSet<_>>(),
+            plugin.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            "every action of {} is the target of an alias",
+            manifest.id
+        );
+        let mut problems = Vec::new();
+        for alias in &aliases {
+            assert_eq!(alias.plugin, manifest.id.as_str());
+            assert_eq!(alias.since, "0.10.0", "{}", alias.legacy);
+            let old = &builtin[alias.legacy];
+            let new = &plugin[alias.target];
+            for problem in alias::incompatibilities(alias, old, new) {
+                problems.push(format!("{}: {problem}", alias.legacy));
+            }
+            let find =
+                |t: &ActionType, key: &str| t.parameters.iter().find(|p| p.key == key).cloned();
+            for rule in alias.params {
+                let (legacy, plugin_key) = (rule.key(), rule.plugin_key().unwrap());
+                let (before, after) = (find(old, legacy), find(new, plugin_key));
+                assert!(
+                    before.is_some() && after.is_some(),
+                    "{}: the rule {rule:?} names `{legacy}` of the built-in and `{plugin_key}` \
+                     of the plugin",
+                    alias.legacy
+                );
+                match rule {
+                    ParamRule::Keep(_) => {
+                        assert!(
+                            matches!(
+                                before.as_ref().unwrap().kind,
+                                ParameterKind::Resource { .. }
+                            ) && matches!(after.unwrap().kind, ParameterKind::Resource { .. }),
+                            "{}: `{legacy}` is kept as a resource",
+                            alias.legacy
+                        );
+                        // The manifest accepts the built-in's kind (the
+                        // core sees several kinds as any).
+                        if let ParameterKind::Resource { kind: Some(kind) } = before.unwrap().kind {
+                            let declared = declared_kinds(manifest, alias.target, plugin_key);
+                            assert!(
+                                declared.contains(&kind),
+                                "{}: `{legacy}` accepts {kind:?} ({declared:?})",
+                                alias.legacy
+                            );
+                        }
+                    }
+                    ParamRule::Rename(from, to) => {
+                        assert_ne!(from, to);
+                        assert!(
+                            find(new, from).is_none(),
+                            "{}: `{from}` is gone",
+                            alias.legacy
+                        );
+                    }
+                    ParamRule::Unsupported(_) => {}
+                    // A bound narrower than the built-in's, which the
+                    // plugin declares as its own maximum.
+                    ParamRule::AtMost(_, most) => {
+                        let (
+                            ParameterKind::Integer { max: old_max, .. },
+                            ParameterKind::Integer { max: new_max, .. },
+                        ) = (
+                            &before.as_ref().unwrap().kind,
+                            &after.as_ref().unwrap().kind,
+                        )
+                        else {
+                            panic!("{}: `{legacy}` is capped as an integer", alias.legacy);
+                        };
+                        assert!(
+                            old_max.is_none_or(|max| max > *most),
+                            "{}: `{legacy}` is narrower than the built-in's",
+                            alias.legacy
+                        );
+                        assert_eq!(*new_max, Some(*most), "{}: `{legacy}`", alias.legacy);
+                    }
+                    ParamRule::DropIfDefault(_) => {
+                        panic!("{}: the extraction drops nothing", alias.legacy)
+                    }
+                }
+            }
+            for parameter in &old.parameters {
+                assert_ne!(
+                    parameter.kind,
+                    ParameterKind::Credential,
+                    "{}: `{}`",
+                    alias.legacy,
+                    parameter.key
+                );
+                // Every resource parameter of the built-in is kept.
+                if matches!(parameter.kind, ParameterKind::Resource { .. }) {
+                    assert!(
+                        matches!(alias.rule(&parameter.key), Some(ParamRule::Keep(_))),
+                        "{}: the resource `{}` has a `Keep` rule",
+                        alias.legacy,
+                        parameter.key
+                    );
+                }
+            }
+            assert_eq!(new.deprecated, old.deprecated, "{}", alias.legacy);
+        }
+        mirrors_extracted_settings(module, manifest, not_kept, &mut problems);
+        // No gap: the agent's health check before a cut-over finds none.
+        assert_eq!(
+            problems,
+            Vec::<String>::new(),
+            "the contract of {} differs from its built-in's",
+            manifest.id
+        );
+        aliases
+    }
+
+    /// The plugin's settings are the module's but for `not_kept`, with the
+    /// same kind, default, `required` and portability (labels may be the
+    /// plugin's translations); what differs, in `problems`.
+    fn mirrors_extracted_settings(
+        module: &dyn FeatureModule,
+        manifest: &Manifest,
+        not_kept: &[&str],
+        problems: &mut Vec<String>,
+    ) {
+        let config = &module.manifest().config;
+        let scopes = &module.manifest().portability.settings;
+        let mut kept = Vec::new();
+        for setting in manifest.contributes.settings() {
+            let spec = core_spec(serde_json::to_value(setting).unwrap());
+            let old = config
+                .iter()
+                .find(|c| c.key == spec.key)
+                .unwrap_or_else(|| panic!("setting `{}` is not the module's", spec.key));
+            for (field, same) in [
+                ("kind", spec.kind == old.kind),
+                ("default", spec.default == old.default),
+                ("required", spec.required == old.required),
+            ] {
+                if !same {
+                    problems.push(format!("setting `{}`: the {field} differs", spec.key));
+                }
+            }
+            let portable = matches!(
+                setting.portability,
+                Some(deckpilot_plugin_manifest::Portability::Portable)
+            );
+            assert_eq!(
+                portable,
+                scopes[&spec.key] == SettingScope::Portable,
+                "{}",
+                spec.key
+            );
+            kept.push(spec.key);
+        }
+        let mut left: Vec<&str> = config
+            .iter()
+            .map(|c| c.key.as_str())
+            .filter(|k| !kept.iter().any(|kept| kept == k))
+            .collect();
+        left.sort_unstable();
+        assert_eq!(left, not_kept, "{}", manifest.id);
+    }
+
+    /// `deckpilot.git` replaces the built-in `git`: `repository` kept as a
+    /// resource handle, `project_id` its `projectId`, `application` of
+    /// `open-repository` kept. `gitExecutable` is the host's (`tool.run`),
+    /// not the plugin's.
+    #[test]
+    fn the_git_plugin_honours_the_builtin_contract() {
+        let manifest = bundled_manifest(GIT_MANIFEST);
+        assert_eq!(manifest.id.as_str(), "deckpilot.git");
+        let aliases =
+            honours_the_extraction_contract(&manifest, &frozen!("git"), &[git::EXECUTABLE]);
+        assert_eq!(aliases.len(), 6);
+        assert_eq!(module_variables(&frozen!("git")), 0);
+        assert_eq!(manifest.contributes.variables().len(), 0);
+    }
+
+    /// `deckpilot.docker` replaces the built-in `docker`: `compose` kept,
+    /// `project_id` its `projectId`, `projectName` declared but never
+    /// honoured (the host pins the Compose project; a value is refused,
+    /// never dropped). `dockerExecutable` and `context` are the host's,
+    /// `allowStateChanges` is the `tools:docker:modify` grant.
+    #[test]
+    fn the_docker_plugin_honours_the_builtin_contract() {
+        let manifest = bundled_manifest(DOCKER_MANIFEST);
+        assert_eq!(manifest.id.as_str(), "deckpilot.docker");
+        let aliases = honours_the_extraction_contract(
+            &manifest,
+            &frozen!("docker"),
+            &[
+                docker::ALLOW_STATE_CHANGES,
+                docker::CONTEXT,
+                docker::EXECUTABLE,
+            ],
+        );
+        let refused: Vec<&str> = aliases
+            .iter()
+            .filter(|a| a.params.contains(&ParamRule::Unsupported("projectName")))
+            .map(|a| a.legacy)
+            .collect();
+        assert_eq!(
+            refused,
+            [
+                "docker.compose-status",
+                "docker.compose-up",
+                "docker.compose-down",
+                "docker.compose-restart",
+                "docker.logs",
+            ]
+        );
+        assert_eq!(manifest.contributes.variables().len(), 0);
+    }
+
+    /// `deckpilot.workspace` replaces the built-in `workspace`: the
+    /// editor, folder and browser resources kept; no settings.
+    #[test]
+    fn the_workspace_plugin_honours_the_builtin_contract() {
+        let manifest = bundled_manifest(WORKSPACE_MANIFEST);
+        assert_eq!(manifest.id.as_str(), "deckpilot.workspace");
+        let aliases = honours_the_extraction_contract(&manifest, &frozen!("workspace"), &[]);
+        assert_eq!(aliases.len(), 3);
+        assert_eq!(manifest.contributes.variables().len(), 0);
+    }
+
+    /// `deckpilot.projects` replaces the built-in `projects`: `project_id`
+    /// its `projectId`, the deprecated `next`, `previous` and `active`
+    /// same-name deprecated actions, `wrapAround` the plugin's; and its
+    /// host-published variables are the module's `projects.current.*`
+    /// (`MODULE_VARIABLE_ALIASES`, WP-C2).
+    #[test]
+    fn the_projects_plugin_honours_the_builtin_contract() {
+        let manifest = bundled_manifest(PROJECTS_MANIFEST);
+        assert_eq!(manifest.id.as_str(), "deckpilot.projects");
+        let module = frozen!("projects");
+        let aliases = honours_the_extraction_contract(&manifest, &module, &[]);
+        assert_eq!(aliases.len(), 9);
+        let declared: BTreeSet<String> = module
+            .manifest()
+            .variables
+            .iter()
+            .map(|v| v.id.to_string())
+            .collect();
+        let moved: BTreeSet<String> = deckpilot_core::variables::MODULE_VARIABLE_ALIASES
+            .iter()
+            .map(|a| a.legacy.to_owned())
+            .collect();
+        assert_eq!(declared, moved, "every variable of the module moved");
+        let plugin: BTreeSet<String> = manifest
+            .contributes
+            .variables()
+            .iter()
+            .map(|v| format!("plugins.deckpilot.projects.{}", v.id))
+            .collect();
+        let canonical: BTreeSet<String> = deckpilot_core::variables::MODULE_VARIABLE_ALIASES
+            .iter()
+            .map(|a| {
+                assert_eq!(a.plugin, "deckpilot.projects");
+                a.canonical.to_owned()
+            })
+            .collect();
+        assert_eq!(
+            plugin, canonical,
+            "the plugin declares every moved variable"
+        );
+    }
+
+    /// The core kinds a manifest's resource parameter accepts.
+    fn declared_kinds(
+        manifest: &Manifest,
+        target: &str,
+        key: &str,
+    ) -> Vec<deckpilot_core::ResourceKind> {
+        use deckpilot_core::ResourceKind as Core;
+        use deckpilot_plugin_manifest::ResourceKind as Declared;
+        let action = manifest
+            .contributes
+            .actions()
+            .iter()
+            .find(|a| format!("{}.{}", manifest.id, a.id) == target)
+            .unwrap();
+        let parameter = action.parameters.iter().find(|p| p.key == key).unwrap();
+        let deckpilot_plugin_manifest::ParameterKind::Resource { kinds } = &parameter.kind else {
+            return Vec::new();
+        };
+        kinds
+            .iter()
+            .filter_map(|kind| match kind {
+                Declared::Directory => Some(Core::Directory),
+                Declared::Application => Some(Core::Application),
+                Declared::DockerEnvironment => Some(Core::DockerEnvironment),
+                Declared::File => None,
+            })
+            .collect()
+    }
+
+    fn module_variables(module: &dyn FeatureModule) -> usize {
+        module.manifest().variables.len()
+    }
+
     /// The comparison finds what it claims to find.
     #[test]
     fn the_github_contract_check_finds_differences() {
         let manifest = manifest(GITHUB_MANIFEST);
-        let module = github::GithubModule::new();
+        let module = frozen!("github");
         let builtin = builtin_types(&module);
         let action = manifest
             .contributes
@@ -2074,14 +2541,7 @@ mod first_party {
 /// The built-in action types that step once per event (a key, or a
 /// dial's detent or press); every other built-in is keys only
 /// (`docs/device-controls.md`).
-const STEP_ACTIONS: &[&str] = &[
-    "deck.brightness",
-    "deck.next-page",
-    "deck.previous-page",
-    "projects.cycle",
-    "projects.next",
-    "projects.previous",
-];
+const STEP_ACTIONS: &[&str] = &["deck.brightness", "deck.next-page", "deck.previous-page"];
 
 /// Every built-in action type declares its controls: none relies on the
 /// legacy default of types without a declaration. Every declaration is
@@ -2136,5 +2596,5 @@ fn every_builtin_action_declares_its_controls() {
             );
         }
     }
-    assert!(table.len() > 50, "{} built-in action types", table.len());
+    assert!(table.len() > 25, "{} built-in action types", table.len());
 }

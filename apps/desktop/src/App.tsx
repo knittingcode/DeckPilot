@@ -51,6 +51,8 @@ import {
   modulePageContext,
   moduleStatusItems,
 } from "@/modules"
+import { hostPage, hostStatusItems, isHostPageAvailable } from "@/modules/host-views"
+import { pluginFeatures } from "@/lib/plugin-features"
 import { findSettingsPage } from "@/settings/registry"
 import { SettingsView } from "@/settings/settings-view"
 import { resolveEditingProfile, useAppData } from "@/shell/app-data"
@@ -73,8 +75,9 @@ type View = React.LazyExoticComponent<() => React.JSX.Element>
 const MARKETPLACE = import.meta.env.VITE_DECKPILOT_PLUGINS === "1"
 
 // Pages load on first use, which keeps the start-up bundle small. Pages of
-// feature modules come from the module registry. Profiles, devices and the
-// rest of the configuration are settings pages.
+// feature modules come from the module registry, the Workflows and Projects
+// screens from the plugins that activate them (`modules/host-views.ts`).
+// Profiles, devices and the rest of the configuration are settings pages.
 const PAGES: Partial<Record<CorePageId, View>> = {
   designer: lazy(() =>
     import("@/pages/layout-designer").then((m) => ({ default: m.LayoutDesignerPage })),
@@ -82,7 +85,6 @@ const PAGES: Partial<Record<CorePageId, View>> = {
   dashboard: lazy(() => import("@/pages/dashboard").then((m) => ({ default: m.DashboardPage }))),
   layouts: lazy(() => import("@/pages/layouts").then((m) => ({ default: m.LayoutsPage }))),
   actions: lazy(() => import("@/pages/actions").then((m) => ({ default: m.ActionsPage }))),
-  workflows: lazy(() => import("@/pages/workflows").then((m) => ({ default: m.WorkflowsPage }))),
   ...(MARKETPLACE
     ? {
         marketplace: lazy(() =>
@@ -102,7 +104,6 @@ const PAGE_TITLES: Partial<Record<CorePageId, string>> = {
   dashboard: "Dashboard",
   layouts: "Layouts",
   actions: "Action Library",
-  workflows: "Workflows",
   marketplace: "Marketplace",
 }
 
@@ -158,8 +159,11 @@ function Studio() {
   }, [dirtyRef])
   const data = useAppData({ acceptEditing })
   const { modules } = data
+  // What the plugins provide now: the Workflows and Projects screens, the
+  // active project's status item. Follows every plugin change.
+  const features = useMemo(() => pluginFeatures(data.pluginModules), [data.pluginModules])
 
-  // Which locations exist depends on the enabled modules.
+  // Which locations exist depends on the enabled modules and plugins.
   const exists = useMemo(
     () =>
       modules === null
@@ -169,8 +173,9 @@ function Studio() {
               ? findSettingsPage(modules, location.page) !== undefined
               : Object.hasOwn(PAGES, location.page) ||
                 isModulePageAvailable(modules, location.page) ||
+                isHostPageAvailable(features, location.page) ||
                 (MARKETPLACE && parsePluginViewPage(location.page) !== null),
-    [modules],
+    [modules, features],
   )
   const navigation = useNavigation(exists)
   // Leaving the device editor, closing the window or quitting asks over
@@ -265,20 +270,25 @@ function Studio() {
   // The workspace page on screen, or the one kept under the settings.
   const page = inSettings ? navigation.workspace : navigation.location.page
   const settingsPage = inSettings ? navigation.location.page : null
-  // A module page disappears when its module is disabled.
+  // A module page disappears when its module is disabled, a host page
+  // when its plugin is.
   const pluginView = MARKETPLACE ? parsePluginViewPage(page) : null
+  const host = isHostPageAvailable(features, page) ? hostPage(page) : undefined
   const Current = Object.hasOwn(PAGES, page)
     ? PAGES[page as CorePageId]
-    : isModulePageAvailable(context.modules, page)
-      ? MODULE_VIEWS[page]
-      : pluginView
-        ? PLUGIN_VIEW
-        : undefined
+    : host
+      ? host.view
+      : isModulePageAvailable(context.modules, page)
+        ? MODULE_VIEWS[page]
+        : pluginView
+          ? PLUGIN_VIEW
+          : undefined
   const ViewComponent = Current ?? DEFAULT_VIEW
   // Settings pages show their title themselves; the toolbar shows where they are.
   const fallbackTitle = settingsPage
     ? ""
     : (PAGE_TITLES[page as CorePageId] ??
+      host?.fallbackTitle ??
       context.modules
         .flatMap((m) => m.pages.map((p) => ({ id: `${m.id}/${p.id}`, title: p.title })))
         .find((p) => p.id === page)?.title ??
@@ -300,7 +310,7 @@ function Studio() {
       ? CORE_PAGE_CONTEXTS.designer
       : pluginView
         ? toolbarContext(openPlugin?.view.context)
-        : (corePageContext(page) ?? modulePageContext(page))
+        : (corePageContext(page) ?? host?.context ?? modulePageContext(page))
   const selectors =
     showsDevice(viewContext) || showsProfile(viewContext) ? (
       <>
@@ -389,6 +399,9 @@ function Studio() {
                 <CoreStatusItems />
                 <ExecutionSync />
                 {moduleStatusItems(context.modules).map(({ key, component: Item }) => (
+                  <Item key={key} />
+                ))}
+                {hostStatusItems(features).map(({ key, component: Item }) => (
                   <Item key={key} />
                 ))}
               </SidebarProvider>

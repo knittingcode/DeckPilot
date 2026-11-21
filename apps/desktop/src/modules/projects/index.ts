@@ -1,23 +1,20 @@
-import { FolderKanban } from "lucide-react"
 import { lazy } from "react"
 
-import type { FrontendModule } from "../types"
-import { ActiveProjectStatus } from "./active-project-status"
+export { ActiveProjectStatus } from "./active-project-status"
 
-/** User interface of the `projects` module. */
-export const projectsModule: FrontendModule = {
-  id: "projects",
-  icon: FolderKanban,
-  pages: {
-    projects: {
-      view: lazy(() => import("./projects-page").then((m) => ({ default: m.ProjectsPage }))),
-      icon: FolderKanban,
-      // A profile's projects.
-      context: "profile",
-    },
-  },
-  statusItems: [ActiveProjectStatus],
-  dashboardCards: [
-    lazy(() => import("./active-project-card").then((m) => ({ default: m.ActiveProjectCard }))),
-  ],
-}
+/**
+ * The Projects screen, a host view the `deckpilot.projects` plugin
+ * activates (plugin API 1.9, `hostViews`; `modules/host-views.ts`). The
+ * page id is the one the legacy module's page had, so links from other
+ * windows (`projects/projects`) keep working.
+ */
+export const PROJECTS_PAGE = "projects/projects"
+
+export const ProjectsPageView = lazy(() =>
+  import("./projects-page").then((m) => ({ default: m.ProjectsPage })),
+)
+
+/** The dashboard card of the active project (`dashboardCards: activeProject`). */
+export const ActiveProjectCardView = lazy(() =>
+  import("./active-project-card").then((m) => ({ default: m.ActiveProjectCard })),
+)

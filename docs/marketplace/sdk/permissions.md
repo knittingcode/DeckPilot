@@ -45,7 +45,7 @@ user grants and revokes.
 | `credentials` | `refs` (1-8 slot keys of `contributes.credentials`) | `credentials:<key>` per slot | `http.fetch` with `auth` naming the slot, only to the slot's `hosts` (each also a granted `network` host), or to the server of its `userOrigin` setting once the user allowed it, and in its `schemes`; `credentials.has` for the slot |
 | `notifications` | | `notifications` | `notify` |
 | `storage` | `quotaKb` (257-10,240) | `storage` | Raises the storage quota from 256 KiB to `quotaKb` KiB. Storage itself needs no permission |
-| `profile` | `read` (`profile`, `project`) | `profile` | Nothing yet: no ABI 1 capability reads the profile or project |
+| `profile` | `read` (`profile`, `project`) | `profile` | Plugin API 1.9: `profile.read` ([`Context::profile`](capabilities.md#plugin-api-19-resources-tools-and-the-project-context)), the profile's name with `profile` and the active project's id, key and name with `project`. Medium tier, every publisher. The broker decides it; this agent answers it as not implemented yet |
 | `variables` | `read` (variable ids of other owners, a final `.*` allowed) | `variables:<entry>` | Nothing yet: ABI 1 has no capability to read variables. Own variables need no permission |
 | `openUrl` | `hosts` (1-16 exact DNS names, optional `:port`; may be empty with `userOrigins`), `userOrigins` (settings of the `network` permission's origin slots, [below](#pages-of-a-server-the-user-entered)) | `openUrl:<host>` per host; `openUrl:user-origin:<setting>` per origin setting | `url.open` ([`Context::open_url`](capabilities.md#open-url)) for `https://<host>` URLs: no other scheme, no userinfo, at most 2,048 bytes, 1 per 2 s and 20 per 10 minutes, 3 per invocation, and only in a run the user started (a key, a gesture, the app, or a workflow the user started; never a schedule, a lifecycle event, the agent's start or a work session). Exact hosts only: **wildcard hosts validate but are never granted**. It gives no `network` access to the host, and `network` gives no `openUrl` |
 | `background` | `minIntervalSeconds` (15-86,400) | `background` | Nothing yet: no background work or timers in ABI 1 |
@@ -84,8 +84,92 @@ routing refuses the manifest (unknown field).
 Kinds that are **never grantable** to plugins have no representation at
 all: file system, processes, shell, clipboard, USB/HID, firmware, workflows, UI (the manifest
 crate refuses them with a clear message, `FORBIDDEN_PERMISSION_KINDS`).
+`projectContext` left that list with plugin API 1.9, behind the
+first-party gate ([below](#plugin-api-19-first-party-bundled-plugins-only)).
 Declaring a kind that does nothing yet is allowed, but it still costs the
 user a consent decision: declare only what you call.
+
+## Plugin API 1.9: first-party bundled plugins only
+
+The kinds below are reviewed in
+[module-migration.md §7](../module-migration.md#plugin-api-19-security-reviews-2026-11-20)
+(X1 to X13). They need `"engines": { "pluginApi": "^1.9" }` (a `^1.8`
+manifest that declares one is refused with the level to set), and they
+pass **only** the rules for a plugin shipped inside the app, whose every
+file matched the pins compiled into the agent
+(`Manifest::validate_bundled`, used by `verify_bundled_files`). A
+third-party manifest (`Manifest::validate`), a `deckpilot.*` package from a
+registry (`Manifest::validate_first_party`), a sideloaded and a developer
+package are refused (`first-party-only`), and the plugin store refuses to
+install such a manifest from any source but the bundle. Process execution
+in general, a shell, the file system, the workflows engine and plugin UI
+stay never grantable for every publisher.
+
+**Status:** the manifest, the grants, the ABI, the SDK and the broker are
+in place; the agent carries out `resource` parameters,
+`resource.resolve` and `tool.run`, and answers the other operations as not implemented
+until their host side lands (WP-A4 to WP-A6).
+
+| Kind | Fields | Grant keys and tiers | Allows |
+| --- | --- | --- | --- |
+| `tools` | `tools`: 1-2 of `{executable, subcommands, network?, modify?}` ([below](#tools)) | `tools:git`, `tools:docker` (**high**); `tools:git:network` (**high**); `tools:docker:modify` (**high**, off by default: optional when actions name it in `requiresPermissions`) | `tool.run` of the declared subcommands and options; docker reads that need no folder also without a handle |
+| `resources` | `paths`, `open` (booleans) | `resources` (medium); `resources:paths` (medium); `resources:open` (**high**) | `resource.resolve` (labels only; with `paths` the bound path); `resource.open` in runs the user started |
+| `openUrl` with `fromParams: true` | `hosts` may then be empty | `openUrl:from-params` (medium) | `url.openParam`: the literal http or https URL the user stored in the invocation's own parameter, in runs the user started |
+| `projectContext` | `select` (boolean) | `projectContext` (medium); `projectContext:select` (**high**) | `project.current`, `project.list`; with `select`, `project.select` and `project.cycle` in runs the user started |
+| `hostViews` | | `hostViews` (low) | The view kinds `workflows` and `projects`, `contributes.statusItems: ["activeProject"]` and `contributes.dashboardCards: ["activeProject"]`, all drawn by the app from core data: placement only, no data |
+
+A `resource` parameter (`{"type": "resource", "kinds": ["directory",
+"file", "application", "dockerEnvironment"]}`) is gated the same way; it
+has no default and is not a setting. High tiers are always asked for,
+never derived by a module migration (which derives at most medium) and
+never seeded with a bundled plugin (which seeds low tiers only).
+
+### `tools`
+
+```json
+{ "kind": "tools",
+  "tools": [
+    { "executable": "git", "network": true, "subcommands": [
+        { "name": "status", "options": ["--porcelain=v2", "--branch", "-z"] },
+        { "name": "log", "options": ["-1", "--format"] },
+        { "name": "ls-remote" } ] }
+  ],
+  "justification": "Reads the status of the repositories you bind to keys." }
+```
+
+- `executable` is `git` or `docker`, nothing else (no path: the path is the
+  user's own host-held setting). There is no argv, shell string or
+  environment in the manifest.
+- Each subcommand and option must be one of the host's policy
+  (`deckpilot_plugin_manifest::tools`): git `status`, `log`, `config`,
+  `remote`, `rev-parse`, `ls-remote`; docker `context show`, `version`,
+  `compose version`, `ps`, `compose ps`, `compose logs`, `logs`,
+  `compose up`, `compose down`, `compose restart`, `start`, `stop`,
+  `restart`, each with its own options (what the built-in modules pass:
+  for example `status --untracked-files`, `log --no-show-signature`,
+  `compose ps --all`, `compose logs --no-color`). That allowlist is the
+  boundary; the agent checks every run against it and the declaration
+  again. The compose file, folder and project name are the host's, from
+  the binding: a plugin never declares or passes `-f`, `-p` or
+  `--project-name`.
+- The denylists are checked first for a precise error: git's `-c`,
+  `--config-env`, `-C`, `--git-dir`, `--work-tree`, `--namespace`,
+  `--exec-path`, `--upload-pack`/`-u`, `--receive-pack`, `--output`/`-o`,
+  `--ext-diff`, `--textconv`, `--exec`, `--super-prefix` and any `core.*`
+  or `alias.*` key; docker's `run`, `exec`, `create`, `cp`, `attach`,
+  `build`, `push`, `pull`, `login`, `logout`, `inspect`, `kill`, `system`,
+  `volume`, `network`, `plugin`, `swarm`, `secret`, `image`,
+  `compose config|run|exec|cp|build|push|pull|kill`, and the options `-v`,
+  `--volume(s)`, `--mount`, `--privileged`, `--cap-add`, `--device`,
+  `--pid`, `--network`, `--security-opt`, `-H`/`--host`, `--context`,
+  `--config`, `--tls*`, `-e`/`--env`, `--env-file`,
+  `--project-directory`, `-p`/`--project-name`, `-f`/`--file`, `--rmi`, `--build`,
+  `--force-recreate`, `--renew-anon-volumes`.
+- `network` (git only) is declared exactly when `ls-remote` is; `modify`
+  (docker only) exactly when a subcommand that starts, stops or restarts
+  is.
+- A plugin with `tools` declares no `network`, `credentials` or `openUrl`
+  (no exfiltration channel next to process authority).
 
 ## Always allowed (no permission)
 

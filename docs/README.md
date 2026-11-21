@@ -38,8 +38,9 @@ led to it; where the code differs, the code and the tests win.
   cost.
 - [Action architecture](action-architecture.md): action types, instances
   and shared variables. *Design record, implemented in 0.6.0.*
-- [Integration modules](integration-modules.md): the System, Workspace,
-  Git, Docker, HTTP, GitHub, GitLab, Jira and Notifications modules.
+- [Integration modules](integration-modules.md): the System, HTTP and
+  Notifications modules, and where the former Git, Docker, Workspace,
+  GitHub, GitLab and Jira modules went (first-party plugins).
 - [Compatibility](compatibility.md): protocol negotiation and the tested
   matrix of app and agent versions.
 - [Built-in actions and feature parity](feature-parity.md): what exists
@@ -61,7 +62,8 @@ led to it; where the code differs, the code and the tests win.
   registry, the app and the agent.
 - [Moving built-in modules to plugins](marketplace/module-migration.md): the
   core boundary, bundled default plugins, action id compatibility and the
-  migration. *Design record, proposed.* Its evidence is the
+  migration. *Design record; the extraction's built-ins are removed
+  (WP-C5, WP-C6).* Its evidence is the
   [module classification matrix](marketplace/module-matrix.md).
 
 ## Contributing and development

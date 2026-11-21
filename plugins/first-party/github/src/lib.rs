@@ -12,21 +12,22 @@
 //! compares the manifest with the built-in's definitions, and
 //! `apps/agent/tests/plugins_github.rs` runs both on the same answers.
 //!
-//! **Read-only.** Only `GET` requests, to `https://api.github.com` only
-//! (the manifest's one `network` origin); pages are opened on
-//! `https://github.com` only (`openUrl`). GitHub Enterprise and other
-//! hosts keep the built-in module.
+//! **Read-only.** Only `GET` requests, to `https://api.github.com` (the
+//! manifest's `network` host) or to the GitHub Enterprise Server API the
+//! user entered in `apiUrl` and allowed (its user-origin slot, a private
+//! network only with its own consent); pages are opened on
+//! `https://github.com` (`openUrl`) or on that server.
 //!
 //! **Token.** The credential slot `token`: the agent injects it as
-//! `Authorization: Bearer` into requests to api.github.com and redacts it
-//! from everything this module sees; it never enters the module.
+//! `Authorization: Bearer` into requests to api.github.com or the allowed
+//! server and redacts it from everything this module sees; it never
+//! enters the module.
 #![deny(unsafe_code)]
 
 use deckpilot_plugin_sdk::prelude::*;
 use serde_json::Value;
 
 pub mod api;
-pub mod urls;
 
 use api::{Api, Failure, Repo, clean, codes, fail};
 
@@ -154,7 +155,7 @@ fn current_user(ctx: &mut Context<'_>, _args: &Args<'_>) -> ActionResult {
         .with("login", login.clone())
         .with(
             "url",
-            string(user, "html_url").unwrap_or_else(|| format!("{}{login}", api::WEB)),
+            string(user, "html_url").unwrap_or_else(|| format!("{}{login}", api.web())),
         );
     if let Some(name) = string(user, "name").filter(|n| !n.is_empty()) {
         output = output.with("name", clean(&name, 200));
@@ -188,7 +189,7 @@ fn repository_info(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
         .with("forks", number(json, "forks_count"))
         .with(
             "url",
-            string(json, "html_url").unwrap_or_else(|| format!("{}{full_name}", api::WEB)),
+            string(json, "html_url").unwrap_or_else(|| format!("{}{full_name}", api.web())),
         );
     if let Some(description) = string(json, "description").filter(|d| !d.is_empty()) {
         output = output.with("description", clean(&description, 500));
@@ -495,7 +496,7 @@ fn checks(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
     let sha = string(&statuses.first, "sha").unwrap_or_else(|| reference.clone());
     let state = overall(counts);
     let total = counts.passed + counts.failed + counts.pending;
-    let url = page.unwrap_or_else(|| format!("{}{full}/commit/{sha}", api::WEB));
+    let url = page.unwrap_or_else(|| format!("{}{full}/commit/{sha}", api.web()));
     let (mut failing_text, kept) = bounded_lines(&failing);
     if kept < failing.len() {
         // Only when the names exceed one output (16 KiB): say how many
@@ -529,17 +530,18 @@ fn checks(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
 
 fn open(ctx: &mut Context<'_>, args: &Args<'_>) -> ActionResult {
     let settings = api::settings(ctx)?;
-    api::api_base(&settings.api_url)?;
+    let web = api::web_base(&api::api_base(&settings.api_url)?);
     let target = if let Some(url) = optional(args, "url")? {
         url
     } else {
         let repo = required_repository(args)?;
+        let root = web.root();
         match args.get::<Option<i64>>("pullRequest")? {
-            Some(number) => format!("{}{}/pull/{}", api::WEB, repo.full_name(), number.max(1)),
-            None => format!("{}{}", api::WEB, repo.full_name()),
+            Some(number) => format!("{root}{}/pull/{}", repo.full_name(), number.max(1)),
+            None => format!("{root}{}", repo.full_name()),
         }
     };
-    let page = api::web_url(&target)?;
+    let page = api::web_url(&target, &web)?;
     ctx.open_url(page.url)?;
     Ok(Output::message(format!("opened {}", page.shown)).with("url", page.shown))
 }

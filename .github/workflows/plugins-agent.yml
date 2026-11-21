@@ -25,6 +25,8 @@ on:
       - Cargo.lock
       - rust-toolchain.toml
       - tools/ci/rust-pinned-toolchain.sh
+      - tools/release-pipeline/check-bundled-plugins.sh
+      - tools/release-pipeline/check-released-pins.sh
       - .github/workflows/plugins-agent.yml
   pull_request:
     paths:
@@ -37,6 +39,8 @@ on:
       - Cargo.lock
       - rust-toolchain.toml
       - tools/ci/rust-pinned-toolchain.sh
+      - tools/release-pipeline/check-bundled-plugins.sh
+      - tools/release-pipeline/check-released-pins.sh
       - .github/workflows/plugins-agent.yml
   workflow_dispatch:
 
@@ -184,11 +188,24 @@ jobs:
       # older build on the same data.
       - name: Notifications plugin end to end
         run: cargo test -p deckpilot-agent --features plugins --test plugins_notifications --locked -- --nocapture
+      # Plugin API 1.9's first-party plugins through the real host
+      # operations: resource handles and a recording launcher (Workspace),
+      # the project context and host-published variables (Projects), and
+      # the host views (Workflows, Projects).
+      - name: Workspace, Projects and Workflows plugins end to end
+        run: cargo test -p deckpilot-agent --features plugins --test plugins_workspace --test plugins_projects --test plugins_workflows --locked -- --nocapture
+      # deckpilot.git and deckpilot.docker through the real `tool.run`:
+      # a fake git and a fake docker first on the agent's PATH print the
+      # built-in tests' recorded output; consent, sub-grants and the
+      # user-started rule for Compose changes (Unix only).
+      - name: Git and Docker plugins end to end
+        if: runner.os != 'Windows'
+        run: cargo test -p deckpilot-agent --features plugins --test plugins_git --test plugins_docker --locked -- --nocapture
       # The bundle layout as the release builds it (and
       # DECKPILOT_RELEASE_PLUGINS=1 locally), with the test fixture: built twice from clean
-      # target directories (reproducible on this platform), the agent
-      # compiled with the pins, and the release check against both. Last,
-      # because it rebuilds the agent.
+      # target directories (reproducible on this platform), no released
+      # version with other files, the agent compiled with the pins, and the
+      # release check against both. Last, because it rebuilds the agent.
       - name: Bundle layout dry run
         run: |
           exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
@@ -196,8 +213,20 @@ jobs:
           # classes. The fixture builds below contain it too, and are checked
           # against an agent compiled with their pins.
           plugins/first-party/build.sh --out "$RUNNER_TEMP/bundle-release"
-          jq -c '[.plugins[] | {id, class}]' "$RUNNER_TEMP/bundle-release/bundled/pins.json" | tr -d '\r' > "$RUNNER_TEMP/release-set.json"
-          echo '[{"id":"deckpilot.github","class":"migration"},{"id":"deckpilot.gitlab","class":"migration"},{"id":"deckpilot.jira","class":"migration"},{"id":"deckpilot.notifications","class":"default"}]' | diff - "$RUNNER_TEMP/release-set.json"
+          # A released version never changes (plugins/first-party/README.md,
+          # "Versions"): no plugin of the release set has the id and version
+          # of one a release shipped, recorded in
+          # plugins/first-party/released-pins.json for this platform, with
+          # other files. check-bundled-plugins.sh below checks it again.
+          tools/release-pipeline/check-released-pins.sh "$RUNNER_TEMP/bundle-release/bundled/pins.json"
+          jq -c '[.plugins[] | {id, class}] | sort_by(.id)' "$RUNNER_TEMP/bundle-release/bundled/pins.json" | tr -d '\r' > "$RUNNER_TEMP/release-set.json"
+          # What bundled.json lists (each directory's manifest id is
+          # `deckpilot.<directory>`, checked here too), as the built pins must say.
+          for path in $(jq -r '.plugins[].path' plugins/first-party/bundled.json | tr -d '\r'); do
+            id=$(jq -r .id "plugins/first-party/$path/manifest.json" | tr -d '\r')
+            [ "$id" = "deckpilot.$path" ] || { echo "plugins/first-party/$path has id $id"; exit 1; }
+          done
+          jq -c '[.plugins[] | {id: ("deckpilot." + .path), class}] | sort_by(.id)' plugins/first-party/bundled.json | tr -d '\r' | diff - "$RUNNER_TEMP/release-set.json"
           for run in a b; do
             plugins/first-party/build.sh --test-fixtures --out "$RUNNER_TEMP/bundle-$run" --target-dir "$RUNNER_TEMP/first-party-$run"
           done

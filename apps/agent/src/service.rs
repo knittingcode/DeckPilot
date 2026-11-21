@@ -38,6 +38,8 @@ mod executions;
 mod folders;
 mod gestures;
 mod live_preview;
+#[cfg(feature = "plugins")]
+pub(crate) mod plugin_projects;
 mod security;
 mod simulate;
 mod stateful;
@@ -139,6 +141,14 @@ pub enum TrayCommand {
     Quit,
 }
 
+/// The first-party plugin that provides the project context once the
+/// built-in `projects` module is extracted (plugin API 1.9).
+pub(crate) const PROJECTS_PLUGIN: &str = "deckpilot.projects";
+
+/// The reason ([`IpcError::reason`]) of a project request refused while no
+/// project context provider is active.
+pub(crate) const PROJECTS_OFF: &str = "projectsOff";
+
 #[derive(Debug)]
 pub(crate) enum Command {
     Request {
@@ -183,6 +193,14 @@ pub(crate) enum Command {
         name: String,
         result: Result<ActionResult, deckpilot_core::EngineError>,
         reply: Option<oneshot::Sender<Result<Response, IpcError>>>,
+    },
+    /// A plugin's project operation or profile read (plugin API 1.9, X6
+    /// and X9), which the broker allowed, from its lane thread.
+    #[cfg(feature = "plugins")]
+    PluginProject {
+        plugin: String,
+        call: plugin_projects::ProjectCall,
+        reply: std::sync::mpsc::SyncSender<plugin_projects::ProjectReply>,
     },
     /// A work session operation from a test (the keys call the service
     /// directly). `press: None` is a press now, in the current state.
@@ -346,6 +364,49 @@ impl AgentHandle {
             });
         });
         Some(rx)
+    }
+
+    /// A plugin's project operation as its executor asks the agent
+    /// (plugin API 1.9, after the broker and the executor allowed it):
+    /// `op` is `current`, `list`, `select` (`arg`: the project id), `cycle`
+    /// (`arg`: `next` or `previous`, wrapping) or `profile`. The answer's
+    /// project id (`None` for `list`, `profile` and no current project), or
+    /// the refusal's reason code. Tests only.
+    #[cfg(all(feature = "test-hooks", feature = "plugins"))]
+    pub async fn plugin_project(
+        &self,
+        plugin: &str,
+        op: &str,
+        arg: Option<&str>,
+    ) -> Result<Option<String>, String> {
+        use plugin_projects::{ProjectAnswer, ProjectCall, ProjectHost};
+        let call = match op {
+            "current" => ProjectCall::Current,
+            "list" => ProjectCall::List,
+            "select" => ProjectCall::Select {
+                id: arg.unwrap_or_default().to_owned(),
+            },
+            "cycle" => ProjectCall::Cycle {
+                direction: if arg == Some("previous") {
+                    CycleDirection::Previous
+                } else {
+                    CycleDirection::Next
+                },
+                wrap: true,
+            },
+            _ => ProjectCall::Profile,
+        };
+        let host = plugin_projects::AgentProjects::new(self.commands.clone());
+        let plugin = plugin.to_owned();
+        let answer = tokio::task::spawn_blocking(move || host.call(&plugin, call))
+            .await
+            .map_err(|e| e.to_string())?;
+        match answer {
+            Ok(ProjectAnswer::Current(project)) => Ok(project.map(|p| p.id)),
+            Ok(ProjectAnswer::Switched { to, .. }) => Ok(Some(to.id)),
+            Ok(ProjectAnswer::List(_) | ProjectAnswer::Profile { .. }) => Ok(None),
+            Err(refusal) => Err(refusal.code.to_owned()),
+        }
     }
 
     /// The work session as last published; changes on every transition.
@@ -692,9 +753,13 @@ impl Agent {
                 desktop_clients: self.handle.desktop_clients.clone(),
                 native: self.options.notifier.clone(),
             }),
-            Arc::new(move || {
-                let _ = commands.send(Command::PluginsChanged);
+            Arc::new({
+                let commands = commands.clone();
+                move || {
+                    let _ = commands.send(Command::PluginsChanged);
+                }
             }),
+            commands,
         );
         if let Some(key) = &self.key {
             self.plugins.opened(key);
@@ -887,6 +952,15 @@ impl Agent {
                 self.detached_finished(action, &name, result, reply);
                 Flow::Continue
             }
+            #[cfg(feature = "plugins")]
+            Command::PluginProject {
+                plugin,
+                call,
+                reply,
+            } => {
+                let _ = reply.try_send(self.plugin_project(&plugin, call));
+                Flow::Continue
+            }
             Command::Request {
                 request: Request::RunAction { action },
                 reply,
@@ -1027,7 +1101,10 @@ impl Agent {
             Request::GetActiveProfile => Ok(Response::ActiveProfile {
                 profile: self.active_profile_info(),
             }),
-            Request::GetActiveProject => Ok(self.active_project_response()),
+            Request::GetActiveProject => {
+                self.require_projects()?;
+                Ok(self.active_project_response())
+            }
             Request::ListVariables { context, filter } => self.list_variables(&context, &filter),
             Request::PreviewReferences { context, items } => {
                 self.preview_references(&context, &items)
@@ -1404,17 +1481,30 @@ impl Agent {
         Ok(())
     }
 
-    /// Project switching belongs to the projects module and is refused while
-    /// that module is disabled.
+    /// Whether something provides the project context now: the Projects
+    /// plugin (`deckpilot.projects`) is enabled. The built-in `projects`
+    /// module is gone (`module-migration.md` §11 D1, WP-C6); the project
+    /// data model stays in the core. Plugins' project operations (plugin
+    /// API 1.9, `service/plugin_projects.rs`), [`Agent::require_projects`],
+    /// the project a workflow leaves behind and the tray ask it. Nothing is
+    /// deleted while it is off: the profile's projects and the stored
+    /// active project stay as they are.
+    pub(crate) fn project_context_active(&self) -> bool {
+        deckpilot_core::ModuleId::new(PROJECTS_PLUGIN).is_ok_and(|id| self.modules.is_enabled(&id))
+    }
+
+    /// Project switching belongs to the Projects plugin and is refused,
+    /// with the reason [`PROJECTS_OFF`], while it is not active
+    /// ([`Agent::project_context_active`]).
     fn require_projects(&self) -> Result<(), IpcError> {
-        let id = deckpilot_modules::projects::module_id();
-        if self.modules.is_enabled(&id) {
+        if self.project_context_active() {
             Ok(())
         } else {
             Err(IpcError::new(
                 ErrorCode::Failed,
-                "the Projects module is disabled",
-            ))
+                "the Projects plugin is not active: turn it on in Settings › Plugins",
+            )
+            .with_reason(PROJECTS_OFF))
         }
     }
 
@@ -1424,10 +1514,13 @@ impl Agent {
             .runtime
             .profile()
             .ok_or_else(|| engine_error(&EngineError::NoActiveProfile))?;
-        // Same order and wrap-around setting as the projects actions.
-        let wrap = deckpilot_modules::projects::switching::wrap_around(&self.modules);
-        let target = deckpilot_modules::projects::switching::step(
-            profile,
+        // Same order and wrap-around setting as the plugin's `cycle`.
+        let wrap = self
+            .plugins
+            .project_wrap_around(PROJECTS_PLUGIN)
+            .unwrap_or(true);
+        let target = deckpilot_core::ProjectSwitcher::step(
+            &profile.projects,
             self.runtime.active_project_id(),
             direction,
             wrap,
@@ -2024,7 +2117,13 @@ impl Agent {
             backend: self.options.backend.name().into(),
             profiles: self.profiles(),
             active_profile: self.active_profile_info(),
-            active_project: self.runtime.active_project().cloned(),
+            // Not shown (tray, status) while no project context provider
+            // is active; the stored active project is kept.
+            active_project: self
+                .runtime
+                .active_project()
+                .filter(|_| self.project_context_active())
+                .cloned(),
             devices: self.device_infos(),
             brightness: self.brightness,
             last_input_at: self.last_input_at,

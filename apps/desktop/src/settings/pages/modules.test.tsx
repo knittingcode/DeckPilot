@@ -20,7 +20,10 @@ beforeEach(() => {
   resetToasts()
   localStorage.clear()
 })
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllEnvs()
+})
 
 describe("Modules settings with the built-in modules", () => {
   it("disables a module and reports the new state", async () => {

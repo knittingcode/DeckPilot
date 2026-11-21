@@ -14,6 +14,9 @@
 //! * **Audit without values** ([`audit`]) and **rate limits** ([`rate`]).
 //! * **Never grantable**: file system, process, clipboard (see
 //!   [`permissions::NEVER_GRANTABLE`]); there is no request type for them.
+//!   Plugin API 1.9's brokered `tool.run` is not a process capability: it
+//!   names `git` or `docker`, an argument array and a resource handle, and
+//!   the agent's policy builds and checks the command (X3).
 #![forbid(unsafe_code)]
 
 pub mod addr;
@@ -30,6 +33,9 @@ use std::sync::{Arc, Mutex, RwLock};
 pub use deckpilot_plugin_abi::capability::RunContext;
 use deckpilot_plugin_abi::capability::{Header, HttpAuth, LogLevel, NotifySeverity};
 use deckpilot_plugin_abi::dialog::DialogRequest;
+use deckpilot_plugin_abi::privileged::{
+    OpenUrlParam, ProjectCycle, ResourceOpen, ResourceResolve, ToolAccess, ToolRun,
+};
 use deckpilot_plugin_abi::{CallErrorCode, CapabilityRequest, HttpMethod, NetworkErrorKind};
 use serde_json::Value;
 use url::Url;
@@ -39,7 +45,8 @@ pub use audit::{AuditDecision, AuditRecord, AuditSink, MemoryAudit};
 pub use origin::{Origin, OriginError, UserOrigin};
 pub use permissions::{
     ApprovedPermission, ApprovedPermissions, CredentialGrant, DEFAULT_STORAGE_QUOTA_BYTES,
-    GrantError, Grants, MAX_STORAGE_KEYS, MAX_STORAGE_QUOTA_BYTES, StorageQuota, UserOriginGrant,
+    GrantError, Grants, MAX_STORAGE_KEYS, MAX_STORAGE_QUOTA_BYTES, ProfileScope, ResourceGrant,
+    StorageQuota, ToolGrant, UserOriginGrant,
 };
 pub use plugin_id::PluginId;
 pub use rate::{Clock, ManualClock, Rate, RateLimits, SystemClock};
@@ -119,6 +126,15 @@ pub enum DenyReason {
     /// A dialog was asked for in a run the user did not start directly
     /// (`dialog.open`, plugin API 1.5; the gate of `url.open`).
     DialogNotUserInitiated,
+    /// A plugin API 1.9 operation that only runs the user started may use
+    /// (`resource.open`, `url.openParam`, `project.select`,
+    /// `project.cycle`, and `tool.run` with `tools:docker:modify`, which a
+    /// work session the user started may use too) came from a schedule, an
+    /// event, the agent's start or an unknown run.
+    PrivilegedNotUserInitiated,
+    /// A `tool.run` argument array that does not start with a subcommand
+    /// (an option of the tool itself is the host's alone).
+    NoSubcommand,
 }
 
 impl DenyReason {
@@ -174,6 +190,13 @@ impl fmt::Display for DenyReason {
                 "pages open only in an action the user started (a key, a gesture or the app), \
                  not in one a schedule, an event or the agent's start ran",
             ),
+            Self::PrivilegedNotUserInitiated => f.write_str(
+                "this runs only in an action the user started (a key, a gesture or the app), \
+                 not in one a schedule, an event or the agent's start ran",
+            ),
+            Self::NoSubcommand => {
+                f.write_str("the arguments must start with a subcommand, not an option")
+            }
         }
     }
 }
@@ -289,6 +312,44 @@ pub enum Allowed {
     },
     /// The app's language (plugin API 1.6). Always allowed.
     LocaleGet,
+    /// `resource.resolve` (plugin API 1.9, X2): the executor resolves one
+    /// handle for the invocation and adds the bound path only when
+    /// `paths` is granted.
+    ResourceResolve {
+        request: ResourceResolve,
+        paths: bool,
+    },
+    /// `resource.open` (X4), granted and in a run the user started.
+    ResourceOpen {
+        request: ResourceOpen,
+    },
+    /// `tool.run` (X3): granted for its tool and for `access`, within the
+    /// run-origin rule. The executor checks the argument array against
+    /// its policy before it runs anything.
+    ToolRun {
+        request: ToolRun,
+        access: ToolAccess,
+    },
+    /// `url.openParam` (X5), granted and in a run the user started.
+    OpenUrlParam {
+        request: OpenUrlParam,
+    },
+    /// `project.current` (X6).
+    ProjectCurrent,
+    /// `project.list` (X6).
+    ProjectList,
+    /// `project.select` (X6), granted and in a run the user started.
+    ProjectSelect {
+        id: String,
+    },
+    /// `project.cycle` (X6), granted and in a run the user started.
+    ProjectCycle {
+        request: ProjectCycle,
+    },
+    /// `profile.read` (X9) with the granted scopes only.
+    ProfileRead {
+        scopes: std::collections::BTreeSet<ProfileScope>,
+    },
     /// One of the plugin's own translation keys (plugin API 1.6): the
     /// executor resolves it against the locale files of the plugin the
     /// session belongs to, and nothing else. Always allowed.
@@ -333,6 +394,11 @@ enum RateClass {
     Time,
     RandomBytes,
     Dialog,
+    ToolRun,
+    ToolModify,
+    ResourceOpen,
+    OpenUrlParam,
+    ProjectSwitch,
 }
 
 #[derive(Debug)]
@@ -434,6 +500,18 @@ impl Broker {
         self.write_grants().remove(plugin);
     }
 
+    /// The plugin's **current** grant of `tool` (plugin API 1.9, X3), read
+    /// per call: the agent checks it while a `tool.run` process runs and
+    /// stops the process once the grant (or the sub-grant it used) is
+    /// revoked.
+    pub fn tool_grant(
+        &self,
+        plugin: &PluginId,
+        tool: deckpilot_plugin_abi::privileged::Tool,
+    ) -> Option<ToolGrant> {
+        self.grants(plugin)?.tool(tool)
+    }
+
     /// A session for the plugin whose host process the caller spawned. The
     /// session is the plugin's identity for every later decision.
     pub fn session(&self, plugin: PluginId) -> Session {
@@ -483,6 +561,11 @@ impl Broker {
             RateClass::Time => self.inner.limits.time,
             RateClass::RandomBytes => self.inner.limits.random_bytes,
             RateClass::Dialog => self.inner.limits.dialog,
+            RateClass::ToolRun => self.inner.limits.tool_run,
+            RateClass::ToolModify => self.inner.limits.tool_modify,
+            RateClass::ResourceOpen => self.inner.limits.resource_open,
+            RateClass::OpenUrlParam => self.inner.limits.open_url_param,
+            RateClass::ProjectSwitch => self.inner.limits.project_switch,
         };
         let now = self.inner.clock.now();
         let mut buckets = self.inner.buckets.lock().unwrap_or_else(|e| e.into_inner());
@@ -513,7 +596,7 @@ impl Broker {
         &self,
         plugin: &PluginId,
         op: &'static str,
-        target: Option<&Origin>,
+        target: Option<String>,
         decision: &Decision,
     ) {
         let seq = {
@@ -526,13 +609,32 @@ impl Broker {
             at_ms: self.inner.clock.wall_ms(),
             plugin: plugin.clone(),
             op,
-            target: target.map(Origin::to_string),
+            target,
             decision: match decision {
                 Decision::Allow(_) => AuditDecision::Allowed,
                 Decision::Deny(r) => AuditDecision::Denied(*r),
             },
         });
     }
+}
+
+/// What the audit names of a `tool.run`: the tool and its subcommand
+/// (`git status`, `docker compose up`), never another argument. A
+/// subcommand that is not a plain word (an option, or text a plugin made
+/// up) is `?`, so nothing a plugin passes reaches the log verbatim.
+fn tool_target(run: &ToolRun) -> String {
+    let plain = |word: &str| {
+        !word.is_empty()
+            && word.len() <= 32
+            && word
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    };
+    let subcommand = run
+        .subcommand()
+        .filter(|s| s.split(' ').all(plain))
+        .unwrap_or_else(|| "?".to_owned());
+    format!("{} {subcommand}", run.tool.as_str())
 }
 
 /// One plugin's view of the broker, bound to its channel.
@@ -566,8 +668,12 @@ impl Session {
         context: Option<&RunContext>,
     ) -> Decision {
         let (decision, target) = self.decide(request, context);
+        let target = match request {
+            CapabilityRequest::ToolRun(run) => Some(tool_target(run)),
+            _ => target.as_ref().map(Origin::to_string),
+        };
         self.broker
-            .audit(&self.plugin, request.op(), target.as_ref(), &decision);
+            .audit(&self.plugin, request.op(), target, &decision);
         decision
     }
 
@@ -589,13 +695,24 @@ impl Session {
     /// The decision point for a capability request made **inside a state
     /// call**: only the operations of
     /// [`allowed_in_state`](deckpilot_plugin_abi::state::allowed_in_state)
-    /// (reading the plugin's own storage and settings, the time, a log
-    /// line), each still subject to its own grants and rate limits.
-    /// Everything else is denied with [`DenyReason::NotInStateCall`]
+    /// (reading the plugin's own storage and settings, the time, the run
+    /// context, a log line), each still subject to its own grants and rate
+    /// limits. Everything else is denied with [`DenyReason::NotInStateCall`]
     /// before any rate limit, and audited.
     pub fn authorize_state(&self, request: &CapabilityRequest) -> Decision {
+        self.authorize_state_in(request, None)
+    }
+
+    /// [`Session::authorize_state`] with the state call's run context,
+    /// which `run.context` answers (nobody started a run; the key's scope,
+    /// plugin API 1.9).
+    pub fn authorize_state_in(
+        &self,
+        request: &CapabilityRequest,
+        context: Option<&RunContext>,
+    ) -> Decision {
         if deckpilot_plugin_abi::state::allowed_in_state(request) {
-            return self.authorize_in(request, None);
+            return self.authorize_in(request, context);
         }
         let decision = Decision::Deny(DenyReason::NotInStateCall);
         self.broker
@@ -612,8 +729,12 @@ impl Session {
         hop: u32,
     ) -> Decision {
         let (decision, target) = self.decide_redirect(previous, location, hop);
-        self.broker
-            .audit(&self.plugin, "http.redirect", target.as_ref(), &decision);
+        self.broker.audit(
+            &self.plugin,
+            "http.redirect",
+            target.as_ref().map(Origin::to_string),
+            &decision,
+        );
         decision
     }
 
@@ -816,6 +937,17 @@ impl Session {
                 };
                 (d, None)
             }
+            CapabilityRequest::ResourceResolve(_)
+            | CapabilityRequest::ResourceOpen(_)
+            | CapabilityRequest::ToolRun(_)
+            | CapabilityRequest::OpenUrlParam(_)
+            | CapabilityRequest::ProjectCurrent(_)
+            | CapabilityRequest::ProjectList(_)
+            | CapabilityRequest::ProjectSelect(_)
+            | CapabilityRequest::ProjectCycle(_)
+            | CapabilityRequest::ProfileRead(_) => {
+                (self.decide_privileged(&grants, request, context), None)
+            }
             // Own variables (design §5.2): always granted, rate limited.
             CapabilityRequest::VariablesPublish(_) | CapabilityRequest::VariablesClear(_) => {
                 if !b.take(&self.plugin, RateClass::Variables) {
@@ -833,6 +965,122 @@ impl Session {
                 };
                 (Decision::Allow(allowed), None)
             }
+        }
+    }
+
+    /// Plugin API 1.9's operations (`docs/marketplace/module-migration.md`
+    /// §7): deny by default, each against its own grant, then the run's
+    /// origin where the review restricts it (checked before the rate
+    /// limits, so a refused call uses none), then its rate.
+    fn decide_privileged(
+        &self,
+        grants: &Grants,
+        request: &CapabilityRequest,
+        context: Option<&RunContext>,
+    ) -> Decision {
+        use deckpilot_plugin_abi::capability::{RunCause, RunTrigger};
+        let b = &self.broker;
+        let user = context.is_some_and(RunContext::is_user_initiated);
+        let deny = Decision::Deny;
+        match request {
+            CapabilityRequest::ResourceResolve(r) => match grants.resources {
+                None => deny(DenyReason::NotGranted),
+                Some(granted) => Decision::Allow(Allowed::ResourceResolve {
+                    request: r.clone(),
+                    paths: granted.paths,
+                }),
+            },
+            CapabilityRequest::ResourceOpen(o) => {
+                if !grants.resources.is_some_and(|r| r.open) {
+                    deny(DenyReason::NotGranted)
+                } else if !user {
+                    deny(DenyReason::PrivilegedNotUserInitiated)
+                } else if !b.take(&self.plugin, RateClass::ResourceOpen) {
+                    deny(DenyReason::RateLimited)
+                } else {
+                    Decision::Allow(Allowed::ResourceOpen { request: o.clone() })
+                }
+            }
+            CapabilityRequest::ToolRun(run) => {
+                let Some(granted) = grants.tools.get(&run.tool) else {
+                    return deny(DenyReason::NotGranted);
+                };
+                let Some(access) = run.access() else {
+                    return deny(DenyReason::NoSubcommand);
+                };
+                // A work session the user started may bring services up
+                // and down ("start work, compose up"), never a schedule,
+                // an event or the agent's start (X3c).
+                let work_session = context.is_some_and(|c| {
+                    c.trigger == RunTrigger::Workflow && c.cause == Some(RunCause::WorkSession)
+                });
+                match access {
+                    ToolAccess::Network if !granted.network => deny(DenyReason::NotGranted),
+                    ToolAccess::Modify if !granted.modify => deny(DenyReason::NotGranted),
+                    ToolAccess::Modify if !user && !work_session => {
+                        deny(DenyReason::PrivilegedNotUserInitiated)
+                    }
+                    _ if !b.take(&self.plugin, RateClass::ToolRun) => deny(DenyReason::RateLimited),
+                    ToolAccess::Modify if !b.take(&self.plugin, RateClass::ToolModify) => {
+                        deny(DenyReason::RateLimited)
+                    }
+                    _ => Decision::Allow(Allowed::ToolRun {
+                        request: run.clone(),
+                        access,
+                    }),
+                }
+            }
+            CapabilityRequest::OpenUrlParam(o) => {
+                if !grants.open_url_from_params {
+                    deny(DenyReason::NotGranted)
+                } else if !user {
+                    deny(DenyReason::PrivilegedNotUserInitiated)
+                } else if !b.take(&self.plugin, RateClass::OpenUrlParam)
+                    || !b.take(&self.plugin, RateClass::OpenUrlWindow)
+                {
+                    deny(DenyReason::RateLimited)
+                } else {
+                    Decision::Allow(Allowed::OpenUrlParam { request: o.clone() })
+                }
+            }
+            CapabilityRequest::ProjectCurrent(_) | CapabilityRequest::ProjectList(_) => {
+                match (grants.project_context, request) {
+                    (None, _) => deny(DenyReason::NotGranted),
+                    (Some(_), CapabilityRequest::ProjectCurrent(_)) => {
+                        Decision::Allow(Allowed::ProjectCurrent)
+                    }
+                    (Some(_), _) => Decision::Allow(Allowed::ProjectList),
+                }
+            }
+            CapabilityRequest::ProjectSelect(_) | CapabilityRequest::ProjectCycle(_) => {
+                if grants.project_context != Some(true) {
+                    deny(DenyReason::NotGranted)
+                } else if !user {
+                    // Never from a lifecycle event, a schedule or the
+                    // agent's start: no loop on `ProjectChanged` (X6).
+                    deny(DenyReason::PrivilegedNotUserInitiated)
+                } else if !b.take(&self.plugin, RateClass::ProjectSwitch) {
+                    deny(DenyReason::RateLimited)
+                } else {
+                    Decision::Allow(match request {
+                        CapabilityRequest::ProjectSelect(p) => {
+                            Allowed::ProjectSelect { id: p.id.clone() }
+                        }
+                        CapabilityRequest::ProjectCycle(c) => Allowed::ProjectCycle { request: *c },
+                        _ => unreachable!("matched above"),
+                    })
+                }
+            }
+            CapabilityRequest::ProfileRead(_) => {
+                if grants.profile.is_empty() {
+                    deny(DenyReason::NotGranted)
+                } else {
+                    Decision::Allow(Allowed::ProfileRead {
+                        scopes: grants.profile.clone(),
+                    })
+                }
+            }
+            _ => unreachable!("only plugin API 1.9's operations come here"),
         }
     }
 

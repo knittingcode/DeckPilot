@@ -63,6 +63,7 @@ pub const PLAN: MigrationPlan = MigrationPlan {
     }),
     private_network: Some("allowPrivateHost"),
     open_url_hosts: &[],
+    extraction: None,
 };
 
 /// Whether this agent runs with the fixture (an agent test asked for it).

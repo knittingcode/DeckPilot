@@ -1,0 +1,154 @@
+{
+  "outputs": {
+    "project": "Compose project",
+    "projectKey": "Project",
+    "available": "Available",
+    "reason": "Why not available",
+    "clientVersion": "Client version",
+    "serverVersion": "Engine version",
+    "serverOs": "Engine OS",
+    "composeVersion": "Compose version",
+    "context": "Docker context",
+    "count": "Containers",
+    "running": "Running",
+    "names": "Names",
+    "containers": "Containers (name, state, image, status)",
+    "stopped": "Not running",
+    "allRunning": "All running",
+    "composeContainers": "Containers (service, state, image, status)",
+    "output": "Compose output",
+    "logs": "Logs",
+    "lineCount": "Lines",
+    "truncated": "Truncated"
+  },
+  "params": {
+    "context": {
+      "label": "Docker context",
+      "description": "Must be the context Docker runs in here (a bound Docker environment's, or DeckPilot's Docker setting). Empty: that context."
+    },
+    "environment": {
+      "label": "Docker environment",
+      "description": "A Docker environment resource (its context is used) or a folder. Empty: DeckPilot's Docker context, as without the plugin."
+    },
+    "all": {
+      "label": "Include stopped",
+      "description": "Off: running containers only."
+    },
+    "name": {
+      "label": "Name contains",
+      "description": "Only containers whose name contains this."
+    },
+    "compose": {
+      "label": "Compose project",
+      "description": "A resource bound to the Compose file or its folder (also as a Docker environment). Empty: the project's compose resource."
+    },
+    "projectId": {
+      "label": "Project",
+      "description": "Whose compose resource, when none is set. Empty: the workflow's current project."
+    },
+    "projectName": {
+      "label": "Compose project name",
+      "description": "Not supported by the plugin: Compose uses the project of the bound folder or file. Leave it empty."
+    },
+    "services": {
+      "item": "Service",
+      "label": "Services",
+      "description": "One per line. Empty: every service of the project."
+    },
+    "removeOrphans": {
+      "label": "Remove orphan containers",
+      "description": "Also removes containers of services no longer in the Compose file."
+    },
+    "container": {
+      "label": "Container",
+      "description": "A container name or id. Or leave it empty and choose a Compose service."
+    },
+    "service": {
+      "label": "Compose service",
+      "description": "A service of the Compose project below."
+    },
+    "lines": {
+      "label": "Lines",
+      "description": "The last lines of the log (at most 1000 are read)."
+    },
+    "since": {
+      "label": "Since",
+      "description": "e.g. 10m, 2h or a timestamp. Empty: no limit."
+    }
+  },
+  "actions": {
+    "status": {
+      "name": "Docker status",
+      "description": "Whether Docker is installed and its engine reachable in the context, with the client, engine and Compose versions. Succeeds when Docker is unavailable; `available` says so and `reason` why."
+    },
+    "containers": {
+      "name": "Containers",
+      "description": "The containers of the context: names, states, images and status."
+    },
+    "compose-status": {
+      "name": "Compose status",
+      "description": "The containers of a Compose project and whether they are running."
+    },
+    "compose-up": {
+      "name": "Compose up",
+      "description": "Starts a Compose project in the background (up --detach). Needs the Docker plugin's permission to start, stop and restart containers."
+    },
+    "compose-down": {
+      "name": "Compose down",
+      "description": "Stops and removes a Compose project's containers and networks. Volumes and images are kept. Needs the Docker plugin's permission to start, stop and restart containers."
+    },
+    "compose-restart": {
+      "name": "Compose restart",
+      "description": "Restarts a Compose project's services. Needs the Docker plugin's permission to start, stop and restart containers."
+    },
+    "logs": {
+      "name": "Container logs",
+      "description": "The last lines of a container's or Compose service's log, up to 64 KiB. Never follows the log."
+    }
+  },
+  "category": "Docker",
+  "plugin": {
+    "name": "Docker",
+    "description": "Docker availability, containers, Compose projects and logs, in the Docker context you bound."
+  },
+  "dependencies": {
+    "projects": "Without a Compose project parameter the Compose actions use the compose resource of the workflow's project; without Projects there is no project, and only Compose keys with a Compose project work."
+  },
+  "permissions": {
+    "tools": "Runs your own docker in the Docker environments and Compose folders you bound, to read whether Docker is available, the containers, a Compose project's state and the last lines of a log (docker context show, version, ps, logs, compose ps and logs). With the separate permission to start, stop and restart containers, which is off until you allow it, Compose up, down and restart change your Compose projects, only when you or your work session start them; down never removes volumes or images.",
+    "resources": "Uses the Compose folders and files and the Docker environments you bound on this computer, by name; the plugin never sees their paths.",
+    "profile": "Reads the active project's key to report which project a Compose project belongs to.",
+    "device": "Shows whether Docker is available, how many containers run and whether a Compose project is up on their keys, as their last run found it."
+  },
+  "settings": {
+    "composeRole": {
+      "label": "Compose resource",
+      "description": "The project resource with the Compose file or its folder, used when an action names none."
+    },
+    "timeoutSeconds": {
+      "label": "Time limit for Compose changes (s)",
+      "description": "DeckPilot's own limit for changes still applies."
+    }
+  },
+  "errors": {
+    "docker-not-found": "Docker was not found on this computer.",
+    "daemon-unavailable": "The Docker engine of the context cannot be reached.",
+    "permission-denied": "The engine refused access (e.g. not in the docker group).",
+    "context-not-found": "The Docker context does not exist.",
+    "compose-unavailable": "docker compose (Compose v2) is not installed.",
+    "compose-file-not-found": "No Compose file was found for the project.",
+    "not-found": "The container, service or resource does not exist.",
+    "invalid-name": "A context, container, service or project name is invalid.",
+    "changes-disabled": "Starting and stopping containers is not allowed for the Docker plugin.",
+    "project-not-in-profile": "The project does not belong to this profile.",
+    "docker-failed": "Docker reported an error.",
+    "not-user-initiated": "Containers are started and stopped only in runs you or your work session started.",
+    "context-unsupported": "The action names another Docker context than the one Docker runs in here.",
+    "project-name-unsupported": "A Compose project name cannot be chosen per action.",
+    "cancelled": "The run was stopped.",
+    "resource-unbound": "The resource is not bound on this computer.",
+    "resource-role-missing": "The project does not define the Compose resource.",
+    "resource-kind-mismatch": "The resource is not a folder, a Compose file or a Docker environment.",
+    "resource-missing": "The resource does not exist in this profile."
+  }
+}

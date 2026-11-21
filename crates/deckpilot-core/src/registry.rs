@@ -124,6 +124,13 @@ pub struct AliasHandler {
     /// Parameters dropped when empty or equal to the legacy module's
     /// setting of the same key (`None`: no setting).
     drops: Vec<(String, Option<ParameterValue>)>,
+    /// Legacy keys and the plugin's key for each.
+    renames: Vec<(String, String)>,
+    /// Parameters the plugin cannot honour any value of.
+    unsupported: Vec<String>,
+    /// Integer parameters the plugin takes only up to a bound
+    /// ([`ParamRule::AtMost`]).
+    capped: Vec<(String, i64)>,
 }
 
 impl fmt::Debug for AliasHandler {
@@ -149,35 +156,62 @@ impl AliasHandler {
         definition.id = alias.legacy_id();
         definition.deprecated = true;
         let mut drops = Vec::new();
+        let mut renames = Vec::new();
+        let mut unsupported = Vec::new();
+        let mut capped = Vec::new();
         for rule in alias.params {
-            let ParamRule::DropIfDefault(key) = *rule;
-            if !definition.parameters.iter().any(|p| p.key == key) {
-                // Stored instances keep validating with the parameter.
-                let spec = builtin
-                    .and_then(|b| b.parameters.iter().find(|p| p.key == key))
-                    .cloned()
-                    .unwrap_or_else(|| ParameterSpec {
-                        key: key.to_owned(),
-                        label: key.to_owned(),
-                        description: None,
-                        kind: ParameterKind::Credential,
-                        required: false,
-                        default: None,
-                    });
-                definition.parameters.push(ParameterSpec {
-                    required: false,
-                    ..spec
-                });
+            match *rule {
+                ParamRule::DropIfDefault(key) => {
+                    if !definition.parameters.iter().any(|p| p.key == key) {
+                        // Stored instances keep validating with the parameter.
+                        let spec = builtin
+                            .and_then(|b| b.parameters.iter().find(|p| p.key == key))
+                            .cloned()
+                            .unwrap_or_else(|| ParameterSpec {
+                                key: key.to_owned(),
+                                label: key.to_owned(),
+                                description: None,
+                                kind: ParameterKind::Credential,
+                                required: false,
+                                default: None,
+                            });
+                        definition.parameters.push(ParameterSpec {
+                            required: false,
+                            ..spec
+                        });
+                    }
+                    drops.push((
+                        key.to_owned(),
+                        legacy_config.and_then(|c| c.get(key)).cloned(),
+                    ));
+                }
+                // The legacy type keeps the legacy key: stored instances,
+                // overrides and mappings name it.
+                ParamRule::Rename(from, to) => {
+                    if let Some(spec) = definition.parameters.iter_mut().find(|p| p.key == to) {
+                        from.clone_into(&mut spec.key);
+                    } else if let Some(spec) =
+                        builtin.and_then(|b| b.parameters.iter().find(|p| p.key == from))
+                    {
+                        definition.parameters.push(ParameterSpec {
+                            required: false,
+                            ..spec.clone()
+                        });
+                    }
+                    renames.push((from.to_owned(), to.to_owned()));
+                }
+                ParamRule::Unsupported(key) => unsupported.push(key.to_owned()),
+                ParamRule::AtMost(key, most) => capped.push((key.to_owned(), most)),
+                ParamRule::Keep(_) => {}
             }
-            drops.push((
-                key.to_owned(),
-                legacy_config.and_then(|c| c.get(key)).cloned(),
-            ));
         }
         Self {
             definition,
             target,
             drops,
+            renames,
+            unsupported,
+            capped,
         }
     }
 
@@ -190,28 +224,64 @@ impl AliasHandler {
     }
 
     /// The parameters for the plugin's handler, or the first one it
-    /// cannot be given.
+    /// cannot be given. Nothing is dropped but what equals the plugin's
+    /// own (an empty or default `credential`), and nothing is guessed.
     fn translated(
         &self,
         parameters: &ActionParameters,
     ) -> Result<ActionParameters, ParameterError> {
+        let empty = |value: &ParameterValue| matches!(value, ParameterValue::Text(text) if text.trim().is_empty());
         let mut translated = ActionParameters::new();
         for (key, value) in parameters.iter() {
-            let Some((_, default)) = self.drops.iter().find(|(k, _)| k == key) else {
-                translated = translated.with(key.clone(), value.clone());
+            if let Some((_, default)) = self.drops.iter().find(|(k, _)| k == key) {
+                if !empty(value) && default.as_ref() != Some(value) {
+                    return Err(ParameterError::Invalid {
+                        key: key.clone(),
+                        reason: format!(
+                            "names something the plugin providing `{}` cannot use; leave it \
+                             empty to use the plugin's own",
+                            self.definition.id
+                        ),
+                    });
+                }
                 continue;
-            };
-            let empty = matches!(value, ParameterValue::Text(text) if text.trim().is_empty());
-            if !empty && default.as_ref() != Some(value) {
+            }
+            if self.unsupported.contains(key) && !empty(value) {
                 return Err(ParameterError::Invalid {
                     key: key.clone(),
                     reason: format!(
-                        "names something the plugin providing `{}` cannot use; leave it empty \
-                         to use the plugin's own",
+                        "is not supported by the plugin providing `{}`, and no other value is \
+                         guessed for it; clear it to run the action",
                         self.definition.id
                     ),
                 });
             }
+            if let (Some((_, most)), ParameterValue::Integer(n)) =
+                (self.capped.iter().find(|(k, _)| k == key), value)
+                && n > most
+            {
+                return Err(ParameterError::Invalid {
+                    key: key.clone(),
+                    reason: format!(
+                        "is {n}, above {most}, the most the plugin providing `{}` accepts; it \
+                         is not lowered for you: set it to {most} or less to run the action",
+                        self.definition.id
+                    ),
+                });
+            }
+            let plugin_key = match self.renames.iter().find(|(from, _)| from == key) {
+                Some((_, to)) => {
+                    if parameters.get(to).is_some() {
+                        return Err(ParameterError::Invalid {
+                            key: to.clone(),
+                            reason: format!("is `{key}` of `{}`, which is set", self.definition.id),
+                        });
+                    }
+                    to.clone()
+                }
+                None => key.clone(),
+            };
+            translated = translated.with(plugin_key, value.clone());
         }
         Ok(translated)
     }

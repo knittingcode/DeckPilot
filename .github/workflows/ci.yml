@@ -160,6 +160,51 @@ jobs:
           codesign --display --verbose=2 "$RUNNER_TEMP/deckpilot-agent" 2>&1 \
             | grep -x "Identifier=io.github.knittingcode.deckpilot.agent"
 
+  # The acceptance gate of the extraction (WP-T1, docs/marketplace/
+  # module-migration.md §11): the core with every optional plugin switched
+  # off, disabled and uninstalled, through the real agent, the real plugin
+  # host and every first-party plugin built to wasm. Not a required check.
+  core-without-plugins:
+    name: Core without optional plugins
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Linux system dependencies
+        run: tools/ci/install-linux-deps.sh
+      # rust-toolchain.toml pins the compiler; the plugins need the wasm32
+      # target.
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup target add wasm32-unknown-unknown
+          rustc --version
+      - name: Only the pinned Rust toolchain
+        shell: bash
+        run: tools/ci/rust-pinned-toolchain.sh
+      # Restores main's workspace cache; never saves one of its own.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: ci-workspace
+          workspaces: |
+            . -> target
+            plugins/runtime -> target
+          save-if: false
+      # Built first so that compile time stays out of the test's timeouts
+      # (the test builds them itself when they are missing).
+      - name: Build the plugin host and every first-party plugin
+        working-directory: plugins/runtime
+        run: |
+          cargo build --locked -p deckpilot-plugin-host --bin deckpilot-plugin-host
+          cargo build --locked --target wasm32-unknown-unknown --profile guest \
+            -p deckpilot-docker -p deckpilot-git -p deckpilot-github -p deckpilot-gitlab \
+            -p deckpilot-jira -p deckpilot-notifications -p deckpilot-projects \
+            -p deckpilot-workflows -p deckpilot-workspace
+      - name: The core without optional plugins
+        run: cargo test -p deckpilot-agent --features plugins,test-hooks --test core_without_plugins --locked -- --nocapture
+
   sqlcipher:
     name: Storage with SQLCipher
     runs-on: ubuntu-latest

@@ -44,7 +44,7 @@
   },
   "status": {
     "activeProfile": "Legacy",
-    "activeProject": "SHOP",
+    "activeProject": null,
     "layout": {
       "layout": "457cb86e-f9fc-496d-8820-2627e351d5b3",
       "name": "Main",
@@ -60,5 +60,21 @@
       "step_2: Succeeded: shop crew on SHOP"
     ],
     "state": "Succeeded"
+  },
+  "movedReferences": {
+    "plugins.deckpilot.projects.current.key": "{\"status\":\"unavailable\",\"owner\":\"deckpilot.projects\"}",
+    "plugins.deckpilot.projects.current.name": "{\"status\":\"unavailable\",\"owner\":\"deckpilot.projects\"}",
+    "projects.current.key": "{\"status\":\"unavailable\",\"owner\":\"projects\"}",
+    "projects.current.name": "{\"status\":\"unavailable\",\"owner\":\"projects\"}",
+    "system.project.current.id": "{\"status\":\"resolved\",\"value\":{\"type\":\"projectId\",\"value\":\"9a39d374-7e5d-469a-86fa-7b612c05488a\"},\"source\":{\"type\":\"system\"}}",
+    "system.project.current.key": "{\"status\":\"resolved\",\"value\":{\"type\":\"string\",\"value\":\"CMR\"},\"source\":{\"type\":\"system\"}}"
+  },
+  "movedReferencesModulesDisabled": {
+    "plugins.deckpilot.projects.current.key": "{\"status\":\"unavailable\",\"owner\":\"deckpilot.projects\"}",
+    "plugins.deckpilot.projects.current.name": "{\"status\":\"unavailable\",\"owner\":\"deckpilot.projects\"}",
+    "projects.current.key": "{\"status\":\"unavailable\",\"owner\":\"projects\"}",
+    "projects.current.name": "{\"status\":\"unavailable\",\"owner\":\"projects\"}",
+    "system.project.current.id": "{\"status\":\"resolved\",\"value\":{\"type\":\"projectId\",\"value\":\"9a39d374-7e5d-469a-86fa-7b612c05488a\"},\"source\":{\"type\":\"system\"}}",
+    "system.project.current.key": "{\"status\":\"resolved\",\"value\":{\"type\":\"string\",\"value\":\"CMR\"},\"source\":{\"type\":\"system\"}}"
   }
 }

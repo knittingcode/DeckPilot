@@ -1,11 +1,12 @@
 //! What DeckPilot's first-party plugins for a server the user enters
-//! (`deckpilot.gitlab`, `deckpilot.jira`) share: the URLs they build and
+//! (`deckpilot.gitlab`, `deckpilot.jira`, and `deckpilot.github` for a
+//! GitHub Enterprise Server) share: the URLs they build and
 //! check ([`server`]), the action's time limit counted with the server's
 //! `Date` headers ([`Deadline`]; a guest has no clock), and how text from a
 //! server is shown.
 //!
-//! Each function is a port of what the built-in modules do
-//! (`modules/gitlab`, `modules/jira`), so a plugin gives the built-in's
+//! Each function is a port of what the former built-in `gitlab` and
+//! `jira` modules did (removed in WP-C5), so a plugin gives the built-in's
 //! results on the same answers.
 #![deny(unsafe_code)]
 

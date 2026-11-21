@@ -164,9 +164,11 @@ pub fn run(
     // The program is gone; end whatever it left in its group, so the pipes
     // close and nothing is orphaned.
     end_group(&child, true);
-    let collect = |handle: Option<std::thread::JoinHandle<(String, bool)>>| {
-        handle.and_then(|h| h.join().ok()).unwrap_or_default()
-    };
+    // A process that left the group (`setsid`) may still hold the pipes
+    // open: the output is waited for at most `grace` more, then taken as it
+    // is and marked truncated. The readers end when the pipes close.
+    let until = Instant::now() + limits.grace;
+    let collect = |stream: Option<Captured>| stream.map(|s| s.take(until)).unwrap_or_default();
     let ((stdout, stdout_truncated), (stderr, stderr_truncated)) =
         (collect(stdout), collect(stderr));
     let status = outcome?;
@@ -255,28 +257,75 @@ fn end_group(child: &Child, _force: bool) {
         .status();
 }
 
-/// Reads a stream to its end, keeping at most `limit` bytes; `true` when
-/// more was discarded.
-fn reader<R: Read + Send + 'static>(
-    mut stream: R,
-    limit: usize,
-) -> std::thread::JoinHandle<(String, bool)> {
+/// What a reader kept so far: the bytes, whether more was discarded, and
+/// whether the stream ended.
+#[derive(Default)]
+struct Kept {
+    bytes: Vec<u8>,
+    truncated: bool,
+    ended: bool,
+}
+
+/// The output of one stream, read on its own thread.
+struct Captured(std::sync::Arc<(std::sync::Mutex<Kept>, std::sync::Condvar)>);
+
+impl Captured {
+    /// The output once the stream ended, or what there is at `until`
+    /// (then marked truncated, since more may follow).
+    fn take(&self, until: Instant) -> (String, bool) {
+        let (lock, ended) = &*self.0;
+        let mut kept = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while !kept.ended {
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                kept.truncated = true;
+                break;
+            }
+            kept = ended
+                .wait_timeout(kept, left)
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
+        (
+            String::from_utf8_lossy(&kept.bytes).into_owned(),
+            kept.truncated,
+        )
+    }
+}
+
+/// Reads a stream to its end, keeping at most `limit` bytes; truncated
+/// when more was discarded.
+fn reader<R: Read + Send + 'static>(mut stream: R, limit: usize) -> Captured {
+    let shared = std::sync::Arc::new((
+        std::sync::Mutex::new(Kept::default()),
+        std::sync::Condvar::new(),
+    ));
+    let writer = shared.clone();
     std::thread::spawn(move || {
-        let mut kept = Vec::new();
-        let mut truncated = false;
+        let (lock, ended) = &*writer;
         let mut buffer = [0u8; 8192];
         loop {
-            match stream.read(&mut buffer) {
-                Ok(0) | Err(_) => break,
+            let read = stream.read(&mut buffer);
+            let mut kept = lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match read {
+                Ok(0) | Err(_) => {
+                    kept.ended = true;
+                    ended.notify_all();
+                    break;
+                }
                 Ok(n) => {
-                    let room = limit.saturating_sub(kept.len());
-                    truncated |= n > room;
-                    kept.extend_from_slice(&buffer[..n.min(room)]);
+                    let room = limit.saturating_sub(kept.bytes.len());
+                    kept.truncated |= n > room;
+                    kept.bytes.extend_from_slice(&buffer[..n.min(room)]);
                 }
             }
         }
-        (String::from_utf8_lossy(&kept).into_owned(), truncated)
-    })
+    });
+    Captured(shared)
 }
 
 #[cfg(all(test, unix))]
@@ -382,6 +431,50 @@ mod tests {
         let output = run(command, None, ProcessLimits::default()).unwrap();
         assert!(output.stdout.starts_with("[]"), "{}", output.stdout);
         assert!(output.stdout.len() > 3, "PATH is kept");
+    }
+
+    /// A process that left the program's group (`setsid`) and still holds
+    /// its output open does not keep the run waiting past the grace period.
+    #[test]
+    fn a_detached_grandchild_holding_the_pipes_does_not_outlast_the_run() {
+        let dir = std::env::temp_dir().join(format!("deckpilot-setsid-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid_file = dir.join("detached.pid");
+        // The detached process writes its pid once it left the group; the
+        // program exits only then, so the group's end cannot reach it.
+        let script = format!(
+            "echo started; perl -MPOSIX -e 'POSIX::setsid(); open(F, \">\", $ARGV[0]); \
+             print F $$; close F; sleep 30' '{pid}' & \
+             while [ ! -s '{pid}' ]; do sleep 0.02; done; exit 0",
+            pid = pid_file.display()
+        );
+        let limits = ProcessLimits {
+            grace: Duration::from_millis(300),
+            ..ProcessLimits::default()
+        };
+        let begun = Instant::now();
+        let output = run(sh(&script), None, limits).unwrap();
+        assert!(
+            begun.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            begun.elapsed()
+        );
+        assert!(output.success());
+        assert!(output.stdout.starts_with("started"), "{output:?}");
+        assert!(output.stdout_truncated);
+        // The detached process is the test's to end.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !pid_file.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if let Some(pid) = std::fs::read_to_string(&pid_file)
+            .ok()
+            .and_then(|p| p.trim().parse::<i32>().ok())
+            .and_then(rustix::process::Pid::from_raw)
+        {
+            let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

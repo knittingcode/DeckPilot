@@ -81,7 +81,8 @@
   },
   "list": {
     "none": "This plugin asks for no permissions.",
-    "publisherReason": "Publisher's reason:"
+    "publisherReason": "Publisher's reason:",
+    "optional": "Optional: the plugin runs without it; only these actions need it: {{actions}}."
   },
   "review": {
     "title": {
@@ -92,7 +93,7 @@
     "intro": {
       "install": "Review what this plugin may do. Check each permission to consent to it; you can revoke permissions later in Installed.",
       "update": "This version asks for more than you granted. Check each new or broadened permission to consent, decline the update, or cancel to decide later.",
-      "enable": "A plugin runs only with every permission it declares. Check each one that is not granted yet."
+      "enable": "A plugin runs only with every permission it needs. Check each one that is not granted yet; an optional one is needed only by the actions it names."
     },
     "confirm": {
       "install": "Install",
@@ -113,6 +114,7 @@
     "allow": "Allow",
     "allowNew": "New: allow",
     "allowBroadened": "Broadened: allow",
+    "allowOptional": "Optional: allow",
     "removed": "No longer requested"
   },
   "capability": {

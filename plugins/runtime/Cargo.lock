@@ -342,6 +342,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
+name = "deckpilot-docker"
+version = "0.1.0"
+dependencies = [
+ "deckpilot-plugin-sdk",
+ "jsonschema",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "deckpilot-example-default"
 version = "0.1.0"
 dependencies = [
@@ -361,21 +371,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "deckpilot-github"
+name = "deckpilot-git"
 version = "0.1.0"
 dependencies = [
+ "deckpilot-plugin-sdk",
+ "jsonschema",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "deckpilot-github"
+version = "0.2.0"
+dependencies = [
+ "deckpilot-first-party-support",
  "deckpilot-plugin-abi",
  "deckpilot-plugin-sdk",
- "form_urlencoded",
  "jsonschema",
- "percent-encoding",
  "serde_json",
- "url",
 ]
 
 [[package]]
 name = "deckpilot-gitlab"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "deckpilot-first-party-support",
  "deckpilot-plugin-abi",
@@ -386,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-jira"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "deckpilot-first-party-support",
  "deckpilot-plugin-abi",
@@ -407,7 +425,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-notifications"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "deckpilot-plugin-sdk",
  "jsonschema",
@@ -485,6 +503,15 @@ name = "deckpilot-plugin-test-fixtures"
 version = "0.1.0"
 
 [[package]]
+name = "deckpilot-projects"
+version = "0.1.0"
+dependencies = [
+ "deckpilot-plugin-sdk",
+ "jsonschema",
+ "serde_json",
+]
+
+[[package]]
 name = "deckpilot-sdk-test-guest"
 version = "0.1.0"
 dependencies = [
@@ -496,6 +523,24 @@ name = "deckpilot-test-guest"
 version = "0.1.0"
 dependencies = [
  "deckpilot-plugin-guest",
+ "serde_json",
+]
+
+[[package]]
+name = "deckpilot-workflows"
+version = "0.1.0"
+dependencies = [
+ "deckpilot-plugin-sdk",
+ "jsonschema",
+ "serde_json",
+]
+
+[[package]]
+name = "deckpilot-workspace"
+version = "0.1.0"
+dependencies = [
+ "deckpilot-plugin-sdk",
+ "jsonschema",
  "serde_json",
 ]
 

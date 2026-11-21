@@ -310,6 +310,17 @@ impl ProjectResolver for ActiveProjects {
 pub(super) struct ContextWatch {
     profile: Option<ProfileId>,
     project: Option<ProjectId>,
+    /// The plugin whose `project.select` or `project.cycle` (plugin API
+    /// 1.9) is being applied: the next announcement names it.
+    changed_by: Option<String>,
+}
+
+impl ContextWatch {
+    /// The next change is announced as made by `plugin`.
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    pub(super) fn changed_by(&mut self, plugin: &str) {
+        self.changed_by = Some(plugin.to_owned());
+    }
 }
 
 /// Every reference available in `context`, metadata only: the core's and
@@ -526,6 +537,8 @@ impl Agent {
             self.active_projects.set(id, project);
         }
         let watch = &mut self.context_watch;
+        // Only the change being applied is attributed to the plugin.
+        let plugin = watch.changed_by.take();
         if profile == watch.profile && project == watch.project {
             return;
         }
@@ -545,6 +558,7 @@ impl Agent {
             profile,
             project,
             source: ProjectSource::Application,
+            plugin: plugin.filter(|_| !profile_changed),
         });
     }
 

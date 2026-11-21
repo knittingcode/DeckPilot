@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use deckpilot_core::ProjectCatalog as _;
 use deckpilot_core::{
     ActionParameters, BindingTarget, ControlBinding, DeviceLayout, LayoutStatus, Os,
     ParameterValue, Profile, Project, ProjectKey, Trigger,
@@ -31,7 +32,6 @@ use deckpilot_ipc::{
     AgentClient, AgentEvent, AgentPaths, AgentStatus, ClientKind, KeyMaterial, Request, Response,
 };
 use deckpilot_modules::general;
-use deckpilot_modules::projects::ProjectCatalog as _;
 use deckpilot_storage::crypto::Password;
 use deckpilot_storage::vault::Vault;
 use deckpilot_storage::{ConfigStore as _, DatabaseKey, Encryption, SqliteStore};
@@ -509,16 +509,25 @@ fn run(root: &Path, options: &Options, report: &mut Report) -> Result<(), String
         },
     );
 
-    // 8. Project switching.
+    // 8. Project switching. Since 0.10.0 projects come from the Projects
+    // plugin; an agent without it refuses, and the step says so.
     let cmr = a.projects[1].id;
-    agent.request(Request::SelectProject { project: cmr })?;
+    let projects = match agent.request(Request::SelectProject { project: cmr }) {
+        Ok(_) => true,
+        Err(error) if error.contains("Projects plugin is not active") => false,
+        Err(error) => return Err(error),
+    };
     report.record(
         "Project switching",
-        match agent.wait(Duration::from_secs(5), "project CMR", |s| {
-            s.active_project.as_ref().is_some_and(|p| p.id == cmr)
-        }) {
-            Ok(_) => Outcome::Passed("SHOP → CMR".into()),
-            Err(error) => Outcome::Failed(error),
+        if projects {
+            match agent.wait(Duration::from_secs(5), "project CMR", |s| {
+                s.active_project.as_ref().is_some_and(|p| p.id == cmr)
+            }) {
+                Ok(_) => Outcome::Passed("SHOP → CMR".into()),
+                Err(error) => Outcome::Failed(error),
+            }
+        } else {
+            Outcome::Skipped("the Projects plugin is not active in this agent".into())
         },
     );
 
@@ -574,7 +583,7 @@ fn run(root: &Path, options: &Options, report: &mut Report) -> Result<(), String
         "the device after the restart",
         |s| {
             shows_layout(s, &a)
-                && s.active_project.as_ref().is_some_and(|p| p.id == cmr)
+                && (!projects || s.active_project.as_ref().is_some_and(|p| p.id == cmr))
                 && s.brightness == 60
         },
     );
@@ -587,7 +596,11 @@ fn run(root: &Path, options: &Options, report: &mut Report) -> Result<(), String
                     options.mock,
                 ) =>
             {
-                Outcome::Passed("layout, project CMR and brightness 60 % restored".into())
+                Outcome::Passed(if projects {
+                    "layout, project CMR and brightness 60 % restored".into()
+                } else {
+                    "layout and brightness 60 % restored".into()
+                })
             }
             Ok(_) => Outcome::Failed("images not as expected".into()),
             Err(error) => Outcome::Failed(error),

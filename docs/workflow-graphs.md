@@ -216,7 +216,8 @@ contract — schemas, execution context, capabilities, cancellation, timeouts,
 retries, errors, progress and compatibility — is in
 [Feature modules](modules.md#workflow-node-contract).
 
-The Projects module declares its nodes: `select`, `next`/`previous` change
+The Projects plugin (`deckpilot.projects`, the former built-in `projects`
+module, removed in WP-C6) declares its nodes: `select`, `next`/`previous` change
 the project (next/previous are not retry-safe), `active` and the resource
 actions are idempotent; all output the project's id, key and name, the
 resource actions also the resource, its key, kind and value.
@@ -303,7 +304,7 @@ may change the active project:
   active project" in the editor). When a run ends on another project than it
   started with, that project becomes the active project, by
   **compare-and-set**: only if the active profile and project are still the
-  ones the run started with, and the Projects module is enabled. If the user,
+  ones the run started with, and the Projects plugin is active. If the user,
   a device or another run changed the active project meanwhile, their change
   stands; the run records that its change was not made and why. With several
   permitted runs, the first to finish switches and the others are refused.

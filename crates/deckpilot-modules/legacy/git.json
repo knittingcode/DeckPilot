@@ -1,0 +1,669 @@
+{
+  "actionTypes": [
+    {
+      "category": "Git",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Branch, whether the work tree is clean, counts of changes and how far the branch is ahead of or behind its upstream as last fetched. Local only.",
+      "id": "git.status",
+      "name": "Repository status",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "git-branch",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": false,
+            "key": "branch",
+            "kind": "text",
+            "label": "Branch"
+          },
+          {
+            "always": false,
+            "key": "head",
+            "kind": "text",
+            "label": "Commit"
+          },
+          {
+            "always": true,
+            "key": "detached",
+            "kind": "boolean",
+            "label": "Detached HEAD"
+          },
+          {
+            "always": true,
+            "key": "unborn",
+            "kind": "boolean",
+            "label": "No commits yet"
+          },
+          {
+            "always": false,
+            "key": "upstream",
+            "kind": "text",
+            "label": "Upstream"
+          },
+          {
+            "always": true,
+            "key": "clean",
+            "kind": "boolean",
+            "label": "Clean"
+          },
+          {
+            "always": true,
+            "key": "staged",
+            "kind": "integer",
+            "label": "Staged"
+          },
+          {
+            "always": true,
+            "key": "unstaged",
+            "kind": "integer",
+            "label": "Not staged"
+          },
+          {
+            "always": true,
+            "key": "untracked",
+            "kind": "integer",
+            "label": "Untracked"
+          },
+          {
+            "always": true,
+            "key": "conflicts",
+            "kind": "integer",
+            "label": "Conflicts"
+          },
+          {
+            "always": false,
+            "key": "ahead",
+            "kind": "integer",
+            "label": "Ahead"
+          },
+          {
+            "always": false,
+            "key": "behind",
+            "kind": "integer",
+            "label": "Behind"
+          },
+          {
+            "always": true,
+            "key": "repository",
+            "kind": "path",
+            "label": "Repository folder"
+          },
+          {
+            "always": false,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 30000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "A folder resource. Empty: the project's repository resource.",
+          "key": "repository",
+          "kind": {
+            "kind": "directory",
+            "type": "resource"
+          },
+          "label": "Repository",
+          "required": false
+        },
+        {
+          "description": "Whose repository, when no repository is set. Empty: the workflow's current project. Choosing one never changes the active project.",
+          "key": "project_id",
+          "kind": {
+            "type": "project"
+          },
+          "label": "Project",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Git",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "The checked-out branch and commit; reports a detached HEAD and a branch without commits. Local only.",
+      "id": "git.branch",
+      "name": "Current branch",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "git-branch",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": false,
+            "key": "branch",
+            "kind": "text",
+            "label": "Branch"
+          },
+          {
+            "always": false,
+            "key": "head",
+            "kind": "text",
+            "label": "Commit"
+          },
+          {
+            "always": true,
+            "key": "detached",
+            "kind": "boolean",
+            "label": "Detached HEAD"
+          },
+          {
+            "always": true,
+            "key": "unborn",
+            "kind": "boolean",
+            "label": "No commits yet"
+          },
+          {
+            "always": false,
+            "key": "upstream",
+            "kind": "text",
+            "label": "Upstream"
+          },
+          {
+            "always": true,
+            "key": "repository",
+            "kind": "path",
+            "label": "Repository folder"
+          },
+          {
+            "always": false,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 30000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "A folder resource. Empty: the project's repository resource.",
+          "key": "repository",
+          "kind": {
+            "kind": "directory",
+            "type": "resource"
+          },
+          "label": "Repository",
+          "required": false
+        },
+        {
+          "description": "Whose repository, when no repository is set. Empty: the workflow's current project. Choosing one never changes the active project.",
+          "key": "project_id",
+          "kind": {
+            "type": "project"
+          },
+          "label": "Project",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Git",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "The paths with changes, one per line with their status (as `git status --short`), and counts. Local only.",
+      "id": "git.changes",
+      "name": "Changed files",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "list-checks",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "changed",
+            "kind": "integer",
+            "label": "Changed paths"
+          },
+          {
+            "always": true,
+            "key": "staged",
+            "kind": "integer",
+            "label": "Staged"
+          },
+          {
+            "always": true,
+            "key": "unstaged",
+            "kind": "integer",
+            "label": "Not staged"
+          },
+          {
+            "always": true,
+            "key": "untracked",
+            "kind": "integer",
+            "label": "Untracked"
+          },
+          {
+            "always": true,
+            "key": "conflicts",
+            "kind": "integer",
+            "label": "Conflicts"
+          },
+          {
+            "always": true,
+            "key": "files",
+            "kind": "text",
+            "label": "Files"
+          },
+          {
+            "always": true,
+            "key": "truncated",
+            "kind": "boolean",
+            "label": "List truncated"
+          },
+          {
+            "always": true,
+            "key": "repository",
+            "kind": "path",
+            "label": "Repository folder"
+          },
+          {
+            "always": false,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 30000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "A folder resource. Empty: the project's repository resource.",
+          "key": "repository",
+          "kind": {
+            "kind": "directory",
+            "type": "resource"
+          },
+          "label": "Repository",
+          "required": false
+        },
+        {
+          "description": "Whose repository, when no repository is set. Empty: the workflow's current project. Choosing one never changes the active project.",
+          "key": "project_id",
+          "kind": {
+            "type": "project"
+          },
+          "label": "Project",
+          "required": false
+        },
+        {
+          "default": {
+            "type": "integer",
+            "value": 100
+          },
+          "description": "At most this many paths in the list.",
+          "key": "limit",
+          "kind": {
+            "max": 500,
+            "min": 1,
+            "type": "integer"
+          },
+          "label": "Files listed",
+          "required": true
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Git",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "The commit HEAD points to: hash, author name, date and subject. Local only.",
+      "id": "git.last-commit",
+      "name": "Last commit",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "git-commit",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "hash",
+            "kind": "text",
+            "label": "Hash"
+          },
+          {
+            "always": true,
+            "key": "shortHash",
+            "kind": "text",
+            "label": "Short hash"
+          },
+          {
+            "always": true,
+            "key": "author",
+            "kind": "text",
+            "label": "Author"
+          },
+          {
+            "always": true,
+            "key": "date",
+            "kind": "text",
+            "label": "Date"
+          },
+          {
+            "always": true,
+            "key": "subject",
+            "kind": "text",
+            "label": "Subject"
+          },
+          {
+            "always": true,
+            "key": "repository",
+            "kind": "path",
+            "label": "Repository folder"
+          },
+          {
+            "always": false,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 30000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "A folder resource. Empty: the project's repository resource.",
+          "key": "repository",
+          "kind": {
+            "kind": "directory",
+            "type": "resource"
+          },
+          "label": "Repository",
+          "required": false
+        },
+        {
+          "description": "Whose repository, when no repository is set. Empty: the workflow's current project. Choosing one never changes the active project.",
+          "key": "project_id",
+          "kind": {
+            "type": "project"
+          },
+          "label": "Project",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Git",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "How the branch compares with its upstream: ahead and behind as last fetched, and on request whether the remote has moved since.",
+      "id": "git.remote-status",
+      "name": "Remote status",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "cloud",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "hasUpstream",
+            "kind": "boolean",
+            "label": "Has an upstream"
+          },
+          {
+            "always": true,
+            "key": "source",
+            "kind": "text",
+            "label": "Source (cached or network)"
+          },
+          {
+            "always": false,
+            "key": "branch",
+            "kind": "text",
+            "label": "Branch"
+          },
+          {
+            "always": false,
+            "key": "upstream",
+            "kind": "text",
+            "label": "Upstream"
+          },
+          {
+            "always": false,
+            "key": "remote",
+            "kind": "text",
+            "label": "Remote"
+          },
+          {
+            "always": false,
+            "key": "ahead",
+            "kind": "integer",
+            "label": "Ahead"
+          },
+          {
+            "always": false,
+            "key": "behind",
+            "kind": "integer",
+            "label": "Behind"
+          },
+          {
+            "always": false,
+            "key": "trackingHead",
+            "kind": "text",
+            "label": "Last fetched commit"
+          },
+          {
+            "always": false,
+            "key": "remoteHead",
+            "kind": "text",
+            "label": "Remote commit"
+          },
+          {
+            "always": false,
+            "key": "stale",
+            "kind": "boolean",
+            "label": "Remote moved since the last fetch"
+          },
+          {
+            "always": true,
+            "key": "repository",
+            "kind": "path",
+            "label": "Repository folder"
+          },
+          {
+            "always": false,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 150000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "A folder resource. Empty: the project's repository resource.",
+          "key": "repository",
+          "kind": {
+            "kind": "directory",
+            "type": "resource"
+          },
+          "label": "Repository",
+          "required": false
+        },
+        {
+          "description": "Whose repository, when no repository is set. Empty: the workflow's current project. Choosing one never changes the active project.",
+          "key": "project_id",
+          "kind": {
+            "type": "project"
+          },
+          "label": "Project",
+          "required": false
+        },
+        {
+          "default": {
+            "type": "boolean",
+            "value": false
+          },
+          "description": "Off: what was last fetched, without the network. On: also asks the remote for its branch (git ls-remote), which changes nothing locally.",
+          "key": "refresh",
+          "kind": {
+            "type": "boolean"
+          },
+          "label": "Ask the remote",
+          "required": true
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Git",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Opens the repository folder in the file manager or an application.",
+      "id": "git.open-repository",
+      "name": "Open repository",
+      "node": {
+        "cancellable": false,
+        "changesContext": false,
+        "effect": "opens",
+        "icon": "folder-open",
+        "idempotent": false,
+        "outputs": [
+          {
+            "always": true,
+            "key": "repository",
+            "kind": "path",
+            "label": "Repository folder"
+          },
+          {
+            "always": false,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 15000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "A folder resource. Empty: the project's repository resource.",
+          "key": "repository",
+          "kind": {
+            "kind": "directory",
+            "type": "resource"
+          },
+          "label": "Repository",
+          "required": false
+        },
+        {
+          "description": "Whose repository, when no repository is set. Empty: the workflow's current project. Choosing one never changes the active project.",
+          "key": "project_id",
+          "kind": {
+            "type": "project"
+          },
+          "label": "Project",
+          "required": false
+        },
+        {
+          "description": "An application resource such as an editor. Empty: the file manager.",
+          "key": "application",
+          "kind": {
+            "kind": "application",
+            "type": "resource"
+          },
+          "label": "Open with",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    }
+  ],
+  "manifest": {
+    "capabilities": ["profile-read", "machine-resources", "process-execution", "open-external"],
+    "config": [
+      {
+        "description": "A path to git, or empty to use git found on PATH. Only for this computer.",
+        "key": "gitExecutable",
+        "kind": {
+          "max_length": 1024,
+          "multiline": false,
+          "type": "text"
+        },
+        "label": "Git program",
+        "required": false
+      },
+      {
+        "default": {
+          "type": "text",
+          "value": "repository"
+        },
+        "description": "The project resource used when an action names no repository.",
+        "key": "repositoryRole",
+        "kind": {
+          "max_length": 64,
+          "multiline": false,
+          "type": "text"
+        },
+        "label": "Repository resource",
+        "required": true
+      },
+      {
+        "default": {
+          "type": "integer",
+          "value": 20
+        },
+        "description": "For refreshing the remote state.",
+        "key": "networkTimeoutSeconds",
+        "kind": {
+          "max": 120,
+          "min": 5,
+          "type": "integer"
+        },
+        "label": "Network time limit (s)",
+        "required": true
+      }
+    ],
+    "dependencies": [],
+    "description": "Status, branch, changes, last commit and remote state of project repositories. Never changes a repository.",
+    "enabledByDefault": true,
+    "id": "git",
+    "name": "Git",
+    "pages": [],
+    "platforms": [],
+    "portability": {
+      "settings": {
+        "gitExecutable": "machineSpecific",
+        "networkTimeoutSeconds": "portable",
+        "repositoryRole": "portable"
+      },
+      "version": 1
+    },
+    "version": "0.9.0",
+    "windows": []
+  }
+}

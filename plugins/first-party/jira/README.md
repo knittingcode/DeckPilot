@@ -1,7 +1,9 @@
 # deckpilot.jira
 
-The first-party Jira plugin: the replacement of the built-in `jira` module
-(`modules/jira`), part of P11 (`docs/marketplace/module-migration.md` §9).
+The first-party Jira plugin: the replacement of the former built-in `jira`
+module (removed in WP-C5), part of P11
+(`docs/marketplace/module-migration.md` §9), and now its only
+implementation.
 Bundled with class `migration` (`../bundled.json`) and pinned in builds that
 enable bundled plugins.
 
@@ -12,11 +14,12 @@ plan for `jira` (`apps/agent/src/plugins/migration.rs`) installs this
 plugin, copies the module's settings with the server you had entered and,
 once you approve, imports the credential and allows exactly that server.
 From then on the stored `jira.*` keys, workflow nodes and actions run
-here; nothing stored is rewritten, so a build without plugins (every
-release build today) keeps running the built-in on the same data. Until
-you approve, after a decline and for every computer that is not eligible
-(a server a plugin cannot reach, a per-action credential other than the
-module's), the built-in serves.
+here; nothing stored is rewritten. Until you approve, after a decline,
+for every computer that is not eligible (a server a plugin cannot reach,
+a per-action credential other than the module's) and in a build or start
+without plugins, they are unavailable with the reason: there is no
+built-in to fall back to since WP-C5. An older app on the same data still
+runs its built-in.
 `apps/agent/tests/plugins_cutover_servers.rs` runs that upgrade end to
 end.
 
@@ -53,14 +56,18 @@ it that way:
 
 - `crates/deckpilot-modules/tests/contracts.rs` (`first_party`): the
   manifest, converted as the agent registers plugin actions, against the
-  built-in's definitions: `alias::incompatibilities` (§5.3) for every
-  alias, and beyond it the definitions must be identical but for the
-  documented differences below. Also the variables (none on either side),
+  built-in's frozen 0.9.0 definitions
+  (`crates/deckpilot-modules/legacy/jira.json`):
+  `alias::incompatibilities` (§5.3) for every alias, and beyond it the
+  definitions must be identical but for the documented differences
+  below. Also the variables (none on either side),
   the settings and that the permissions are exactly the three below.
 - `apps/agent/tests/plugins_jira.rs`: every action of the plugin through
-  the real agent and sandboxed host, on canned Jira answers, against the
-  built-in on the same answers served from 127.0.0.1: the same status,
-  message, outputs and error code, and **the same requests in the same
+  the real agent and sandboxed host, on canned Jira answers. Until WP-C5
+  it compared the plugin with the built-in on the same answers served
+  from 127.0.0.1; now it is a plugin-only regression test holding the
+  plugin to those answers: the same status, message, outputs and error
+  code, and **the same requests in the same
   order** (the plugin's canned answers are exactly what the built-in asked
   for): 19 readings (success and every error code) and 5 pages to open on
   Jira Cloud; 8 readings and 3 pages again on a Data Center under a path;
@@ -95,7 +102,7 @@ idempotency flags and timeouts are identical.
 | `siteUrl` | `siteUrl` (same kind, no default, portability) | an `https` address; the server is reached only with your consent to it (above). A plain `http` address on this computer, which the built-in accepts, is not reachable for a plugin and fails with `invalid-site-url` |
 | `deployment` | `deployment` (same choices, default, portability) | `cloud`: REST API 3, the credential as Basic; `data-center`: REST API 2, as Bearer |
 | `timeoutSeconds` | `timeoutSeconds` (same) | the time limit of one action, counted with Jira's `Date` headers (a guest has no clock) |
-| `credential` (a credential id, default `jira.token`) | the credential slot `credential` (Basic or Bearer; the allowed site only) | the per-action `credential` override is dropped by the alias when it is empty or the module's own (`ParamRule::DropIfDefault`); any other value keeps the built-in until G5 |
+| `credential` (a credential id, default `jira.token`) | the credential slot `credential` (Basic or Bearer; the allowed site only) | the per-action `credential` override is dropped by the alias when it is empty or the module's own (`ParamRule::DropIfDefault`); any other value is not eligible (the keys stay unavailable) until G5 |
 | `allowPrivateHost` | not declared | replaced by the private-network consent per server, which is never assumed |
 
 ## What the plugin does not reproduce
@@ -158,3 +165,15 @@ cd plugins/runtime && cargo test -p deckpilot-jira           # unit tests
 No `url` crate in the module: the few URLs it needs are built and checked
 by `../support` (`deckpilot-first-party-support`), whose tests compare it
 with the `url` crate.
+
+## Versions
+
+A changed plugin gets a new version (`manifest.json`, `Cargo.toml` and
+`plugins/runtime/Cargo.lock`): an installation keeps its copy unless the
+bundled version is higher, and refuses a copy whose files differ from the
+pins of the same version (`../README.md`, "Versions").
+
+| Version | Shipped in | What changed |
+| --- | --- | --- |
+| 0.1.0 | DeckPilot 0.7.0 to 0.9.0 | The first release |
+| 0.1.1 | the next DeckPilot release | Rebuilt with the current plugin SDK and `deckpilot-first-party-support`; the manifest and the actions are unchanged |

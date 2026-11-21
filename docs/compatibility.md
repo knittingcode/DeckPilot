@@ -91,6 +91,68 @@ summaries carry the optional `visualAssets` (older apps ignore it), and
 whose plugin runtime lists the feature `visualAssets` (an older agent would
 answer with the plugin's own icon).
 
+Plugin API 1.9 (unreleased,
+[marketplace/module-migration.md §7](marketplace/module-migration.md#plugin-api-19-security-reviews-2026-11-20)):
+additive. The manifest kinds `tools`, `resources`, `projectContext` and
+`hostViews`, `openUrl.fromParams`, `resource` parameters, the view kinds
+`workflows` and `projects`, and `contributes.statusItems` and
+`contributes.dashboardCards` validate only with `^1.9` and only for a
+first-party plugin shipped inside the app; every other manifest is refused
+them, and a `^1.8` manifest without them validates exactly as before. The
+capability operations `resource.resolve`, `resource.open`, `tool.run`,
+`url.openParam`, `project.current`, `project.list`, `project.select`,
+`project.cycle` and `profile.read` are compatible additions within ABI 1
+(a guest that does not use them never sends them; an older agent refuses
+them as unknown). This agent reports plugin API 1.9 and carries out all of
+them; an agent of 1.8 reports a `^1.9` version `incompatible`. The SDK's
+`LATEST_API_LEVEL` is 1.9. An older app ignores a navigation entry of an
+unknown view kind. A manifest action's `node.changesContext` (a first-party
+plugin with `projectContext.select` only) is another `^1.9` field that an
+older agent refuses as unknown; a `resource.resolve` role is the user's
+role name (up to 1,024 characters, not blank), no longer a parameter key.
+No IPC protocol or document change.
+
+The plugin store goes from schema 5 to 6 with the extraction's cut-over
+(`docs/marketplace/module-migration.md` §7 X13): an additive
+`host_settings` table, after the usual encrypted backup in
+`plugins/.backups/` (`plugins-schema5-…`). It holds what the host keeps
+for itself and never hands a plugin: the built-in `git` and `docker`
+modules' executable, context and time limits that `tool.run` uses
+(`tools.git`, `tools.docker`), and the journal's note of the encrypted
+`deckpilot-pre-plugin-extraction-…` backup of the configuration database
+taken before the first extraction cut-over. A 0.9.x agent (store schema 5)
+refuses a schema 6 `plugins.db` with `UnsupportedSchema` before writing
+anything, reports the plugin store unavailable and runs without plugins:
+its built-in `git`, `docker`, `workspace`, `projects`, `github`, `gitlab`
+and `jira` modules serve the stored legacy ids again, since the migration
+never changes `deckpilot.db`. Going back with plugins means restoring the
+`plugins-schema5-…` backup as `plugins.db`.
+
+Legacy action ids of the removed built-ins (WP-C5, WP-C6,
+[marketplace/module-migration.md](marketplace/module-migration.md) §11 D1,
+D2): this build has no `github`, `gitlab`, `jira`, `git`, `docker`,
+`workspace` or `projects` module; their bundled first-party plugins
+(`deckpilot.<id>`) are the only implementation. Every legacy id
+(`github.pull-requests`, `projects.cycle`) stays in `ACTION_ALIASES`
+(`crates/deckpilot-core/src/alias.rs`) for good, and stored profiles,
+layouts, workflows and exports are never rewritten. While the plugin does
+not serve (not installed, disabled or uninstalled by the user, waiting for
+consent, plugins off with `--disable-plugins`), a legacy id is unavailable
+with the reason ("`<legacy>` now comes from <Plugin> (`<id>`): …"), never
+an unknown type; there is no built-in fallback. Once the plugin serves, the
+same keys and nodes run again unchanged. An upgrade from 0.9.x migrates
+without the built-in crates: static descriptors
+(`apps/agent/src/plugins/migration/descriptors.rs`, X13) read the stored
+`modules` rows, and a removed module's saved settings go to
+`ModuleRegistry::set_legacy_config`, so a per-action `credential` override
+naming the module's own credential is still dropped. Settings, credentials,
+projects and resource bindings are kept; without the Projects plugin
+project switching is refused ("the Projects plugin is not active"), and
+nothing is deleted. Tests: `apps/agent/tests/core_without_plugins.rs`
+(WP-T1), the `plugins_cutover*.rs` upgrades, and
+`crates/deckpilot-modules/tests/contracts.rs` against the frozen 0.9.0
+contracts in `crates/deckpilot-modules/legacy/`.
+
 Before it, protocol 13 and plugin API 1.6: localization
 ([i18n.md](i18n.md#plugin-localization),
 [marketplace/sdk/localization.md](marketplace/sdk/localization.md)).

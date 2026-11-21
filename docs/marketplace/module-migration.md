@@ -5,6 +5,27 @@ experimental plugin marketplace. Nothing here changes a release build until
 the PRs in [§9](#9-pr-sequence) land, and several steps wait on owner
 decisions ([§10](#10-blockers-and-owner-decisions)).
 
+**Owner decision of 2026-11-20.** Git, Docker, Workspace, Projects,
+Workflows, GitHub, GitLab and Jira are extracted into first-party plugins,
+and B4 of 2026-11-15 is superseded. The decision record is
+[§11](#11-owner-decisions-of-2026-11-20). The written security reviews for
+the new host capabilities are in
+[§7, plugin API 1.9 reviews](#plugin-api-19-security-reviews-2026-11-20).
+Where this document says that one of those modules "stays built-in" or
+"stays core" (§1, §3.3, §5.7, G12, G13, G15), §11 governs.
+
+**Status: WP-C5 and WP-C6 are done (P34, P35).** The `github`, `gitlab`,
+`jira`, `git`, `docker`, `workspace` and `projects` built-ins are removed
+from the workspace, `crates/deckpilot-modules` and the app. Wherever this
+document describes the built-in as a fallback (a migration not cut over,
+failed or not eligible, a build or start without plugins), the legacy
+action types are now **unavailable with the plugin's reason until the
+plugin serves** (installed, enabled, consented); nothing is rewritten, so
+they come back unchanged. The migration from 0.9.x and the contract
+checks keep working without the crates: the legacy descriptors (X13) and
+the frozen 0.9.0 contracts in `crates/deckpilot-modules/legacy/<id>.json`
+([§9](#9-pr-sequence)).
+
 The evidence, module by module, with `file:line` citations, is in
 [module-matrix.md](module-matrix.md). This document makes the decisions.
 Line numbers are from `origin/main` at `21fc2de2`. The capability baseline
@@ -75,7 +96,7 @@ be cut: the agent's plugin executor imports
 and `jira`. The transport moves to a core crate (`crates/deckpilot-net`)
 before `http` or its dependants change ([§9](#9-pr-sequence), P2).
 Similarly, `workspace` depends on the `system` crate for path helpers
-(`modules/workspace/src/actions.rs:13-14`). Those helpers move to the core
+(the former built-in's `src/actions.rs:13-14`). Those helpers move to the core
 next to `launch` if `workspace` ever moves.
 
 ### 3.1 `general`, action by action
@@ -115,6 +136,18 @@ the agent owns, in core schema 9 tables. Both declare the only module
 variables and the only `ALIASES` (`crates/deckpilot-core/src/variables/registry.rs:53,309-350`).
 So **no variable needs to migrate**, and the variable alias design in
 [§5.4](#54-variables) is a rule for later modules, not work for now.
+
+*Superseded for `projects` (2026-11-20, [§11](#11-owner-decisions-of-2026-11-20)).*
+The user-facing part of `projects` moves to `deckpilot.projects`: its
+actions, its variables, the management view, the status item, the
+dashboard card, cycling and the `wrapAround` setting. The project data
+model and its storage stay in the core as a neutral *project context*
+primitive, because the profile model, the step conditions, the FKs of
+schemas 8 and 9, portability and IPC need it. The plugin changes the active
+project only through the reviewed `projectContext` operations
+([X6](#x6-project-operations-projectcontext)). `work-session` stays core,
+unchanged. The `projects.current.*` variables now migrate as §5.4
+describes.
 
 ## 4. The default system plugin set
 
@@ -330,6 +363,12 @@ then registers, for each alias:
 | `Plugin` | any | disabled or uninstalled **by the user** | unavailable: "GitHub (`deckpilot.github`) is disabled". The user's choice is respected; there is no fallback |
 | `Plugin` | no | not registered | unavailable, naming the plugin, with "install from Marketplace" |
 
+*Since WP-C5 and WP-C6* the built-in of a moved module is never compiled
+in: the migration engine never routes such a module to `Builtin`
+(`removed()` in `apps/agent/src/plugins/migration.rs`), so every row that
+named the built-in reads "unavailable with the reason" ("`<legacy>` now
+comes from <Plugin> (`<id>`): …") until the plugin serves.
+
 `ActionRegistry::dispatch`, `definition`, `check_parameters` and
 `decorate_face` (`crates/deckpilot-core/src/registry.rs:204,315`) look up the
 legacy id as today and find the `AliasHandler`. Nothing in the engine
@@ -377,8 +416,8 @@ compiled in.
 `ParamRule` exists for the one unavoidable difference: parameter kinds that
 plugins cannot have (`credential`, `resource`; `crates/deckpilot-plugin-manifest/src/model.rs:405-460`).
 The only one the migratable modules use is the optional `credential`
-override (`modules/github/src/actions.rs:89-97`, and the same in gitlab and
-jira). The rules:
+override (the former built-in `github`'s `src/actions.rs:89-97`, and the
+same in gitlab and jira). The rules:
 
 - `DropIfDefault("credential")`: an instance whose `credential` is empty or
   equals the module's configured credential is translated by dropping it.
@@ -387,6 +426,9 @@ jira). The rules:
   computer ([§5.6](#56-the-migration)) until G5 (a `credentialSlot`
   parameter kind) exists. The built-in keeps running, and the migration
   note names the action.
+
+The extraction of 2026-11-20 added `Keep`, `Rename`, `Unsupported` and
+`AtMost` ([X10](#x10-alias-parameter-rules-keep-and-set)).
 
 The translation runs on the parameters *after* overrides and mappings are
 applied, so it covers instances, bindings and workflow nodes alike. While
@@ -598,6 +640,23 @@ build only when all of the following hold:
 After removal, `ACTION_ALIASES` keeps the entry forever, so the stored ids
 keep resolving.
 
+*Waived for the extraction set (2026-11-20, [§11](#11-owner-decisions-of-2026-11-20) D2).*
+For `github`, `gitlab`, `jira`, `git`, `docker`, `workspace` and `projects`,
+criterion 1 ("two minor releases as the default route") does not apply.
+Two conditions replace it: the plugin covers every user (GitHub Enterprise
+included, WP-B0), and the "core without optional plugins" check (WP-T1)
+passes. Criterion 2 (the contract test) still applies. Criterion 3 is
+replaced by accepting a known cost: a user whose migration is
+`awaiting_consent`, `failed` or `not_eligible` sees recoverable Unavailable
+keys and has no built-in fallback.
+
+*Done (WP-C5, WP-C6).* All seven built-ins are removed. The contract test
+runs against their frozen 0.9.0 contracts
+(`crates/deckpilot-modules/legacy/<id>.json`,
+`crates/deckpilot-modules/tests/contracts.rs`), the migration reads their
+stored rows through the legacy descriptors (X13), and WP-T1
+(`apps/agent/tests/core_without_plugins.rs`) is a CI job.
+
 ### 5.8 Fresh installs
 
 A fresh install has no `deckpilot.db` before the first start, so no
@@ -616,11 +675,14 @@ gate, not a code switch.
 | --- | --- | --- |
 | `deckpilot.db` (schema 9) | nothing: no schema change, no rewritten document, no deleted row | opens it as before. Legacy ids find its built-ins; `modules` and `credentials` rows are as they were at migration time |
 | `plugins.db` | schema 2 → 3 (`module_migrations`, `plugin_tombstones`, `source = 'bundled'`) | refuses schema 3 with `UnsupportedSchema` (`crates/deckpilot-plugin-store/src/db.rs:163`). The agent reports the plugin store as unavailable and runs without plugins (`apps/agent/src/plugins/service.rs:294-302`). Release builds include the `plugins` feature from the first release after v0.6.0 |
+| `plugins.db` (the extraction) | schema 5 → 6 (`host_settings`, [X13](#x13-migration-consent-and-the-upgrade-path)) | a 0.9.x agent refuses schema 6 the same way and runs without plugins; its built-ins serve the legacy ids |
 
 Turning plugins off on the same data (`--disable-plugins` or
 `DECKPILOT_ENABLE_PLUGINS=0`, see [§5.10](#510-plugins-on-by-default))
 behaves like an older app: `plugins/` is not opened, and the legacy ids
-run their built-ins again.
+run their built-ins again. *Since WP-C5 and WP-C6* the moved modules have
+no built-in: their legacy ids are unavailable with the reason until
+plugins are on again, and come back unchanged.
 
 So a **downgrade is safe**, with three documented losses:
 
@@ -651,7 +713,7 @@ medium tiers; credentials and private networks wait for the user).
 | Switch | Plugins |
 | --- | --- |
 | none (the app, the login item) | on with the feature, off without it |
-| `--disable-plugins`, or `DECKPILOT_ENABLE_PLUGINS=0` | off: plugin requests are refused with `pluginsUnavailable`, `plugins/` is not opened, the legacy ids run their built-ins |
+| `--disable-plugins`, or `DECKPILOT_ENABLE_PLUGINS=0` | off: plugin requests are refused with `pluginsUnavailable`, `plugins/` is not opened, the legacy ids of the remaining built-ins run them; those of the removed ones (WP-C5, WP-C6) are unavailable with the reason |
 | `--enable-plugins` (kept for compatibility), or `DECKPILOT_ENABLE_PLUGINS=1` | on with the feature; nothing without it |
 
 The command line wins over the variable, and of two switches the last.
@@ -754,9 +816,12 @@ feature from the first release after v0.6.0 (v0.6.0 and older do not).
   `not_eligible`; disabling the plugin makes the legacy actions
   unavailable, with no fallback; uninstalling and upgrading again does
   not reinstall it; a decline keeps the built-in until Retry. The
-  built-in's requests go to a stand-in on 127.0.0.1
+  built-in's requests went to a stand-in on 127.0.0.1
   (`DECKPILOT_TEST_BUILTIN_GITHUB_API`, feature `test-hooks`, never in a
-  release build), its stored settings untouched.
+  release build), its stored settings untouched. *Since WP-C5* the
+  built-in and that test hook are gone; the test runs against the plugin
+  only, and where it ran the built-in the legacy actions are now
+  unavailable with the reason.
 - Found by that test and fixed: a built-in network action (`github`,
   `http`, `gitlab`, `jira`) bound to a key, or run with `runAction`, runs
   on the agent's service task, where `deckpilot-net` blocked on a runtime
@@ -883,9 +948,11 @@ and older do not).
   uninstall withdraw the legacy actions and an upgrade does not bring the
   plugin back); GitLab.com; a GitLab on a private network (declined,
   restarted, Retry, allowed); servers a plugin cannot reach; and a
-  computer that does not use the module. The built-ins' requests go to
+  computer that does not use the module. The built-ins' requests went to
   stand-ins on 127.0.0.1 (`DECKPILOT_TEST_BUILTIN_GITLAB_API`,
-  `DECKPILOT_TEST_BUILTIN_JIRA_SITE`, feature `test-hooks`).
+  `DECKPILOT_TEST_BUILTIN_JIRA_SITE`, feature `test-hooks`); *since WP-C5*
+  the built-ins and those test hooks are gone, and the test runs against
+  the plugins only.
 - Follow-ups: GitHub Enterprise through the same mechanism (a user-origin
   slot in `deckpilot.github` and `entered: true` in its plan; its web
   host is not derivable from the API URL on GitHub Enterprise Cloud, so
@@ -1136,6 +1203,9 @@ core launcher. The plugin never sees a path. High tier: it starts
 user-chosen programs. **Not in API 1.** The value is low and the risk is
 real.
 
+*Superseded (2026-11-20).* This becomes plugin API 1.9, first-party only, as
+[X1, X2 and X4](#x1-resource-parameters-as-opaque-handles).
+
 ### G13 `process.exec`: not offered
 
 Needed by `git`, `docker` and `system.run-command`. Even with an allowlist
@@ -1153,6 +1223,16 @@ would keep all of the security-relevant code (argument building, output
 parsing, environment curation) in the host, and the plugin would only
 format. **Blocker: `git`, `docker` and `system.run-command` stay built-in.**
 
+*Superseded for `git` and `docker` (2026-11-20).* The threat analysis above
+still stands, and the 1.9 design answers it rather than dismissing it. A raw
+`process.exec` is still **not offered**. In its place is `tool.run`, a
+brokered run of `git` or `docker` only, checked against a host-compiled
+policy for each tool, granted only to bundled first-party plugins
+([X3](#x3-toolrun-brokered-git-and-docker)). The last sentence of the
+paragraph above stays true: the authority remains host code. The owner
+accepted that in exchange for removability. `system.run-command` stays
+built-in and is not affected.
+
 ### G14 Scoped file read: not needed
 
 No module that could otherwise move reads files. `git` and `docker` need
@@ -1166,9 +1246,958 @@ the `variables` read kind (`workSession.*`, `projects.current.*`), whose
 operation does not exist yet. **Blocker: `projects` and `work-session` stay
 core.**
 
+*Superseded for project context (2026-11-20).* Project select and cycle
+become grantable to the bundled `deckpilot.projects` only
+([X6](#x6-project-operations-projectcontext)). The work-session write (G16)
+stays **never grantable**.
+
 ### G17 Bundled source, pins and tombstones (infrastructure)
 
 Covered in [§4](#4-the-default-system-plugin-set) and [§5.6](#56-the-migration).
+
+### Plugin API 1.9 security reviews (2026-11-20)
+
+These are the written security reviews that the owner's rule requires
+before any privileged capability lands ("no privileged capability without
+a written security review"). They replace G12, G13 and G15 for the
+extraction set ([§11](#11-owner-decisions-of-2026-11-20)). **No code for X2
+to X9 may merge before the owner has read and approved this section.** It
+changes security policy, so it falls under "permissions need approval" and
+is not auto-merged. WP-A4 (`tool.run`) in particular waits for that
+approval.
+
+Status: **reviewed design, not implemented.** Nothing here is grantable
+until its work package lands with the tests named below.
+
+#### Common rules for every entry
+
+1. **API level.** Each kind validates only with `"engines": { "pluginApi":
+   "^1.9" }`. A `^1.8` manifest that declares one is refused, so third-party
+   manifests built against 1.8 are unaffected.
+2. **First-party gate** ([X12](#x12-first-party-publisher-gate)). `tools`,
+   `resources` (with `paths` and `open`), `openUrl.fromParams`,
+   `projectContext`, `hostViews` and host-sourced variables validate only
+   for the reserved publisher `deckpilot`. They are granted only to a
+   **bundled, pinned** package.
+3. **Deny by default.** The broker checks every call against the
+   **current** grants. A revocation, a disable or an uninstall applies to
+   the next call. For `tool.run` it also kills a process that is still
+   running (below).
+4. **Run origin.** "User-started run" has the meaning G1 and G8 gave it: a
+   key press, a gesture, the app, or a workflow whose cause is `user`. It
+   never covers a schedule, a lifecycle event, the agent's start or a work
+   session, except where an entry says otherwise. The origin is the core's
+   `RunOrigin` (`crates/deckpilot-core/src/execution.rs:53`). The guest
+   cannot set it.
+5. **Audit.** Every call to these capabilities, allowed or denied, writes
+   one audit record. The record holds the plugin id and version, the
+   operation, the grant key, the run origin, the outcome (a reason code on
+   denial), the duration, and for `tool.run` the exit status and the byte
+   counts. It never holds a secret, an environment value or an output
+   body. A path appears only as the binding's label. A URL appears only as
+   its origin.
+6. **No exfiltration channel next to authority.** A plugin that holds
+   `tools` must declare no `network`, no `credentials` and no `openUrl`.
+   The validator refuses that combination. Its results can leave the
+   plugin only as its action outputs, its own variables, its key state and
+   its log, all of which the user's own configuration consumes.
+7. **What stays never grantable**, for every publisher: a raw
+   `process.exec` or shell, `filesystem`, `clipboard`, raw device access,
+   work-session writes (G16), the `workflows` engine kind (X11), and `ui` or
+   `customUi` (plugin UI code).
+
+#### X1 Resource parameters as opaque handles
+
+*Purpose.* git, docker and workspace actions take a `repository`, `compose`,
+`location` or `application` resource, as the built-ins do. Today a plugin
+parameter of kind Resource is refused (`apps/agent/src/plugins/engine.rs:639-662`).
+
+*Design.* A parameter of kind `resource {kinds[]}` (`directory`, `file`,
+`application`, `dockerEnvironment`) reaches the guest as `{handle, kind,
+label}`. The host resolves it through `ResourceRef::{Fixed, ProjectRole}`
+and the machine bindings. `handle` is a random 128-bit value, bound to the
+plugin id and the invocation, and valid until the invocation ends. `label`
+is the binding's name, which the user chose. The guest never receives the
+path.
+
+*Threats.* A plugin minting, guessing or replaying a handle to reach another
+binding. A crafted stored parameter that names a path outside a binding.
+Path disclosure (user names, client folder names).
+
+*Mitigations.* Handles are unguessable and are checked against the
+invocation's table on every use. A handle from another invocation, another
+plugin, or one that has ended is `not-permitted`. Only bindings of the
+declared kinds resolve. A `Fixed` reference resolves only to an existing
+machine binding, never to a literal path from the document. The legacy
+alias rule `Keep` (X10) passes the stored reference to the host resolver,
+never to the guest.
+
+*Tier and consent.* None by itself. It confers nothing without X2, X3 or X4.
+
+*Audit.* None (no outside effect).
+
+*Tests (denial matrix).* A handle replayed in a second invocation, a handle
+of plugin A used by plugin B, a forged handle, and a handle of a
+non-declared kind are each refused. A Resource parameter of a `^1.8` or
+third-party manifest is refused at validation. No guest-visible value ever
+contains the bound path (a property test over the serialized invocation).
+
+#### X2 `resource.resolve`
+
+*Purpose.* Role defaults (`repositoryRole`, `composeRole`, the workspace
+roles): when an action has no fixed resource, the active project's role
+resolves it, as `repo.rs:50-94` does today.
+
+*Design.* `resource.resolve {param? | role, projectId?, kinds[]}` returns
+`{handle, kind, displayPath?}`. `projectId` must be a project of the active
+profile. Without Projects, a role resolves to `no-active-project`.
+
+*Threats.* Enumerating every binding of every project. Path disclosure
+through `displayPath`. A confused deputy: resolving a role of a project
+other than the one the user is working in.
+
+*Mitigations.* One handle per call, for the named role or parameter only.
+There is no list operation. `projectId` defaults to the run's project.
+Another project of the same profile is allowed only when the action's own
+`project_id` parameter names it. `displayPath` is returned only with
+`resources.paths: true`, which the consent dialog shows. The first-party
+git, docker and workspace plugins **do not declare `paths`**: they need
+only labels. 20 resolves per invocation.
+
+*Tier.* `resources` medium. `resources.paths` medium, separately listed.
+
+*Consent.* Derived during a migration only when the built-in demonstrably
+used machine resources on this computer (`demonstrated`,
+`apps/agent/src/plugins/migration.rs:709`). Otherwise it is asked for.
+
+*Audit.* The role, the kind, the outcome, and the binding label.
+
+*Tests.* A role of another profile's project is refused. `projectId` that
+does not match the action's parameter is refused. Without `paths`,
+`displayPath` is absent. Projects disabled gives `no-active-project`, with
+no panic. Over 20 calls per invocation gives `Throttled`.
+
+#### X3 `tool.run`: brokered git and docker
+
+This is the largest risk in the plan.
+
+*Purpose.* Let `deckpilot.git` and `deckpilot.docker` run the user's own
+`git` and `docker` executables, as the former built-ins did (`git`'s
+`src/repo.rs:115-149`, `docker`'s `src/actions.rs:565-595`). The owner gets removability: with
+the plugin disabled or uninstalled, no process authority is in use. The
+parsing and logic can also be released independently.
+
+*Owner's model (2026-11-20).* The manifest allow-lists executables (`git`
+and `docker` only). Arguments are an array, never a shell string. The
+working directory is a resource handle only. Time and output are limited.
+Explicit consent is asked on first use. Every run is audited.
+
+*Hardening adopted within that model.* A host-compiled policy for each
+tool, in the proposed `apps/agent/src/plugins/tools/{mod,git,docker}.rs`:
+
+- **Allowed subcommands.** Each argv's subcommand must be in the tool's
+  closed list.
+- **Allowed options for each subcommand.** Each option must be an exact
+  token or a `--name=<value>` whose value passes a typed validator. Each
+  positional fills a typed slot: a ref name, a remote name, a container,
+  service or project name (the former built-in `docker`'s `src/cli.rs:74-101`), a bounded
+  integer, or a `--since` value. Anything not listed is refused. This
+  allowlist is the security boundary.
+- **Denylist.** The dangerous flags below are checked first, for a precise
+  error and as a second line of defence. A denylist on its own is
+  incomplete by nature, so the boundary is the allowlist.
+- **No value starts with `-`** in a positional slot. The host inserts `--`
+  before positionals.
+- **An environment allowlist**, applied over `minimal_environment`
+  (`crates/deckpilot-core/src/process.rs:135`). The guest cannot pass any
+  environment.
+- **The executable is a host-held machine setting of the grant**:
+  `gitExecutable` and `dockerExecutable` move out of the plugin's settings.
+  The user sets it in DeckPilot's own settings UI. Its file name must be
+  `git` or `docker` (`.exe` on Windows). The consent dialog shows the
+  resolved path. The plugin cannot read or repoint it. The Docker
+  `context` is a host-held setting too.
+- **The working directory and git's `-C` are a resolved handle only**, of
+  kind `directory` (git) or `directory`/`file` (compose). They are never a
+  path the plugin supplies.
+
+The wasm guest never builds the final argv, never sees the environment or
+the executable path, and never receives a process handle. It submits
+`{tool, args[], cwd: handle, timeoutMs}` and gets back `{exit, stdout,
+stderr, truncated, durationMs}`.
+
+##### X3a `tools:git` (read) and `tools:git:network`
+
+*Allowed subcommands and shapes* (exactly what the built-in runs today):
+
+| Subcommand | Allowed form |
+| --- | --- |
+| `status` | `--porcelain=v2 --branch -z` |
+| `log` | `-1 --format=<format from a fixed set of placeholders>`, no `--output`, no path arguments |
+| `config` | `--get branch.<ref name>.remote` or `branch.<ref name>.merge` only. No other key, so `credential.*`, `http.*.extraHeader` and `url.*` cannot be read |
+| `remote` | bare (names only). Not `-v` or `get-url`, which can print URLs with embedded credentials |
+| `rev-parse` | `--verify -q <ref name>` |
+| `ls-remote` | `-- <remote name> <ref name>`, only with `tools:git:network`. The remote must be a **name** listed by `git remote`, never a URL (a URL would let the plugin choose the server, and `ext::` URLs run commands) |
+
+*Host-fixed prefix*, which the plugin cannot change (as implemented,
+after the security review of WP-A4; see
+[below](#x3-as-implemented-and-the-review-of-wp-a4)):
+`-C <handle dir> --no-pager --no-optional-locks -c core.fsmonitor=false -c log.showSignature=false -c protocol.allow=never -c protocol.https.allow=always -c protocol.ssh.allow=always -c protocol.git.allow=always -c protocol.ext.allow=never -c protocol.file.allow=never -c credential.interactive=never -c core.askPass=`.
+The environment is `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0`,
+`GIT_PROTOCOL_FROM_USER=0`, `GCM_INTERACTIVE=never`, an empty
+`GIT_ASKPASS`, `GIT_CEILING_DIRECTORIES=<the binding's parent>`,
+`LC_ALL=C`, plus `GIT_EXEC_PATH` and `XDG_CONFIG_HOME` from the agent's own
+environment. `SSH_AUTH_SOCK` is added **only** for `ls-remote` under
+`tools:git:network`.
+
+*Denied always* (refused before the allowlist check): `-c`, `--config-env`,
+`-C`, `--git-dir`, `--work-tree`, `--namespace`, `--exec-path`,
+`--upload-pack` and `-u`, `--receive-pack`, `--output` and `-o`,
+`--ext-diff`, `--textconv`, `--exec`, `--super-prefix`, any `core.*` or
+`alias.*` key, and any subcommand that is not a git builtin. Git expands an
+alias only for a name that is not a builtin, so the subcommand allowlist
+also excludes aliases.
+
+*Threats.* Argument injection that runs programs (`-c core.sshCommand`,
+`--upload-pack`, `ext::`). Writing files (`log --output`). Reading
+secrets from configuration. SSRF through a plugin-chosen remote. Lending
+the SSH identity. Output that echoes credentials.
+
+*Mitigations.* The allowlist, the denylist and the fixed prefix above. The
+network sub-grant is separate, and its consent says "uses your SSH identity
+and git credential helpers to contact the remotes configured in your
+repository". On stderr and stdout the host redacts URL userinfo
+(`https://user:token@host` becomes `https://host`) before the guest sees
+it. The time limit is `networkTimeoutSeconds` (5-120, default 20) for
+`ls-remote` and 10 s for local reads. Output is capped by the core's
+`ProcessLimits`, and above that by the 1 MiB host-call reply.
+
+*Residual risk, stated honestly.*
+
+- **Repository-local configuration is trusted by git.** A repository the
+  user cloned from a hostile source can set `core.sshCommand`,
+  `remote.<name>.uploadpack` or `core.gitProxy` in `.git/config`, and
+  `ls-remote` would run them. `git status` can run filters
+  (`filter.*.process`) for files that need them. The built-in has exactly
+  the same exposure today. The plugin cannot write that configuration (no
+  `config` set and no file system), so it gains nothing the repository's
+  author did not already have. WP-A4 should also force
+  `-c core.sshCommand=ssh` and `-c core.gitProxy=` for `ls-remote`, and
+  measure whether that breaks common setups before it is made mandatory. WP-A4 (2026-11-20) does **not** force them: they would also override
+  the user's own global `core.sshCommand` (a custom key or agent), which
+  has not been measured. This stays an accepted risk, as for the
+  built-in. The environment overrides (`GIT_SSH_COMMAND`, `GIT_CONFIG_*`,
+  `GIT_ASKPASS`, `GIT_DIR`) never reach git.
+- **The isolation gain is limited.** The authority stays in the agent. A
+  bug in the host policy is a bug in trusted code, exactly as G13 warned.
+  The sandbox isolates parsing and formatting only. The gain is
+  removability, a typed and reviewable policy instead of free-form module
+  code, and independent releases of the parsing.
+
+##### X3b `tools:docker` (read)
+
+*Allowed:* `context show`; `version --format {{json .}}`; `compose version
+--short`; `ps --no-trunc --format {{json .}} [--all] [--filter
+name=<name>]`; `compose -f <file> -p <project> ps --format json`;
+`compose -f <file> -p <project> logs --tail <1-1000> [--since <v>]
+[<service>…]`; `logs --tail <1-1000> [--since <v>] -- <container>`. The
+compose file is always the handle's path, which the host inserts.
+
+*Denied always:* `run`, `exec`, `create`, `cp`, `attach`, `build`, `push`,
+`pull`, `login`, `logout`, `inspect` (it prints environment variables,
+which often hold secrets), `compose config` (it prints the interpolated
+file, secrets included), `compose run|exec|cp|build|push|pull`, `system`,
+`volume`, `network`, `plugin`, `swarm`, `secret`, `image`, `-v` and
+`--volume`, `--mount`, `--privileged`, `--cap-add`, `--device`,
+`--pid`, `--network`, `--security-opt`, `-H` and `--host`, `--context`,
+`--config`, `--tls*`, `-e` and `--env`, `--env-file`,
+`--project-directory`, and any plugin-supplied `-f` or `--file`.
+
+*Environment:* `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`,
+`DOCKER_CERT_PATH` and `DOCKER_TLS_VERIFY` from the agent's own environment
+or the host-held `context`, never from the plugin. `SSH_AUTH_SOCK` only
+when the host-held context is an `ssh://` one.
+
+*Threats.* Docker access is root-equivalent. Reading container secrets.
+Pointing the CLI at another daemon (SSRF to a remote engine). Log output
+carrying tokens.
+
+*Mitigations.* No subcommand that creates, changes or enters a container
+is reachable with the read grant. `logs` output is marked sensitive and
+capped at 64 KiB, as today. The read timeout is 30 s.
+
+*Residual.* `ps --format {{json .}}` includes container command lines and
+labels, which can hold secrets. The built-in returns the same data. The
+docker plugin has no network or credential grant (common rule 6), so the
+data can leave it only through the user's own configuration.
+
+##### X3c `tools:docker:modify`
+
+*Allowed:* `compose -f <file> -p <project> up --detach [<service>…]`,
+`compose … down [--remove-orphans]`, `compose … restart [<service>…]`,
+and `start|stop|restart -- <container>`. Never `down -v` or `--volumes`,
+`--rmi`, `up --build`, `--force-recreate` with `--renew-anon-volumes`, or
+`kill`.
+
+*Threats.* A compromised plugin taking services up or down at a bad time.
+Running whatever the compose file declares (privileged containers, a bind
+mount of `/`). Lifecycle-driven loops.
+
+*Mitigations.* A separate grant, **off by default**, which replaces
+`allowStateChanges`. It needs explicit consent and is never derived. It is
+offered during a migration only when `allowStateChanges` was on, and even
+then it is asked for. It is allowed only in user-started runs, and in
+workflow runs with cause `workSession` (a session the user started; this
+keeps "start work, compose up" working). It is never allowed from a
+schedule, a lifecycle event or the agent's start. Limits: 1 modifying run
+at a time per plugin, and 6 per minute. The timeout is `timeoutSeconds`
+(10-1800, default 300). The compose file is only the user's bound
+resource.
+
+*Residual.* `up` runs the user's compose file with the daemon's full
+authority, which is what the user asked for. The plugin chooses *when*,
+within the run-origin rule. This matches the built-in with
+`allowStateChanges` on. A scheduled workflow that ran `compose up` under
+the built-in stops working. The owner must confirm that, or allow the
+`schedule` cause explicitly.
+
+##### Common to X3a to X3c
+
+*Tier.* **High.** Explicit consent for each plugin and each sub-grant
+(`tools:git`, `tools:git:network`, `tools:docker`, `tools:docker:modify`).
+It is never derived: the migration engine caps derivation at medium
+(`crates/deckpilot-plugin-store/src/manager.rs:731`).
+
+*Consent.* One time, when the plugin is first used or at the migration
+prompt. It names the executable path, the sub-grant, and for network the
+SSH identity. The plugin cannot trigger the prompt itself.
+
+*Process lifecycle.* The process runs without a shell, in its own process
+group. It is killed on cancellation, on the deadline, on a disable, on a
+revocation of the grant and on an uninstall. At most 4 concurrent runs per
+plugin, 20 starts per second per plugin, and a queue beyond that. These are
+proposed values, fixed by WP-A4 with tests. 32 git keys refreshing every
+30 s fit easily (risk 8 in the plan).
+
+*Audit.* The tool, the subcommand, the option names (never values), the
+handle label, the run origin, the exit status, the duration, the byte
+counts, and the denial reason.
+
+*Tests: the denial matrix* (`apps/agent/src/plugins/tools/tests.rs`, plus
+end-to-end tests in `apps/agent/tests/plugins_tools.rs` with a fake
+executable that records its argv and environment):
+
+- git: each denied flag above, alone and as `--flag=value`, `-cfoo=bar`,
+  combined short options, and after `--`. A remote given as a URL. `ext::`,
+  `file://` and `-` as a remote. `config --get` of any key other than the
+  two branch keys. `log --output`. An alias name. A non-builtin
+  subcommand. An unknown option.
+- docker: each denied subcommand and flag. `-H`. `--context`. A
+  plugin-supplied `-f`. `compose config`. `inspect`. `down -v`. Modify
+  operations without `tools:docker:modify`, and modify from a `schedule`,
+  `event` and `startup` run.
+- both: a cwd that is not a live handle. A path argument outside the
+  handle. Environment values not on the allowlist (the fake executable
+  asserts its whole environment). `SSH_AUTH_SOCK` absent without the
+  network sub-grant. Timeout kills the process group. Output over the cap
+  is truncated and flagged. A revocation mid-run kills the process. An
+  executable setting whose file name is not `git` or `docker` is refused.
+  A third-party or `^1.8` manifest declaring `tools` is refused. A `tools`
+  manifest that also declares `network`, `credentials` or `openUrl` is
+  refused.
+
+##### X3 as implemented and the review of WP-A4
+
+WP-A4 (`apps/agent/src/plugins/tools/`, `executor/tools.rs`) had an
+independent security review on 2026-11-20 ("ship after fixes"). Each
+finding is fixed and has a regression test that reproduces the attack
+(`apps/agent/src/plugins/tools/tests.rs` and `tests/runs.rs`, with fake
+executables and, for git's own behaviour, the real `git` in temporary
+repositories; never a real docker):
+
+| Finding | Fix | Test |
+| --- | --- | --- |
+| M1 git discovery escapes the binding (a folder inside a dotfiles repository lists the home folder) | `GIT_CEILING_DIRECTORIES=<the binding's parent>`, and before every run `rev-parse --show-toplevel`, whose real path must be the binding or inside it (`not-a-repository`, `tool-outside-binding`) | `git_never_finds_a_repository_above_the_binding`, `a_work_tree_outside_the_binding_is_refused` |
+| M2 compose on a folder loads a file outside it (the folders above, `COMPOSE_FILE=../compose.yaml` in `.env`) | the host picks `compose.yaml`, `compose.yml`, `docker-compose.yaml` or `docker-compose.yml` **inside** the folder (real path contained) and passes it as `-f`; none is a refusal | `the_compose_file_of_a_folder_is_inside_it`, `compose_on_a_folder_runs_the_folders_own_file_only` |
+| M3 a plugin-chosen `--project-name` reaches another project | the plugin passes no `-f`, `-p` or `--project-name` (denylisted); the host pins the name: the file's literal top-level `name:`, else compose's default for its folder | `a_plugin_can_never_name_the_compose_project`, `compose_on_a_folder_runs_the_folders_own_file_only` |
+| I1 the user's settings unused | `gitExecutable`, `networkTimeoutSeconds`, `dockerExecutable`, `context` and `timeoutSeconds` of the built-in modules are read by the agent whenever it loads its modules (`ToolSettings`); on macOS `git` and `docker` are also looked for where Homebrew and Docker Desktop install them | `the_users_module_settings_are_the_hosts`, `the_executable_must_be_the_tools_own` |
+| L1 a hostile repository runs `gpg` on `log` | `-c log.showSignature=false`; a format must start with `format:` or `tformat:` (a bare word names a `pretty.*` of the repository) and has no `%G` placeholder | `a_hostile_repository_cannot_run_gpg_on_log`, `log_formats_must_be_explicit_and_never_check_signatures` |
+| L2 remote helper transports (`foo::bar`) | `GIT_PROTOCOL_FROM_USER=0`, `protocol.allow=never` with `https`, `ssh` and `git` allowed again | `remote_helper_transports_never_run` |
+| L3 relative `PATH` entries | only absolute, non-empty entries, plus the executable's own folder | `only_absolute_path_entries_reach_the_child` |
+| L4 credential prompts and windows | `credential.interactive=never`, empty `core.askPass` and `GIT_ASKPASS`, `GCM_INTERACTIVE=never`, no `SSH_ASKPASS` | `git_runs_exactly_the_canonical_argv_in_the_allowlisted_environment` |
+| L5 a `setsid` grandchild holding the pipes outlives the time limit | the core's process runner waits for the output at most the grace period after the program ended, then returns what it has (truncated) | `deckpilot-core` `a_detached_grandchild_holding_the_pipes_does_not_outlast_the_run` |
+| I2 redaction gaps | userinfo with `/` in the password, and the values of `access_token`, `private_token`, `oauth_token`, `token` and `password` query parameters | `credentials_in_queries_and_passwords_with_slashes_are_redacted` |
+| Re-review: a `.git` file (`gitdir: ../secret/.git`) or a `.git` link leads to another repository | `rev-parse --show-toplevel --absolute-git-dir`: the real git directory must be inside the binding too, except a genuine linked worktree (`<common>/worktrees/<name>` with a `commondir`, whose `gitdir` back-pointer names this work tree's `.git`); a submodule's git directory (`.git/modules/…` of the superproject) is refused | `a_git_directory_outside_the_binding_is_refused_except_for_a_linked_worktree` |
+| Re-review: userinfo containing `@` (`https://user:p@ss@host/`) | the **last** `@` before the host that ends a `user[:pass]` is the end of the userinfo | `credentials_in_queries_and_passwords_with_slashes_are_redacted` |
+| I3 broker denials audited without the subcommand | the broker's record of a `tool.run` names the tool and its subcommand (`git status`; `?` when it is not a plain word), never another argument | broker `tool_run_denials_name_the_tool_and_subcommand_only` |
+
+*Accepted risks that remain, stated precisely.*
+
+- **Repository-local configuration.** `.git/config` of the bound
+  repository may still set `core.sshCommand`, `core.gitProxy`,
+  `remote.<name>.uploadpack` (run by `ls-remote`), `filter.*` (run by
+  `status` for files that need them) and `protocol.<name>.allow=always`
+  for a remote helper of a remote it configures. The plugin cannot write
+  any of it; the built-in has the same exposure.
+- **The project's `.env` and the compose file.** The `.env` inside the
+  binding still interpolates the compose file and sets the other
+  `COMPOSE_*` settings (profiles, for example); `-f` and `-p` override
+  `COMPOSE_FILE` and `COMPOSE_PROJECT_NAME`. A compose file may `include`
+  or `extends` files outside the folder, and `up` runs whatever it
+  declares (privileged containers, bind mounts). That is the user's own
+  file, as for the built-in.
+- **The project name.** A file whose `name:` is interpolated (`${X}`)
+  gets the folder's name, which may not be the project its containers were
+  started under from the command line; the run then sees no containers.
+  The built-in's `projectName` parameter has no plugin equivalent.
+- **A repository below the binding's root only.** A binding that is a
+  subfolder of a repository is `not-a-repository` (it used to work with
+  the built-in); the binding must be the repository's own folder. Linked
+  worktrees work; **submodules are not supported as bindings yet**
+  (their git directory lives in the superproject), and neither are bare
+  repositories.
+- **Settings after the built-ins are removed (WP-C6).** `ToolSettings`
+  reads the built-in `git` and `docker` modules' configuration. When WP-C6
+  removes those modules, it must keep these values as host-held settings
+  (migrated, not lost) and feed them to `tools::configure`, or every run
+  falls back to `PATH` and the default time limits.
+- **Settings and `PATH`.** A configured executable that is a name other
+  than `git` or `docker` (not an absolute path) is refused. A
+  desktop-started agent outside macOS finds the tools only on its own
+  `PATH`, as the built-in did.
+- **Output redaction** is best effort: a secret that is not in a URL's
+  userinfo or one of the named query parameters reaches the plugin, which
+  holds no network grant (common rule 6). A path with `:` before an `@`
+  may be shortened more than needed (over-redaction, never under).
+
+*As implemented, follow-up of 2026-11-20 (host gaps found while building
+the first-party plugins).*
+
+- **Docker reads without a handle.** `ps`, `logs` of a container,
+  `version`, `context show` and `compose version` read no folder; a
+  `tool.run` of one of them may omit `cwd` (`ToolRun.cwd` is optional in
+  the ABI, `Context::run_tool_unbound` in the SDK). The agent then runs it
+  with its host-held context in an empty folder it made itself
+  (`<temp>/deckpilot-empty-<64 random bits>`, mode 0700, created with
+  `create`, never reused once anything appeared in it); a Docker
+  environment handle now runs in that folder too, instead of the system's
+  temporary folder. Compose's project commands and every git command still
+  need their handle (`tool-invalid-cwd` without one). This gives
+  `deckpilot.docker`'s `status`, `containers` and container `logs` the
+  built-in's behaviour (no resource, no project). *Tests:*
+  `reads_need_no_resource` (`apps/agent/tests/plugins_docker.rs`), the
+  ABI's `requests_are_bounded`.
+- **A Compose project bound as a Docker environment.** As the built-in's
+  compose role allowed, a `dockerEnvironment` binding whose value is an
+  absolute path of an existing folder or file is, for Compose's project
+  commands, that folder or file (by its real path, with M2's compose file
+  rules); any other Docker environment stays a context name, and is
+  refused for Compose.
+- **`tools:docker:modify` is optional and off by default (X3c).** An
+  action names the sub-grants it needs in `requiresPermissions` (plugin
+  API 1.9, one of `tools:git:network`, `tools:docker:modify`,
+  `resources:open`, `resources:paths`, `projectContext:select`,
+  `openUrl:from-params`, declared by the manifest). A sub-grant an action
+  names is optional: enabling, a plan's activation and an update's
+  activation need every other grant only (`GrantSet::is_optional`,
+  `missing_grants`); while it is not granted only the actions naming it
+  are unavailable ("needs the permission `…`: allow it in Settings ›
+  Plugins") and refused before the plugin runs; granting it makes them
+  available, revoking it again stops only them. The consent dialog and
+  Settings › Plugins show it with its own check, off by default for a high
+  tier one. `deckpilot.docker`'s Compose up, down and restart name
+  `tools:docker:modify`. The broker still refuses every call without the
+  grant (deny by default). *Tests:*
+  `changing_containers_is_a_separate_grant_off_by_default`, the store's
+  `sub_grants_actions_name_are_optional_for_enabling`, the manifest's
+  `actions_name_the_optional_sub_grants_they_need`, the desktop's
+  `review-dialog.test.tsx`.
+- **Key state per key.** A state call still runs no `tool.run` and gets no
+  handle, but `run.context` is now answered in it, with the key's
+  `keyScope`: 128 bits of SHA-256 of the plugin id, each `resource`
+  parameter with its stored reference (never a path) and, where a binding
+  follows the active project (a role, or an empty parameter), the active
+  project's id. Every run with the same bindings (a press, a workflow
+  node) gets the same scope, so the git and docker plugins keep and read
+  state per key. A key of an action that changes something may show state
+  from plugin API 1.9 (rule 6): Compose up and down keys show the
+  built-in's toggle again, as a read of what the last run stored. *Tests:*
+  `the_key_scope_names_the_bindings_of_a_key` (engine), the plugins'
+  `keys_of_different_*_keep_their_own_state`, broker
+  `a_state_call_reads_and_nothing_else_whatever_is_granted`.
+
+#### X4 `resource.open`
+
+*Purpose.* `workspace.open-in-editor`, `workspace.open-project` and
+`git.open-repository`: open a bound folder or file in a bound application,
+optionally at a line and column.
+
+*Design.* `resource.open {handle, with?: handle, position?: {line,
+column}, editor?}`. `with` must be a handle of kind `application`. `editor`
+picks a host-held argument plan (`vscode`, `cursor`, `jetbrains`, `zed`,
+`sublime`, `other`), ported from the former built-in `workspace`'s `src/editor.rs:48-67`.
+The launch goes through `crates/deckpilot-core/src/launch.rs`.
+
+*Threats.* Launching an arbitrary program. Argument injection into the
+editor (a path that starts with `-`). Path traversal from a bound location
+(`../../.ssh`). Symlink escape. Opening many windows.
+
+*Mitigations.* Only applications that are themselves machine bindings (the
+user chose them), or the operating system's default handler. Paths are
+canonical absolute paths checked with `existing_inside` and `join_inside`
+(moved to the core, WP-A3), so they never start with `-`. Line and column
+are integers from 1 to 1,000,000. Only in user-started runs. At most 1 per
+second and 5 per invocation (`open-project` opens the editor, the docs and
+the URLs). *Clarified 2026-11-20 (implementation):* a token bucket with a
+burst of 5 (the per-invocation cap) that refills at 1 per second, so a
+single `open-project` is never throttled by its own opens; `url.openParam`
+likewise has its own bucket with a burst of 10 refilling at 1 per 2 s,
+plus the shared 20 per 10 minutes window.
+
+*Tier.* **High.** Explicit consent: it starts programs the user chose.
+
+*Audit.* The labels of both handles, the editor plan, and the outcome.
+
+*Residual.* A time-of-check to time-of-use gap between the containment
+check and the launch, if a local attacker swaps a symlink. The built-in has
+the same gap. The opened application does whatever it does with the path:
+an editor may run workspace tasks it trusts, and that stays the editor's
+trust model.
+
+*Tests.* An unbound application, a handle of kind `directory` as `with`, a
+`..` or symlink escape, and a path outside the location are each refused.
+It is refused from a schedule, an event or startup run. The rate limits
+hold. The editor argv matches the fixtures for each plan.
+
+*As implemented, follow-up of 2026-11-20: `path`.* `resource.open
+{handle, path?, …}` opens a file or folder inside a `directory` handle,
+for the built-in workspace's `path`: a relative path of `/`-separated
+names (no `..`, `.`, empty name, backslash, colon or control character,
+at most 1,024 bytes; the ABI refuses anything else), joined with
+`join_inside` and resolved with `existing_inside` (`bound_inside`): it must
+exist and its real path stay inside the binding, so a `..` or a link that
+leads out is `invalid-path`. The agent opens it by its canonical absolute
+path (never starting with `-`); a line needs a file (`invalid-position`),
+and a `path` with a handle that is not a folder is refused. The record
+says that a relative path was opened, never which. *Tests:*
+`a_path_inside_a_bound_folder_opens_and_nothing_outside_it` (executor)
+and `a_path_inside_the_bound_folder_opens_and_nothing_outside_it`
+(`apps/agent/tests/plugins_workspace.rs`).
+
+*Decision of 2026-11-20 (WP-A5, coordinator within the owner's
+authorization): URL roles.* A project's URL role (a binding of kind `url`)
+resolves to a handle of the new ABI kind `url` (`resource.resolve {role,
+kinds: ["url"]}`, by label only) and `resource.open` opens it with the
+system's default browser only: never with `with`, `position` or `editor`,
+under X5's URL rules (http or https, no userinfo, printable ASCII, the host
+written literally, at most 2,048 bytes), in user-started runs, within the
+5 per invocation, audited by label and origin. This gives
+`workspace.open-project` its URL roles as the built-in has them. *Tests:*
+a bound address opens in the browser and nowhere else; with an
+application, a position or an editor, as a non-literal URL, as `with`,
+and from a schedule it is refused.
+
+#### X5 `url.openParam`
+
+*Purpose.* `workspace.open-urls` and the URL roles of `open-project` open
+URLs the user typed into the action, on any host. `openUrl.hosts` cannot
+express that.
+
+*Design.* `url.openParam {param, index?}`. The host opens the **literal
+stored value** of this invocation's own parameter (`Lines`, so `index` is
+from 0 to 9). The plugin never passes a URL.
+
+*Threats.* A plugin opening a URL it chose (phishing, drive-by). A crafted
+parameter value (`javascript:`, `file:`, a custom scheme, userinfo
+spoofing such as `https://bank.example@evil.example`). Template injection
+through variables.
+
+*Mitigations.* Only `http` and `https`. No userinfo. At most 2,048 bytes.
+Values produced by templates or workflow mappings are **excluded** in 1.9:
+only a value the user authored in the document. Private and local hosts
+are allowed, because the user typed them, as `system.open-url` allows. Only
+in user-started runs. 1 per 2 s and 20 per 10 minutes, as `url.open`. The
+per-invocation limit is 10, not `url.open`'s 3, to match `open-urls` (at
+most 10).
+
+*Tier and consent.* `openUrl.fromParams`, medium. Derived in a migration
+when the built-in was in use.
+
+*Audit.* The origin only, never the path or query.
+
+*Tests.* A templated value is refused. Each of `javascript:`, `file:`,
+`data:`, a custom scheme and userinfo is refused. An index out of range is
+refused. It is refused from a schedule. The 11th call in an invocation is
+`Throttled`.
+
+*Decision of 2026-11-20 (WP-A5, coordinator within the owner's
+authorization): provenance instead of no workflows.* The core's
+`resolve_parameters` reports where each value came from
+(`deckpilot_core::resolution::Provenance`: `Literal`, `Default`,
+`Template`, `Reference`, `Mapped`), the engine marks a workflow node's
+overrides (its mappings) `Mapped`, and the handler's context carries it.
+`url.openParam` opens only a `Literal` value: one the user wrote as it is
+into the instance, a binding's overrides or a step's overrides. It does so
+in every user-started run, workflows the user started included. Defaults
+(which the plugin's manifest supplies), templates, references and
+mappings stay refused (`url-param-not-literal`), and so does every value
+when the caller gave no provenance. *Tests:* a literal value in a
+user-started workflow opens; a template-expanded or mapped value is
+refused; a non-user run is refused.
+
+#### X6 Project operations (`projectContext`)
+
+*Purpose.* `deckpilot.projects` reads, lists, selects and cycles the active
+project. The data and `ActiveProjectContext` stay in the core
+([§3.3](#33-projects-and-work-session)).
+
+*Design.* `project.current`, `project.list` (ids, keys and names of the
+active profile's projects only: no bindings, no paths),
+`project.select {id}`, and `project.cycle {direction, wrap}`. They are
+applied by the agent's existing `ActiveProjectContext`, which emits
+`ProjectChanged` with source `plugin:<id>`.
+
+*Threats.* A confused deputy: switching the project silently changes which
+repository git touches and which compose file docker brings up. Loops with
+`LifecycleEvent::ProjectChanged` triggers. Reading other profiles'
+projects.
+
+*Mitigations.* Select and cycle are allowed only in user-started runs and
+in workflow runs with cause `user`. They are **never** allowed from a
+lifecycle event, a schedule or the agent's start, so the plugin cannot loop
+on `ProjectChanged`. Rate limit 2 per second. The active profile only. Each
+switch is shown in the status bar ("Project changed by Projects"), so a
+silent switch is visible.
+
+*Tier.* Read ops (`current`, `list`) medium. Select and cycle **high**,
+explicit consent. `projectContext` leaves `NEVER_GRANTABLE` only behind the
+first-party gate.
+
+*Consent.* See [X13](#x13-migration-consent-and-the-upgrade-path). Users of
+project cycling wait for one consent.
+
+*Audit.* The operation, the from and to project ids, and the run origin.
+
+*Tests.* Select from a lifecycle-triggered run is refused. Two selects
+within 500 ms: the second is `Throttled`. An id of another profile gives
+`not-found`. `ProjectChanged{source: plugin:deckpilot.projects}` is
+emitted. A third-party manifest declaring `projectContext` is refused at
+validation.
+
+*As implemented, follow-up of 2026-11-20: the run's project.* A built-in
+project action changes the **run's** project (its result's
+`ContextEffect`, applied by the engine for the nodes after it; the
+workflow's project scope decides at its end whether the active project
+follows). The plugin now does the same, under the same rules:
+
+- A manifest action declares it with `node.changesContext: true` (plugin
+  API 1.9; only with `projectContext.select`, first-party only, checked by
+  the validator). The agent registers such an action with `changesContext`
+  on (`plugins/engine.rs` `action_type`), so a legacy workflow without a
+  saved project scope still changes the active project, and a
+  `projectChanged` lifecycle trigger on an application-scoped workflow is
+  refused at save as for the built-in. `deckpilot.projects` declares it
+  for `cycle`, `select`, `next` and `previous`.
+- In a **workflow run** a `project.select` or `project.cycle` switches
+  nothing: the agent plans it from the run's project
+  (`ProjectCall::InRun`, `service/plugin_projects.rs`), the invocation
+  keeps the target (`executor/project.rs` `ProjectSwitch`), and the
+  action's successful result carries it as `ContextEffect::SelectProject`,
+  which the engine applies to the run (the action registry refuses it from
+  a module without `Capability::ProjectContext`, which only a plugin
+  holding `projectContext` has). `project.current` and `profile.read`
+  answer the run's project there. An action without `changesContext` is
+  refused a switch in a workflow run (`not-permitted`).
+- From a key, a gesture or the app the switch changes the active project
+  at once, as before (those runs are detached and carry no effect).
+- Unchanged: only user-started runs (a workflow of cause `user`) may
+  switch; never one a lifecycle event (the loop guard), a schedule, the
+  start or a work session started; 2 switches per second; the audit adds
+  `scope=run` for a run's switch.
+
+*Tests.* `executor/project/tests.rs`
+`a_switch_in_a_workflow_run_selects_the_runs_project`;
+`apps/agent/tests/plugins_projects.rs`
+`a_select_in_a_workflow_changes_the_runs_project` (the next node reads the
+selected project; kept in the run, or followed by the active project for a
+legacy workflow) and `a_workflow_started_by_a_project_change_cannot_switch`;
+manifest `changes_context_needs_project_context_select`.
+
+#### X7 Host-published context variables
+
+*Purpose.* `projects.current.{id,key,name}` become
+`deckpilot.projects.current.*`, scope Project, while their values stay the
+host's.
+
+*Design.* A variable declared with `scope: "project"` and `source:
+"host:project.{id,key,name}"`. The host computes and publishes it. The
+plugin never writes it: `variables.publish` for such an id is refused.
+
+*Threats.* A plugin forging project values that other workflows trust.
+
+*Mitigations.* No new authority. The values are the host's own. The values
+are published only while the plugin is enabled. 1.9 has only these three
+`host:` sources. First-party only.
+
+*Tier.* None.
+
+*Tests.* `variables.publish` on a host-sourced id is refused. The values
+disappear when the plugin is disabled and return when it is re-enabled. A
+`host:` source other than the three is refused at validation.
+
+#### X8 `hostViews`, `statusItems` and `dashboardCards`
+
+*Purpose.* Workflows and Projects become **app-drawn host views that the
+plugin activates**. Plugins ship no UI code. What moves is ownership,
+activation and removability. The React code stays in the app bundle, as the
+`settings` view kind's renderer does today.
+
+*Design.* Closed enumerations: view kinds `workflows` and `projects`,
+`statusItems: ["activeProject"]`, `dashboardCards: ["activeProject"]`, and
+a navigation entry at a position the host fixes. All are drawn by the host
+from core data.
+
+*Threats.* UI spoofing (a plugin view that mimics DeckPilot's own chrome or
+a consent dialog). Crowding the app's navigation. Data access through a
+view.
+
+*Mitigations.* No plugin markup, script or styles. The host draws the view
+and decides its strings. There is no data ABI: the view reads core IPC as
+the app does today. First-party only, so a third party cannot add chrome.
+Disabling or uninstalling the plugin hides the view. The data stays in core
+tables and returns on re-enable.
+
+*Tier and consent.* `hostViews`, low, derived. It grants placement, not
+data.
+
+*Tests.* A third-party manifest with `hostViews` is refused. An unknown
+view kind is refused under `^1.9`, and is ignored by an older app (IPC
+`PluginView.kind` is a string, `crates/deckpilot-ipc/src/plugins.rs:187-193`).
+With the plugin disabled there is no navigation entry, status item or card
+(WP-T1's desktop test).
+
+#### X9 Profile read (`profile` kind)
+
+*Purpose.* git and docker show the project key. `general` and
+`notifications` already declare the need (G8). The kind exists, but it has
+no operation yet ([permissions.md](sdk/permissions.md)).
+
+*Design.* `profile.read` returns the profile name with `read: profile`,
+and the active project's id, key and name with `read: project`. It never
+returns layouts, other profiles, bindings or paths.
+
+*Threats.* Disclosure of client or project names.
+
+*Mitigations.* Only the scopes declared. It is the existing kind for every
+publisher, so it is not first-party gated.
+
+*Tier.* Medium (existing). Explicit consent for third parties. Derived in a
+migration where the built-in declared `ProfileRead`.
+
+*Audit.* The scope.
+
+*Tests.* An undeclared scope is refused. Disabling the plugin denies the
+op. Without an active project the result is `null`, not an error.
+
+#### X10 Alias parameter rules `Keep` and `Set`
+
+*Purpose.* Route the legacy ids (plan §4.1).
+
+*Review.* No new authority. One requirement: `Keep(resource)` passes the
+stored `ResourceRef` to the **host** resolver (X1). It must never pass it to
+the guest as a path. `Set` is not used in 1.9: the deprecated
+`projects.next|previous|active` stay same-name deprecated plugin actions.
+
+*Tests.* Contract tests in `crates/deckpilot-modules/tests/contracts.rs`. A
+routed legacy `git.status` with a fixed repository reaches the guest as a
+handle and never as a path.
+
+*As implemented (WP-C1 and its follow-up).* The extraction's alias blocks
+use four rules (`crates/deckpilot-core/src/alias.rs`), applied to the
+parameters after overrides and mappings:
+
+- `Keep(key)`: a `resource` parameter on both sides, passed unchanged to
+  the host's resolver (X1).
+- `Rename(from, to)`: the built-in's `project_id` is the plugins'
+  `projectId`; the legacy type keeps the legacy key, so stored instances,
+  overrides and mappings stay valid.
+- `Unsupported(key)`: the plugin declares the parameter but cannot honour
+  a value (Docker's `projectName`: the host pins the Compose project).
+  Empty passes; any other value fails the run and is refused when saved,
+  never dropped or guessed. The migration names the stored uses in its
+  note ("… unavailable until cleared") and still cuts over.
+- `AtMost(key, max)`: an integer the plugin takes only up to a bound
+  narrower than the built-in's, by its review: `workspace.open-in-editor`'s
+  `line` and `column` (1 to 1,000,000, X4; the built-in took 10,000,000).
+  A larger value is never clamped: the run fails and a save is refused with
+  the reason, the migration names the stored uses as for `Unsupported`, and
+  lowering the value recovers the key. The contract check compares the
+  bound with the plugin's maximum.
+
+`Set` is not used (above).
+
+#### X11 Workflow engine API: not offered
+
+The Workflows plugin needs no data ABI, because its view is host-rendered
+(X8). `workflow.list` and `workflow.run` stay unimplemented, and the
+`workflows` kind stays never grantable. A later plugin that must run
+workflows needs its own review.
+
+#### X12 First-party publisher gate
+
+*Purpose.* Keep every 1.9 privileged kind out of third-party reach.
+
+*Design.*
+
+- The validator accepts the kinds only through
+  `Manifest::validate_first_party` (publisher `deckpilot`).
+- The grant needs, at every agent start and every enable, an installed
+  record with `source = 'bundled'` whose files match the compiled-in sha256
+  pins, plus the macOS code seal.
+- A `deckpilot.*` package from a registry, even one the registry's key set
+  authorizes for the `deckpilot` namespace (B6), and any sideloaded or
+  developer-mode package ([local-testing.md](local-testing.md)) **does not
+  receive these kinds**. Its manifest is refused if it declares them.
+
+*Threats.* A third party publishing under a look-alike id. A tampered
+bundle on disk. A registry compromise delivering a privileged
+`deckpilot.*` update.
+
+*Mitigations.* The gate above. The registry never serves
+`BUNDLED_PLUGIN_IDS`. Updates to these plugins ride app releases only.
+
+*Residual.* The trust is DeckPilot's release pipeline. A compromised
+release compromises the agent anyway, so the gate adds no new trust root.
+Opening any of these kinds to third parties needs a separate written
+review.
+
+*Tests.* A registry-sourced `deckpilot.git` with `tools` is refused. A
+bundled copy whose `plugin.wasm` does not match the pin is quarantined and
+holds no grant. A sideloaded `deckpilot.*` manifest with any gated kind is
+refused. A third-party publisher with each gated kind is refused.
+
+#### X13 Migration consent and the upgrade path
+
+*Purpose.* Existing users keep their keys ([§11](#11-owner-decisions-of-2026-11-20) D4).
+
+*Design.*
+
+- The migration engine installs and enables a bundled extracted plugin only
+  where the module's data is in use (a saved `modules` row or a stored
+  instance). Fresh installs and unused modules get nothing (no silent
+  install of high-tier plugins).
+- Low tiers are derived. Medium tiers are derived only when demonstrated.
+- High tiers are **always** asked once: `tools:*`, `resources.open`, and
+  `projectContext` select and cycle.
+- `tools:docker:modify` is offered only when `allowStateChanges` was on,
+  and it is asked for, not pre-checked.
+- Settings are copied (`gitExecutable`, `dockerExecutable` and `context`
+  into host-held tool settings, the rest into plugin settings).
+- No `deckpilot.db` write.
+- An encrypted, verified backup `pre-plugin-extraction` is taken before
+  the first cut-over, and its name is journaled.
+- **Eligibility without the built-in.** v0.10.0 ships with the built-ins
+  removed (D2, D5). Users who upgrade straight from v0.9.x have never run
+  these migrations. Eligibility required "the built-in module is
+  compiled in and enabled" (`eligibility` in
+  `apps/agent/src/plugins/migration.rs`), and `demonstrated` read the
+  built-in's manifest. Each removed module therefore needs a static
+  **legacy descriptor** kept in the agent as data: its id, its declared
+  capabilities, and its settings keys and kinds. Eligibility then uses the
+  stored `modules` row and the stored instances. This is a precondition of
+  WP-C5 and WP-C6, implemented (below: "Legacy descriptors").
+
+*Threats.* Consent fatigue or a pre-approved dialog. A plugin triggering
+consent prompts. Data loss. A confused deputy where a lifecycle event
+completes a migration step on the user's behalf.
+
+*Mitigations.* Only the agent starts the prompt. The plugin cannot. One
+dialog per plugin lists every high-tier item, each unchecked. Declining
+keeps the keys Unavailable with "Allow" and "Restore" actions. Documents
+are never rewritten, so every step is reversible. Consent is recorded
+`decided_by = user:migration:<module>`.
+
+*Residual.* With the built-ins removed (D2), a user who has not consented
+has no fallback. Their git, docker, workspace and project-cycling keys show
+Unavailable until they click. The owner accepted this.
+
+*Tests.* Per module in `apps/agent/src/plugins/migration/tests.rs`:
+eligible, awaiting consent (the keys are Unavailable with a reason),
+consent given (cut over), declined (still Unavailable, recoverable),
+`allowStateChanges` off (modify never offered), and the backup recorded
+before the first cut-over.
+
+*As implemented (WP-C1, with the follow-up of 2026-11-20).*
+
+- **Plans.** `PLANS` (`apps/agent/src/plugins/migration.rs`) has one
+  `Extraction` plan each for `git`, `docker`, `workspace` and `projects`:
+  the host-held tool settings, the grants offered only when a setting was
+  on (`tools:docker:modify` with `allowStateChanges`), and, for
+  `projects`, a profile's projects as the module's data in use.
+- **The `AwaitingConsent` route.** While an extraction plan waits for the
+  user (and after a decline, until Retry), its legacy action types are
+  unavailable with the reason ("… waits for your consent: allow it in
+  Settings › Plugins"): `LegacyRoute::AwaitingConsent`, not the built-in.
+  A failed step still falls back to the built-in while it is compiled in
+  (since WP-C5 and WP-C6 never: the legacy types stay unavailable with
+  the reason).
+- **The pre-extraction backup.** The service task writes the encrypted
+  backup `backups/deckpilot-pre-plugin-extraction-<ms>.db` of
+  `deckpilot.db` when a module of the set is in use, and the first cut-over
+  journals it once in `plugins.db` (`host_settings`
+  `migration.backup.pre-plugin-extraction`, `{"file": …}`); a backup that
+  could not be written fails the cut-over, which then falls back (since
+  WP-C6: the keys stay unavailable until Retry).
+- **Plugin store schema 6.** `host_settings` (additive, after the store's
+  encrypted backup) holds what the host keeps for itself: the built-ins'
+  `gitExecutable`, `networkTimeoutSeconds`, `dockerExecutable`, `context`
+  and `timeoutSeconds` (`tools.git`, `tools.docker`, refreshed at every
+  start while the migration runs or is cut over, read by `tool.run` also
+  once the built-ins are gone), and the backup note. A 0.9.x agent refuses
+  schema 6 with `UnsupportedSchema` before writing, reports the plugin
+  store unavailable and runs **without plugins**: its built-ins serve the
+  stored legacy ids, since `deckpilot.db` is never changed
+  ([compatibility.md](../compatibility.md)).
+- **No known gaps.** The contract check
+  (`crates/deckpilot-modules/tests/contracts.rs`, and the agent's health
+  check before a cut-over) passes for all four plugins with no exemption.
+  The follow-up closed the gaps the cut-over had recorded: Workspace's
+  `path` output is a path again (the opened location's, with
+  `resources.paths`, medium tier, derived because the built-in reported
+  it) and `line` and `column` are capped by `AtMost` (X10); Docker's
+  `composeRole` takes 1,024 characters as the built-in's, and a
+  `resource.resolve` role is any role name the user gave (not blank, no
+  control character, at most 1,024 bytes; it only names an entry of the
+  project's role map); Projects changes the run's project from a workflow
+  (X6) and its `cycle`, `next` and `previous` declare the dial controls
+  the built-ins had, which the contract now compares.
+- **Legacy descriptors.** `apps/agent/src/plugins/migration/descriptors.rs`
+  holds a static descriptor of every moved built-in (`github`, `gitlab`,
+  `jira`, `git`, `docker`, `workspace`, `projects`): id, name, default
+  state, capabilities, settings (key, kind, default, `required`) and action
+  ids with their parameter keys. The plans and the host's tool settings
+  name keys from them, not from the module crates. `LegacySnapshot::read`
+  uses a descriptor only when the built-in is not registered: the stored
+  row is read as the module registry read it (declared keys, checked
+  against their kinds, defaults for the rest), the enabled state is the
+  row's or the default, `demonstrated` reads the descriptor's
+  capabilities, and the health check, without the built-in's full
+  `ActionType`, requires the plugin to declare every alias target with
+  every built-in parameter under the alias's key (the full contract was
+  checked while the crate existed, and the bundled copy is pinned).
+  `descriptors.rs`'s tests hold every descriptor equal to its built-in
+  while both exist; `without_the_builtin_crates_the_descriptors_migrate`
+  migrates a 0.9.x configuration with none of the crates registered.
+  WP-C5 and WP-C6 can therefore remove the crates, and did: the
+  descriptors are now the only description of the removed modules in the
+  agent, and the saved settings of a removed module are handed to the
+  module registry (`ModuleRegistry::set_legacy_config`), so a per-action
+  `credential` override naming the module's own credential is still
+  dropped (`ParamRule::DropIfDefault`).
+- **End to end.** `apps/agent/tests/plugins_cutover_git.rs`,
+  `plugins_cutover_projects.rs` and `plugins_cutover_workspace.rs`: a used
+  module waits for consent with its stored keys unavailable, then the same
+  keys run through the plugin.
 
 ## 8. Installer size
 
@@ -1258,6 +2287,65 @@ they change.
 | P13 | Plugins on in builds with the `plugins` feature | `apps/agent/src/{main.rs,plugins/mod.rs}`, agent tests | P10, P11 | *Done* (§5.10): no switch needed; `--disable-plugins` / `DECKPILOT_ENABLE_PLUGINS=0` turn plugins off. The release workflow and packaging enable the feature separately |
 | P12 | Remove a legacy built-in | `modules/<name>`, `crates/deckpilot-modules/src/lib.rs` | §5.7 criteria | The alias entries stay forever |
 
+*P12 for the extraction set* is split into P34 and P35 below. The §5.7
+criterion 1 is waived for them (§11 D2).
+
+#### P14 onwards: the extraction of 2026-11-20
+
+Each PR is one work package (WP) of the extraction plan and lands on its
+own, squash-merged when its checks pass. The exceptions are P16 and P21,
+which need the owner's approval (security policy). Hot files have one owner
+per wave: `alias.rs`, `migration.rs` `PLANS`, `executor.rs`, the manifest
+crate, both schema copies, the runtime `abi`/`broker`, `bundled.json`,
+`deckpilot-modules`, `App.tsx`, `app-sidebar.tsx` and `modules/index.ts`.
+
+| # | WP | PR | Depends on | Notes |
+| --- | --- | --- | --- | --- |
+| P14 | WP-00 | Land the `app-review` worktree on `main` | — | Blocks everything below |
+| P15 | WP-01 | Bundled allowlist accepts `locales/<tag>.json` and the `visualAssets` formats (`crates/deckpilot-plugin-bundled`, `check-bundled-plugins.sh`) | P14 | Fixes a latent seeding refusal |
+| P16 | WP-02 | This decision record and the 1.9 security reviews (docs only) | — | **Owner approval**, not auto-merge |
+| P17 | WP-B0 | `deckpilot.github` user-origin slot for GitHub Enterprise | P14 | Existing API; makes GHE users eligible (D2 precondition) |
+| P18 | WP-A1 | Manifest kinds, `^1.9` gate, first-party gate, tiers, both schemas | P14, P16 | Validator only, no new authority |
+| P19 | WP-A2 | ABI capabilities, broker authorization, guest SDK, `sdk/` docs | P18 | Deny by default for each op |
+| P20 | WP-A3 | Resource handles (X1, X2); path helpers move to the core; `executor.rs` split | P19 | |
+| P21 | WP-A4 | `tool.run` (X3) with the denial matrix | P20, **P16 approved** | **Owner approval** |
+| P22 | WP-A5 | `resource.open` (X4), `url.openParam` (X5) | P20 | Parallel with P21 after the split |
+| P23 | WP-A6 | Project ops (X6), host context variables (X7), profile read (X9) | P20 | Parallel with P21 and P22 |
+| P24 | WP-B1 | `deckpilot.git` | P21 | |
+| P25 | WP-B2 | `deckpilot.docker` | P21 | |
+| P26 | WP-B3 | `deckpilot.workspace` | P22 | |
+| P27 | WP-B4 | `deckpilot.projects` (actions, variables, host views) | P23 | |
+| P28 | WP-B5 | `deckpilot.workflows` (manifest only, host view) | P19 | |
+| P29 | WP-C1 | Bundle and route: `bundled.json`, aliases, `PLANS`, `Keep`, pre-extraction backup, contract tests, legacy descriptors (X13) | P24-P28 | Owns the hot files |
+| P30 | WP-C2 | Variable aliases `projects.current.*` | P29 | |
+| P31 | WP-C3 | Desktop gating; resource-binding editor to Settings › Resources | P30 | Parallel with P32 |
+| P32 | WP-C4 | Agent and Tauri gating (`require_projects`, `settle_project`, tray) | P30 | |
+| P33 | WP-T1 | "Core without optional plugins" check, a required CI job | P31, P32 | Acceptance gate for P34 and P35 |
+| P34 | WP-C5 | Remove the `github`, `gitlab`, `jira` built-ins | P17, P33 | §5.7 criterion 1 waived (D2). *Done* |
+| P35 | WP-C6 | Remove the `git`, `docker`, `workspace`, `projects` built-ins; `ProjectCatalog` to the core | P33, P29's legacy descriptors | **Before v0.10.0** (D1, D5), not "one release later". *Done* |
+
+*Done (P34, P35).* The seven crates are gone from the workspace,
+`crates/deckpilot-modules/src/lib.rs` and the app; the remaining built-ins
+are `deck`, `general`, `http`, `notifications`, `system` and
+`work-session`. `ACTION_ALIASES` keeps every legacy id; without the plugin
+it is unavailable with the reason, never a built-in. The frozen 0.9.0
+contracts (`crates/deckpilot-modules/legacy/<id>.json`) keep the contract
+test, and the legacy descriptors (X13) the 0.9.x migration.
+`crates/deckpilot-modules/tests/integration_services.rs` and
+`live_smoke.rs` were deleted with the built-ins, and with them the test
+hooks `DECKPILOT_TEST_BUILTIN_GITHUB_API`, `…_GITLAB_API` and
+`…_JIRA_SITE`; `apps/agent/tests/plugins_{github,gitlab,jira}.rs` are
+plugin-only regression tests. `ProjectCatalog` and `CatalogError` are in
+`crates/deckpilot-core/src/project_catalog.rs`; the Projects plugin is the
+only project-context provider. `tools/dev`'s seed stores the legacy ids
+directly. WP-T1 (`apps/agent/tests/core_without_plugins.rs`) runs in CI.
+
+**Release cut line.** v0.10.0 is cut only after P35 has merged and the
+whole set is green: full CI, WP-T1, the denial matrix, the migration tests
+and the release smoke. Nothing in P14 to P35 is released before that. The
+work can merge to `main` gradually, because the plugins stay unrouted
+until P29.
+
 This PR touches none of `modules/`, `apps/agent/src/plugins/`, `plugins/`
 or `docs/distribution/`. P2 and P4 touch files the Marketplace stream owns,
 so they wait for #231 and #232 and are coordinated with that stream rather
@@ -1270,7 +2358,46 @@ than run in parallel.
 | B1 | Registry trust configuration and keys (U-10, U-12) | independent updates of bundled plugins; "fresh install gets only the default set" (§5.8); Marketplace-sourced replacements |
 | B2 | Bundled trust: option B (pins in the agent), with or without A (new decision) | P5 and everything after it |
 | B3 | Consent policy: derived grants for low and medium tiers, and explicit consent for credentials and private network during a migration (§5.5) | P6, P7 |
-| B4 | Confirm that `git`, `docker`, `system.run-command`, `http`, `workspace` and `system.process-status` stay built-in (G13 and §6), and that `general`, `projects`, `work-session` and the `system` launchers are core | the scope of P12 |
+| B4 | ~~Confirm that `git`, `docker`, `system.run-command`, `http`, `workspace` and `system.process-status` stay built-in (G13 and §6), and that `general`, `projects`, `work-session` and the `system` launchers are core~~ **Superseded 2026-11-20 by [§11](#11-owner-decisions-of-2026-11-20).** `system.run-command` and `system.process-status` remain built-in; `general`, `work-session`, `http` and the `system` launchers remain core | the scope of P12 |
 | B5 | Where first-party plugin sources live: in this repository (`plugins/first-party/`, built into the bundle by the app's release build) and also submitted to `knittingcode/deckpilot-plugins` by pinned commit for registry updates | P5, P8 |
 | B6 | Reserve the `deckpilot` publisher in the registry | registry publication of first-party plugins |
 | B7 | The removal criteria for legacy implementations (§5.7) | P12 |
+| B8 | Approval of the plugin API 1.9 security reviews ([§7](#plugin-api-19-security-reviews-2026-11-20)) | P19 to P23, especially P21 (`tool.run`) |
+| B9 | Docker modify from scheduled workflows: refused by X3c (allowed only in user-started and work-session runs). Confirm, or allow the `schedule` cause explicitly | P21, P25 |
+| B10 | Workspace and Projects keys also wait for one consent (`resources.open` and `projectContext` select/cycle are high tier, X13), not only Git and Docker keys. Confirm, or name a lower tier for one of them with a reason | P29 |
+
+## 11. Owner decisions of 2026-11-20
+
+Decided by the owner on 2026-11-20. These decisions supersede B4 of
+2026-11-15 and the conclusions of G12, G13 and G15 for the modules named.
+The analysis in those sections still stands. The security reviews in
+[§7](#plugin-api-19-security-reviews-2026-11-20) answer it.
+
+| # | Decision |
+| --- | --- |
+| D1 | **Extract Workflows, Docker, Git, GitHub, GitLab, Jira, Projects and Workspace into plugins.** No duplicate developer functionality stays in the core. The core keeps only system capabilities: devices, profiles, layouts, pages and folders, the protected Back key, navigation, gestures and dispatch, the action and workflow-**execution** primitives, rendering, live preview, IPC, the plugin host and permissions, the Marketplace client, encrypted storage, backup and restore, security, the notifications infrastructure, settings, updates, the shared UI, the appearance systems and i18n. `work-session`, `http` and the `system` launchers stay core |
+| D2 | **The legacy `github`, `gitlab` and `jira` built-ins are removed** once their plugins cover every user (GitHub Enterprise included, P17) and the "core without optional plugins" check (P33) passes. This explicitly waives the §5.7 "two minor releases" rule. Users whose migration waits on consent see recoverable Unavailable keys |
+| D3 | **Process execution for Git and Docker is a new high-tier permission** ([X3](#x3-toolrun-brokered-git-and-docker)). The manifest allow-lists the executables (`git` and `docker` only). Arguments are an array. There is no shell. The working directory is limited to the project's resource folders (resource handles). Time and output are limited. Explicit consent is asked on first use. Every run is audited. Hardening adopted within that model: allowed subcommands and options for each tool, a denylist of dangerous flags, an environment allowlist, mutating Docker operations as a separate grant that is off by default, and the first-party publisher gate. Third-party plugins cannot request it |
+| D4 | **Existing users.** The extracted plugins ship bundled. The migration engine installs and enables only those whose data or keys are in use. Data and keys are preserved. Git and Docker keys wait for the one-time consent (see B10 for Workspace and Projects) |
+| D5 | **Release v0.10.0 only when the whole extraction is complete and green** (the cut line in [§9](#9-pr-sequence)) |
+| D6 | **Plugins cannot ship UI code.** The Workflows and Projects screens become app-drawn host views that the plugin activates ([X8](#x8-hostviews-statusitems-and-dashboardcards)). Ownership, activation and removability move to the plugin. The React code stays in the app. "Extracting" these two screens does not take their code out of the app binary, and cannot without a plugin UI framework, which D6 forbids |
+
+**What stays in the core, stated plainly**
+
+- The **project data model** stays in the core as a neutral project-context
+  primitive (§3.3). It covers `Project`, `ActiveProjectContext`, the
+  storage tables, the FKs, portability and IPC. `deckpilot.projects` owns
+  every user-facing part of it.
+- The **workflow engine**, `BindingTarget::Workflow`, the execution IPC and
+  the run monitoring views stay in the core. With `deckpilot.workflows`
+  off, keys that run workflows still run them, and existing workflow
+  bindings show read-only.
+- The **resource-binding store** (`machine_config`) and its editor stay in
+  the core (Settings › Resources), because the `system.open-*` launchers
+  use them.
+- **No `deckpilot.db` schema change.** Stored profiles and layouts are
+  never rewritten. Routing is by `ACTION_ALIASES` (§5.2).
+
+**Mapping to the PR sequence.** P14 to P35 in [§9](#9-pr-sequence), with
+P16 (this record) and P21 (`tool.run`) needing the owner's approval. The
+release cut line is v0.10.0 after P35.

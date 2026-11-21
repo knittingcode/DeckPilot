@@ -179,6 +179,7 @@ impl Gui {
             fx.agent_unlocked().then_some(())
         });
         self.wd().wait(SETTINGS, LONG).expect("the main window");
+        marketplace::wait_for_bundled_plugins(self);
         via
     }
 
@@ -197,6 +198,7 @@ impl Gui {
         self.wd = Some(wd);
         self.wd().wait(SETTINGS, LONG).expect("the main window");
         eprintln!("[gui] the agent was started and unlocked by the test (Windows)");
+        marketplace::wait_for_bundled_plugins(self);
         vec![Via::Fixture, Via::AgentIpc]
     }
 

@@ -37,6 +37,8 @@ use deckpilot_plugin_manifest::Action;
 use deckpilot_plugin_supervisor::AbortSignal;
 use tracing::warn;
 
+use super::executor::project::ProjectSwitch;
+use super::executor::resources::InvocationResources;
 use super::key_state::{Asked, KeyId, Turn};
 use super::variables::{PluginVariableSource, PublishedVariables, declarations};
 use super::worker::{EngineFailure, Invoker};
@@ -82,6 +84,18 @@ pub(crate) struct CatalogPlugin {
     /// The visual assets keys may draw now (plugin API 1.8): those of an
     /// enabled plugin whose files match the integrity record, decoded.
     pub visual_assets: Vec<(deckpilot_core::AssetId, deckpilot_render::LibraryAsset)>,
+    /// It holds `projectContext` (plugin API 1.9): with it, and while it
+    /// can run, its host-published variables have a value (X7).
+    pub project_context: bool,
+    /// It holds `resources` (plugin API 1.9): its invocations resolve the
+    /// project's roles (`resource.resolve`, X2) even without a `resource`
+    /// parameter, so its module reads the profile and the bindings.
+    pub resources: bool,
+    /// Its `wrapAround` setting while it holds `projectContext`: how the
+    /// app's and the tray's project cycling (`cycleProject`) steps past
+    /// the ends, as the plugin's own `cycle` does. `None` for every other
+    /// plugin.
+    pub wrap_around: Option<bool>,
 }
 
 impl CatalogPlugin {
@@ -101,7 +115,9 @@ impl CatalogPlugin {
 }
 
 /// A plugin as a feature module: no capabilities (a plugin reaches
-/// nothing of DeckPilot's but through the broker), no settings, pages,
+/// nothing of DeckPilot's but through the broker; only a plugin with
+/// `resource` parameters has its handler read the profile and the
+/// bindings, to resolve them for the invocation), no settings, pages,
 /// windows or migrations. Its variables are those it declares, in its
 /// namespace (`plugins.<publisherCamel>.<nameCamel>.…`), resolved from
 /// the values it published (`variables.rs`). Enabled exactly when its
@@ -130,12 +146,12 @@ impl PluginModule {
         }
         let namespace = module_namespace(&id);
         let variables = declarations(&namespace, &plugin.variables);
+        let host_context = plugin.unavailable.is_none() && plugin.project_context;
         let source = (!variables.is_empty()).then(|| {
-            Arc::new(PluginVariableSource::new(
-                plugin.id.clone(),
-                namespace,
-                values,
-            )) as Arc<dyn VariableSource>
+            Arc::new(
+                PluginVariableSource::new(plugin.id.clone(), namespace, values)
+                    .with_host_context(&plugin.variables, host_context),
+            ) as Arc<dyn VariableSource>
         });
         Some(Self {
             source,
@@ -146,7 +162,7 @@ impl PluginModule {
                 description: plugin.description.clone(),
                 platforms: Vec::new(),
                 pages: Vec::new(),
-                capabilities: Vec::new(),
+                capabilities: capabilities(&plugin),
                 config: Vec::new(),
                 // Only while it runs: a plugin that cannot run (for lack
                 // of one of them, say) does not hold its dependencies.
@@ -169,6 +185,26 @@ impl PluginModule {
             invoker,
         })
     }
+}
+
+/// What a plugin's module may use of the core: the profile and the
+/// bindings for one that resolves resources; the profile and the project
+/// context for one holding `projectContext` (X6), whose switches in a
+/// workflow run are its results' `ContextEffect`s, which the action
+/// registry refuses from any other module.
+fn capabilities(plugin: &CatalogPlugin) -> Vec<deckpilot_core::Capability> {
+    use deckpilot_core::Capability;
+    let mut capabilities = Vec::new();
+    if plugin.resources || takes_resources(&plugin.actions) {
+        capabilities.extend([Capability::ProfileRead, Capability::MachineResources]);
+    }
+    if plugin.project_context {
+        if !capabilities.contains(&Capability::ProfileRead) {
+            capabilities.push(Capability::ProfileRead);
+        }
+        capabilities.push(Capability::ProjectContext);
+    }
+    capabilities
 }
 
 impl FeatureModule for PluginModule {
@@ -206,10 +242,13 @@ impl FeatureModule for PluginModule {
     }
 
     fn unavailable_reason(&self) -> Option<String> {
-        self.plugin
-            .unavailable
-            .as_ref()
-            .map(|why| format!("{} ({}): {why}", self.plugin.name, self.plugin.id))
+        self.plugin.unavailable.as_ref().map(|why| {
+            if self.plugin.name == self.plugin.id {
+                format!("{}: {why}", self.plugin.id)
+            } else {
+                format!("{} ({}): {why}", self.plugin.name, self.plugin.id)
+            }
+        })
     }
 }
 
@@ -222,6 +261,12 @@ pub(crate) fn action_type(plugin: &str, action: &Action) -> Result<ActionType, S
         .parameters
         .iter()
         .map(|parameter| {
+            // Plugin API 1.9's resource parameters (X1): a core resource
+            // parameter, which the engine resolves for the invocation and
+            // the plugin receives as a handle (`executor/resources.rs`).
+            if let deckpilot_plugin_manifest::ParameterKind::Resource { kinds } = &parameter.kind {
+                return Ok(resource_spec(parameter, kinds));
+            }
             // Through `core_spec`: the kind's constraints (`maxLength`, …)
             // are camel case in the manifest and snake case in the core.
             serde_json::to_value(parameter)
@@ -236,10 +281,12 @@ pub(crate) fn action_type(plugin: &str, action: &Action) -> Result<ActionType, S
             .map_err(|e| format!("node: {e}"))?,
         None => NodeSpec::default(),
     };
-    // Every plugin action can be stopped (the abort signal), and none
-    // can change the run's project (plugins have no project context).
+    // Every plugin action can be stopped (the abort signal). One changes
+    // the run's project only when its node declares it (plugin API 1.9,
+    // a first-party manifest with `projectContext.select`, X6): its
+    // `project.select` in a workflow run is the result's `ContextEffect`.
     node.cancellable = true;
-    node.changes_context = false;
+    node.changes_context = action.changes_context();
     node.timeout_ms = u32::try_from(
         action
             .node
@@ -271,6 +318,46 @@ pub(crate) fn action_type(plugin: &str, action: &Action) -> Result<ActionType, S
             bindings: controls.as_sets(),
         }),
         node,
+    })
+}
+
+/// A `resource` parameter as the core's: one kind for the editor when the
+/// manifest accepts exactly one the core knows (a file is the core's
+/// `other`, so any binding is offered for it); the executor checks the
+/// declared kinds again when it issues a handle. No default.
+fn resource_spec(
+    parameter: &deckpilot_plugin_manifest::Parameter,
+    kinds: &[deckpilot_plugin_manifest::ResourceKind],
+) -> deckpilot_core::ParameterSpec {
+    use deckpilot_core::ResourceKind as Core;
+    use deckpilot_plugin_manifest::ResourceKind as Declared;
+    let kind = match kinds {
+        [Declared::Directory] => Some(Core::Directory),
+        [Declared::Application] => Some(Core::Application),
+        [Declared::DockerEnvironment] => Some(Core::DockerEnvironment),
+        _ => None,
+    };
+    deckpilot_core::ParameterSpec {
+        key: parameter.key.clone(),
+        label: parameter.label.clone(),
+        description: parameter.description.clone(),
+        kind: deckpilot_core::ParameterKind::Resource { kind },
+        required: parameter.required,
+        default: None,
+    }
+}
+
+/// Whether an action of the plugin declares a `resource` parameter: its
+/// module then reads the profile and this computer's bindings, so the
+/// engine can resolve them for the invocation (never the plugin itself).
+fn takes_resources(actions: &[Action]) -> bool {
+    actions.iter().any(|action| {
+        action.parameters.iter().any(|p| {
+            matches!(
+                p.kind,
+                deckpilot_plugin_manifest::ParameterKind::Resource { .. }
+            )
+        })
     })
 }
 
@@ -396,10 +483,23 @@ impl PluginActionHandler {
     ) -> Result<ButtonState, StateError> {
         let params =
             params(parameters).map_err(|problem| StateError::new("invalid-parameters", problem))?;
+        // Resource parameters never reach a state call (no handles
+        // there), but keys bound to different resources are different keys.
+        let references: Vec<&ParameterValue> = parameters
+            .iter()
+            .filter_map(|(_, value)| matches!(value, ParameterValue::Resource(_)).then_some(value))
+            .collect();
+        // A key whose binding follows the active project is another key
+        // in another project.
+        let scope = key_scope(&self.plugin, &self.definition, parameters, context);
         let key = KeyId {
             plugin: self.plugin.clone(),
             action: self.action.clone(),
-            params: serde_json::to_string(&params).unwrap_or_default(),
+            params: if references.is_empty() && scope.is_none() {
+                serde_json::to_string(&params).unwrap_or_default()
+            } else {
+                serde_json::to_string(&(&params, references, &scope)).unwrap_or_default()
+            },
         };
         let book = self.invoker.book();
         // The plugin's keys take turns; state calls are short, so the
@@ -418,8 +518,8 @@ impl PluginActionHandler {
             }
         }
         // The turn is always given back, whatever happens while asking.
-        let asked =
-            catch_unwind(AssertUnwindSafe(|| self.ask(params, context))).unwrap_or_else(|_| {
+        let asked = catch_unwind(AssertUnwindSafe(|| self.ask(params, scope, context)))
+            .unwrap_or_else(|_| {
                 Asked::Failed(StateError::new(
                     "plugin-host-failed",
                     "the key's state could not be read",
@@ -428,13 +528,14 @@ impl PluginActionHandler {
         book.finish(&key, asked, Instant::now())
     }
 
-    fn ask(&self, params: Params, context: &ExecutionContext<'_>) -> Asked {
+    fn ask(&self, params: Params, scope: Option<String>, context: &ExecutionContext<'_>) -> Asked {
         let failed = |code: &str, message: &str| Asked::Failed(StateError::new(code, message));
         let abort = AbortSignal::new();
         let Some(answer) = self.invoker.key_state(
             self.plugin.clone(),
             self.action.clone(),
             params,
+            scope,
             abort.clone(),
         ) else {
             return Asked::Quiet;
@@ -480,12 +581,28 @@ impl PluginActionHandler {
             Ok(params) => params,
             Err(problem) => return ActionResult::error("invalid-parameters", problem),
         };
+        let mut resources = InvocationResources::of(parameters, context).with_urls(
+            &self.definition,
+            parameters,
+            context.provenance(),
+        );
+        // What a `project.select` of a workflow run selects (X6), for the
+        // result.
+        let switch = ProjectSwitch::for_action(self.definition.node.changes_context);
+        resources.switch = switch.clone();
         let abort = AbortSignal::new();
+        let run = run_context(context).with_key_scope(key_scope(
+            &self.plugin,
+            &self.definition,
+            parameters,
+            context,
+        ));
         let Some(answer) = self.invoker.invoke(
             self.plugin.clone(),
             self.action.clone(),
             params,
-            run_context(context),
+            resources,
+            run,
             abort.clone(),
         ) else {
             return ActionResult::error(
@@ -496,7 +613,7 @@ impl PluginActionHandler {
         let deadline = Instant::now() + self.timeout + QUEUE_MARGIN;
         let reason = loop {
             match answer.recv_timeout(POLL) {
-                Ok(reply) => return self.result(reply),
+                Ok(reply) => return with_switch(self.result(reply), &switch),
                 Err(RecvTimeoutError::Disconnected) => {
                     return ActionResult::error(
                         "plugin-host-failed",
@@ -548,6 +665,27 @@ impl PluginActionHandler {
             ),
             Err(EngineFailure { code, message }) => ActionResult::error(code, message),
         }
+    }
+}
+
+/// `result` with the run's new project as its `ContextEffect` when the
+/// action selected one in a workflow run and succeeded: the engine applies
+/// it to the run's project, as a built-in project action's (and refuses it
+/// from a module without the project context). Nothing for a failed or
+/// skipped action.
+fn with_switch(result: ActionResult, switch: &ProjectSwitch) -> ActionResult {
+    if !result.is_success() {
+        return result;
+    }
+    match switch
+        .target()
+        .map(|id| id.parse::<deckpilot_core::ProjectId>())
+    {
+        Some(Ok(project)) => {
+            result.with_effect(deckpilot_core::ContextEffect::SelectProject { project })
+        }
+        Some(Err(_)) => ActionResult::failure("the plugin selected a project that does not exist"),
+        None => result,
     }
 }
 
@@ -635,11 +773,71 @@ fn run_context(context: &ExecutionContext<'_>) -> RunContext {
     .bounded()
 }
 
+/// Which key this is for its key state ([`RunContext::key_scope`], plugin
+/// API 1.9): 128 bits of the SHA-256 of the plugin id, each `resource`
+/// parameter of the action with its stored reference (never its path), and
+/// the active project's id when a binding follows it (a project role, or a
+/// parameter left empty, which the plugin resolves through the project's
+/// role). The same for a key's state call and for every run with the same
+/// bindings; `None` when the action has no `resource` parameter.
+fn key_scope(
+    plugin: &str,
+    definition: &ActionType,
+    parameters: &ActionParameters,
+    context: &ExecutionContext<'_>,
+) -> Option<String> {
+    use sha2::Digest as _;
+    use std::fmt::Write as _;
+    let resources: Vec<&str> = definition
+        .parameters
+        .iter()
+        .filter(|spec| matches!(spec.kind, deckpilot_core::ParameterKind::Resource { .. }))
+        .map(|spec| spec.key.as_str())
+        .collect();
+    if resources.is_empty() {
+        return None;
+    }
+    let mut hash = sha2::Sha256::new();
+    hash.update(b"deckpilot.key-scope.v1\0");
+    hash.update(plugin.as_bytes());
+    let mut follows_project = false;
+    for key in resources {
+        hash.update(b"\0");
+        hash.update(key.as_bytes());
+        hash.update(b"=");
+        if let Some(ParameterValue::Resource(reference)) = parameters.get(key) {
+            follows_project |= matches!(reference, deckpilot_core::ResourceRef::ProjectRole { .. });
+            hash.update(serde_json::to_vec(reference).unwrap_or_default());
+        } else {
+            follows_project = true;
+            hash.update(b"unset");
+        }
+    }
+    if follows_project {
+        hash.update(b"\0project=");
+        if let Ok(Some(project)) = context.project() {
+            hash.update(project.id.to_string().as_bytes());
+        }
+    }
+    let digest = hash.finalize();
+    Some(
+        digest[..16]
+            .iter()
+            .fold(String::with_capacity(32), |mut out, b| {
+                let _ = write!(out, "{b:02x}");
+                out
+            }),
+    )
+}
+
 /// Resolved parameters as ABI 1 values. Plugins see texts, integers and
-/// booleans; a project parameter is the project's id.
+/// booleans; a project parameter is the project's id. A resource
+/// parameter is left out: it travels as [`InvocationResources`], and the
+/// plugin receives a handle for it (`executor/resources.rs`).
 fn params(parameters: &ActionParameters) -> Result<Params, String> {
     parameters
         .iter()
+        .filter(|(_, value)| !matches!(value, ParameterValue::Resource(_)))
         .map(|(key, value)| {
             let value = match value {
                 ParameterValue::Text(text) | ParameterValue::Choice(text) => {
@@ -892,6 +1090,111 @@ mod tests {
         }
     }
 
+    /// Plugin API 1.9's key scope: the same for every action of a plugin
+    /// with the same bindings and for every run, different for another
+    /// binding, another plugin and, when a binding follows the active
+    /// project, another project; none without `resource` parameters.
+    #[test]
+    fn the_key_scope_names_the_bindings_of_a_key() {
+        use deckpilot_core::{
+            MachineConfig, Profile, Project, ProjectKey, ResourceKey, ResourceRef,
+        };
+        let action = |id: &str| -> Action {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "name": id, "description": "d", "category": "c",
+                "parameters": [{"key": "compose", "label": "C", "required": false,
+                    "kind": {"type": "resource", "kinds": ["directory"]}}]
+            }))
+            .unwrap()
+        };
+        let definition = |id: &str| action_type("deckpilot.docker", &action(id)).unwrap();
+        let fixed = |key: &str| {
+            ActionParameters::new().with(
+                "compose",
+                ParameterValue::Resource(ResourceRef::Fixed {
+                    key: ResourceKey::new(key).unwrap(),
+                }),
+            )
+        };
+        let profile = Profile::new("P");
+        let shop = Project::new(ProjectKey::new("SHOP").unwrap(), "Shop");
+        let cms = Project::new(ProjectKey::new("CMS").unwrap(), "Cms");
+        let machine = MachineConfig::new(deckpilot_core::Os::Linux);
+        let in_shop = ExecutionContext::new(&profile, Some(&shop), &machine);
+        let in_cms = ExecutionContext::new(&profile, Some(&cms), &machine);
+        let scope = |plugin: &str, id: &str, params: &ActionParameters, ctx| {
+            key_scope(plugin, &definition(id), params, ctx).unwrap()
+        };
+        let a = scope(
+            "deckpilot.docker",
+            "compose-up",
+            &fixed("shop.compose"),
+            &in_shop,
+        );
+        assert_eq!(a.len(), 32);
+        assert!(
+            a.bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        );
+        // The status and the up key of one project share it, in any project.
+        assert_eq!(
+            a,
+            scope(
+                "deckpilot.docker",
+                "compose-status",
+                &fixed("shop.compose"),
+                &in_cms
+            )
+        );
+        assert_ne!(
+            a,
+            scope(
+                "deckpilot.docker",
+                "compose-up",
+                &fixed("cms.compose"),
+                &in_shop
+            )
+        );
+        assert_ne!(
+            a,
+            scope(
+                "deckpilot.other",
+                "compose-up",
+                &fixed("shop.compose"),
+                &in_shop
+            )
+        );
+        // A role, or no binding (the project's role then), follows the
+        // active project.
+        let role = ActionParameters::new().with(
+            "compose",
+            ParameterValue::Resource(ResourceRef::ProjectRole {
+                role: "compose".into(),
+            }),
+        );
+        for params in [role, ActionParameters::new()] {
+            assert_ne!(
+                scope("deckpilot.docker", "compose-up", &params, &in_shop),
+                scope("deckpilot.docker", "compose-up", &params, &in_cms)
+            );
+        }
+        // No path is part of it, and an action without resources has none.
+        let plain: Action = serde_json::from_value(serde_json::json!({
+            "id": "status", "name": "s", "description": "d", "category": "c", "parameters": []
+        }))
+        .unwrap();
+        let plain = action_type("deckpilot.docker", &plain).unwrap();
+        assert_eq!(
+            key_scope(
+                "deckpilot.docker",
+                &plain,
+                &ActionParameters::new(),
+                &in_shop
+            ),
+            None
+        );
+    }
+
     #[test]
     fn a_simulated_press_is_not_user_initiated_for_plugins() {
         use deckpilot_core::{MachineConfig, Profile};
@@ -975,5 +1278,51 @@ mod tests {
         assert_eq!(params["city"], ParamValue::String("berlin".into()));
         assert_eq!(text(&ParamValue::Number(21.5)), "21.5");
         assert_eq!(text(&ParamValue::List(vec![ParamValue::Integer(1)])), "[1]");
+    }
+
+    /// Plugin API 1.9 (X1): a `resource` parameter is a core resource
+    /// parameter (one kind for the editor when the manifest names exactly
+    /// one the core knows), its value never travels as a plugin value, and
+    /// only such a plugin's module reads the profile and the bindings.
+    #[test]
+    fn resource_parameters_become_core_resources_and_travel_apart() {
+        use deckpilot_core::{ResourceKind as Core, ResourceRef};
+        let mut action = sample().contributes.actions()[0].clone();
+        let declare = |kinds: serde_json::Value| -> deckpilot_plugin_manifest::Parameter {
+            serde_json::from_value(serde_json::json!({
+                "key": "repository", "label": "Repository", "required": true,
+                "kind": {"type": "resource", "kinds": kinds}
+            }))
+            .unwrap()
+        };
+        for (kinds, core) in [
+            (serde_json::json!(["directory"]), Some(Core::Directory)),
+            (serde_json::json!(["application"]), Some(Core::Application)),
+            (serde_json::json!(["file"]), None),
+            (serde_json::json!(["directory", "file"]), None),
+        ] {
+            action.parameters = vec![declare(kinds.clone())];
+            let declared = action_type("deckpilot.git", &action).unwrap();
+            let spec = &declared.parameters[0];
+            assert_eq!(
+                spec.kind,
+                deckpilot_core::ParameterKind::Resource { kind: core },
+                "{kinds}"
+            );
+            assert!(spec.required && spec.default.is_none());
+        }
+        let parameters = ActionParameters::new()
+            .with("name", ParameterValue::Text("Ada".into()))
+            .with(
+                "repository",
+                ParameterValue::Resource(ResourceRef::ProjectRole {
+                    role: "repository".into(),
+                }),
+            );
+        let values = params(&parameters).unwrap();
+        assert_eq!(values.keys().collect::<Vec<_>>(), ["name"]);
+
+        assert!(takes_resources(std::slice::from_ref(&action)));
+        assert!(!takes_resources(sample().contributes.actions()));
     }
 }

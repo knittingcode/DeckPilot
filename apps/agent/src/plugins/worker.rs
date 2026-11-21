@@ -28,6 +28,7 @@ use tracing::{info, warn};
 
 use super::PluginSettings;
 use super::engine::CatalogPlugin;
+use super::executor::resources::InvocationResources;
 use super::lane::LaneEnd;
 use super::migration::LegacySnapshot;
 use super::service::{PluginService, closed_status, open_problem, store_unavailable};
@@ -46,6 +47,9 @@ pub(crate) struct Events {
     pub notifier: Arc<dyn deckpilot_core::notify::Notifier>,
     /// Plugin dialogs and the app connections that show them.
     pub dialogs: Arc<crate::plugin_dialogs::PluginDialogs>,
+    /// The agent's project context (plugin API 1.9); without it the
+    /// project operations and `profile.read` are `unavailable`.
+    pub projects: Option<Arc<dyn crate::service::plugin_projects::ProjectHost>>,
 }
 
 /// Why an engine invocation produced no outcome: a stable code for the
@@ -76,6 +80,9 @@ pub(super) enum Message {
         plugin: String,
         action: String,
         params: Params,
+        /// The bindings of its `resource` parameters and the run's
+        /// project roles (plugin API 1.9).
+        resources: Box<InvocationResources>,
         /// What started the run (G8).
         run: RunContext,
         abort: AbortSignal,
@@ -86,6 +93,8 @@ pub(super) enum Message {
         plugin: String,
         action: String,
         params: Params,
+        /// Which key it is ([`RunContext::key_scope`]).
+        scope: Option<String>,
         abort: AbortSignal,
         reply: mpsc::SyncSender<StateReply>,
     },
@@ -114,6 +123,7 @@ impl Invoker {
         plugin: String,
         action: String,
         params: Params,
+        resources: InvocationResources,
         run: RunContext,
         abort: AbortSignal,
     ) -> Option<Receiver<EngineReply>> {
@@ -123,6 +133,7 @@ impl Invoker {
                 plugin,
                 action,
                 params,
+                resources: Box::new(resources),
                 run,
                 abort,
                 reply,
@@ -139,6 +150,7 @@ impl Invoker {
         plugin: String,
         action: String,
         params: Params,
+        scope: Option<String>,
         abort: AbortSignal,
     ) -> Option<Receiver<StateReply>> {
         let (reply, answer) = mpsc::sync_channel(1);
@@ -147,6 +159,7 @@ impl Invoker {
                 plugin,
                 action,
                 params,
+                scope,
                 abort,
                 reply,
             })
@@ -324,12 +337,14 @@ impl State {
                 plugin,
                 action,
                 params,
+                resources,
                 run,
                 abort,
                 reply,
             } => {
                 if let Some(service) = &mut self.service {
-                    service.invoke_for_engine(&plugin, &action, params, run, abort, reply);
+                    service
+                        .invoke_for_engine(&plugin, &action, params, *resources, run, abort, reply);
                 } else {
                     let error = self.unavailable();
                     let _ = reply.try_send(Err(EngineFailure {
@@ -342,11 +357,12 @@ impl State {
                 plugin,
                 action,
                 params,
+                scope,
                 abort,
                 reply,
             } => {
                 if let Some(service) = &mut self.service {
-                    service.key_state_for_engine(&plugin, &action, params, abort, reply);
+                    service.key_state_for_engine(&plugin, &action, params, scope, abort, reply);
                 } else {
                     let error = self.unavailable();
                     let _ = reply.try_send(Err(EngineFailure {

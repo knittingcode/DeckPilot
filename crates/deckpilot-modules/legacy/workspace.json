@@ -1,0 +1,330 @@
+{
+  "actionTypes": [
+    {
+      "category": "Workspace",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Opens the project's repository, or a file in it at a line, in an editor.",
+      "id": "workspace.open-in-editor",
+      "name": "Open in editor",
+      "node": {
+        "cancellable": false,
+        "changesContext": false,
+        "effect": "opens",
+        "icon": "code",
+        "idempotent": false,
+        "outputs": [
+          {
+            "always": true,
+            "key": "path",
+            "kind": "path",
+            "label": "Opened"
+          },
+          {
+            "always": true,
+            "key": "application",
+            "kind": "text",
+            "label": "Editor"
+          },
+          {
+            "always": true,
+            "key": "located",
+            "kind": "boolean",
+            "label": "Opened at the line"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 15000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "An application resource: the editor (bind its command-line tool, e.g. /usr/local/bin/code, to open at a line in an editor that is already running on macOS).",
+          "key": "application",
+          "kind": {
+            "kind": "application",
+            "type": "resource"
+          },
+          "label": "Editor",
+          "required": true
+        },
+        {
+          "default": {
+            "type": "choice",
+            "value": "other"
+          },
+          "description": "How to pass a line: vscode and cursor (--goto file:line), jetbrains (--line N file), zed and sublime (file:line). other opens the file without a line.",
+          "key": "editor",
+          "kind": {
+            "options": ["vscode", "cursor", "jetbrains", "zed", "sublime", "other"],
+            "type": "choice"
+          },
+          "label": "Editor kind",
+          "required": true
+        },
+        {
+          "description": "A folder resource. Empty: the project's repository.",
+          "key": "location",
+          "kind": {
+            "kind": "directory",
+            "type": "resource"
+          },
+          "label": "Folder",
+          "required": false
+        },
+        {
+          "description": "Relative to the folder, e.g. src/main.rs. It cannot leave the folder. Empty: the folder itself.",
+          "key": "path",
+          "kind": {
+            "max_length": 1024,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "File",
+          "required": false
+        },
+        {
+          "description": "Needs a file.",
+          "key": "line",
+          "kind": {
+            "max": 10000000,
+            "min": 1,
+            "type": "integer"
+          },
+          "label": "Line",
+          "required": false
+        },
+        {
+          "description": "Needs a line.",
+          "key": "column",
+          "kind": {
+            "max": 10000000,
+            "min": 1,
+            "type": "integer"
+          },
+          "label": "Column",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Workspace",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Opens up to ten web pages (http, https) in the default browser or a chosen one.",
+      "id": "workspace.open-urls",
+      "name": "Open pages",
+      "node": {
+        "cancellable": false,
+        "changesContext": false,
+        "effect": "opens",
+        "icon": "globe",
+        "idempotent": false,
+        "outputs": [
+          {
+            "always": true,
+            "key": "opened",
+            "kind": "integer",
+            "label": "Opened"
+          },
+          {
+            "always": true,
+            "key": "failed",
+            "kind": "integer",
+            "label": "Not opened"
+          },
+          {
+            "always": true,
+            "key": "urls",
+            "kind": "text",
+            "label": "Pages opened",
+            "sensitive": true
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 15000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "One http or https address per line, at most 10.",
+          "key": "urls",
+          "kind": {
+            "item_label": "Page",
+            "max_items": 10,
+            "max_length": 2048,
+            "type": "lines"
+          },
+          "label": "Pages",
+          "required": true
+        },
+        {
+          "description": "An application resource. Empty: the default browser.",
+          "key": "browser",
+          "kind": {
+            "kind": "application",
+            "type": "resource"
+          },
+          "label": "Browser",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Workspace",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Opens the current project's repository in its editor, its documentation and other pages, from the project's resources. Missing ones are reported.",
+      "id": "workspace.open-project",
+      "name": "Open project workspace",
+      "node": {
+        "cancellable": false,
+        "changesContext": false,
+        "effect": "opens",
+        "icon": "app-window",
+        "idempotent": false,
+        "outputs": [
+          {
+            "always": true,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project"
+          },
+          {
+            "always": true,
+            "key": "opened",
+            "kind": "integer",
+            "label": "Opened"
+          },
+          {
+            "always": true,
+            "key": "openedRoles",
+            "kind": "text",
+            "label": "Opened resources"
+          },
+          {
+            "always": true,
+            "key": "missingCount",
+            "kind": "integer",
+            "label": "Missing"
+          },
+          {
+            "always": true,
+            "key": "missing",
+            "kind": "text",
+            "label": "Missing resources and why"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 15000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "default": {
+            "type": "choice",
+            "value": "other"
+          },
+          "description": "How to pass a line: vscode and cursor (--goto file:line), jetbrains (--line N file), zed and sublime (file:line). other opens the file without a line.",
+          "key": "editor",
+          "kind": {
+            "options": ["vscode", "cursor", "jetbrains", "zed", "sublime", "other"],
+            "type": "choice"
+          },
+          "label": "Editor kind",
+          "required": true
+        },
+        {
+          "default": {
+            "type": "text",
+            "value": "editor"
+          },
+          "description": "The project resource that is the editor (an application).",
+          "key": "editorRole",
+          "kind": {
+            "max_length": 64,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Editor resource",
+          "required": true
+        },
+        {
+          "default": {
+            "type": "text",
+            "value": "repository"
+          },
+          "description": "The project resource that is the repository (a folder). Empty: skip.",
+          "key": "repositoryRole",
+          "kind": {
+            "max_length": 64,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Repository resource",
+          "required": true
+        },
+        {
+          "default": {
+            "type": "text",
+            "value": "docs"
+          },
+          "description": "A page (URL) or folder. Empty: skip.",
+          "key": "docsRole",
+          "kind": {
+            "max_length": 64,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Documentation resource",
+          "required": true
+        },
+        {
+          "description": "Project resources that are pages, one name per line, e.g. dashboard, at most 10.",
+          "key": "urlRoles",
+          "kind": {
+            "item_label": "Resource",
+            "max_items": 10,
+            "max_length": 64,
+            "type": "lines"
+          },
+          "label": "Other pages",
+          "required": false
+        },
+        {
+          "description": "An application resource. Empty: the default browser.",
+          "key": "browser",
+          "kind": {
+            "kind": "application",
+            "type": "resource"
+          },
+          "label": "Browser",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    }
+  ],
+  "manifest": {
+    "capabilities": ["profile-read", "machine-resources", "open-external"],
+    "config": [],
+    "dependencies": [],
+    "description": "Opens a project's repository or files in an editor and its pages in the browser, from resources bound on this computer.",
+    "enabledByDefault": true,
+    "id": "workspace",
+    "name": "Workspace",
+    "pages": [],
+    "platforms": [],
+    "portability": {
+      "settings": {},
+      "version": 1
+    },
+    "version": "0.9.0",
+    "windows": []
+  }
+}

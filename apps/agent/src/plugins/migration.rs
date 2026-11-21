@@ -130,11 +130,10 @@ use tracing::{info, warn};
 
 use super::bundled::{self, Bundle, Seeded};
 
+pub(crate) mod descriptors;
 #[cfg(feature = "test-hooks")]
 pub(crate) mod fixture;
 pub(crate) mod legacy;
-#[cfg(feature = "test-hooks")]
-mod standin;
 #[cfg(all(test, feature = "test-hooks"))]
 mod tests;
 
@@ -158,7 +157,59 @@ pub(crate) struct MigrationPlan {
     /// Hosts the built-in opens pages on (`openUrl`, derived when the
     /// built-in has the `open-external` capability).
     pub open_url_hosts: &'static [&'static str],
+    /// A module of the extraction of 2026-11-20 (§11 D1, D4, X13), with
+    /// what only those need.
+    pub extraction: Option<&'static Extraction>,
 }
+
+/// What the migration of a module extracted on 2026-11-20 (`git`,
+/// `docker`, `workspace`, `projects`; `module-migration.md` §11 D1, D4, §7
+/// X13) does beyond the steps of every plan:
+///
+/// - **no fallback while it waits:** until the user consents (or after
+///   they declined), the legacy action types are unavailable with the
+///   reason ([`LegacyRoute::AwaitingConsent`]); the built-ins are removed
+///   (WP-C5, WP-C6), so no step falls back to one ([`removed`]): the
+///   plugin serves them once it can, and they are unavailable until then;
+/// - **a backup first:** the first cut-over of any of them needs the
+///   encrypted backup `pre-plugin-extraction` of `deckpilot.db`, taken by
+///   the service task ([`LegacySnapshot::backup`]) and journaled once;
+/// - the medium tier the built-in demonstrably used (its capabilities:
+///   resources and their paths, profile and project reads, opening the
+///   URLs of its parameters) is derived; the high tier always waits;
+/// - the host-held tool settings ([`HostTool`]) and the grants offered
+///   only when a setting of the built-in was on ([`Extraction::offered_if`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Extraction {
+    /// The built-in's settings that `tool.run` reads as the host's own.
+    pub tool: Option<HostTool>,
+    /// Grant keys asked for only when the built-in's boolean setting was
+    /// on (`tools:docker:modify` with `allowStateChanges`); never derived
+    /// and never pre-approved. Otherwise they are not offered at all.
+    pub offered_if: &'static [(&'static str, &'static str)],
+    /// The profiles' projects count as the module's data in use (the
+    /// `projects` module manages them).
+    pub projects_data: bool,
+}
+
+/// Settings of a built-in that become host-held settings of `tool.run`
+/// (§7 X3: "the executable is a host-held machine setting of the grant"):
+/// copied from the built-in's saved settings into `plugins.db`
+/// (`host_settings` under `key`), refreshed at every start while the
+/// migration runs or is cut over, and read by the agent's `ToolSettings`
+/// also once the built-in is gone (WP-C6). Never a plugin's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HostTool {
+    /// `tools.git`, `tools.docker`.
+    pub key: &'static str,
+    pub settings: &'static [&'static str],
+}
+
+/// The journal's note of the backup taken before the first extraction
+/// cut-over (`host_settings`): `{"file": "<name in backups/>"}`.
+pub(crate) const BACKUP_NOTE: &str = "migration.backup.pre-plugin-extraction";
+/// The label of that backup (`deckpilot-<label>-<millis>.db`).
+pub(crate) const BACKUP_LABEL: &str = "pre-plugin-extraction";
 
 /// The setting of a built-in with the server it talks to, and how its
 /// plugin takes it.
@@ -178,19 +229,32 @@ pub(crate) struct OriginPlan {
 }
 
 /// Every plan, one per module of [`deckpilot_core::alias::ACTION_ALIASES`].
-pub(crate) const PLANS: &[MigrationPlan] = &[GITHUB, GITLAB, JIRA, NOTIFICATIONS];
+pub(crate) const PLANS: &[MigrationPlan] = &[
+    GITHUB,
+    GITLAB,
+    JIRA,
+    NOTIFICATIONS,
+    GIT,
+    DOCKER,
+    WORKSPACE,
+    PROJECTS,
+];
 
 /// GitHub (P9) to `deckpilot.github`:
 ///
 /// - the credential setting `credential` (a credential id, default
 ///   `github.token`) is imported into the plugin's slot `token`, only with
 ///   the user's consent;
-/// - the origin `apiUrl`: only `https://api.github.com`, the plugin's
-///   default, is eligible; GitHub Enterprise and any other origin keep the
-///   built-in (`not_eligible`) until G2;
-/// - `allowPrivateHost` on keeps the built-in (G3, never migrated);
+/// - the origin `apiUrl`: `https://api.github.com` is the plugin's
+///   declared host; a GitHub Enterprise Server (`https://<host>/api/v3`)
+///   is carried into the plugin's `apiUrl` setting (its user-origin
+///   slot), and the user is asked to allow exactly that server;
+/// - `allowPrivateHost` on, for such a server, asks the user's separate
+///   consent to reach it on a private network; on for api.github.com
+///   keeps the built-in (G3);
 /// - `github.com` is the web host the built-in opens pages on (`openUrl`,
-///   derived: the built-in has `open-external`).
+///   derived when api.github.com is what the built-in used: the built-in
+///   has `open-external`).
 ///
 /// A per-action `credential` override other than empty or the module's
 /// own makes the module `not_eligible` ([`ParamRule::DropIfDefault`] in the
@@ -198,15 +262,16 @@ pub(crate) const PLANS: &[MigrationPlan] = &[GITHUB, GITLAB, JIRA, NOTIFICATIONS
 ///
 /// [`ParamRule::DropIfDefault`]: deckpilot_core::alias::ParamRule::DropIfDefault
 const GITHUB: MigrationPlan = MigrationPlan {
-    module: deckpilot_modules::github::MODULE_ID,
-    credentials: &[(deckpilot_modules::github::CREDENTIAL, "token")],
+    module: descriptors::github::MODULE_ID,
+    credentials: &[(descriptors::github::CREDENTIAL, "token")],
     origin: Some(OriginPlan {
-        setting: deckpilot_modules::github::API_URL,
-        default: Some(deckpilot_modules::github::DEFAULT_API_URL),
-        entered: false,
+        setting: descriptors::github::API_URL,
+        default: Some(descriptors::github::DEFAULT_API_URL),
+        entered: true,
     }),
-    private_network: Some(deckpilot_modules::github::ALLOW_PRIVATE),
+    private_network: Some(descriptors::github::ALLOW_PRIVATE),
     open_url_hosts: &["github.com"],
+    extraction: None,
 };
 
 /// GitLab (P11) to `deckpilot.gitlab`:
@@ -224,15 +289,16 @@ const GITHUB: MigrationPlan = MigrationPlan {
 /// - `gitlab.com` is the web host the built-in opens pages on (`openUrl`,
 ///   derived when GitLab.com is what the built-in used).
 const GITLAB: MigrationPlan = MigrationPlan {
-    module: deckpilot_modules::gitlab::MODULE_ID,
-    credentials: &[(deckpilot_modules::gitlab::CREDENTIAL, "token")],
+    module: descriptors::gitlab::MODULE_ID,
+    credentials: &[(descriptors::gitlab::CREDENTIAL, "token")],
     origin: Some(OriginPlan {
-        setting: deckpilot_modules::gitlab::API_URL,
-        default: Some(deckpilot_modules::gitlab::DEFAULT_API_URL),
+        setting: descriptors::gitlab::API_URL,
+        default: Some(descriptors::gitlab::DEFAULT_API_URL),
         entered: true,
     }),
-    private_network: Some(deckpilot_modules::gitlab::ALLOW_PRIVATE),
+    private_network: Some(descriptors::gitlab::ALLOW_PRIVATE),
     open_url_hosts: &["gitlab.com"],
+    extraction: None,
 };
 
 /// Jira (P11) to `deckpilot.jira`:
@@ -248,15 +314,16 @@ const GITLAB: MigrationPlan = MigrationPlan {
 /// - `deployment` and `timeoutSeconds` are declared by the plugin with the
 ///   same keys and copied one to one.
 const JIRA: MigrationPlan = MigrationPlan {
-    module: deckpilot_modules::jira::MODULE_ID,
-    credentials: &[(deckpilot_modules::jira::CREDENTIAL, "credential")],
+    module: descriptors::jira::MODULE_ID,
+    credentials: &[(descriptors::jira::CREDENTIAL, "credential")],
     origin: Some(OriginPlan {
-        setting: deckpilot_modules::jira::SITE_URL,
+        setting: descriptors::jira::SITE_URL,
         default: None,
         entered: true,
     }),
-    private_network: Some(deckpilot_modules::jira::ALLOW_PRIVATE),
+    private_network: Some(descriptors::jira::ALLOW_PRIVATE),
     open_url_hosts: &[],
+    extraction: None,
 };
 
 /// Notifications (P10) to `deckpilot.notifications`, class `default`:
@@ -266,12 +333,96 @@ const JIRA: MigrationPlan = MigrationPlan {
 /// copied one to one; the agent routes the plugin's notifications by them
 /// (the manifest's `notifications.routing`, G9).
 const NOTIFICATIONS: MigrationPlan = MigrationPlan {
-    module: deckpilot_modules::notifications::MODULE_ID,
+    module: "notifications",
     credentials: &[],
     origin: None,
     private_network: None,
     open_url_hosts: &[],
+    extraction: None,
 };
+
+/// A plan of the extraction set: no credential, origin, private network
+/// or fixed web host.
+const fn extracted(module: &'static str, extraction: &'static Extraction) -> MigrationPlan {
+    MigrationPlan {
+        module,
+        credentials: &[],
+        origin: None,
+        private_network: None,
+        open_url_hosts: &[],
+        extraction: Some(extraction),
+    }
+}
+
+/// Git (WP-C1) to `deckpilot.git`: `repositoryRole` and
+/// `networkTimeoutSeconds` are declared by the plugin and copied one to
+/// one; `gitExecutable` and `networkTimeoutSeconds` are the host's
+/// (`tools.git`, `ToolSettings`). Waits for `tools:git`,
+/// `tools:git:network` and `resources:open` (high tier).
+const GIT: MigrationPlan = extracted(
+    descriptors::git::MODULE_ID,
+    &Extraction {
+        tool: Some(HostTool {
+            key: "tools.git",
+            settings: &[
+                descriptors::git::EXECUTABLE,
+                descriptors::git::NETWORK_TIMEOUT,
+            ],
+        }),
+        offered_if: &[],
+        projects_data: false,
+    },
+);
+
+/// Docker (WP-C1) to `deckpilot.docker`: `composeRole` and
+/// `timeoutSeconds` are declared by the plugin and copied one to one;
+/// `dockerExecutable`, `context` and `timeoutSeconds` are the host's
+/// (`tools.docker`). Waits for `tools:docker`; `tools:docker:modify` is
+/// offered only when `allowStateChanges` was on, and asked for, never
+/// derived (X3c, X13).
+const DOCKER: MigrationPlan = extracted(
+    descriptors::docker::MODULE_ID,
+    &Extraction {
+        tool: Some(HostTool {
+            key: "tools.docker",
+            settings: &[
+                descriptors::docker::EXECUTABLE,
+                descriptors::docker::CONTEXT,
+                descriptors::docker::TIMEOUT,
+            ],
+        }),
+        offered_if: &[(
+            "tools:docker:modify",
+            descriptors::docker::ALLOW_STATE_CHANGES,
+        )],
+        projects_data: false,
+    },
+);
+
+/// Workspace (WP-C1) to `deckpilot.workspace`: no settings. Opening the
+/// URLs of its parameters is derived (the built-in opened them); waits for
+/// `resources:open` (high tier).
+const WORKSPACE: MigrationPlan = extracted(
+    descriptors::workspace::MODULE_ID,
+    &Extraction {
+        tool: None,
+        offered_if: &[],
+        projects_data: false,
+    },
+);
+
+/// Projects (WP-C1) to `deckpilot.projects`: `wrapAround` is declared by
+/// the plugin and copied one to one; the project data stays in the core's
+/// tables. A profile with projects is the module's data in use. Waits for
+/// `projectContext:select` (high tier).
+const PROJECTS: MigrationPlan = extracted(
+    descriptors::projects::MODULE_ID,
+    &Extraction {
+        tool: None,
+        offered_if: &[],
+        projects_data: true,
+    },
+);
 
 /// The plan of `module`, if it has one.
 pub(crate) fn plan_for(module: &str) -> Option<&'static MigrationPlan> {
@@ -296,15 +447,25 @@ pub(crate) fn configured(states: &ModuleStates) -> (ModuleRegistry, Vec<String>)
         let problems = registry.apply_states(states);
         return (registry, problems);
     }
-    #[cfg(feature = "test-hooks")]
-    {
-        let mut registry = deckpilot_modules::builtin(deckpilot_core::Os::current());
-        if standin::apply(&mut registry) {
-            let problems = registry.apply_states(states);
-            return (registry, problems);
-        }
+    let (mut registry, problems) = deckpilot_modules::configured(states);
+    set_legacy_configs(&mut registry, states);
+    (registry, problems)
+}
+
+/// Hands the registry the saved settings of every removed built-in
+/// ([`removed`]), read from its stored `modules` row through its
+/// descriptor as the built-in read them: the alias rules of its legacy
+/// action types compare stored parameters with them (a per-action
+/// credential naming the module's own is dropped, the plugin's imported
+/// one used). Nothing is written.
+fn set_legacy_configs(registry: &mut ModuleRegistry, states: &ModuleStates) {
+    for descriptor in descriptors::DESCRIPTORS {
+        let Ok(module) = ModuleId::new(descriptor.module) else {
+            continue;
+        };
+        let config = descriptor.config(states.get(&module));
+        registry.set_legacy_config(module, config);
     }
-    deckpilot_modules::configured(states)
 }
 
 /// A decision of the user's: the requests `decideModuleMigration` and
@@ -407,6 +568,19 @@ fn one_line(text: &str) -> String {
         .map(|c| if c.is_control() { ' ' } else { c })
         .take(MAX_MIGRATION_REASON_CHARS)
         .collect()
+}
+
+/// `; …` naming the stored uses of a parameter the plugin cannot honour
+/// ([`LegacyModule::unsupported`]), or nothing. Keys and names only.
+fn unsupported_note(m: &LegacyModule) -> String {
+    if m.unsupported.is_empty() {
+        return String::new();
+    }
+    format!(
+        "; {} {} cannot use: unavailable until cleared",
+        m.unsupported.join(", "),
+        m.plugin
+    )
 }
 
 /// The hex sha256 of what the migration took from the built-in: the
@@ -649,12 +823,14 @@ fn origin_asks(manager: &PluginManager, m: &LegacyModule, manifest: &Manifest) -
 /// the built-in whether or not the user's data uses it (§4.3, §5.8).
 fn eligibility(m: &LegacyModule, default: bool) -> Option<String> {
     if m.manifest.is_none() {
-        return Some("the built-in module is not part of this app".into());
+        return Some(
+            "the built-in module is not part of this app, and nothing describes it".into(),
+        );
     }
     if !m.enabled {
         return Some("the built-in module is disabled".into());
     }
-    if !default && m.row.is_none() && m.instances == 0 {
+    if !default && m.row.is_none() && m.instances == 0 && !m.data_in_use {
         return Some("the built-in module is not used on this computer".into());
     }
     if !m.untranslatable.is_empty() {
@@ -717,6 +893,22 @@ fn demonstrated(m: &LegacyModule, key: &GrantKey) -> bool {
     // The default origin and its web hosts count only when the default is
     // what the built-in talked to here.
     let on_default = plan.origin.is_none_or(|origin| uses_default(m, &origin));
+    // The extraction set (X13): the medium tier its capabilities show it
+    // used. The high tier (`resources:open`, tools, project switching) is
+    // never derived, whatever this says.
+    if plan.extraction.is_some() {
+        return match key.kind {
+            PermissionKind::Resources => has(Capability::MachineResources),
+            PermissionKind::Profile => has(Capability::ProfileRead),
+            PermissionKind::ProjectContext => {
+                has(Capability::ProjectContext) || has(Capability::ProfileRead)
+            }
+            // `openUrl:from-params` (the store's `OPEN_URL_FROM_PARAMS_KEY`):
+            // the URLs of the action's own parameters, which it opened.
+            PermissionKind::OpenUrl => key.key == "from-params" && has(Capability::OpenExternal),
+            _ => false,
+        };
+    }
     match key.kind {
         PermissionKind::Network => {
             has(Capability::Network)
@@ -751,10 +943,82 @@ fn demonstrated(m: &LegacyModule, key: &GrantKey) -> bool {
     }
 }
 
+/// Whether the migration of `m` offers `key` at all: `Some(false)` for a
+/// grant offered only when a setting of the built-in was on
+/// ([`Extraction::offered_if`]) and it was not, `Some(true)` when it was,
+/// `None` for every other grant.
+fn offered(m: &LegacyModule, key: &GrantKey) -> Option<bool> {
+    let extraction = m.plan?.extraction?;
+    let name = key.to_string();
+    let (_, setting) = extraction.offered_if.iter().find(|(k, _)| *k == name)?;
+    Some(m.config.get(setting) == Some(&ParameterValue::Boolean(true)))
+}
+
+/// The grants of `declared` the migration of `m` waits for: those not
+/// granted (high tier, and medium tier not derived), except what it does
+/// not offer, and what it offers only on a setting of the built-in that
+/// was on, also when the host would not require it.
+fn needed_grants(
+    m: &LegacyModule,
+    stored: &[deckpilot_plugin_store::StoredGrant],
+    declared: &GrantSet,
+) -> Vec<GrantKey> {
+    let mut needed: Vec<GrantKey> = missing_grants(stored, declared)
+        .into_iter()
+        .filter(|key| offered(m, key) != Some(false))
+        .collect();
+    for key in declared.keys() {
+        let granted = stored
+            .iter()
+            .any(|g| &g.key == key && g.status == GrantStatus::Granted);
+        if offered(m, key) == Some(true) && !granted && !needed.contains(key) {
+            needed.push(key.clone());
+        }
+    }
+    needed
+}
+
+/// What the user did not decide yet, or declined, while a module of the
+/// extraction set waits (its legacy action types are unavailable then,
+/// [`LegacyRoute::AwaitingConsent`]); `None` for every other module and
+/// phase.
+fn waiting_reason(manager: &PluginManager, record: &ModuleMigration) -> Option<String> {
+    let plan = plan_for(&record.module_id)?;
+    if plan.extraction.is_none() && !removed(&record.module_id) {
+        return None;
+    }
+    match record.phase {
+        MigrationPhase::AwaitingConsent => Some(format!(
+            "{} waits for your consent: allow it in Settings › Plugins",
+            record.plugin_id
+        )),
+        MigrationPhase::NotEligible => {
+            let module = ModuleId::new(record.module_id.clone()).ok()?;
+            let by = consented_by(&module);
+            let declined = manager
+                .store()
+                .grants(&record.plugin_id)
+                .ok()?
+                .iter()
+                .any(|g| g.status == GrantStatus::Revoked && g.decided_by == by);
+            declined.then(|| {
+                format!(
+                    "you declined what {} needs: allow it in Settings › Plugins (Retry)",
+                    record.plugin_id
+                )
+            })
+        }
+        _ => None,
+    }
+}
+
 /// The engine over one open plugin store.
 struct Engine<'a> {
     manager: &'a mut PluginManager,
     bundle: &'a Bundle,
+    /// The backup the service task took for the extraction set
+    /// ([`LegacySnapshot::backup`]).
+    backup: Option<Result<String, String>>,
     /// Plugins whose state or grants changed (the broker syncs them).
     touched: BTreeSet<PluginId>,
     /// Test only: the agent exits right after recording this phase.
@@ -909,16 +1173,30 @@ impl Engine<'_> {
         let pin =
             pin.ok_or_else(|| Stop::NotEligible(format!("this app does not bundle {}", m.plugin)))?;
         self.advance(m, MigrationPhase::Pending, None, None)?;
+        self.hold_tool_settings(m)?;
         self.install(m, &pin)?;
         self.advance(m, MigrationPhase::Installed, None, None)?;
         let digest = self.copy_settings(m)?;
         self.advance(m, MigrationPhase::SettingsCopied, None, digest)?;
-        // The user declined in the consent dialog: the built-in stays, at
-        // every start, until the user asks again (Retry).
+        // The extraction set waits without a fallback: a plugin that
+        // cannot replace the built-in fails here, before the user is asked
+        // and before the keys wait, and the built-in keeps serving.
+        if m.plan.and_then(|plan| plan.extraction).is_some() {
+            contract(m, &self.active_manifest(m)?)
+                .map_err(|why| Stop::Failed(format!("health check: {why}")))?;
+        }
+        // The user declined in the consent dialog: the built-in stays (a
+        // removed one: its keys stay unavailable), at every start, until
+        // the user asks again (Retry).
         let declined = self.declined(m)?;
         if !declined.is_empty() {
+            let after = if removed(m.module.as_str()) {
+                "its keys are unavailable until you ask again"
+            } else {
+                "the built-in stays until you ask again"
+            };
             return Err(Stop::NotEligible(format!(
-                "you declined {}; the built-in stays until you ask again",
+                "you declined {}; {after}",
                 declined
                     .iter()
                     .map(ToString::to_string)
@@ -931,10 +1209,15 @@ impl Engine<'_> {
             return self.advance(
                 m,
                 MigrationPhase::AwaitingConsent,
-                Some(&format!("waiting for your consent: {}", waiting.join(", "))),
+                Some(&format!(
+                    "waiting for your consent: {}{}",
+                    waiting.join(", "),
+                    unsupported_note(m)
+                )),
                 None,
             );
         }
+        self.ensure_backup(m)?;
         self.import_credentials(m)?;
         self.enable(m)?;
         if let Err(why) = self.health(m) {
@@ -945,7 +1228,74 @@ impl Engine<'_> {
             self.touched.insert(m.plugin.clone());
             return Err(Stop::Failed(format!("health check: {why}")));
         }
-        self.record(m, MigrationPhase::CutOver, None, None)
+        let note = unsupported_note(m);
+        let note = note.trim_start_matches("; ");
+        self.record(
+            m,
+            MigrationPhase::CutOver,
+            (!note.is_empty()).then_some(note),
+            None,
+        )
+    }
+
+    /// The backup of `deckpilot.db` before the first cut-over of a module
+    /// of the extraction set: journaled once (`host_settings`
+    /// [`BACKUP_NOTE`]) with the file the service task wrote; a backup
+    /// that could not be written fails the step, so the built-in keeps
+    /// serving. Nothing for other modules, and nothing to back up without
+    /// an encrypted database on disk.
+    fn ensure_backup(&mut self, m: &LegacyModule) -> Step<()> {
+        if m.plan.and_then(|plan| plan.extraction).is_none()
+            || self
+                .manager
+                .store()
+                .host_setting(BACKUP_NOTE)
+                .map_err(failed)?
+                .is_some()
+        {
+            return Ok(());
+        }
+        match &self.backup {
+            None => Ok(()),
+            Some(Err(why)) => Err(failed(format!(
+                "deckpilot.db could not be backed up before the first move to a plugin: {why}"
+            ))),
+            Some(Ok(file)) => {
+                self.manager
+                    .set_host_setting(BACKUP_NOTE, Some(&serde_json::json!({ "file": file })))
+                    .map_err(failed)?;
+                info!(module = %m.module, %file,
+                    "deckpilot.db was backed up before the first move to a plugin");
+                Ok(())
+            }
+        }
+    }
+
+    /// The built-in's tool settings as the host's own
+    /// ([`HostTool`]): the saved values of its settings, refreshed while
+    /// the built-in's row is there; removed when the row holds none of
+    /// them (the defaults); kept when there is no row at all.
+    fn hold_tool_settings(&mut self, m: &LegacyModule) -> Step<()> {
+        let Some(tool) = m.plan.and_then(|plan| plan.extraction).and_then(|e| e.tool) else {
+            return Ok(());
+        };
+        let Some(row) = &m.row else {
+            return Ok(());
+        };
+        let values: serde_json::Map<String, Value> = tool
+            .settings
+            .iter()
+            .filter_map(|key| Some(((*key).to_owned(), json_of(row.config.get(key)?)?)))
+            .collect();
+        let value = (!values.is_empty()).then_some(Value::Object(values));
+        if self
+            .manager
+            .set_host_setting(tool.key, value.as_ref())
+            .map_err(failed)?
+        {
+            info!(module = %m.module, key = tool.key, "the built-in's tool settings are held by the host");
+        }
+        Ok(())
     }
 
     fn active_manifest(&self, m: &LegacyModule) -> Step<Manifest> {
@@ -1070,10 +1420,11 @@ impl Engine<'_> {
     fn consent_needed(&self, m: &LegacyModule) -> Step<Vec<String>> {
         let manifest = self.active_manifest(m)?;
         let stored = self.manager.store().grants(&m.plugin).map_err(failed)?;
-        let mut waiting: Vec<String> = missing_grants(&stored, &GrantSet::from_manifest(&manifest))
-            .iter()
-            .map(ToString::to_string)
-            .collect();
+        let mut waiting: Vec<String> =
+            needed_grants(m, &stored, &GrantSet::from_manifest(&manifest))
+                .iter()
+                .map(ToString::to_string)
+                .collect();
         for credential in self.imports(m)? {
             if !self.import_consented(m, &credential.slot)? {
                 waiting.push(format!(
@@ -1109,7 +1460,7 @@ impl Engine<'_> {
         let manifest = self.active_manifest(m)?;
         let stored = self.manager.store().grants(&m.plugin).map_err(failed)?;
         let mut keys: BTreeSet<GrantKey> =
-            missing_grants(&stored, &GrantSet::from_manifest(&manifest))
+            needed_grants(m, &stored, &GrantSet::from_manifest(&manifest))
                 .into_iter()
                 .collect();
         for credential in self.imports(m)? {
@@ -1223,30 +1574,7 @@ impl Engine<'_> {
             .clone();
         let dir = self.manager.layout().resolve(&active.install_dir);
         bundled::check_installed(self.manager, self.bundle, &record, &dir)?;
-        let actions = active.manifest.contributes.actions();
-        for alias in &m.aliases {
-            let builtin = m
-                .builtin_types
-                .iter()
-                .find(|t| t.id.as_str() == alias.legacy)
-                .ok_or_else(|| {
-                    format!("the built-in `{}` is not part of this app", alias.legacy)
-                })?;
-            let action = actions
-                .iter()
-                .find(|a| format!("{}.{}", m.plugin, a.id) == alias.target)
-                .ok_or_else(|| format!("{} does not provide `{}`", m.plugin, alias.target))?;
-            let target = super::engine::action_type(m.plugin.as_str(), action)?;
-            let problems = deckpilot_core::alias::incompatibilities(alias, builtin, &target);
-            if !problems.is_empty() {
-                return Err(format!(
-                    "`{}` cannot replace `{}`: {}",
-                    alias.target,
-                    alias.legacy,
-                    problems.join("; ")
-                ));
-            }
-        }
+        contract(m, &active.manifest)?;
         let saved = self
             .manager
             .store()
@@ -1261,7 +1589,65 @@ impl Engine<'_> {
         }
         Ok(())
     }
+}
 
+/// Whether `manifest`'s plugin declares every alias target of `m` with a
+/// contract that can replace the built-in's (`alias::incompatibilities`).
+///
+/// Without the built-in's crate (X13) only its descriptor is known: the
+/// plugin must then declare every alias target with every parameter of
+/// the built-in under the alias's key. The full contract was checked
+/// while the crate existed (`crates/deckpilot-modules/tests/contracts.rs`),
+/// and the plugin is the pinned bundled copy of the same release.
+fn contract(m: &LegacyModule, manifest: &Manifest) -> Result<(), String> {
+    let actions = manifest.contributes.actions();
+    for alias in &m.aliases {
+        let action = actions
+            .iter()
+            .find(|a| format!("{}.{}", m.plugin, a.id) == alias.target)
+            .ok_or_else(|| format!("{} does not provide `{}`", m.plugin, alias.target))?;
+        let target = super::engine::action_type(m.plugin.as_str(), action)?;
+        let Some(builtin) = m
+            .builtin_types
+            .iter()
+            .find(|t| t.id.as_str() == alias.legacy)
+        else {
+            let params = m
+                .descriptor
+                .and_then(|d| d.params_of(alias.legacy))
+                .ok_or_else(|| {
+                    format!("the built-in `{}` is not part of this app", alias.legacy)
+                })?;
+            let missing: Vec<&str> = params
+                .iter()
+                .filter_map(|key| alias.plugin_key(key).map(|plugin| (*key, plugin)))
+                .filter(|(_, plugin)| !target.parameters.iter().any(|p| p.key == *plugin))
+                .map(|(key, _)| key)
+                .collect();
+            if !missing.is_empty() {
+                return Err(format!(
+                    "`{}` cannot replace `{}`: it lacks {}",
+                    alias.target,
+                    alias.legacy,
+                    missing.join(", ")
+                ));
+            }
+            continue;
+        };
+        let problems = deckpilot_core::alias::incompatibilities(alias, builtin, &target);
+        if !problems.is_empty() {
+            return Err(format!(
+                "`{}` cannot replace `{}`: {}",
+                alias.target,
+                alias.legacy,
+                problems.join("; ")
+            ));
+        }
+    }
+    Ok(())
+}
+
+impl Engine<'_> {
     /// A cut-over module at a start (§5.6 "Re-runs and drift").
     fn reconcile(&mut self, m: &LegacyModule, record: &ModuleMigration) -> Step<()> {
         if self
@@ -1282,6 +1668,7 @@ impl Engine<'_> {
         {
             return Ok(());
         }
+        self.hold_tool_settings(m)?;
         let manifest = self.active_manifest(m)?;
         let ids = m.credential_ids();
         let builtin = builtin_part(m);
@@ -1474,6 +1861,7 @@ pub(super) fn start(
     let mut engine = Engine {
         manager,
         bundle,
+        backup: snapshot.backup.clone(),
         touched: BTreeSet::new(),
         exit_after: test_hooks::exit_after(),
     };
@@ -1534,6 +1922,7 @@ pub(super) fn decide(
     let mut engine = Engine {
         manager,
         bundle,
+        backup: snapshot.backup.clone(),
         touched: BTreeSet::new(),
         exit_after: None,
     };
@@ -1541,16 +1930,50 @@ pub(super) fn decide(
     Ok(engine.touched)
 }
 
+/// Whether `module`'s built-in was removed from the app (`github`,
+/// `gitlab`, `jira`, `git`, `docker`, `workspace`, `projects`;
+/// `module-migration.md` §11 D1, D2, WP-C5, WP-C6): only a descriptor of it
+/// is left (`descriptors.rs`). Such a module has nothing to fall back to.
+pub(crate) fn removed(module: &str) -> bool {
+    descriptors::of(module).is_some()
+}
+
 /// The route of one journaled module (§5.2), and why it is unavailable
-/// when the user withdrew the plugin.
+/// when the user withdrew the plugin or the migration waits for consent.
+///
+/// A removed built-in ([`removed`]) is never routed to: where the route
+/// would fall back to it (a migration that has not cut over yet, failed,
+/// or was not eligible; a build without the bundled plugin), the legacy
+/// action types go to the plugin instead, which serves them once it can
+/// (installed, enabled, consented) and leaves them unavailable with its
+/// reason until then. Stored documents are never rewritten, so they come
+/// back unchanged.
 fn route_of(
+    manager: &PluginManager,
+    bundle: &Bundle,
+    record: &ModuleMigration,
+) -> (LegacyRoute, Option<String>) {
+    match route_with_builtin(manager, bundle, record) {
+        (LegacyRoute::Builtin, reason) if removed(&record.module_id) => {
+            (LegacyRoute::Plugin, reason)
+        }
+        other => other,
+    }
+}
+
+/// [`route_of`] while the built-in is compiled in.
+fn route_with_builtin(
     manager: &PluginManager,
     bundle: &Bundle,
     record: &ModuleMigration,
 ) -> (LegacyRoute, Option<String>) {
     let store = manager.store();
     if record.phase != MigrationPhase::CutOver {
-        return (LegacyRoute::Builtin, None);
+        // The extraction set waits without a fallback (§11 D2, D4).
+        return match waiting_reason(manager, record) {
+            Some(reason) => (LegacyRoute::AwaitingConsent, Some(reason)),
+            None => (LegacyRoute::Builtin, None),
+        };
     }
     if let Some(tombstone) = store.tombstone(&record.plugin_id).ok().flatten() {
         let name = store
@@ -1593,11 +2016,10 @@ pub(super) fn routing(manager: &PluginManager, bundle: &Bundle) -> LegacyRouting
         let Ok(module) = ModuleId::new(record.module_id.clone()) else {
             continue;
         };
-        if record.phase != MigrationPhase::CutOver {
-            continue;
-        }
         let (route, _) = route_of(manager, bundle, &record);
-        routing = routing.with(module, route);
+        if record.phase == MigrationPhase::CutOver || route != LegacyRoute::Builtin {
+            routing = routing.with(module, route);
+        }
     }
     routing
 }
@@ -1706,7 +2128,11 @@ fn info_of(
         route: match route {
             LegacyRoute::Builtin => ipc::MigrationRoute::Builtin,
             LegacyRoute::Plugin => ipc::MigrationRoute::Plugin,
-            LegacyRoute::PluginWithdrawn => ipc::MigrationRoute::PluginWithdrawn,
+            // Unavailable either way, with `route_reason` saying why (an
+            // older app knows only this unavailable route).
+            LegacyRoute::PluginWithdrawn | LegacyRoute::AwaitingConsent => {
+                ipc::MigrationRoute::PluginWithdrawn
+            }
         },
         route_reason,
         aliases: m
@@ -1738,7 +2164,7 @@ fn consent_items(
     };
     let filled = manager.store().credentials(&m.plugin).unwrap_or_default();
     let declared = GrantSet::from_manifest(manifest);
-    let missing: BTreeSet<GrantKey> = missing_grants(&stored, &declared).into_iter().collect();
+    let missing: BTreeSet<GrantKey> = needed_grants(m, &stored, &declared).into_iter().collect();
     let consented = consented_by(&m.module);
     let imports: BTreeMap<&str, &legacy::LegacyCredential> = m
         .credentials
@@ -1760,6 +2186,10 @@ fn consent_items(
             let ask = deckpilot_plugin_store::user_origin_setting(key)
                 .and_then(|setting| asks.iter().find(|a| a.setting == setting && !a.allowed));
             if !missing.contains(key) && import.is_none() && decided.is_none() && ask.is_none() {
+                return None;
+            }
+            // Not offered: a setting of the built-in was off.
+            if offered(m, key) == Some(false) && decided.is_none() {
                 return None;
             }
             let decision = match decided.map(|g| g.status) {

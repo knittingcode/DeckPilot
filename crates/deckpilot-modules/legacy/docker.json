@@ -1,0 +1,811 @@
+{
+  "actionTypes": [
+    {
+      "category": "Docker",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Whether Docker is installed and its engine reachable in the context, with the client, engine and Compose versions. Succeeds when Docker is unavailable; `available` says so and `reason` why.",
+      "id": "docker.status",
+      "name": "Docker status",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "container",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "available",
+            "kind": "boolean",
+            "label": "Available"
+          },
+          {
+            "always": false,
+            "key": "reason",
+            "kind": "text",
+            "label": "Why not available"
+          },
+          {
+            "always": false,
+            "key": "clientVersion",
+            "kind": "text",
+            "label": "Client version"
+          },
+          {
+            "always": false,
+            "key": "serverVersion",
+            "kind": "text",
+            "label": "Engine version"
+          },
+          {
+            "always": false,
+            "key": "serverOs",
+            "kind": "text",
+            "label": "Engine OS"
+          },
+          {
+            "always": false,
+            "key": "composeVersion",
+            "kind": "text",
+            "label": "Compose version"
+          },
+          {
+            "always": false,
+            "key": "context",
+            "kind": "text",
+            "label": "Docker context"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 60000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "Empty: the context set in Settings › Docker, or Docker's current context.",
+          "key": "context",
+          "kind": {
+            "max_length": 128,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Docker context",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Docker",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "The containers of the context: names, states, images and status.",
+      "id": "docker.containers",
+      "name": "Containers",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "server",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "count",
+            "kind": "integer",
+            "label": "Containers"
+          },
+          {
+            "always": true,
+            "key": "running",
+            "kind": "integer",
+            "label": "Running"
+          },
+          {
+            "always": true,
+            "key": "names",
+            "kind": "text",
+            "label": "Names"
+          },
+          {
+            "always": true,
+            "key": "containers",
+            "kind": "text",
+            "label": "Containers (name, state, image, status)"
+          },
+          {
+            "always": true,
+            "key": "context",
+            "kind": "text",
+            "label": "Docker context"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 30000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "default": {
+            "type": "boolean",
+            "value": false
+          },
+          "description": "Off: running containers only.",
+          "key": "all",
+          "kind": {
+            "type": "boolean"
+          },
+          "label": "Include stopped",
+          "required": true
+        },
+        {
+          "description": "Only containers whose name contains this.",
+          "key": "name",
+          "kind": {
+            "max_length": 128,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Name contains",
+          "required": false
+        },
+        {
+          "description": "Empty: the context set in Settings › Docker, or Docker's current context.",
+          "key": "context",
+          "kind": {
+            "max_length": 128,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Docker context",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Docker",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "The containers of a Compose project and whether they are running.",
+      "id": "docker.compose-status",
+      "name": "Compose status",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "list-checks",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "services",
+            "kind": "integer",
+            "label": "Containers"
+          },
+          {
+            "always": true,
+            "key": "running",
+            "kind": "integer",
+            "label": "Running"
+          },
+          {
+            "always": true,
+            "key": "stopped",
+            "kind": "integer",
+            "label": "Not running"
+          },
+          {
+            "always": true,
+            "key": "allRunning",
+            "kind": "boolean",
+            "label": "All running"
+          },
+          {
+            "always": true,
+            "key": "containers",
+            "kind": "text",
+            "label": "Containers (service, state, image, status)"
+          },
+          {
+            "always": false,
+            "key": "project",
+            "kind": "text",
+            "label": "Compose project"
+          },
+          {
+            "always": false,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project"
+          },
+          {
+            "always": true,
+            "key": "context",
+            "kind": "text",
+            "label": "Docker context"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 30000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "A resource bound to the Compose file or its folder. Empty: the project's compose resource.",
+          "key": "compose",
+          "kind": {
+            "type": "resource"
+          },
+          "label": "Compose project",
+          "required": false
+        },
+        {
+          "description": "Whose compose resource, when none is set. Empty: the workflow's current project.",
+          "key": "project_id",
+          "kind": {
+            "type": "project"
+          },
+          "label": "Project",
+          "required": false
+        },
+        {
+          "description": "Passed as -p. Empty: Compose's own choice (usually the folder name).",
+          "key": "projectName",
+          "kind": {
+            "max_length": 64,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Compose project name",
+          "required": false
+        },
+        {
+          "description": "Empty: the context set in Settings › Docker, or Docker's current context.",
+          "key": "context",
+          "kind": {
+            "max_length": 128,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Docker context",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Docker",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Starts a Compose project in the background (up --detach). Must be allowed in Settings › Docker.",
+      "id": "docker.compose-up",
+      "name": "Compose up",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "modifies",
+        "icon": "play",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "output",
+            "kind": "text",
+            "label": "Compose output",
+            "sensitive": true
+          },
+          {
+            "always": false,
+            "key": "project",
+            "kind": "text",
+            "label": "Compose project"
+          },
+          {
+            "always": false,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project"
+          },
+          {
+            "always": true,
+            "key": "context",
+            "kind": "text",
+            "label": "Docker context"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 600000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "A resource bound to the Compose file or its folder. Empty: the project's compose resource.",
+          "key": "compose",
+          "kind": {
+            "type": "resource"
+          },
+          "label": "Compose project",
+          "required": false
+        },
+        {
+          "description": "Whose compose resource, when none is set. Empty: the workflow's current project.",
+          "key": "project_id",
+          "kind": {
+            "type": "project"
+          },
+          "label": "Project",
+          "required": false
+        },
+        {
+          "description": "Passed as -p. Empty: Compose's own choice (usually the folder name).",
+          "key": "projectName",
+          "kind": {
+            "max_length": 64,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Compose project name",
+          "required": false
+        },
+        {
+          "description": "Empty: the context set in Settings › Docker, or Docker's current context.",
+          "key": "context",
+          "kind": {
+            "max_length": 128,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Docker context",
+          "required": false
+        },
+        {
+          "description": "One per line. Empty: every service of the project.",
+          "key": "services",
+          "kind": {
+            "item_label": "Service",
+            "max_items": 50,
+            "max_length": 128,
+            "type": "lines"
+          },
+          "label": "Services",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Docker",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Stops and removes a Compose project's containers and networks. Volumes and images are kept. Must be allowed in Settings › Docker.",
+      "id": "docker.compose-down",
+      "name": "Compose down",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "modifies",
+        "icon": "power",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "output",
+            "kind": "text",
+            "label": "Compose output",
+            "sensitive": true
+          },
+          {
+            "always": false,
+            "key": "project",
+            "kind": "text",
+            "label": "Compose project"
+          },
+          {
+            "always": false,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project"
+          },
+          {
+            "always": true,
+            "key": "context",
+            "kind": "text",
+            "label": "Docker context"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 600000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "A resource bound to the Compose file or its folder. Empty: the project's compose resource.",
+          "key": "compose",
+          "kind": {
+            "type": "resource"
+          },
+          "label": "Compose project",
+          "required": false
+        },
+        {
+          "description": "Whose compose resource, when none is set. Empty: the workflow's current project.",
+          "key": "project_id",
+          "kind": {
+            "type": "project"
+          },
+          "label": "Project",
+          "required": false
+        },
+        {
+          "description": "Passed as -p. Empty: Compose's own choice (usually the folder name).",
+          "key": "projectName",
+          "kind": {
+            "max_length": 64,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Compose project name",
+          "required": false
+        },
+        {
+          "description": "Empty: the context set in Settings › Docker, or Docker's current context.",
+          "key": "context",
+          "kind": {
+            "max_length": 128,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Docker context",
+          "required": false
+        },
+        {
+          "default": {
+            "type": "boolean",
+            "value": false
+          },
+          "description": "Also removes containers of services no longer in the Compose file.",
+          "key": "removeOrphans",
+          "kind": {
+            "type": "boolean"
+          },
+          "label": "Remove orphan containers",
+          "required": true
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Docker",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Restarts a Compose project's services. Must be allowed in Settings › Docker.",
+      "id": "docker.compose-restart",
+      "name": "Compose restart",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "modifies",
+        "icon": "refresh-cw",
+        "idempotent": false,
+        "outputs": [
+          {
+            "always": true,
+            "key": "output",
+            "kind": "text",
+            "label": "Compose output",
+            "sensitive": true
+          },
+          {
+            "always": false,
+            "key": "project",
+            "kind": "text",
+            "label": "Compose project"
+          },
+          {
+            "always": false,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project"
+          },
+          {
+            "always": true,
+            "key": "context",
+            "kind": "text",
+            "label": "Docker context"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 600000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "A resource bound to the Compose file or its folder. Empty: the project's compose resource.",
+          "key": "compose",
+          "kind": {
+            "type": "resource"
+          },
+          "label": "Compose project",
+          "required": false
+        },
+        {
+          "description": "Whose compose resource, when none is set. Empty: the workflow's current project.",
+          "key": "project_id",
+          "kind": {
+            "type": "project"
+          },
+          "label": "Project",
+          "required": false
+        },
+        {
+          "description": "Passed as -p. Empty: Compose's own choice (usually the folder name).",
+          "key": "projectName",
+          "kind": {
+            "max_length": 64,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Compose project name",
+          "required": false
+        },
+        {
+          "description": "Empty: the context set in Settings › Docker, or Docker's current context.",
+          "key": "context",
+          "kind": {
+            "max_length": 128,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Docker context",
+          "required": false
+        },
+        {
+          "description": "One per line. Empty: every service of the project.",
+          "key": "services",
+          "kind": {
+            "item_label": "Service",
+            "max_items": 50,
+            "max_length": 128,
+            "type": "lines"
+          },
+          "label": "Services",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Docker",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "The last lines of a container's or Compose service's log, up to 64 KiB. Never follows the log.",
+      "id": "docker.logs",
+      "name": "Container logs",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "file-text",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "logs",
+            "kind": "text",
+            "label": "Logs",
+            "sensitive": true
+          },
+          {
+            "always": true,
+            "key": "lineCount",
+            "kind": "integer",
+            "label": "Lines"
+          },
+          {
+            "always": true,
+            "key": "truncated",
+            "kind": "boolean",
+            "label": "Truncated"
+          },
+          {
+            "always": true,
+            "key": "context",
+            "kind": "text",
+            "label": "Docker context"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 60000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "A container name or id. Or leave it empty and choose a Compose service.",
+          "key": "container",
+          "kind": {
+            "max_length": 128,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Container",
+          "required": false
+        },
+        {
+          "description": "A service of the Compose project below.",
+          "key": "service",
+          "kind": {
+            "max_length": 128,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Compose service",
+          "required": false
+        },
+        {
+          "default": {
+            "type": "integer",
+            "value": 100
+          },
+          "description": "The last lines of the log.",
+          "key": "lines",
+          "kind": {
+            "max": 2000,
+            "min": 1,
+            "type": "integer"
+          },
+          "label": "Lines",
+          "required": true
+        },
+        {
+          "description": "e.g. 10m, 2h or a timestamp. Empty: no limit.",
+          "key": "since",
+          "kind": {
+            "max_length": 40,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Since",
+          "required": false
+        },
+        {
+          "description": "A resource bound to the Compose file or its folder. Empty: the project's compose resource.",
+          "key": "compose",
+          "kind": {
+            "type": "resource"
+          },
+          "label": "Compose project",
+          "required": false
+        },
+        {
+          "description": "Whose compose resource, when none is set. Empty: the workflow's current project.",
+          "key": "project_id",
+          "kind": {
+            "type": "project"
+          },
+          "label": "Project",
+          "required": false
+        },
+        {
+          "description": "Passed as -p. Empty: Compose's own choice (usually the folder name).",
+          "key": "projectName",
+          "kind": {
+            "max_length": 64,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Compose project name",
+          "required": false
+        },
+        {
+          "description": "Empty: the context set in Settings › Docker, or Docker's current context.",
+          "key": "context",
+          "kind": {
+            "max_length": 128,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Docker context",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    }
+  ],
+  "manifest": {
+    "capabilities": ["profile-read", "machine-resources", "process-execution"],
+    "config": [
+      {
+        "description": "A path to docker, or empty to use docker found on PATH. Only for this computer.",
+        "key": "dockerExecutable",
+        "kind": {
+          "max_length": 1024,
+          "multiline": false,
+          "type": "text"
+        },
+        "label": "Docker program",
+        "required": false
+      },
+      {
+        "description": "The context commands use, e.g. a remote engine. Empty: Docker's current context. Only for this computer.",
+        "key": "context",
+        "kind": {
+          "max_length": 1024,
+          "multiline": false,
+          "type": "text"
+        },
+        "label": "Docker context",
+        "required": false
+      },
+      {
+        "default": {
+          "type": "boolean",
+          "value": false
+        },
+        "description": "Lets the Compose up, down and restart actions change containers on this computer's Docker context. Off by default; never exported or imported. Down never removes volumes.",
+        "key": "allowStateChanges",
+        "kind": {
+          "type": "boolean"
+        },
+        "label": "Allow starting and stopping services",
+        "required": true
+      },
+      {
+        "default": {
+          "type": "text",
+          "value": "compose"
+        },
+        "description": "The project resource with the Compose file or its folder, used when an action names none.",
+        "key": "composeRole",
+        "kind": {
+          "max_length": 1024,
+          "multiline": false,
+          "type": "text"
+        },
+        "label": "Compose resource",
+        "required": true
+      },
+      {
+        "default": {
+          "type": "integer",
+          "value": 300
+        },
+        "key": "timeoutSeconds",
+        "kind": {
+          "max": 1800,
+          "min": 10,
+          "type": "integer"
+        },
+        "label": "Time limit for Compose changes (s)",
+        "required": true
+      }
+    ],
+    "dependencies": [],
+    "description": "Docker availability, containers, Compose projects and logs, in the Docker context you choose.",
+    "enabledByDefault": true,
+    "id": "docker",
+    "name": "Docker",
+    "pages": [],
+    "platforms": [],
+    "portability": {
+      "settings": {
+        "allowStateChanges": "machineSpecific",
+        "composeRole": "portable",
+        "context": "machineSpecific",
+        "dockerExecutable": "machineSpecific",
+        "timeoutSeconds": "portable"
+      },
+      "version": 1
+    },
+    "version": "0.9.0",
+    "windows": []
+  }
+}

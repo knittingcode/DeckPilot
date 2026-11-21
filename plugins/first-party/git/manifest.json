@@ -1,0 +1,733 @@
+{
+  "$schema": "https://knittingcode.github.io/deckpilot-plugins/v1/schemas/plugin-manifest.schema.json",
+  "manifestVersion": 1,
+  "id": "deckpilot.git",
+  "name": "t:plugin.name",
+  "version": "0.1.0",
+  "publisher": {
+    "id": "deckpilot",
+    "name": "DeckPilot",
+    "url": "https://github.com/knittingcode/deckpilot"
+  },
+  "description": "t:plugin.description",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/knittingcode/deckpilot",
+    "directory": "plugins/first-party/git"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["git", "repository", "branch", "status"],
+  "categories": ["developer-tools"],
+  "engines": {
+    "deckpilot": ">=0.9.0 <1.0.0",
+    "pluginApi": "^1.9",
+    "sdk": "0.1.0"
+  },
+  "runtime": {
+    "kind": "wasm",
+    "abi": 1
+  },
+  "entry": "src/lib.rs",
+  "icons": {
+    "128": "assets/icon-128.png"
+  },
+  "defaultLocale": "en",
+  "locales": ["en", "pl"],
+  "dependencies": [
+    {
+      "id": "deckpilot.projects",
+      "version": ">=0.1.0 <1.0.0",
+      "optional": true,
+      "justification": "t:dependencies.projects"
+    }
+  ],
+  "permissions": [
+    {
+      "kind": "tools",
+      "tools": [
+        {
+          "executable": "git",
+          "subcommands": [
+            {
+              "name": "status",
+              "options": ["--porcelain=v2", "--branch", "-z", "--untracked-files"]
+            },
+            {
+              "name": "log",
+              "options": ["-1", "--no-show-signature", "--format"]
+            },
+            {
+              "name": "config",
+              "options": ["--get"]
+            },
+            {
+              "name": "remote"
+            },
+            {
+              "name": "rev-parse",
+              "options": ["--verify", "-q"]
+            },
+            {
+              "name": "ls-remote"
+            }
+          ],
+          "network": true
+        }
+      ],
+      "justification": "t:permissions.tools"
+    },
+    {
+      "kind": "resources",
+      "paths": true,
+      "open": true,
+      "justification": "t:permissions.resources"
+    },
+    {
+      "kind": "profile",
+      "read": ["project"],
+      "justification": "t:permissions.profile"
+    },
+    {
+      "kind": "device",
+      "state": true,
+      "justification": "t:permissions.device"
+    }
+  ],
+  "contributes": {
+    "actions": [
+      {
+        "id": "status",
+        "name": "t:actions.status.name",
+        "description": "t:actions.status.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "repository",
+            "label": "t:params.repository.label",
+            "description": "t:params.repository.description",
+            "required": false,
+            "kind": {
+              "type": "resource",
+              "kinds": ["directory"]
+            }
+          },
+          {
+            "key": "projectId",
+            "label": "t:params.projectId.label",
+            "description": "t:params.projectId.description",
+            "required": false,
+            "kind": {
+              "type": "project"
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "git-branch",
+          "outputs": [
+            {
+              "key": "branch",
+              "label": "t:outputs.branch",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "head",
+              "label": "t:outputs.head",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "detached",
+              "label": "t:outputs.detached",
+              "kind": "boolean",
+              "always": true
+            },
+            {
+              "key": "unborn",
+              "label": "t:outputs.unborn",
+              "kind": "boolean",
+              "always": true
+            },
+            {
+              "key": "upstream",
+              "label": "t:outputs.upstream",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "clean",
+              "label": "t:outputs.clean",
+              "kind": "boolean",
+              "always": true
+            },
+            {
+              "key": "staged",
+              "label": "t:outputs.staged",
+              "kind": "integer",
+              "always": true
+            },
+            {
+              "key": "unstaged",
+              "label": "t:outputs.unstaged",
+              "kind": "integer",
+              "always": true
+            },
+            {
+              "key": "untracked",
+              "label": "t:outputs.untracked",
+              "kind": "integer",
+              "always": true
+            },
+            {
+              "key": "conflicts",
+              "label": "t:outputs.conflicts",
+              "kind": "integer",
+              "always": true
+            },
+            {
+              "key": "ahead",
+              "label": "t:outputs.ahead",
+              "kind": "integer",
+              "always": false
+            },
+            {
+              "key": "behind",
+              "label": "t:outputs.behind",
+              "kind": "integer",
+              "always": false
+            },
+            {
+              "key": "repository",
+              "label": "t:outputs.repository",
+              "kind": "path",
+              "always": true
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": false
+            }
+          ],
+          "timeoutMs": 30000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "readOnly"
+        },
+        "state": {
+          "refresh": "every",
+          "intervalSeconds": 5
+        }
+      },
+      {
+        "id": "branch",
+        "name": "t:actions.branch.name",
+        "description": "t:actions.branch.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "repository",
+            "label": "t:params.repository.label",
+            "description": "t:params.repository.description",
+            "required": false,
+            "kind": {
+              "type": "resource",
+              "kinds": ["directory"]
+            }
+          },
+          {
+            "key": "projectId",
+            "label": "t:params.projectId.label",
+            "description": "t:params.projectId.description",
+            "required": false,
+            "kind": {
+              "type": "project"
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "git-branch",
+          "outputs": [
+            {
+              "key": "branch",
+              "label": "t:outputs.branch",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "head",
+              "label": "t:outputs.head",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "detached",
+              "label": "t:outputs.detached",
+              "kind": "boolean",
+              "always": true
+            },
+            {
+              "key": "unborn",
+              "label": "t:outputs.unborn",
+              "kind": "boolean",
+              "always": true
+            },
+            {
+              "key": "upstream",
+              "label": "t:outputs.upstream",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "repository",
+              "label": "t:outputs.repository",
+              "kind": "path",
+              "always": true
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": false
+            }
+          ],
+          "timeoutMs": 30000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "readOnly"
+        },
+        "state": {
+          "refresh": "every",
+          "intervalSeconds": 5
+        }
+      },
+      {
+        "id": "changes",
+        "name": "t:actions.changes.name",
+        "description": "t:actions.changes.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "repository",
+            "label": "t:params.repository.label",
+            "description": "t:params.repository.description",
+            "required": false,
+            "kind": {
+              "type": "resource",
+              "kinds": ["directory"]
+            }
+          },
+          {
+            "key": "projectId",
+            "label": "t:params.projectId.label",
+            "description": "t:params.projectId.description",
+            "required": false,
+            "kind": {
+              "type": "project"
+            }
+          },
+          {
+            "key": "limit",
+            "label": "t:params.limit.label",
+            "description": "t:params.limit.description",
+            "required": false,
+            "kind": {
+              "type": "integer",
+              "min": 1,
+              "max": 500
+            },
+            "default": {
+              "type": "integer",
+              "value": 100
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "list-checks",
+          "outputs": [
+            {
+              "key": "changed",
+              "label": "t:outputs.changed",
+              "kind": "integer",
+              "always": true
+            },
+            {
+              "key": "staged",
+              "label": "t:outputs.staged",
+              "kind": "integer",
+              "always": true
+            },
+            {
+              "key": "unstaged",
+              "label": "t:outputs.unstaged",
+              "kind": "integer",
+              "always": true
+            },
+            {
+              "key": "untracked",
+              "label": "t:outputs.untracked",
+              "kind": "integer",
+              "always": true
+            },
+            {
+              "key": "conflicts",
+              "label": "t:outputs.conflicts",
+              "kind": "integer",
+              "always": true
+            },
+            {
+              "key": "files",
+              "label": "t:outputs.files",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "truncated",
+              "label": "t:outputs.truncated",
+              "kind": "boolean",
+              "always": true
+            },
+            {
+              "key": "repository",
+              "label": "t:outputs.repository",
+              "kind": "path",
+              "always": true
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": false
+            }
+          ],
+          "timeoutMs": 30000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "last-commit",
+        "name": "t:actions.last-commit.name",
+        "description": "t:actions.last-commit.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "repository",
+            "label": "t:params.repository.label",
+            "description": "t:params.repository.description",
+            "required": false,
+            "kind": {
+              "type": "resource",
+              "kinds": ["directory"]
+            }
+          },
+          {
+            "key": "projectId",
+            "label": "t:params.projectId.label",
+            "description": "t:params.projectId.description",
+            "required": false,
+            "kind": {
+              "type": "project"
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "git-commit",
+          "outputs": [
+            {
+              "key": "hash",
+              "label": "t:outputs.hash",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "shortHash",
+              "label": "t:outputs.shortHash",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "author",
+              "label": "t:outputs.author",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "date",
+              "label": "t:outputs.date",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "subject",
+              "label": "t:outputs.subject",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "repository",
+              "label": "t:outputs.repository",
+              "kind": "path",
+              "always": true
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": false
+            }
+          ],
+          "timeoutMs": 30000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "remote-status",
+        "name": "t:actions.remote-status.name",
+        "description": "t:actions.remote-status.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "repository",
+            "label": "t:params.repository.label",
+            "description": "t:params.repository.description",
+            "required": false,
+            "kind": {
+              "type": "resource",
+              "kinds": ["directory"]
+            }
+          },
+          {
+            "key": "projectId",
+            "label": "t:params.projectId.label",
+            "description": "t:params.projectId.description",
+            "required": false,
+            "kind": {
+              "type": "project"
+            }
+          },
+          {
+            "key": "refresh",
+            "label": "t:params.refresh.label",
+            "description": "t:params.refresh.description",
+            "required": false,
+            "kind": {
+              "type": "boolean"
+            },
+            "default": {
+              "type": "boolean",
+              "value": false
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "cloud",
+          "outputs": [
+            {
+              "key": "hasUpstream",
+              "label": "t:outputs.hasUpstream",
+              "kind": "boolean",
+              "always": true
+            },
+            {
+              "key": "source",
+              "label": "t:outputs.source",
+              "kind": "text",
+              "always": true
+            },
+            {
+              "key": "branch",
+              "label": "t:outputs.branch",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "upstream",
+              "label": "t:outputs.upstream",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "remote",
+              "label": "t:outputs.remote",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "ahead",
+              "label": "t:outputs.ahead",
+              "kind": "integer",
+              "always": false
+            },
+            {
+              "key": "behind",
+              "label": "t:outputs.behind",
+              "kind": "integer",
+              "always": false
+            },
+            {
+              "key": "trackingHead",
+              "label": "t:outputs.trackingHead",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "remoteHead",
+              "label": "t:outputs.remoteHead",
+              "kind": "text",
+              "always": false
+            },
+            {
+              "key": "stale",
+              "label": "t:outputs.stale",
+              "kind": "boolean",
+              "always": false
+            },
+            {
+              "key": "repository",
+              "label": "t:outputs.repository",
+              "kind": "path",
+              "always": true
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": false
+            }
+          ],
+          "timeoutMs": 150000,
+          "retrySafe": true,
+          "idempotent": true,
+          "cancellable": true,
+          "effect": "readOnly"
+        }
+      },
+      {
+        "id": "open-repository",
+        "name": "t:actions.open-repository.name",
+        "description": "t:actions.open-repository.description",
+        "category": "t:category",
+        "parameters": [
+          {
+            "key": "repository",
+            "label": "t:params.repository.label",
+            "description": "t:params.repository.description",
+            "required": false,
+            "kind": {
+              "type": "resource",
+              "kinds": ["directory"]
+            }
+          },
+          {
+            "key": "projectId",
+            "label": "t:params.projectId.label",
+            "description": "t:params.projectId.description",
+            "required": false,
+            "kind": {
+              "type": "project"
+            }
+          },
+          {
+            "key": "application",
+            "label": "t:params.application.label",
+            "description": "t:params.application.description",
+            "required": false,
+            "kind": {
+              "type": "resource",
+              "kinds": ["application"]
+            }
+          }
+        ],
+        "node": {
+          "version": 1,
+          "icon": "folder-open",
+          "outputs": [
+            {
+              "key": "repository",
+              "label": "t:outputs.repository",
+              "kind": "path",
+              "always": true
+            },
+            {
+              "key": "projectKey",
+              "label": "t:outputs.projectKey",
+              "kind": "projectKey",
+              "always": false
+            }
+          ],
+          "timeoutMs": 15000,
+          "retrySafe": true,
+          "idempotent": false,
+          "cancellable": true,
+          "effect": "opens"
+        }
+      }
+    ],
+    "settings": {
+      "portabilityVersion": 1,
+      "fields": [
+        {
+          "key": "repositoryRole",
+          "label": "t:settings.repositoryRole.label",
+          "description": "t:settings.repositoryRole.description",
+          "required": true,
+          "kind": {
+            "type": "text",
+            "maxLength": 64
+          },
+          "default": {
+            "type": "text",
+            "value": "repository"
+          },
+          "portability": "portable"
+        },
+        {
+          "key": "networkTimeoutSeconds",
+          "label": "t:settings.networkTimeoutSeconds.label",
+          "description": "t:settings.networkTimeoutSeconds.description",
+          "required": true,
+          "kind": {
+            "type": "integer",
+            "min": 5,
+            "max": 120
+          },
+          "default": {
+            "type": "integer",
+            "value": 20
+          },
+          "portability": "portable"
+        }
+      ]
+    },
+    "errorCodes": {
+      "not-found": "t:errors.not-found",
+      "not-a-repository": "t:errors.not-a-repository",
+      "unsafe-repository": "t:errors.unsafe-repository",
+      "git-not-found": "t:errors.git-not-found",
+      "git-failed": "t:errors.git-failed",
+      "project-not-in-profile": "t:errors.project-not-in-profile",
+      "no-commits": "t:errors.no-commits",
+      "no-remote": "t:errors.no-remote",
+      "network-failed": "t:errors.network-failed",
+      "cancelled": "t:errors.cancelled",
+      "resource-unbound": "t:errors.resource-unbound",
+      "resource-role-missing": "t:errors.resource-role-missing",
+      "resource-kind-mismatch": "t:errors.resource-kind-mismatch",
+      "resource-missing": "t:errors.resource-missing",
+      "not-user-initiated": "t:errors.not-user-initiated"
+    }
+  }
+}

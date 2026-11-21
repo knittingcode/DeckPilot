@@ -15,6 +15,8 @@ on:
       - .github/scripts/**
       - .github/updater.pub
       - tools/release-pipeline/**
+      # The pins of the published releases, checked by check-released-pins.sh.
+      - plugins/first-party/released-pins.json
       - tools/dev/src/release.rs
       - tools/dev/src/versions.rs
       - tools/dev/src/prepare.rs

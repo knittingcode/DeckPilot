@@ -389,32 +389,27 @@ async fn a_driver_registered_only_in_a_test_drives_a_layout() {
     agent.shutdown().await;
 }
 
-/// The Acme dial bound to *Select project* (keys only) does not run it:
+/// The Acme dial bound to *Log message* (keys only) does not run it:
 /// the binding is refused, kept and reported in the layout status, while
 /// key 0 bound to the same action runs it (`docs/device-controls.md`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_dial_bound_to_a_key_only_action_does_not_run_it() {
-    use deckpilot_core::{ActionParameters, Os, ParameterValue, Project, ProjectKey};
-    use deckpilot_modules::projects::actions;
+    use deckpilot_core::{ActionParameters, Os, ParameterValue};
+    use deckpilot_ipc::AgentEvent;
+    use deckpilot_modules::general;
     use deckpilot_storage::ConfigStore;
 
     let mut profile = profile();
-    for key in ["SHOP", "CMS"] {
-        profile
-            .projects
-            .push(Project::new(ProjectKey::new(key).unwrap(), key));
-    }
-    let cms = profile.projects[1].id;
     let select = deckpilot_modules::builtin(Os::current())
         .action_registry()
         .create_instance(
             "Select CMS",
-            actions::select_id(),
-            &ActionParameters::new().with(actions::PROJECT_ID, ParameterValue::Project(cms)),
+            general::log_id(),
+            &ActionParameters::new().with("message", ParameterValue::Text("CMS".into())),
         )
         .unwrap();
     let home = &mut profile.layouts[0].pages[0].bindings;
-    // The dial now selects CMS (instead of opening the folder); key 0 too.
+    // The dial now logs "CMS" (instead of opening the folder); key 0 too.
     home[0].target = BindingTarget::action(select.id);
     home.push(ControlBinding::new(
         ControlId::Key { index: 0 },
@@ -442,33 +437,35 @@ async fn a_dial_bound_to_a_key_only_action_does_not_run_it() {
         issues[0].contains("encoder 0") && issues[0].contains("it works on keys only"),
         "{issues:?}"
     );
-    let active = |status: &AgentStatus| {
-        status
-            .active_project
-            .as_ref()
-            .map(|p| p.key.as_str().to_owned())
+    let mut events = agent.events().await;
+    let ran = |event: AgentEvent| match event {
+        AgentEvent::ActionCompleted { name, .. } => Some(name),
+        _ => None,
     };
-    assert_ne!(active(&status).as_deref(), Some("CMS"));
 
     // Turning the dial runs nothing; key 3, sent after it, still opens
     // the folder, so the turn was handled.
     acme.send("ACME-2", vec![0x02, 0, 1]);
     acme.send("ACME-2", vec![0x01, 0b1000]);
     acme.send("ACME-2", vec![0x01, 0]);
-    let status = wait_status(&agent, |s| page(s, &device) == Some("Folder")).await;
-    assert_ne!(
-        active(&status).as_deref(),
-        Some("CMS"),
-        "the dial ran nothing"
-    );
+    wait_status(&agent, |s| page(s, &device) == Some("Folder")).await;
 
-    // Back home, key 0 runs the same action.
+    // Back home, key 0 runs the same action: the first that ran at all.
     acme.send("ACME-2", vec![0x01, 0b0010]);
     acme.send("ACME-2", vec![0x01, 0]);
     wait_status(&agent, |s| page(s, &device) == Some("Home")).await;
     acme.send("ACME-2", vec![0x01, 0b0001]);
     acme.send("ACME-2", vec![0x01, 0]);
-    wait_status(&agent, |s| active(s).as_deref() == Some("CMS")).await;
+    let first = loop {
+        let event = tokio::time::timeout(TIMEOUT, events.next_event())
+            .await
+            .expect("an action completes in time")
+            .unwrap();
+        if let Some(name) = ran(event) {
+            break name;
+        }
+    };
+    assert_eq!(first, "Select CMS", "the dial ran nothing, key 0 did");
 
     // The binding is kept as it was stored.
     agent.shutdown().await;

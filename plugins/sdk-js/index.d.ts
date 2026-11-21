@@ -249,6 +249,93 @@ export interface ActionContext<M extends ManifestShape = Manifest> extends BaseC
    * invocation came from a key press or the app (a user gesture).
    */
   open(url: string): Promise<void>
+  /**
+   * Plugin API 1.9, permission `openUrl` with `fromParams` (DeckPilot's own
+   * bundled plugins only): opens the literal http or https URL the user
+   * stored in this action's parameter `param` (line `index` of a `lines`
+   * parameter). The plugin never names the URL. Only in runs the user
+   * started.
+   */
+  openParam(param: string, index?: number): Promise<void>
+  /** Plugin API 1.9, permission `resources` (DeckPilot's own bundled plugins only). */
+  readonly resources: ResourcesApi
+  /** Plugin API 1.9, permission `tools` (DeckPilot's own bundled plugins only). */
+  readonly tools: ToolsApi
+  /** Plugin API 1.9, permission `projectContext` (DeckPilot's own bundled plugins only). */
+  readonly projects: ProjectsApi
+}
+
+// ---------------------------------------------------------------------------
+// Plugin API 1.9: resources, tools and the project context
+// (docs/marketplace/module-migration.md §7; first-party bundled plugins only)
+// ---------------------------------------------------------------------------
+
+export type ResourceKind = "directory" | "file" | "application" | "dockerEnvironment" | "url"
+
+/** An opaque handle, valid for this invocation only. Never a path. */
+export interface ResourceHandle {
+  readonly handle: string
+  readonly kind: ResourceKind
+  /** The binding's name, which the user chose. */
+  readonly label: string
+  /** The bound path, only with `resources.paths`. */
+  readonly displayPath?: string
+}
+
+export type EditorPlan = "vscode" | "cursor" | "jetbrains" | "zed" | "sublime" | "other"
+
+export interface ResourcesApi {
+  /** `resource.resolve` of a `resource` parameter of the invoked action. */
+  param(param: string, kinds: readonly ResourceKind[]): Promise<ResourceHandle>
+  /** `resource.resolve` of a role of the run's project (or `projectId` of the active profile). */
+  role(role: string, kinds: readonly ResourceKind[], projectId?: ProjectId): Promise<ResourceHandle>
+  /**
+   * `resource.open`, permission `resources` with `open` (high tier): a
+   * bound location, optionally in a bound application, only in runs the
+   * user started.
+   */
+  open(
+    handle: ResourceHandle | string,
+    options?: {
+      readonly with?: ResourceHandle | string
+      readonly position?: { readonly line: number; readonly column?: number }
+      readonly editor?: EditorPlan
+    },
+  ): Promise<void>
+}
+
+export interface ToolOutput {
+  /** The exit status; null when the process was stopped. */
+  readonly exit: number | null
+  readonly stdout: string
+  readonly stderr: string
+  readonly truncated: boolean
+  readonly durationMs: number
+}
+
+export interface ToolsApi {
+  /**
+   * `tool.run`: the user's own git or docker with an argument array (the
+   * subcommand first; never a shell string) in a handle's directory.
+   * Limited to the subcommands and options the manifest declares from the
+   * host's policy; `network` (git ls-remote) and `modify` (docker start,
+   * stop, restart) are sub-grants of their own.
+   */
+  run(
+    tool: "git" | "docker",
+    args: readonly string[],
+    cwd: ResourceHandle | string,
+    options?: { readonly timeoutMs?: number },
+  ): Promise<ToolOutput>
+}
+
+export interface ProjectsApi {
+  current(): Promise<ProjectInfo | null>
+  list(): Promise<readonly ProjectInfo[]>
+  /** Permission `projectContext` with `select` (high tier), only in runs the user started. */
+  select(id: ProjectId): Promise<void>
+  /** Like `select`; wraps at the ends unless `wrap` is false. */
+  cycle(direction: "next" | "previous", wrap?: boolean): Promise<void>
 }
 
 export interface StateContext<M extends ManifestShape = Manifest> extends BaseContext<M> {

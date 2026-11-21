@@ -124,10 +124,6 @@
       "title": "Projekty",
       "description": "Projekty tego profilu i ich zasoby na tym komputerze"
     },
-    "tabs": {
-      "projects": "Projekty",
-      "machine": "Ten komputer"
-    },
     "option": "{{key}} · {{project}}",
     "status": {
       "ok": "Znaleziono",
@@ -240,7 +236,9 @@
       "removeTitle": "Usunąć przypisanie dla {{key}}?",
       "removeDescription": "Akcje używające tego zasobu nie odnajdą go na tym komputerze, dopóki nie zostanie ponownie przypisany.",
       "removeConfirm": "Usuń",
-      "removeFailed": "Przypisanie dla {{key}} nie zostało usunięte"
+      "removeFailed": "Przypisanie dla {{key}} nie zostało usunięte",
+      "moved": "Powiązania zasobów tego komputera są w Ustawieniach.",
+      "open": "Otwórz Ustawienia › Zasoby"
     },
     "binding": {
       "browseFailed": "Nie udało się otworzyć przeglądarki plików",

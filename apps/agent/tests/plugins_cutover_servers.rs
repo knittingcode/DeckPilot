@@ -1,28 +1,34 @@
 //! The GitLab and Jira cut-overs (`docs/marketplace/module-migration.md`
-//! §9, P11) end to end, through the real agent, the real sandboxed plugin
-//! host, real storage and IPC, each test in its own data directory
-//! (feature `plugins`):
+//! §9, P11), and the GitHub cut-over for GitHub Enterprise Server, end to
+//! end, now that the built-in `gitlab`, `jira` and `github` modules are
+//! removed from the app (§11 D1), through the real agent, the real
+//! sandboxed plugin host, real storage and IPC, each test in its own data
+//! directory (feature `plugins`). What it proves: a 0.9.x configuration of
+//! a server the user entered migrates to the plugin **without the
+//! built-in**, and nothing runs anywhere until the plugin can serve it.
 //!
-//! * an alpha.3-style `deckpilot.db`: the built-in module saved and
+//! * a 0.9.x (alpha.3-style) `deckpilot.db`: the module row saved and
 //!   enabled with **the server the user entered** (a self-managed GitLab
-//!   under a path, a Jira Cloud site), its credential stored, a profile
-//!   with an MK.2 key bound to a legacy action and a workflow node running
-//!   another;
+//!   under a path, a Jira Cloud site, a GitHub Enterprise Server), its
+//!   credential stored, a profile with an MK.2 key bound to a legacy
+//!   action and a workflow node running another (legacy ids). The agent
+//!   has no built-in: the migration reads that row through the frozen
+//!   descriptors;
 //! * the shipped alias blocks (`ACTION_ALIASES`) and migration plans, and
-//!   `plugins/first-party/{gitlab,jira}` built to wasm and bundled as the
-//!   release bundles them (class `migration`, pinned with
+//!   `plugins/first-party/{gitlab,jira,github}` built to wasm and bundled
+//!   as the release bundles them (class `migration`, pinned with
 //!   `DECKPILOT_TEST_BUNDLED_PINS`);
 //! * no server ever answers: the plugin's requests get canned answers
-//!   (`DECKPILOT_TEST_PLUGIN_HTTP`, which logs the credential header the
-//!   agent injected), and the built-in's go to a stand-in on 127.0.0.1
-//!   that records them (`DECKPILOT_TEST_BUILTIN_GITLAB_API`,
-//!   `DECKPILOT_TEST_BUILTIN_JIRA_SITE`, feature `test-hooks`: the
-//!   module's stored settings, and so what the migration carries, are
-//!   untouched). Which of the two got a request says which implementation
-//!   ran;
-//! * the consent to the credential, **to the server** and, separately, to
-//!   a private network, Retry, disable and uninstall come through the
-//!   app's requests.
+//!   (`DECKPILOT_TEST_PLUGIN_HTTP`, which logs every request with the
+//!   credential header the agent injected), so the log is everything sent;
+//! * until the plugin serves (consent to the credential, **to the server**
+//!   or, separately, to a private network pending or declined; a server no
+//!   plugin can reach; plugins off; the plugin disabled or uninstalled)
+//!   the legacy key and node are unavailable with a clear reason, the
+//!   agent keeps answering, and nothing is sent; once allowed, the same
+//!   stored key and node run in the plugin at exactly the user's server;
+//! * the consents, Retry, disable and uninstall come through the app's
+//!   requests; `deckpilot.db` is never rewritten and restarts redo nothing.
 #![cfg(feature = "plugins")]
 
 #[path = "support/parity.rs"]
@@ -35,7 +41,6 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use base64::Engine as _;
 use deckpilot_core::{
     ActionInstance, ActionInstanceId, ActionParameters, ActionStatus, ActionTypeId, BindingTarget,
     ControlBinding, CredentialId, DeviceLayout, ExecutionState, ModuleId, ModuleSettings,
@@ -52,7 +57,7 @@ use deckpilot_plugin_bundled::{BundleClass, Pins};
 use deckpilot_plugin_manifest::PluginId;
 use deckpilot_plugin_store::{PluginStore, TombstoneDecision};
 use deckpilot_storage::{ConfigStore, DatabaseKey};
-use parity::{Answer, Server, json_answer};
+use parity::{Answer, json_answer};
 use serde_json::{Value, json};
 use support::TempDir;
 
@@ -77,22 +82,19 @@ struct Module {
     credential: &'static str,
     secret: &'static str,
     slot: &'static str,
-    /// The module's setting with the server, and the stand-in's variable.
+    /// The module's setting with the server.
     setting: &'static str,
-    stand_in: &'static str,
-    /// The rest of what the alpha.3 user saved.
+    /// The rest of what the 0.9.x user saved.
     settings: fn(&Module) -> ActionParameters,
     /// On the key, and in the workflow's node.
     key: Use,
     node: Use,
+    /// The server's answers, canned for the plugin.
     answers: parity::Answers,
-    /// The request header with the credential, and its value.
-    header: &'static str,
-    sent: fn(&Module) -> String,
-    /// What the plugin's log shows after the URL.
+    /// What the plugin's log shows after the URL: the credential header.
     logged: fn(&Module) -> String,
-    /// The plugin's declared host and web host, if it has one.
-    host: Option<&'static str>,
+    /// The plugin's declared API host and web host, if it has them.
+    hosts: Option<(&'static str, &'static str)>,
 }
 
 fn text(value: &str) -> ParameterValue {
@@ -145,7 +147,6 @@ const GITLAB: Module = Module {
     secret: "glpat-cutover-4b8d1e-not-a-real-token",
     slot: "token",
     setting: "apiUrl",
-    stand_in: "DECKPILOT_TEST_BUILTIN_GITLAB_API",
     settings: |m| {
         ActionParameters::new()
             .with("credential", text(m.credential))
@@ -173,10 +174,8 @@ const GITLAB: Module = Module {
         asks: "/projects/group%2Fapp/pipelines",
     },
     answers: gitlab_answers,
-    header: "private-token",
-    sent: |m| m.secret.to_owned(),
     logged: |m| format!("\tPRIVATE-TOKEN: {}", m.secret),
-    host: Some("gitlab.com"),
+    hosts: Some(("gitlab.com", "gitlab.com")),
 };
 
 /// A self-managed GitLab under a path.
@@ -218,7 +217,6 @@ const JIRA: Module = Module {
     secret: "dev@example.com:ATATT-cutover-9f2a-not-a-real-token",
     slot: "credential",
     setting: "siteUrl",
-    stand_in: "DECKPILOT_TEST_BUILTIN_JIRA_SITE",
     settings: |m| {
         ActionParameters::new()
             .with("deployment", ParameterValue::Choice("cloud".into()))
@@ -242,19 +240,92 @@ const JIRA: Module = Module {
         asks: "/rest/api/3/issue/WEB-12",
     },
     answers: jira_answers,
-    header: "authorization",
-    sent: |m| {
-        format!(
-            "Basic {}",
-            base64::engine::general_purpose::STANDARD.encode(m.secret)
-        )
-    },
     logged: |m| format!("\tauthorization: Basic {}", m.secret),
-    host: None,
+    hosts: None,
 };
 
 /// A Jira Cloud site.
 const OWN_JIRA: &str = "https://team.atlassian.net";
+
+// ------------------------------------------------- GitHub Enterprise Server
+
+fn github_answers(base: &str, target: &str) -> Answer {
+    let path = target.split('?').next().unwrap();
+    let web = base.strip_suffix("/api/v3").unwrap_or(base);
+    match path {
+        "/search/issues" => json_answer(
+            200,
+            &json!({"total_count": 2, "incomplete_results": false, "items": [
+                {"number": 12, "title": "Fix the build", "draft": false,
+                 "repository_url": format!("{base}/repos/octo/site"),
+                 "user": {"login": "mona"}, "html_url": format!("{web}/octo/site/pull/12")},
+                {"number": 11, "title": "Docs", "draft": true,
+                 "repository_url": format!("{base}/repos/octo/site"),
+                 "user": {"login": "hubot"}, "html_url": format!("{web}/octo/site/pull/11")}
+            ]}),
+        ),
+        "/repos/octo/site/commits/main/check-runs" => json_answer(
+            200,
+            &json!({"total_count": 2, "check_runs": [
+                {"name": "build", "status": "completed", "conclusion": "success"},
+                {"name": "lint", "status": "completed", "conclusion": "failure"}
+            ]}),
+        ),
+        "/repos/octo/site/commits/main/status" => json_answer(
+            200,
+            &json!({"sha": "0123abc", "state": "success", "statuses": [
+                {"context": "ci/legacy", "state": "success"}
+            ]}),
+        ),
+        _ => json_answer(404, &json!({"message": "Not Found"})),
+    }
+}
+
+const GITHUB: Module = Module {
+    id: "github",
+    name: "GitHub",
+    plugin: parity::Plugin {
+        id: "deckpilot.github",
+        dir: "github",
+        package: "deckpilot-github",
+    },
+    credential: "github.token",
+    secret: "ghp_cutover-ghe-5c2a-not-a-real-token",
+    slot: "token",
+    setting: "apiUrl",
+    settings: |m| {
+        ActionParameters::new()
+            .with("credential", text(m.credential))
+            .with("timeoutSeconds", ParameterValue::Integer(30))
+    },
+    key: Use {
+        name: "Open pull requests",
+        action: "github.pull-requests",
+        parameters: |_| {
+            ActionParameters::new()
+                .with("repository", text("octo/site"))
+                .with("credential", text(""))
+        },
+        asks: "/search/issues",
+    },
+    node: Use {
+        name: "Checks of main",
+        action: "github.checks",
+        parameters: |m| {
+            ActionParameters::new()
+                .with("repository", text("octo/site"))
+                .with("ref", text("main"))
+                .with("credential", text(m.credential))
+        },
+        asks: "/repos/octo/site/commits/main/check-runs",
+    },
+    answers: github_answers,
+    logged: |m| format!("\tauthorization: Bearer {}", m.secret),
+    hosts: Some(("api.github.com", "github.com")),
+};
+
+/// A GitHub Enterprise Server: its API under `/api/v3`.
+const OWN_GITHUB: &str = "https://ghe.example.com/api/v3";
 
 // ---------------------------------------------------------- environment
 
@@ -282,21 +353,12 @@ struct Env {
     dir: TempDir,
     paths: AgentPaths,
     key: DatabaseKey,
-    stand_in: Server,
     on_key: ActionInstanceId,
     workflow: WorkflowId,
 }
 
-/// The path of an `https` server (`/gitlab/api/v4`, or nothing).
-fn path_of(server: &str) -> &str {
-    server
-        .strip_prefix("https://")
-        .and_then(|rest| rest.find('/').map(|at| &rest[at..]))
-        .unwrap_or("")
-}
-
 impl Env {
-    /// An alpha.3 configuration of `module`: `saved` as its server setting
+    /// A 0.9.x configuration of `module`: `saved` as its server setting
     /// (`None`: never saved), `private` as its private-network switch,
     /// and, with `used`, its credential and a profile that uses it. The
     /// plugin talks to `server`.
@@ -318,7 +380,6 @@ impl Env {
             dir,
             paths,
             key,
-            stand_in: Server::start(path_of(server), module.answers, module.header),
             on_key: ActionInstanceId::new(),
             workflow: WorkflowId::new(),
         };
@@ -344,6 +405,9 @@ impl Env {
         if self.module.id == "gitlab" {
             targets.push("/projects/group%2Fapp/pipelines/77/jobs".into());
         }
+        if self.module.id == "github" {
+            targets.push("/repos/octo/site/commits/main/status".into());
+        }
         targets.sort_by_key(|t| std::cmp::Reverse(t.len()));
         targets
             .iter()
@@ -355,8 +419,8 @@ impl Env {
             .collect()
     }
 
-    /// The built-in module saved and enabled, its credential stored, and
-    /// a profile with a key bound to one legacy action and a workflow
+    /// The (now removed) built-in module saved and enabled as 0.9.x saved
+    /// it, its credential stored, and a profile with a key bound to one legacy action and a workflow
     /// node running another.
     fn write_alpha3(&mut self, saved: Option<&str>, private: bool) {
         let m = self.module;
@@ -504,8 +568,9 @@ impl Env {
                 "DECKPILOT_TEST_PLUGIN_OPEN_URL",
                 self.dir.path().join("opened.txt"),
             )
-            .env(self.module.stand_in, self.stand_in.base())
             .env_remove("DECKPILOT_TEST_BUILTIN_GITHUB_API")
+            .env_remove("DECKPILOT_TEST_BUILTIN_GITLAB_API")
+            .env_remove("DECKPILOT_TEST_BUILTIN_JIRA_SITE")
             .env_remove("DECKPILOT_TEST_LEGACY_FIXTURE")
             .env_remove("DECKPILOT_TEST_MIGRATION_DECISIONS")
             .env_remove("DECKPILOT_TEST_MIGRATION_EXIT")
@@ -614,52 +679,39 @@ impl Env {
         }
     }
 
-    fn traffic(&self) -> Traffic {
-        Traffic {
-            builtin: self.stand_in.seen(),
-            plugin: self.plugin_log(),
-        }
+    /// What was sent after the first `before` requests (there is no
+    /// built-in left to send anything).
+    fn since(&self, before: usize) -> Vec<String> {
+        self.plugin_log()[before..].to_vec()
     }
 
-    /// Which implementation answered the requests made since `before`.
-    fn since(&self, before: &Traffic) -> Traffic {
-        Traffic {
-            builtin: self.stand_in.seen()[before.builtin.len()..].to_vec(),
-            plugin: self.plugin_log()[before.plugin.len()..].to_vec(),
-        }
-    }
-
-    /// Presses the key until `side` serves it (the routing reaches the
+    /// Presses the key until the plugin serves it (the routing reaches the
     /// registry a moment after the migration step is recorded); checks
-    /// the requests it made. The other side must never see one.
-    async fn press_until(&self, agent: &Agent, device: &DeviceId, side: Side) {
+    /// the requests it made.
+    async fn press_until_served(&self, agent: &Agent, device: &DeviceId) {
         let deadline = Instant::now() + SETTLE;
         loop {
-            let before = self.traffic();
+            let before = self.plugin_log().len();
             let (name, status) = agent.press(device).await;
-            let new = self.since(&before);
+            let new = self.since(before);
             assert_eq!(name, self.module.key.name);
-            let served = match side {
-                Side::Builtin => !new.builtin.is_empty(),
-                Side::Plugin => !new.plugin.is_empty(),
-            };
-            if served {
+            if !new.is_empty() {
                 assert_eq!(status, ActionStatus::Succeeded, "{new:?}\n{}", agent.log());
-                self.assert_side(&new, side, self.module.key.asks);
+                self.assert_plugin(&new, self.module.key.asks);
                 return;
             }
             assert!(
                 Instant::now() < deadline,
-                "{side:?} never served the key: {status:?}, {new:?}\n{}",
+                "the plugin never served the key: {status:?}\n{}",
                 agent.log()
             );
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     }
 
-    /// Runs the workflow; its node ran on `side`.
-    async fn run_node(&self, agent: &Agent, side: Side) {
-        let before = self.traffic();
+    /// Runs the workflow; its node ran in the plugin.
+    async fn run_node(&self, agent: &Agent) {
+        let before = self.plugin_log().len();
         let record = agent.run_workflow(self.workflow).await;
         assert_eq!(
             record.summary.state,
@@ -667,49 +719,48 @@ impl Env {
             "{record:#?}\n{}",
             agent.log()
         );
-        self.assert_side(&self.since(&before), side, self.module.node.asks);
+        self.assert_plugin(&self.since(before), self.module.node.asks);
     }
 
-    /// Only `side` got requests: for `asks` first, each with the stored
-    /// credential; the plugin's go to its server and nowhere else.
-    fn assert_side(&self, traffic: &Traffic, side: Side, asks: &str) {
+    /// The plugin's requests: for `asks` first, each to its server and
+    /// nowhere else, with the credential the user stored with 0.9.x.
+    fn assert_plugin(&self, sent: &[String], asks: &str) {
         let m = self.module;
-        match side {
-            Side::Builtin => {
-                assert_eq!(traffic.plugin, Vec::<String>::new(), "{traffic:?}");
-                assert!(traffic.builtin[0].starts_with(asks), "{traffic:?}");
-                for line in &traffic.builtin {
-                    assert!(!line.starts_with("OUTSIDE"), "{line}");
-                    assert!(line.ends_with(&format!("\t{}", (m.sent)(m))), "{line}");
-                }
-            }
-            Side::Plugin => {
-                assert_eq!(traffic.builtin, Vec::<String>::new(), "{traffic:?}");
-                assert!(
-                    traffic.plugin[0].starts_with(&format!("{}{asks}", self.server)),
-                    "{traffic:?}"
-                );
-                for line in &traffic.plugin {
-                    assert!(line.starts_with(&format!("{}/", self.server)), "{line}");
-                    assert!(line.ends_with(&(m.logged)(m)), "{line}");
-                }
-            }
+        assert!(
+            sent.first()
+                .is_some_and(|first| first.starts_with(&format!("{}{asks}", self.server))),
+            "{sent:?}"
+        );
+        for line in sent {
+            assert!(line.starts_with(&format!("{}/", self.server)), "{line}");
+            assert!(line.ends_with(&(m.logged)(m)), "{line}");
         }
     }
-}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Side {
-    Builtin,
-    Plugin,
-}
-
-/// Requests each implementation made: `<target>\t<credential>` for the
-/// built-in, `<url>\t<credential header>` for the plugin.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct Traffic {
-    builtin: Vec<String>,
-    plugin: Vec<String>,
+    /// The legacy key and the workflow node are unavailable, with a reason
+    /// that contains `why`: running the action fails with it, the key
+    /// press fails, the workflow does not start (its node names it), the
+    /// agent keeps answering, and nothing is sent anywhere. The reason.
+    async fn assert_unavailable(&self, agent: &Agent, device: &DeviceId, why: &str) -> String {
+        let reason = agent.wait_unavailable(self.on_key, why).await;
+        let before = self.plugin_log().len();
+        let (name, status) = agent.press(device).await;
+        assert_eq!(name, self.module.key.name);
+        assert_eq!(status, ActionStatus::Failed);
+        let refused = agent
+            .request(Request::StartWorkflow {
+                workflow: self.workflow,
+            })
+            .await
+            .expect_err("the workflow does not start")
+            .to_string();
+        assert!(refused.contains(why), "{refused}");
+        let Response::Status { .. } = agent.ok(Request::GetStatus).await else {
+            panic!("the agent answers")
+        };
+        assert_eq!(self.since(before), Vec::<String>::new(), "nothing was sent");
+        reason
+    }
 }
 
 struct Agent {
@@ -840,21 +891,29 @@ impl Agent {
         }
     }
 
-    /// Runs the key's action until it is unavailable; why.
-    async fn wait_unavailable(&self, action: ActionInstanceId) -> String {
+    /// Runs the key's action until it is unavailable for a reason that
+    /// contains `why` (the routing settles a moment after a step); the
+    /// reason.
+    async fn wait_unavailable(&self, action: ActionInstanceId, why: &str) -> String {
         let deadline = Instant::now() + SETTLE;
         loop {
-            let why = match self.request(Request::RunAction { action }).await {
+            let reason = match self.request(Request::RunAction { action }).await {
                 Err(ClientError::Agent(error)) => Some(error.message),
                 Ok(Response::ActionResult { result }) if result.status == ActionStatus::Failed => {
                     Some(result.message)
                 }
                 Ok(_) | Err(_) => None,
             };
-            if let Some(why) = why {
-                return why;
+            if let Some(reason) = &reason
+                && reason.contains(why)
+            {
+                return reason.clone();
             }
-            assert!(Instant::now() < deadline, "still available\n{}", self.log());
+            assert!(
+                Instant::now() < deadline,
+                "not unavailable because of {why:?}: {reason:?}\n{}",
+                self.log()
+            );
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
@@ -950,18 +1009,24 @@ fn keys(items: &[String]) -> BTreeSet<String> {
     items.iter().cloned().collect()
 }
 
+/// Why the legacy types are unavailable while `module`'s migration waits.
+fn waits(module: &Module) -> String {
+    format!("`{}`) waits for your consent", module.plugin.id)
+}
+
 // ---------------------------------------------------------------- tests
 
-/// An alpha.3 user whose module talks to a server they entered upgrades
-/// to a build with plugins: the bundled plugin is installed and pinned,
-/// the settings and the server carried, and the credential **and the
-/// server** wait for the user's consent while the built-in keeps
-/// serving. Neither allows the other. Approved through IPC, the key and
-/// the workflow node run in the plugin, at exactly that server, with the
-/// imported credential. `deckpilot.db` is byte-identical, so a build
-/// without plugins still runs the built-in. The user disabling the plugin
-/// makes the legacy actions unavailable, with no fallback; uninstalling
-/// it and upgrading again does not bring it back.
+/// A 0.9.x user whose module talks to a server they entered upgrades to a
+/// build without the built-in: the bundled plugin is installed and
+/// pinned, the settings and the server carried, and the credential **and
+/// the server** wait for the user's consent; meanwhile the stored key and
+/// node are unavailable (nothing sent). Neither consent allows the other.
+/// Approved through IPC, the same key and workflow node run in the
+/// plugin, at exactly that server, with the imported credential.
+/// `deckpilot.db` is byte-identical; with plugins off nothing can run
+/// them (unavailable, saying where they come from now). The user
+/// disabling the plugin makes them unavailable again; uninstalling it and
+/// upgrading again does not bring it back.
 #[allow(clippy::too_many_lines)] // one upgrade, step by step
 async fn upgrade(module: &'static Module, server: &'static str) {
     let env = Env::new(
@@ -985,12 +1050,20 @@ async fn upgrade(module: &'static Module, server: &'static str) {
         .wait_listed(ipc::MigrationPhase::AwaitingConsent)
         .await;
     eprintln!(
-        "{} step 1: {:?}, route {:?}",
-        module.id, asked.phase, asked.route
+        "{} step 1: {:?}, route {:?}: {:?}",
+        module.id, asked.phase, asked.route, asked.route_reason
     );
     assert_eq!(asked.plugin, module.plugin.id);
     assert_eq!(asked.module_name, module.name);
-    assert_eq!(asked.route, MigrationRoute::Builtin);
+    // No built-in to fall back to: unavailable until the user decides.
+    assert_eq!(asked.route, MigrationRoute::PluginWithdrawn);
+    assert!(
+        asked
+            .route_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("waits for your consent")),
+        "{asked:?}"
+    );
     assert!(
         asked
             .aliases
@@ -1001,9 +1074,9 @@ async fn upgrade(module: &'static Module, server: &'static str) {
     // What waits: the credential and the server, always; and the declared
     // host the built-in did not talk to here (medium tier, not derived).
     let mut expected = vec![credential.clone(), slot.clone()];
-    if let Some(host) = module.host {
-        expected.push(format!("network:{host}"));
-        expected.push(format!("openUrl:{host}"));
+    if let Some((api, web)) = module.hosts {
+        expected.push(format!("network:{api}"));
+        expected.push(format!("openUrl:{web}"));
     }
     assert_eq!(waiting(&asked), keys(&expected), "{asked:?}");
     let item = |key: &str| asked.consent.iter().find(|i| i.key == key).unwrap();
@@ -1039,13 +1112,15 @@ async fn upgrade(module: &'static Module, server: &'static str) {
     drop(store);
     assert_eq!(env.allowed_servers(), [], "no server allowed");
 
-    // Meanwhile the built-in serves the key and the node.
+    // Meanwhile the stored key and node are unavailable, saying why.
     let device = agent.device().await;
-    env.press_until(&agent, &device, Side::Builtin).await;
-    env.run_node(&agent, Side::Builtin).await;
+    let why = env
+        .assert_unavailable(&agent, &device, &waits(module))
+        .await;
+    eprintln!("{} step 1: unavailable: {why}", module.id);
 
     // 2. Everything but the server: the credential's consent does not
-    // allow the server. The built-in keeps serving.
+    // allow the server. Still unavailable, nothing sent.
     let others: Vec<&str> = expected
         .iter()
         .filter(|k| **k != slot)
@@ -1058,10 +1133,12 @@ async fn upgrade(module: &'static Module, server: &'static str) {
         "{partly:?}"
     );
     assert_eq!(waiting(&partly), keys(std::slice::from_ref(&slot)));
+    assert_eq!(partly.route, MigrationRoute::PluginWithdrawn);
     assert_eq!(env.allowed_servers(), []);
     assert_eq!(env.plugin_store().credentials(&id).unwrap(), []);
-    env.press_until(&agent, &device, Side::Builtin).await;
-    assert_eq!(env.plugin_log(), Vec::<String>::new(), "the plugin sent");
+    env.assert_unavailable(&agent, &device, &waits(module))
+        .await;
+    assert_eq!(env.plugin_log(), Vec::<String>::new(), "nothing was sent");
 
     // 3. The server: allowed, exactly it, by this decision.
     let done = agent.decide(&[&slot], &[]).await;
@@ -1081,60 +1158,62 @@ async fn upgrade(module: &'static Module, server: &'static str) {
         )]
     );
     assert_eq!(env.plugin_store().credentials(&id).unwrap().len(), 1);
-    // The same key and node now run the plugin, at the user's server.
-    env.press_until(&agent, &device, Side::Plugin).await;
-    env.run_node(&agent, Side::Plugin).await;
+    // The same stored key and node now run the plugin, at the user's
+    // server.
+    env.press_until_served(&agent, &device).await;
+    env.run_node(&agent).await;
     agent.stop().await;
 
     // 4. Nothing an older app reads changed, byte for byte.
     assert_eq!(env.legacy(), before);
 
-    // 5. An older build (plugins off) on the same data: the built-in.
+    // 5. Plugins off on the same data: nothing can run them, and the
+    // reason says where they come from now.
     let agent = env.start(Start { plugins_off: true }).await;
     let device = agent.device().await;
-    env.press_until(&agent, &device, Side::Builtin).await;
-    env.run_node(&agent, Side::Builtin).await;
+    let why = env
+        .assert_unavailable(&agent, &device, "now comes from")
+        .await;
+    eprintln!("{} step 5: plugins off: {why}", module.id);
+    assert!(
+        why.contains(&format!("`{}`", module.key.action)) && why.contains(module.plugin.id),
+        "{why}"
+    );
     agent.stop().await;
 
     // 6. Upgrading again: still the plugin, nothing asked again.
     let agent = env.start(Start::default()).await;
     let device = agent.device().await;
-    env.press_until(&agent, &device, Side::Plugin).await;
+    env.press_until_served(&agent, &device).await;
     let info = agent.listed().await;
     assert_eq!(info.phase, ipc::MigrationPhase::CutOver, "{info:?}");
     assert_eq!(info.consent, []);
 
-    // 7. The user disables the plugin: unavailable, no fallback.
+    // 7. The user disables the plugin: unavailable, nothing to fall back
+    // to; enabled again, it serves again.
     agent
         .ok(Request::DisablePlugin {
             plugin: module.plugin.id.into(),
         })
         .await;
-    let why = agent.wait_unavailable(env.on_key).await;
+    let why = env
+        .assert_unavailable(
+            &agent,
+            &device,
+            &format!("`{}`) is disabled", module.plugin.id),
+        )
+        .await;
     eprintln!("{} step 7: disabled: {why}", module.id);
-    assert!(why.contains("disabled"), "{why}");
     let info = agent.listed().await;
     assert_eq!(info.route, MigrationRoute::PluginWithdrawn, "{info:?}");
-    let quiet = env.traffic();
-    let (_, status) = agent.press(&device).await;
-    assert_eq!(status, ActionStatus::Failed);
-    let refused = agent
-        .request(Request::StartWorkflow {
-            workflow: env.workflow,
+    agent
+        .ok(Request::EnablePlugin {
+            plugin: module.plugin.id.into(),
+            consent: Vec::new(),
         })
-        .await
-        .unwrap_err();
-    assert!(
-        refused
-            .to_string()
-            .contains(&format!("`{}`) is disabled", module.plugin.id)),
-        "{refused}"
-    );
-    assert_eq!(
-        env.since(&quiet),
-        Traffic::default(),
-        "neither implementation ran"
-    );
+        .await;
+    env.press_until_served(&agent, &device).await;
+    assert_eq!(agent.listed().await.route, MigrationRoute::Plugin);
 
     // 8. The user uninstalls it; an upgrade does not bring it back.
     agent
@@ -1143,18 +1222,22 @@ async fn upgrade(module: &'static Module, server: &'static str) {
             keep: deckpilot_ipc::plugins::PluginRetention::default(),
         })
         .await;
-    agent.wait_unavailable(env.on_key).await;
+    agent.wait_unavailable(env.on_key, module.plugin.id).await;
     agent.stop().await;
     env.stage();
     let agent = env.start(Start::default()).await;
-    agent.wait_unavailable(env.on_key).await;
+    let device = agent.device().await;
+    env.assert_unavailable(&agent, &device, module.plugin.id)
+        .await;
     assert_eq!(agent.plugin_state().await, None, "{}", agent.log());
     let info = agent.listed().await;
     assert_eq!(info.route, MigrationRoute::PluginWithdrawn, "{info:?}");
-    let quiet = env.traffic();
-    let (_, status) = agent.press(&agent.device().await).await;
-    assert_eq!(status, ActionStatus::Failed);
-    assert_eq!(env.since(&quiet), Traffic::default());
+    assert!(
+        info.route_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("uninstalled")),
+        "{info:?}"
+    );
     agent.stop().await;
     assert_eq!(
         env.plugin_store().tombstone(&id).unwrap().unwrap().decision,
@@ -1166,18 +1249,27 @@ async fn upgrade(module: &'static Module, server: &'static str) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_alpha3_user_of_a_self_managed_gitlab_moves_to_the_plugin_after_consent() {
+async fn a_0_9_user_of_a_self_managed_gitlab_moves_to_the_plugin_after_consent() {
     upgrade(&GITLAB, OWN_GITLAB).await;
 }
 
+/// GitHub Enterprise Server (the `apiUrl` slot of `deckpilot.github`):
+/// the same as a self-managed GitLab; api.github.com and github.com, which
+/// the built-in did not talk to here, are asked for too, never derived.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_alpha3_jira_user_moves_to_the_plugin_after_consent() {
+async fn a_0_9_github_enterprise_user_moves_to_the_plugin_after_consent() {
+    upgrade(&GITHUB, OWN_GITHUB).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_0_9_jira_user_moves_to_the_plugin_after_consent() {
     upgrade(&JIRA, OWN_JIRA).await;
 }
 
 /// A GitLab.com user: the declared host and its pages are derived (the
 /// built-in used them), no server is asked about, and the token and the
-/// origin slot (high tier: it may be on a private network) wait.
+/// origin slot (high tier: it may be on a private network) wait, the
+/// legacy types unavailable meanwhile.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_gitlab_com_user_is_asked_for_the_token_only_once_and_no_server() {
     let api = "https://gitlab.com/api/v4";
@@ -1223,21 +1315,23 @@ async fn a_gitlab_com_user_is_asked_for_the_token_only_once_and_no_server() {
         ]
     );
     let device = agent.device().await;
-    env.press_until(&agent, &device, Side::Builtin).await;
+    env.assert_unavailable(&agent, &device, &waits(&GITLAB))
+        .await;
     let done = agent
         .decide(&["credentials:token", "network:user-origin:apiUrl"], &[])
         .await;
     assert_eq!(done.phase, ipc::MigrationPhase::CutOver, "{done:?}");
     assert_eq!(env.allowed_servers(), [], "GitLab.com needs no consent");
-    env.press_until(&agent, &device, Side::Plugin).await;
-    env.run_node(&agent, Side::Plugin).await;
+    env.press_until_served(&agent, &device).await;
+    env.run_node(&agent).await;
     agent.stop().await;
 }
 
 /// A GitLab on a private network: reaching it is an item of its own.
-/// Declined, the built-in keeps serving, across restarts, until Retry;
-/// allowed together with the server, the plugin serves, and the consent
-/// records the private network for exactly that server.
+/// Declined, the legacy types stay unavailable (saying the user
+/// declined), across restarts, until Retry; allowed together with the
+/// server, the plugin serves, and the consent records the private network
+/// for exactly that server.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_private_gitlab_needs_its_own_consent_to_the_private_network() {
     let server = "https://gitlab.internal/api/v4";
@@ -1263,6 +1357,9 @@ async fn a_private_gitlab_needs_its_own_consent_to_the_private_network() {
     assert_eq!(origin.origin, server);
     let all: Vec<String> = waiting(&asked).into_iter().collect();
     assert!(all.contains(&slot.to_owned()) && all.contains(&private.to_owned()));
+    let device = agent.device().await;
+    env.assert_unavailable(&agent, &device, &waits(&GITLAB))
+        .await;
 
     // Everything allowed but the private network: declined.
     let others: Vec<&str> = all
@@ -1271,21 +1368,40 @@ async fn a_private_gitlab_needs_its_own_consent_to_the_private_network() {
         .filter(|k| *k != private)
         .collect();
     let declined = agent.decide(&others, &[private]).await;
-    eprintln!("declined: {:?}: {:?}", declined.phase, declined.reason);
+    eprintln!(
+        "declined: {:?}: {:?}; route {:?}: {:?}",
+        declined.phase, declined.reason, declined.route, declined.route_reason
+    );
     assert_eq!(declined.phase, ipc::MigrationPhase::NotEligible);
     assert!(declined.can_retry);
-    assert_eq!(declined.route, MigrationRoute::Builtin);
+    assert!(
+        declined
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("its keys are unavailable until you ask again")),
+        "{declined:?}"
+    );
+    assert_eq!(declined.route, MigrationRoute::PluginWithdrawn);
+    assert!(
+        declined
+            .route_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("you declined what deckpilot.gitlab needs")),
+        "{declined:?}"
+    );
     assert_eq!(env.allowed_servers(), []);
-    let device = agent.device().await;
-    env.press_until(&agent, &device, Side::Builtin).await;
+    env.assert_unavailable(&agent, &device, GITLAB.plugin.id)
+        .await;
     agent.stop().await;
 
     // Still declined at the next start; nothing asked, nothing sent.
     let agent = env.start(Start::default()).await;
     let info = agent.listed().await;
     assert_eq!(info.phase, ipc::MigrationPhase::NotEligible, "{info:?}");
+    assert_eq!(info.route, MigrationRoute::PluginWithdrawn, "{info:?}");
     let device = agent.device().await;
-    env.press_until(&agent, &device, Side::Builtin).await;
+    env.assert_unavailable(&agent, &device, GITLAB.plugin.id)
+        .await;
     assert_eq!(env.plugin_log(), Vec::<String>::new());
 
     // Retry asks again; the server and its private network, together.
@@ -1299,19 +1415,23 @@ async fn a_private_gitlab_needs_its_own_consent_to_the_private_network() {
         env.allowed_servers(),
         [(server.to_owned(), true, "user:migration:gitlab".to_owned())]
     );
-    env.press_until(&agent, &device, Side::Plugin).await;
+    env.press_until_served(&agent, &device).await;
     agent.stop().await;
     assert_eq!(env.legacy(), before);
 }
 
-/// What a plugin can never reach (plain `http`) keeps the built-in:
-/// nothing installed, nothing asked. And a computer that does not use
-/// the module (a fresh install) gets no migration-class plugin at all.
+/// What a plugin can never reach (plain `http`): nothing installed,
+/// nothing asked, and with no built-in left the legacy types are
+/// unavailable, saying where they come from now and that the plugin is
+/// not installed; nothing is sent. And
+/// a computer that does not use the module (a fresh install) gets no
+/// migration-class plugin at all.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unreachable_servers_and_unused_modules_stay_on_the_builtin() {
+async fn unreachable_servers_and_unused_modules_install_nothing() {
     for (module, saved) in [
         (&GITLAB, "http://gitlab.example.com/api/v4"),
         (&JIRA, "http://jira.example.com"),
+        (&GITHUB, "http://ghe.example.com/api/v3"),
     ] {
         let env = Env::new(
             &format!("plugins-cutover-{}-http", module.id),
@@ -1324,26 +1444,38 @@ async fn unreachable_servers_and_unused_modules_stay_on_the_builtin() {
         let before = env.legacy();
         let agent = env.start(Start::default()).await;
         let info = agent.wait_listed(ipc::MigrationPhase::NotEligible).await;
-        eprintln!("{}: {:?}", module.id, info.reason);
+        eprintln!(
+            "{}: {:?}; route {:?}: {:?}",
+            module.id, info.reason, info.route, info.route_reason
+        );
         let reason = info.reason.as_deref().unwrap();
         assert!(
             reason.contains("is not a server a plugin can reach"),
             "{info:?}"
         );
         assert!(!reason.contains("example.com"), "{reason}");
-        assert_eq!(info.route, MigrationRoute::Builtin);
+        // Routed to the plugin: there is nothing else to route to.
+        assert_eq!(info.route, MigrationRoute::Plugin);
         assert_eq!(info.consent, []);
         assert_eq!(agent.plugin_state().await, None, "never installed");
         let device = agent.device().await;
-        env.press_until(&agent, &device, Side::Builtin).await;
-        env.run_node(&agent, Side::Builtin).await;
+        let why = env
+            .assert_unavailable(&agent, &device, "install it from the Marketplace")
+            .await;
+        eprintln!("{}: unavailable: {why}", module.id);
+        assert!(
+            why.contains(&format!(
+                "`{}` now comes from `{}`",
+                module.key.action, module.plugin.id
+            )),
+            "{why}"
+        );
         agent.stop().await;
         assert_eq!(env.legacy(), before);
         assert_eq!(env.plugin_log(), Vec::<String>::new(), "the plugin ran");
     }
     // A fresh data directory: the module is unused, so its
-    // migration-class plugin is not installed and its legacy action types
-    // stay with the built-in.
+    // migration-class plugin is not installed.
     for module in [&GITLAB, &JIRA] {
         let env = Env::new(
             &format!("plugins-cutover-{}-fresh", module.id),
@@ -1355,12 +1487,16 @@ async fn unreachable_servers_and_unused_modules_stay_on_the_builtin() {
         );
         let agent = env.start(Start::default()).await;
         let info = agent.wait_listed(ipc::MigrationPhase::NotEligible).await;
+        eprintln!(
+            "{} fresh: {:?}; route {:?}: {:?}; aliases {:?}",
+            module.id, info.reason, info.route, info.route_reason, info.aliases
+        );
         assert_eq!(
             info.reason.as_deref(),
             Some("the built-in module is not used on this computer"),
             "{info:?}"
         );
-        assert_eq!(info.route, MigrationRoute::Builtin);
+        assert_eq!(info.route, MigrationRoute::Plugin);
         assert_eq!(agent.plugin_state().await, None, "never installed");
         assert!(
             info.aliases.iter().any(|a| a.legacy == module.key.action),

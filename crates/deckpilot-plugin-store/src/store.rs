@@ -483,6 +483,21 @@ impl PluginStore {
         crate::data::storage_keys(self.connection(), id, None)
     }
 
+    /// The host-held value `key` (schema 6), if one is stored: never a
+    /// plugin's, and never handed to one.
+    pub fn host_setting(&self, key: &str) -> Result<Option<serde_json::Value>> {
+        let text: Option<String> = self
+            .connection()
+            .query_row(
+                "SELECT value_json FROM host_settings WHERE key = ?1",
+                [key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        text.map(|t| serde_json::from_str(&t).map_err(StoreError::record))
+            .transpose()
+    }
+
     /// The migration record of built-in module `module_id`, if any.
     pub fn module_migration(&self, module_id: &str) -> Result<Option<ModuleMigration>> {
         load_migration(self.connection(), module_id)

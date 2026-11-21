@@ -216,20 +216,35 @@ fn changing(plugin: &str) -> ClientError {
 
 /// The installed plugins in full, as `listPlugins` has them, read with
 /// paged answers. Needs an agent with [`plugins::feature::PAGED_ANSWERS`].
+/// A plugin uninstalled between the list and its actions is no longer
+/// installed: it is left out, and the others are still listed.
 pub async fn list_plugins(client: &mut AgentClient) -> Result<Vec<PluginSummary>, ClientError> {
     'attempt: for _ in 0..ATTEMPTS {
-        let Response::Plugins { mut plugins } = client.request(Request::ListPluginsPaged).await?
-        else {
+        let Response::Plugins { plugins } = client.request(Request::ListPluginsPaged).await? else {
             return Err(unexpected("listPluginsPaged"));
         };
-        for summary in &mut plugins {
-            if !complete(client, summary, None).await? {
-                continue 'attempt;
+        let mut listed = Vec::with_capacity(plugins.len());
+        for mut summary in plugins {
+            match complete(client, &mut summary, None).await {
+                Ok(true) => listed.push(summary),
+                Ok(false) => continue 'attempt,
+                Err(error) if uninstalled(&error) => {}
+                Err(error) => return Err(error),
             }
         }
-        return Ok(plugins);
+        return Ok(listed);
     }
     Err(changing("a plugin"))
+}
+
+/// Whether the agent refused because the plugin is not installed (any
+/// more).
+fn uninstalled(error: &ClientError) -> bool {
+    matches!(
+        error,
+        ClientError::Agent(IpcError { reason: Some(reason), .. })
+            if reason == plugins::reason::NOT_INSTALLED
+    )
 }
 
 /// One installed plugin in full, as `getPlugin` has it (icon included),
@@ -461,6 +476,21 @@ mod tests {
     use super::*;
     use crate::plugins::{PluginActionInfo, PluginOrigin, PluginState};
 
+    #[test]
+    fn only_a_plugin_that_is_gone_is_left_out_of_the_list() {
+        let gone = IpcError::new(ErrorCode::Failed, "plugin acme.x is not installed")
+            .with_reason(plugins::reason::NOT_INSTALLED);
+        assert!(uninstalled(&ClientError::Agent(gone)));
+        let other = IpcError::new(ErrorCode::Failed, "the store is locked")
+            .with_reason(plugins::reason::ANSWER_TOO_LARGE);
+        assert!(!uninstalled(&ClientError::Agent(other)));
+        assert!(!uninstalled(&ClientError::Agent(IpcError::new(
+            ErrorCode::Failed,
+            "no reason"
+        ))));
+        assert!(!uninstalled(&ClientError::Closed));
+    }
+
     fn action(id: &str, outputs: usize) -> PluginActionEntry {
         let definition: deckpilot_core::ActionType = serde_json::from_value(serde_json::json!({
             "id": format!("acme.big.{id}"),
@@ -510,6 +540,8 @@ mod tests {
             navigation: Vec::new(),
             installed_for: None,
             visual_assets: Vec::new(),
+            status_items: Vec::new(),
+            dashboard_cards: Vec::new(),
         }
     }
 

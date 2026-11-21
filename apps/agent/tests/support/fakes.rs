@@ -10,11 +10,9 @@ use std::path::{Path, PathBuf};
 pub fn program(dir: &Path, name: &str, unix: &str, windows: &str) -> PathBuf {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
         let _ = windows;
         let path = dir.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{unix}")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        write_script(&path, &format!("#!/bin/sh\n{unix}"));
         path
     }
     #[cfg(windows)]
@@ -28,6 +26,34 @@ pub fn program(dir: &Path, name: &str, unix: &str, windows: &str) -> PathBuf {
         .unwrap();
         path
     }
+}
+
+/// Writes the executable script `path` (Unix) without this process ever
+/// holding it open for writing. A child process that another test starts
+/// at that moment shares every descriptor of this process until it runs
+/// its program, and starting a script while a writable descriptor of it
+/// is open anywhere fails ("text file busy" on Linux). Here only a helper
+/// shell writes the file, and it has exited when this returns.
+#[cfg(unix)]
+pub fn write_script(path: &Path, script: &str) {
+    use std::io::Write as _;
+    let mut writer = std::process::Command::new("/bin/sh")
+        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    writer
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(script.as_bytes())
+        .unwrap();
+    assert!(
+        writer.wait().unwrap().success(),
+        "{} not written",
+        path.display()
+    );
 }
 
 /// The argument lists a fake written with [`log_arguments`] was called

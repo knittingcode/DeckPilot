@@ -89,7 +89,8 @@
       "trigger": "klawisz {{key}} otwiera folder „{{folder}}” wyłącznie pojedynczym naciśnięciem",
       "replaced": "klawisz {{key}} otwiera folder „{{folder}}”; wyczyść klawisz albo usuń folder zamiast go zastępować",
       "recovered": "odzyskane gesty można tylko zachować, przenieść na wolny klawisz albo odrzucić"
-    }
+    },
+    "pluginFeatureOff": "wtyczka {{feature}} jest wyłączona: włącz ją w Ustawieniach › Wtyczki"
   },
   "storage": {
     "database": "błąd bazy danych: {{detail}}",

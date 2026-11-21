@@ -46,6 +46,9 @@ pub enum IssueCode {
     Conflict,
     /// A file is missing from, or not allowed in, the package.
     PackageFile,
+    /// A kind only DeckPilot's own plugins shipped inside the app may
+    /// declare (plugin API 1.9, the first-party publisher gate).
+    FirstPartyOnly,
     /// Review advice; never an error.
     Review,
 }
@@ -116,7 +119,9 @@ pub enum ManifestError {
     #[error(
         "permissions[{index}]: plugins cannot be granted `{kind}`. Plugin API 1 has no file \
          system, process, clipboard, raw device or UI access; the kinds are network, credentials, \
-         notifications, profile, variables, storage, openUrl, background and device"
+         notifications, profile, variables, storage, openUrl, background, device and dialogs \
+         (and, for DeckPilot's own bundled plugins, tools, resources, projectContext and \
+         hostViews)"
     )]
     ForbiddenPermission { index: usize, kind: String },
     #[error(

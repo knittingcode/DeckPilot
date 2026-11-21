@@ -24,6 +24,7 @@ import { api } from "@/lib/api"
 import { failureMessage, toastFailure } from "@/lib/failure"
 import { creatableTypes } from "@/lib/modules"
 import { pluginTypeUnavailable, typeAvailability } from "@/lib/plugin-actions"
+import { PROJECTS_PLUGIN, pluginFeatures } from "@/lib/plugin-features"
 import { buildParameters, initialValue, missingRequired } from "@/lib/parameters"
 import type {
   ActionInstance,
@@ -97,7 +98,11 @@ export function ActionEditor({
   // available now.
   const offered = (m: ModuleInfo | undefined) =>
     creatableTypes(m?.actionTypes ?? []).filter((type) => !m || !pluginTypeUnavailable(m, type.id))
-  const projectsEnabled = modules.some((m) => m.id === "projects" && m.enabled)
+  // Project placeholders while the project context provider (the Projects
+  // plugin) is active.
+  const projectsEnabled = pluginFeatures(modules.filter((m) => m.plugin)).isPluginActive(
+    PROJECTS_PLUGIN,
+  )
   const usable = modules.filter((m) => m.enabled && m.supported && offered(m).length > 0)
   const chosenType = action?.actionType ?? initialType
   const availability = chosenType ? typeAvailability(modules, chosenType) : undefined
@@ -332,7 +337,7 @@ export function ActionEditor({
           }}
           placeholder={t("actions:editor.keyLabelPlaceholder")}
         />
-        {/* Project placeholders come with the Projects module. */}
+        {/* Project placeholders come with the Projects plugin. */}
         {projectsEnabled && (
           <p className="text-xs text-muted-foreground">
             {t("actions:editor.projectPlaceholders", {

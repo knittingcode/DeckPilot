@@ -12,12 +12,21 @@ use std::fmt;
 
 use deckpilot_plugin_abi::HttpMethod;
 use deckpilot_plugin_abi::capability::{AuthScheme, is_credential_key};
+use deckpilot_plugin_abi::privileged::Tool;
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::origin::{Origin, OriginError, UserOrigin};
 
 /// Kinds that a plugin can never be granted in API 1.
+///
+/// `projectContext` left this list with plugin API 1.9 (X6 in
+/// `docs/marketplace/module-migration.md` §7), behind the first-party
+/// gate: the manifest rules accept it only for a plugin shipped inside the
+/// app, the store records it only from that source, and the record is
+/// [`ApprovedPermission::ProjectContext`]. A raw process, a shell, the file
+/// system, the workflows engine and plugin UI stay here for every
+/// publisher.
 pub const NEVER_GRANTABLE: &[&str] = &[
     "filesystem",
     "fs",
@@ -28,7 +37,6 @@ pub const NEVER_GRANTABLE: &[&str] = &[
     "shell",
     "clipboard",
     "machineResources",
-    "projectContext",
     "rawDevice",
     "brightness",
     "firmware",
@@ -100,6 +108,64 @@ pub enum ApprovedPermission {
         #[serde(default)]
         open_url: bool,
     },
+    /// Plugin API 1.9 (X3; first-party bundled plugins only, which the
+    /// agent alone decides): `tool.run` of the user's own `git` or
+    /// `docker`. `network` is `tools:git:network` (`ls-remote`), `modify`
+    /// is `tools:docker:modify` (start, stop, restart), each consented to
+    /// on its own. The host's policy checks every argument array.
+    Tool {
+        tool: Tool,
+        #[serde(default)]
+        network: bool,
+        #[serde(default)]
+        modify: bool,
+    },
+    /// Plugin API 1.9 (X2, X4): `resource.resolve` (labels), with
+    /// `paths` the bound path, with `open` `resource.open`.
+    Resources {
+        #[serde(default)]
+        paths: bool,
+        #[serde(default)]
+        open: bool,
+    },
+    /// Plugin API 1.9 (X5): `url.openParam`.
+    OpenUrlFromParams {},
+    /// Plugin API 1.9 (X6): `project.current` and `project.list`; with
+    /// `select`, `project.select` and `project.cycle`.
+    ProjectContext {
+        #[serde(default)]
+        select: bool,
+    },
+    /// `profile.read` (X9) with the declared scopes.
+    Profile { read: BTreeSet<ProfileScope> },
+}
+
+/// What `profile.read` may return.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProfileScope {
+    /// The profile's name.
+    Profile,
+    /// The active project's id, key and name.
+    Project,
+}
+
+/// One granted tool (plugin API 1.9).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ToolGrant {
+    /// `tools:git:network`.
+    pub network: bool,
+    /// `tools:docker:modify`.
+    pub modify: bool,
+}
+
+/// The granted resource operations (plugin API 1.9).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResourceGrant {
+    /// `resources:paths`.
+    pub paths: bool,
+    /// `resources:open`.
+    pub open: bool,
 }
 
 /// Storage every plugin has without a `storage` grant (design §5.2).
@@ -168,6 +234,16 @@ pub struct Grants {
     pub(crate) dialogs: bool,
     /// Origins the user entered and consented to (G2).
     pub(crate) user_origins: Vec<UserOriginGrant>,
+    /// Plugin API 1.9: `tool.run` per tool.
+    pub(crate) tools: BTreeMap<Tool, ToolGrant>,
+    /// Plugin API 1.9: `resource.*`.
+    pub(crate) resources: Option<ResourceGrant>,
+    /// Plugin API 1.9: `url.openParam`.
+    pub(crate) open_url_from_params: bool,
+    /// Plugin API 1.9: `project.*`; `Some(true)` with select and cycle.
+    pub(crate) project_context: Option<bool>,
+    /// `profile.read` scopes.
+    pub(crate) profile: BTreeSet<ProfileScope>,
     /// Credential origins withheld because they have no network grant
     /// (revoked after consent), by slot key. A slot left with no origin is
     /// not in [`Grants::credentials`] at all: it is unusable until the
@@ -321,6 +397,44 @@ impl Grants {
                         open_url: *open_url,
                     });
                 }
+                ApprovedPermission::Tool {
+                    tool,
+                    network,
+                    modify,
+                } => {
+                    // Each sub-grant exists on its own tool only.
+                    if (*network && *tool != Tool::Git) || (*modify && *tool != Tool::Docker) {
+                        return Err(GrantError::ToolSubGrant);
+                    }
+                    let grant = ToolGrant {
+                        network: *network,
+                        modify: *modify,
+                    };
+                    if g.tools.insert(*tool, grant).is_some() {
+                        return Err(GrantError::Duplicate);
+                    }
+                }
+                ApprovedPermission::Resources { paths, open } => {
+                    let grant = ResourceGrant {
+                        paths: *paths,
+                        open: *open,
+                    };
+                    if g.resources.replace(grant).is_some() {
+                        return Err(GrantError::Duplicate);
+                    }
+                }
+                ApprovedPermission::OpenUrlFromParams {} => g.open_url_from_params = true,
+                ApprovedPermission::ProjectContext { select } => {
+                    if g.project_context.replace(*select).is_some() {
+                        return Err(GrantError::Duplicate);
+                    }
+                }
+                ApprovedPermission::Profile { read } => {
+                    if read.is_empty() || !g.profile.is_empty() {
+                        return Err(GrantError::Malformed);
+                    }
+                    g.profile.clone_from(read);
+                }
                 ApprovedPermission::Storage { quota_kb } => {
                     let bytes = quota_kb.saturating_mul(1024);
                     if bytes <= DEFAULT_STORAGE_QUOTA_BYTES || bytes > MAX_STORAGE_QUOTA_BYTES {
@@ -422,6 +536,21 @@ impl Grants {
         self.dialogs
     }
 
+    /// The granted tool `tool` (plugin API 1.9).
+    pub fn tool(&self, tool: Tool) -> Option<ToolGrant> {
+        self.tools.get(&tool).copied()
+    }
+
+    /// The granted resource operations (plugin API 1.9).
+    pub fn resources(&self) -> Option<ResourceGrant> {
+        self.resources
+    }
+
+    /// The `profile.read` scopes.
+    pub fn profile_scopes(&self) -> impl Iterator<Item = ProfileScope> + '_ {
+        self.profile.iter().copied()
+    }
+
     /// The plugin's storage quota: the granted one, or the default.
     pub fn storage_quota(&self) -> StorageQuota {
         StorageQuota {
@@ -447,6 +576,11 @@ pub enum GrantError {
     /// A user origin on a private network without the user's consent to
     /// reach it there.
     PrivateNetworkNotGranted,
+    /// `network` on a tool other than git, or `modify` on one other than
+    /// docker.
+    ToolSubGrant,
+    /// A kind of plugin API 1.9 granted twice.
+    Duplicate,
 }
 
 impl fmt::Display for GrantError {
@@ -467,6 +601,10 @@ impl fmt::Display for GrantError {
             Self::PrivateNetworkNotGranted => {
                 f.write_str("user origin on a private network without consent")
             }
+            Self::ToolSubGrant => {
+                f.write_str("tool sub-grant on the wrong tool (network is git's, modify docker's)")
+            }
+            Self::Duplicate => f.write_str("permission granted twice"),
         }
     }
 }

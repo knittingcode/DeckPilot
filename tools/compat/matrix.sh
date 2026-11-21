@@ -167,12 +167,15 @@ case "$status" in
 esac
 stop_agents
 
-# 4. The agent of this commit upgrades the old release's database.
+# 4. The agent of this commit upgrades the old release's database. The
+# active project must survive in the database; the agent reports it only
+# while the Projects plugin provides a project context (since 0.10.0 the
+# projects feature is a plugin, and this agent runs without plugins).
 start_agent "$NEW_BIN" "$old_data"
 "$NEW_BIN/deckpilot-dev" validation unlock "$old_data" >/dev/null
-status=$(status_of "$NEW_BIN" "$old_data")
+status="$(status_of "$NEW_BIN" "$old_data") $("$NEW_BIN/deckpilot-dev" validation stored "$old_data" 2>&1)"
 case "$status" in
-  *"profiles=3"*"active_project=SHOP"*) result "$NEW_VERSION agent  -> $OLD_VERSION database (upgrade)" ok "$status" ;;
+  *"profiles=3"*"stored_active_project=SHOP"*) result "$NEW_VERSION agent  -> $OLD_VERSION database (upgrade)" ok "$status" ;;
   *) result "$NEW_VERSION agent  -> $OLD_VERSION database (upgrade)" FAIL "$status" ;;
 esac
 stop_agents

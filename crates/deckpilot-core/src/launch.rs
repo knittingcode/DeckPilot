@@ -8,12 +8,18 @@
 //! A [`Launcher`] runs a plan; modules receive one so tests can record
 //! plans instead of opening windows.
 //!
+//! [`editor_plan`] opens a file or folder in an editor at a line, with the
+//! arguments each known [`Editor`] takes, and [`url_plan`] a page in the
+//! default or a given browser. The `workspace` module and the plugin
+//! host's `resource.open` (plugin API 1.9) share them; the program is
+//! always an application the user bound, never one a plugin names.
+//!
 //! Opened programs are independent of DeckPilot: they are not stopped when
 //! a workflow is cancelled and are never ended with it.
 
 use std::fmt;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -199,6 +205,201 @@ fn direct(application: &str, args: Vec<String>) -> LaunchPlan {
     }
 }
 
+/// Highest line or column an editor is opened at.
+pub const MAX_POSITION: i64 = 10_000_000;
+
+/// Highest line or column a plugin's `resource.open` takes (the security
+/// review of `docs/marketplace/module-migration.md` §7 X4: 1 to
+/// 1,000,000), below the built-in's [`MAX_POSITION`]. The `workspace`
+/// aliases cap `line` and `column` there (`alias::ParamRule::AtMost`).
+pub const PLUGIN_MAX_POSITION: i64 = 1_000_000;
+
+/// Error codes of the editor plans, as [`crate::ActionResult::code`].
+pub mod codes {
+    /// A line or column that is out of range, or a column without a line.
+    pub const INVALID_POSITION: &str = "invalid-position";
+}
+
+/// Editors whose way of opening a file at a line is known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Editor {
+    /// Visual Studio Code: `--goto file:line:column`.
+    VsCode,
+    /// Cursor: like Visual Studio Code.
+    Cursor,
+    /// IDEs by `JetBrains` (IDEA and the others): `--line N --column M file`.
+    JetBrains,
+    /// Zed: `file:line:column`.
+    Zed,
+    /// Sublime Text: `file:line:column`.
+    Sublime,
+    /// Anything else: the file is opened with the application, without a
+    /// line.
+    Other,
+}
+
+/// The names of [`Editor`]s, as stored in parameters.
+pub const EDITORS: [&str; 6] = ["vscode", "cursor", "jetbrains", "zed", "sublime", "other"];
+
+impl Editor {
+    /// The editor named `value`; [`Editor::Other`] for any other name.
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "vscode" => Self::VsCode,
+            "cursor" => Self::Cursor,
+            "jetbrains" => Self::JetBrains,
+            "zed" => Self::Zed,
+            "sublime" => Self::Sublime,
+            _ => Self::Other,
+        }
+    }
+
+    /// The editor's name, one of [`EDITORS`].
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::VsCode => "vscode",
+            Self::Cursor => "cursor",
+            Self::JetBrains => "jetbrains",
+            Self::Zed => "zed",
+            Self::Sublime => "sublime",
+            Self::Other => "other",
+        }
+    }
+
+    /// The arguments that open `path` at `position`, or `None` when the
+    /// editor has no known convention.
+    pub fn arguments(self, path: &Path, position: Position) -> Option<Vec<String>> {
+        let file = path.to_string_lossy();
+        let located = match position.column {
+            Some(column) => format!("{file}:{}:{column}", position.line),
+            None => format!("{file}:{}", position.line),
+        };
+        match self {
+            Self::VsCode | Self::Cursor => Some(vec!["--goto".into(), located]),
+            Self::Zed | Self::Sublime => Some(vec![located]),
+            Self::JetBrains => {
+                let mut args = vec!["--line".into(), position.line.to_string()];
+                if let Some(column) = position.column {
+                    args.extend(["--column".into(), column.to_string()]);
+                }
+                args.push(file.into_owned());
+                Some(args)
+            }
+            Self::Other => None,
+        }
+    }
+}
+
+/// A line and optional column, both counted from 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Position {
+    pub line: u32,
+    pub column: Option<u32>,
+}
+
+impl Position {
+    /// Checks a line and column: within 1..=[`MAX_POSITION`], and a column
+    /// only with a line.
+    pub fn new(
+        line: Option<i64>,
+        column: Option<i64>,
+    ) -> Result<Option<Self>, crate::ActionResult> {
+        let invalid =
+            |message: String| crate::ActionResult::error(codes::INVALID_POSITION, message);
+        let check = |value: i64, what: &str| {
+            u32::try_from(value)
+                .ok()
+                .filter(|v| (1..=MAX_POSITION).contains(&i64::from(*v)))
+                .ok_or_else(|| invalid(format!("the {what} must be between 1 and {MAX_POSITION}")))
+        };
+        match (line, column) {
+            (None, None) => Ok(None),
+            (None, Some(_)) => Err(invalid("a column needs a line".into())),
+            (Some(line), column) => Ok(Some(Self {
+                line: check(line, "line")?,
+                column: column.map(|c| check(c, "column")).transpose()?,
+            })),
+        }
+    }
+}
+
+/// An application value that names a command-line program by path (such
+/// as `/usr/local/bin/code`) rather than an application bundle, a bundle
+/// identifier or a `.desktop` id.
+fn is_command_line_tool(application: &str) -> bool {
+    let extension = Path::new(application)
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase());
+    application.contains(['/', '\\']) && !matches!(extension.as_deref(), Some("app" | "desktop"))
+}
+
+/// How `application` opens `path`, at `position` when given and the
+/// editor knows how. Returns the plan and whether the position is passed.
+///
+/// A command-line tool is started directly with the arguments on every
+/// system, so the line reaches an editor that is already running (on
+/// macOS, `open -a … --args` only passes arguments to an editor that is
+/// not running yet).
+pub fn editor_plan(
+    os: Os,
+    editor: Editor,
+    application: &str,
+    path: &Path,
+    position: Option<Position>,
+) -> Result<(LaunchPlan, bool), LaunchError> {
+    let arguments = position.and_then(|p| editor.arguments(path, p));
+    let Some(arguments) = arguments else {
+        let plan = plan(
+            os,
+            &OpenTarget::PathWith {
+                path: path.to_path_buf(),
+                application: application.to_owned(),
+            },
+        )?;
+        return Ok((plan, false));
+    };
+    if os == Os::Other {
+        return Err(LaunchError::Unsupported(
+            "opening is not supported on this operating system".into(),
+        ));
+    }
+    if is_command_line_tool(application) {
+        return Ok((
+            LaunchPlan {
+                program: application.to_owned(),
+                args: arguments,
+                wait: false,
+            },
+            true,
+        ));
+    }
+    let plan = plan(
+        os,
+        &OpenTarget::Application {
+            application: application.to_owned(),
+            arguments,
+        },
+    )?;
+    Ok((plan, true))
+}
+
+/// How `url` (validated by the caller) is opened: in the default browser,
+/// or in `browser` (an application resource value).
+pub fn url_plan(os: Os, url: &str, browser: Option<&str>) -> Result<LaunchPlan, LaunchError> {
+    match browser {
+        None => plan(os, &OpenTarget::Url(url.to_owned())),
+        // `open -a Browser <url>` on macOS, `<browser> <url>` elsewhere:
+        // the page reaches a browser that is already running.
+        Some(browser) => plan(
+            os,
+            &OpenTarget::PathWith {
+                path: url.into(),
+                application: browser.to_owned(),
+            },
+        ),
+    }
+}
+
 /// Runs launch plans.
 pub trait Launcher: Send + Sync + fmt::Debug {
     fn launch(&self, plan: &LaunchPlan) -> Result<(), LaunchError>;
@@ -376,6 +577,34 @@ mod tests {
         for target in [url, exe] {
             assert!(!target.program.to_lowercase().contains("cmd"));
         }
+    }
+
+    #[test]
+    fn editor_names_round_trip_and_plans_never_start_a_shell() {
+        for name in EDITORS {
+            assert_eq!(Editor::parse(name).name(), name);
+        }
+        assert_eq!(Editor::parse("notepad"), Editor::Other);
+        let file = Path::new("/src/shop/main.rs");
+        let at = Some(Position {
+            line: 3,
+            column: Some(4),
+        });
+        for os in [Os::MacOs, Os::Linux, Os::Windows] {
+            for name in EDITORS {
+                let (plan, _) =
+                    editor_plan(os, Editor::parse(name), "/usr/bin/code", file, at).unwrap();
+                assert!(
+                    !plan.program.to_lowercase().contains("cmd"),
+                    "{os:?} {name}"
+                );
+                assert!(!plan.program.ends_with("sh"), "{os:?} {name}");
+            }
+        }
+        assert_eq!(
+            Position::new(None, Some(1)).unwrap_err().code.as_deref(),
+            Some(codes::INVALID_POSITION)
+        );
     }
 
     #[test]

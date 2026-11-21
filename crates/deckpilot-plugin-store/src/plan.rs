@@ -201,7 +201,7 @@ impl PluginManager {
                     if activate {
                         let missing: Vec<GrantKey> = declared
                             .keys()
-                            .filter(|k| !consent.keys.contains(*k))
+                            .filter(|k| !declared.is_optional(k) && !consent.keys.contains(*k))
                             .cloned()
                             .collect();
                         if !missing.is_empty() {
@@ -218,7 +218,7 @@ impl PluginManager {
                     let missing: Vec<GrantKey> = diff
                         .escalations()
                         .into_iter()
-                        .filter(|k| !consent.keys.contains(k))
+                        .filter(|k| !declared.is_optional(k) && !consent.keys.contains(k))
                         .collect();
                     if activate && !missing.is_empty() {
                         return Err(StoreError::ConsentRequired { id, missing });

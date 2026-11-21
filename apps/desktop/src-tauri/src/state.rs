@@ -2,9 +2,7 @@ use std::ops::Deref;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use deckpilot_core::{
-    ActionRegistry, MachineConfig, ModuleId, ModuleRegistry, Os, Profile, ProfileId,
-};
+use deckpilot_core::{ActionRegistry, MachineConfig, ModuleRegistry, Os, Profile, ProfileId};
 use deckpilot_device::ModelCatalog;
 use deckpilot_ipc::{AgentPaths, AgentStatus, LockReason, ProtectionMode, SecurityState};
 use deckpilot_presence::PresenceCheck;
@@ -15,7 +13,7 @@ use deckpilot_storage::{
 };
 
 use crate::error::{CommandError, CommandResult};
-use crate::plugin_actions::PluginActions;
+use crate::plugin_actions::{FeatureState, PluginActions};
 
 /// Setting with the app version for which the user last authenticated.
 /// With the "after updates" policy, authentication is asked for once after
@@ -273,23 +271,40 @@ impl AppState {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Fails unless the module is enabled. Used by commands that belong to a
-    /// feature module.
-    pub fn require_module(&self, id: &ModuleId) -> CommandResult<()> {
-        let modules = self.modules();
-        if modules.is_enabled(id) {
+    /// Fails unless the feature the first-party plugin `plugin` owns is on
+    /// (decision D1/D6 of 2026-11-20): [`WORKFLOWS_PLUGIN`] or
+    /// [`PROJECTS_PLUGIN`]. Before any plugin answer (a build without
+    /// plugins) Workflows behave as before the extraction and are on.
+    /// Projects are on only while the Projects plugin is enabled: the
+    /// built-in `projects` module is gone (WP-C6), as the agent decides
+    /// (`Agent::project_context_active`). Nothing is deleted while a
+    /// feature is off.
+    pub fn require_feature(&self, plugin: &str) -> CommandResult<()> {
+        let state = self.plugin_actions().feature(plugin);
+        let on = matches!(
+            (plugin, state),
+            (_, FeatureState::Enabled) | (WORKFLOWS_PLUGIN, FeatureState::Unknown)
+        );
+        if on {
             return Ok(());
         }
-        let name = modules
-            .manifest(id)
-            .map_or_else(|| id.to_string(), |m| m.name.clone());
+        let name = match plugin {
+            WORKFLOWS_PLUGIN => "Workflows",
+            PROJECTS_PLUGIN => "Projects",
+            other => other,
+        };
         Err(CommandError::invalid_with(
-            "moduleDisabled",
-            format!("the {name} module is disabled"),
-            [("module", name.into())],
+            "pluginFeatureOff",
+            format!("the {name} plugin is off: turn it on in Settings › Plugins"),
+            [("feature", name.to_owned().into())],
         ))
     }
 }
+
+/// The first-party plugin that owns the Workflows screens.
+pub const WORKFLOWS_PLUGIN: &str = "deckpilot.workflows";
+/// The first-party plugin that owns the Projects screens and switching.
+pub const PROJECTS_PLUGIN: &str = "deckpilot.projects";
 
 pub fn load_profile(store: &SqliteStore, id: ProfileId) -> CommandResult<Profile> {
     store

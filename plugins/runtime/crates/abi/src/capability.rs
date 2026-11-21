@@ -108,6 +108,57 @@ pub enum CapabilityRequest {
     /// within ABI 1.
     #[serde(rename = "locale.translate")]
     LocaleTranslate(crate::locale::Translate),
+    /// One opaque handle for a `resource` parameter of the invoked action
+    /// or a role of the run's project
+    /// ([`ResourceResolve`](crate::privileged::ResourceResolve),
+    /// [`ResourceHandle`](crate::privileged::ResourceHandle); plugin API
+    /// 1.9, X2). Needs `resources`; the bound path only with
+    /// `resources:paths`. First-party bundled plugins only.
+    #[serde(rename = "resource.resolve")]
+    ResourceResolve(crate::privileged::ResourceResolve),
+    /// Opens a bound location, optionally in a bound application
+    /// ([`ResourceOpen`](crate::privileged::ResourceOpen); plugin API 1.9,
+    /// X4). Needs `resources:open` and a run the user started.
+    #[serde(rename = "resource.open")]
+    ResourceOpen(crate::privileged::ResourceOpen),
+    /// Runs the user's own `git` or `docker` with an argument array in a
+    /// handle's directory ([`ToolRun`](crate::privileged::ToolRun),
+    /// [`ToolOutput`](crate::privileged::ToolOutput); plugin API 1.9, X3).
+    /// Needs `tools:<tool>`, and `tools:git:network` or
+    /// `tools:docker:modify` for the subcommands that need them.
+    #[serde(rename = "tool.run")]
+    ToolRun(crate::privileged::ToolRun),
+    /// Opens the URL the user stored in the invocation's own parameter
+    /// ([`OpenUrlParam`](crate::privileged::OpenUrlParam); plugin API 1.9,
+    /// X5). Needs `openUrl:from-params` and a run the user started.
+    #[serde(rename = "url.openParam")]
+    OpenUrlParam(crate::privileged::OpenUrlParam),
+    /// The active project
+    /// ([`ProjectInfo`](crate::privileged::ProjectInfo) or `null`; plugin
+    /// API 1.9, X6). Needs `projectContext`.
+    #[serde(rename = "project.current")]
+    ProjectCurrent(NoArgs),
+    /// The active profile's projects
+    /// ([`ProjectList`](crate::privileged::ProjectList); plugin API 1.9,
+    /// X6). Needs `projectContext`.
+    #[serde(rename = "project.list")]
+    ProjectList(NoArgs),
+    /// Makes a project of the active profile the active one
+    /// ([`ProjectSelect`](crate::privileged::ProjectSelect); plugin API
+    /// 1.9, X6). Needs `projectContext:select` and a run the user started.
+    #[serde(rename = "project.select")]
+    ProjectSelect(crate::privileged::ProjectSelect),
+    /// The next or previous project
+    /// ([`ProjectCycle`](crate::privileged::ProjectCycle); plugin API 1.9,
+    /// X6). Needs `projectContext:select` and a run the user started.
+    #[serde(rename = "project.cycle")]
+    ProjectCycle(crate::privileged::ProjectCycle),
+    /// The profile's name and the active project, as far as the `profile`
+    /// permission's `read` scopes allow
+    /// ([`ProfileInfo`](crate::privileged::ProfileInfo); plugin API 1.9,
+    /// X9). Every publisher.
+    #[serde(rename = "profile.read")]
+    ProfileRead(NoArgs),
 }
 
 /// The `ok` value of `time.now`. Unknown fields are **ignored** (host to
@@ -183,7 +234,21 @@ pub struct RunContext {
     /// node of a workflow graph.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<RunSummary>,
+    /// Which key this is, for its key state (plugin API 1.9): an opaque
+    /// token, [`KEY_SCOPE_LEN`] lowercase hex digits, of the plugin and the
+    /// invocation's resource bindings (each `resource` parameter's binding,
+    /// and the active project where it names a project's role). It is the
+    /// same in a key's state call and in every run of an action of the
+    /// plugin with the same bindings (a key press, a workflow node), and
+    /// differs between keys that differ only in their resources. A plugin
+    /// keeps a key's state under it together with its own parameters.
+    /// Absent when the action has no `resource` parameter. Never a path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_scope: Option<String>,
 }
+
+/// Characters of [`RunContext::key_scope`].
+pub const KEY_SCOPE_LEN: usize = 32;
 
 impl RunContext {
     /// A run that was not started by a workflow.
@@ -192,6 +257,7 @@ impl RunContext {
             trigger,
             cause: None,
             run: None,
+            key_scope: None,
         }
     }
 
@@ -201,7 +267,15 @@ impl RunContext {
             trigger: RunTrigger::Workflow,
             cause: Some(cause),
             run,
+            key_scope: None,
         }
+    }
+
+    /// The same run of the key `scope` ([`RunContext::key_scope`]).
+    #[must_use]
+    pub fn with_key_scope(mut self, scope: Option<String>) -> Self {
+        self.key_scope = scope;
+        self
     }
 
     /// What nobody said anything about: not started by the user.
@@ -226,6 +300,14 @@ impl RunContext {
     /// node ids cut, at most [`MAX_RUN_FAILED_NODES`] node ids.
     #[must_use]
     pub fn bounded(mut self) -> Self {
+        if self.key_scope.as_deref().is_some_and(|scope| {
+            scope.len() != KEY_SCOPE_LEN
+                || !scope
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        }) {
+            self.key_scope = None;
+        }
         if let Some(run) = &mut self.run {
             run.workflow = run
                 .workflow
@@ -644,6 +726,15 @@ impl CapabilityRequest {
             Self::DialogOpen(_) => "dialog.open",
             Self::LocaleGet(_) => "locale.get",
             Self::LocaleTranslate(_) => "locale.translate",
+            Self::ResourceResolve(_) => "resource.resolve",
+            Self::ResourceOpen(_) => "resource.open",
+            Self::ToolRun(_) => "tool.run",
+            Self::OpenUrlParam(_) => "url.openParam",
+            Self::ProjectCurrent(_) => "project.current",
+            Self::ProjectList(_) => "project.list",
+            Self::ProjectSelect(_) => "project.select",
+            Self::ProjectCycle(_) => "project.cycle",
+            Self::ProfileRead(_) => "profile.read",
         }
     }
 
@@ -711,7 +802,16 @@ impl CapabilityRequest {
             | Self::SettingsGet(_)
             | Self::RunContext(_)
             | Self::TimeNow(_)
-            | Self::LocaleGet(_) => {}
+            | Self::LocaleGet(_)
+            | Self::ProjectCurrent(_)
+            | Self::ProjectList(_)
+            | Self::ProjectCycle(_)
+            | Self::ProfileRead(_) => {}
+            Self::ResourceResolve(r) => r.validate()?,
+            Self::ResourceOpen(o) => o.validate()?,
+            Self::ToolRun(t) => t.validate()?,
+            Self::OpenUrlParam(o) => o.validate()?,
+            Self::ProjectSelect(p) => p.validate()?,
             Self::LocaleTranslate(t) => t.validate().map_err(|e| RequestError::Invalid(e.0))?,
             Self::RandomBytes(r) => {
                 if r.length == 0 || r.length as usize > MAX_RANDOM_BYTES {

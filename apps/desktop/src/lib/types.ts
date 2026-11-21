@@ -978,6 +978,22 @@ export interface PluginModuleState {
   unavailable: Record<string, string>
   /** The legacy action types of the built-in module this plugin replaces. */
   aliases?: LegacyAlias[]
+  /**
+   * The view kinds of the plugin's navigation entries. The host views
+   * among them (`workflows`, `projects`, plugin API 1.9, `hostViews`) are
+   * the app's own screens the plugin activates; the agent lists those only
+   * while the plugin is enabled. See `lib/plugin-features.ts`.
+   */
+  hostViews?: string[]
+  /** Status-bar items the app draws for the plugin (`activeProject`). */
+  statusItems?: string[]
+  /** Dashboard cards the app draws for the plugin (`activeProject`). */
+  dashboardCards?: string[]
+  /**
+   * Where the agent routes the built-in module this plugin replaces
+   * (`listModuleMigrations`); absent without a migration.
+   */
+  route?: LegacyAlias["route"]
 }
 
 /** A legacy action type and the plugin action type that replaces it. */

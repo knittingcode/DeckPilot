@@ -132,9 +132,13 @@ sent (`server.rs`).
   `projects`, `workSession`) are roots of the grammar; any other root is
   rejected when parsed and validated, exactly as before (`{{ env.home }}`
   stays invalid). A module that declares variables adds its namespace
-  there; a test keeps the list equal to the built-in modules'.
+  there; a test keeps the list equal to the built-in modules', plus
+  `projects`, which stays a root for the Projects plugin.
   - Projects owns `projects.current.id`, `projects.current.key`,
-    `projects.current.name`.
+    `projects.current.name`. Since WP-C6 the built-in `projects` module is
+    removed: the agent publishes them for the Projects plugin
+    (`deckpilot.projects`) while it is enabled, under the same ids
+    ([module-migration.md](marketplace/module-migration.md) X7).
   - Work Session owns `workSession.id`, `.state`, `.startedAt`,
     `.elapsedSeconds`, `.projectId`, `.canFinish`.
 - **Users** own shared variables, `shared.<key>`. The user namespace stays

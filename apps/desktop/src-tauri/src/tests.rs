@@ -77,6 +77,13 @@ impl Harness {
         let window = WebviewWindowBuilder::new(&app, "main", WebviewUrl::default())
             .build()
             .expect("build window");
+        // As the app with its bundled first-party plugins: the Workflows
+        // and Projects features are on (the built-in `projects` module is
+        // gone, WP-C6). The tests of the gates change this.
+        window.state::<AppState>().plugin_actions().replace(&[
+            first_party("deckpilot.workflows", "enabled"),
+            first_party("deckpilot.projects", "enabled"),
+        ]);
         Self { window, paths }
     }
 
@@ -199,8 +206,8 @@ fn configuration_flow_through_ipc() {
             "profileId": profile_id,
             "action": {
                 "name": "Where am I",
-                "actionType": "projects.repository",
-                "parameters": { "project_id": null }
+                "actionType": "general.log",
+                "parameters": { "message": { "type": "text", "value": "on {project.key}" } }
             }
         }),
     );
@@ -438,6 +445,172 @@ fn workflows_are_validated_and_keep_their_step_order() {
     assert_eq!(view["profile"]["workflows"].as_array().unwrap().len(), 1);
     assert_eq!(steps[0]["action"], second["id"]);
     assert_eq!(steps[1]["condition"]["type"], "previousSucceeded");
+}
+
+/// A `listPlugins` entry for a first-party plugin without actions.
+fn first_party(id: &str, state: &str) -> deckpilot_ipc::plugins::PluginSummary {
+    serde_json::from_value(json!({
+        "id": id, "name": id, "publisher": "DeckPilot", "version": "0.1.0",
+        "state": state, "origin": { "type": "bundled" }, "actions": [],
+    }))
+    .unwrap()
+}
+
+/// The code and the feature of a refusal while a plugin's feature is off.
+fn feature_off(h: &Harness, cmd: &str, args: Value) -> (String, String) {
+    let error = h.call_raw(cmd, args).expect_err(cmd);
+    (
+        error["code"].as_str().unwrap_or_default().to_owned(),
+        error["params"]["feature"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+    )
+}
+
+/// Workflow management and the Projects commands follow their plugins
+/// (decisions D1/D6 of 2026-11-20): on before any plugin answer (a build
+/// without plugins), refused with `invalid.pluginFeatureOff` once plugins
+/// are listed without them, on again with the plugin enabled. Multi
+/// Actions (step workflows) and the core resource bindings keep working.
+#[allow(clippy::too_many_lines)] // One life of both features.
+#[test]
+fn workflow_and_project_commands_require_their_plugins() {
+    let h = Harness::new();
+    let profile_id = new_profile(&h, "Work");
+    let first = log_action(&h, &profile_id, "First", "1");
+    let graph_id = "00000000-0000-4000-8000-0000000000a1";
+    let graph = json!({ "id": graph_id, "name": "Graph", "steps": [], "graph": {
+        "version": 1,
+        "nodes": [
+            { "id": "start", "type": "trigger" },
+            { "id": "log", "type": "action", "action": first["id"] }
+        ],
+        "edges": [{ "from": "start", "to": "log" }]
+    }});
+    let steps = json!({ "id": "00000000-0000-4000-8000-0000000000a2", "name": "Multi Action",
+        "steps": [{ "action": first["id"] }] });
+    let save = |workflow: &Value| {
+        h.call_raw(
+            "save_workflow",
+            json!({ "profileId": profile_id, "workflow": workflow }),
+        )
+    };
+    let project = |key: &str| {
+        h.call_raw(
+            "create_project",
+            json!({ "profileId": profile_id, "project": { "key": key, "name": key } }),
+        )
+    };
+
+    // No plugin answer yet (a build without plugins): Workflows as before
+    // the extraction; Projects come only from the Projects plugin now
+    // that the built-in module is gone (WP-C6).
+    let off = |name: &str| ("invalid.pluginFeatureOff".to_owned(), name.to_owned());
+    let state = h.window.state::<AppState>();
+    *state.plugin_actions() = crate::plugin_actions::PluginActions::default();
+    h.ok(
+        "convert_workflow",
+        json!({ "profileId": profile_id, "workflow": steps }),
+    );
+    save(&graph).unwrap();
+    let refused = project("SHOP").unwrap_err();
+    assert_eq!(refused["code"], "invalid.pluginFeatureOff", "{refused}");
+    assert_eq!(refused["params"]["feature"], "Projects");
+    state
+        .plugin_actions()
+        .replace(&[first_party("deckpilot.projects", "enabled")]);
+    project("SHOP").unwrap();
+    project("CMS").unwrap();
+
+    // Plugins listed, neither of the two among them: both features off.
+    state.plugin_actions().replace(&[]);
+    assert_eq!(
+        feature_off(
+            &h,
+            "validate_workflow_graph",
+            json!({ "profileId": profile_id, "workflow": graph })
+        ),
+        off("Workflows")
+    );
+    assert_eq!(
+        feature_off(
+            &h,
+            "convert_workflow",
+            json!({ "profileId": profile_id, "workflow": steps })
+        ),
+        off("Workflows")
+    );
+    let refused = save(&graph).unwrap_err();
+    assert_eq!(refused["code"], "invalid.pluginFeatureOff", "{refused}");
+    assert!(
+        refused["message"]
+            .as_str()
+            .unwrap()
+            .contains("the Workflows plugin is off"),
+        "{refused}"
+    );
+    // A Multi Action is the key editor's: saved, duplicated and deleted.
+    save(&steps).unwrap();
+    let copy = h.ok(
+        "duplicate_workflow",
+        json!({ "profileId": profile_id, "workflowId": steps["id"], "name": "Copy" }),
+    );
+    h.ok(
+        "delete_workflow",
+        json!({ "profileId": profile_id, "workflowId": copy["id"] }),
+    );
+    assert_eq!(
+        feature_off(
+            &h,
+            "delete_workflow",
+            json!({ "profileId": profile_id, "workflowId": graph_id })
+        ),
+        off("Workflows")
+    );
+    // Nor can a graph be replaced by steps behind the plugin's back.
+    let flattened = json!({ "id": graph_id, "name": "Graph", "steps": [] });
+    let refused = save(&flattened).unwrap_err();
+    assert_eq!(refused["code"], "invalid.pluginFeatureOff", "{refused}");
+    let refused = project("CMR").unwrap_err();
+    assert_eq!(refused["code"], "invalid.pluginFeatureOff", "{refused}");
+    assert_eq!(refused["params"]["feature"], "Projects");
+    assert_eq!(
+        feature_off(
+            &h,
+            "cycle_project",
+            json!({ "profileId": profile_id, "direction": "next" })
+        ),
+        off("Projects")
+    );
+    // Resources are core.
+    h.ok("check_resources", json!({ "profileId": profile_id }));
+    // Nothing was deleted.
+    let view = h.ok("get_profile", json!({ "profileId": profile_id }));
+    assert_eq!(view["profile"]["projects"].as_array().unwrap().len(), 2);
+
+    // Both plugins enabled: on.
+    state.plugin_actions().replace(&[
+        first_party("deckpilot.workflows", "enabled"),
+        first_party("deckpilot.projects", "enabled"),
+    ]);
+    h.ok(
+        "convert_workflow",
+        json!({ "profileId": profile_id, "workflow": steps }),
+    );
+    project("CMR").unwrap();
+    // Disabled: off again.
+    state
+        .plugin_actions()
+        .upsert(&first_party("deckpilot.workflows", "disabled"));
+    assert_eq!(
+        feature_off(
+            &h,
+            "convert_workflow",
+            json!({ "profileId": profile_id, "workflow": steps })
+        ),
+        off("Workflows")
+    );
 }
 
 #[test]
@@ -839,19 +1012,25 @@ fn runtime_state_and_actions_go_through_the_agent() {
         s["status"]["devices"][0]["layout"]["type"] == "compatible"
     });
 
-    let next = h.ok(
+    // Switching projects belongs to the Projects plugin, which this agent
+    // (a build without plugins) does not run: the agent refuses it.
+    let refused = h.call(
         "cycle_project",
         json!({ "profileId": profile_id, "direction": "next" }),
+    );
+    assert!(
+        refused
+            .unwrap_err()
+            .as_str()
+            .unwrap()
+            .contains("the Projects plugin is not active"),
     );
     let result = h.ok(
         "run_action",
         json!({ "profileId": profile_id, "actionId": action["id"] }),
     );
     assert_eq!(result["status"], "succeeded");
-    assert_eq!(result["message"], "on CMR");
-    // The agent persisted the selection; the overview reads it from storage.
-    let overview = h.ok("get_overview", json!({}));
-    assert_eq!(overview["activeProject"]["id"], next);
+    assert!(result["message"].as_str().unwrap().starts_with("on "));
 
     h.ok("set_brightness", json!({ "percent": 40 }));
     let device = deckpilot_device::DeviceId {
@@ -886,18 +1065,11 @@ fn fresh_installation_has_an_empty_action_library() {
         ids,
         [
             "deck",
-            "docker",
             "general",
-            "git",
-            "github",
-            "gitlab",
             "http",
-            "jira",
             "notifications",
-            "projects",
             "system",
-            "work-session",
-            "workspace"
+            "work-session"
         ]
     );
     let module = |id: &str| {
@@ -909,50 +1081,22 @@ fn fresh_installation_has_an_empty_action_library() {
             .unwrap()
             .clone()
     };
-    assert_eq!(module("projects")["pages"][0]["id"], "projects");
+    assert_eq!(module("work-session")["pages"][0]["id"], "work-session");
     // Modules with risky actions start with them switched off.
     assert_eq!(
         module("system")["configValues"]["allowCommands"]["value"],
         false
     );
-    let types: Vec<_> = module("projects")["actionTypes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|t| t["id"].as_str().unwrap().to_owned())
-        .collect();
-    assert_eq!(
-        types,
-        [
-            "projects.cycle",
-            "projects.select",
-            "projects.current",
-            "projects.repository",
-            "projects.documentation",
-            "projects.resolve-resource",
-            "projects.next",
-            "projects.previous",
-            "projects.active",
-        ]
-    );
-    // Replaced types are marked, so the app does not offer them for new
-    // actions; the flag is left out for every other type.
-    let deprecated: Vec<_> = module("projects")["actionTypes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|t| t["deprecated"] == true)
-        .map(|t| t["id"].as_str().unwrap().to_owned())
-        .collect();
-    assert_eq!(
-        deprecated,
-        ["projects.next", "projects.previous", "projects.active"]
-    );
-    assert!(
-        module("projects")["actionTypes"][0]
-            .get("deprecated")
-            .is_none()
-    );
+    // No built-in type is deprecated any more (the deprecated `projects.*`
+    // types moved to the Projects plugin with the module, WP-C6): the flag
+    // is left out of every type.
+    assert!(modules.as_array().unwrap().iter().all(|m| {
+        m["actionTypes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|t| t.get("deprecated").is_none())
+    }));
     assert_eq!(h.ok("migration_notes", json!({})), json!([]));
 }
 
@@ -960,40 +1104,40 @@ fn fresh_installation_has_an_empty_action_library() {
 fn disabled_modules_hide_types_but_keep_saved_actions() {
     let h = Harness::new();
     let profile_id = new_profile(&h, "Work");
-    let next = h.ok(
+    let cpu = h.ok(
         "create_action",
         json!({
             "profileId": profile_id,
-            "action": { "name": "Next", "actionType": "projects.next", "parameters": {} }
+            "action": { "name": "CPU", "actionType": "system.cpu", "parameters": {} }
         }),
     );
 
     let modules = h.ok(
         "set_module_enabled",
-        json!({ "moduleId": "projects", "enabled": false }),
+        json!({ "moduleId": "system", "enabled": false }),
     );
-    let projects = modules
+    let system = modules
         .as_array()
         .unwrap()
         .iter()
-        .find(|m| m["id"] == "projects")
+        .find(|m| m["id"] == "system")
         .unwrap();
-    assert_eq!(projects["enabled"], false);
+    assert_eq!(system["enabled"], false);
     let types = h.ok("list_action_types", json!({}));
     assert!(
         types
             .as_array()
             .unwrap()
             .iter()
-            .all(|t| !t["id"].as_str().unwrap().starts_with("projects."))
+            .all(|t| !t["id"].as_str().unwrap().starts_with("system."))
     );
-    // New actions of the module and project changes are refused ...
+    // New actions of the module are refused ...
     assert!(
         h.call(
             "create_action",
             json!({
                 "profileId": profile_id,
-                "action": { "name": "Again", "actionType": "projects.next", "parameters": {} }
+                "action": { "name": "Again", "actionType": "system.cpu", "parameters": {} }
             }),
         )
         .unwrap_err()
@@ -1001,45 +1145,38 @@ fn disabled_modules_hide_types_but_keep_saved_actions() {
         .unwrap()
         .contains("disabled")
     );
-    assert!(
-        h.call(
-            "create_project",
-            json!({ "profileId": profile_id, "project": { "key": "SHOP", "name": "" } }),
-        )
-        .is_err()
-    );
     // ... but the saved action is still there and the state survives restarts.
     let view = h.ok("get_profile", json!({ "profileId": profile_id }));
-    assert_eq!(view["profile"]["actions"][0]["id"], next["id"]);
+    assert_eq!(view["profile"]["actions"][0]["id"], cpu["id"]);
     let reopened = AppState::open(h.paths.clone()).unwrap();
     let key = h.window.state::<AppState>().key().unwrap();
     reopened.attach(key, false).unwrap();
     assert!(
         !reopened
             .modules()
-            .is_enabled(&deckpilot_modules::projects::module_id())
+            .is_enabled(&deckpilot_modules::system::module_id())
     );
 
     h.ok(
         "set_module_enabled",
-        json!({ "moduleId": "projects", "enabled": true }),
+        json!({ "moduleId": "system", "enabled": true }),
     );
     let invalid = h.call(
         "set_module_config",
-        json!({ "moduleId": "projects", "config": { "wrapAround": { "type": "text", "value": "x" } } }),
+        json!({ "moduleId": "system", "config": { "allowCommands": { "type": "text", "value": "x" } } }),
     );
     assert!(invalid.is_err());
     let configured = h.ok(
         "set_module_config",
-        json!({ "moduleId": "projects", "config": { "wrapAround": { "type": "boolean", "value": false } } }),
+        json!({ "moduleId": "system", "config": { "allowCommands": { "type": "boolean", "value": true } } }),
     );
-    let projects = configured
+    let system = configured
         .as_array()
         .unwrap()
         .iter()
-        .find(|m| m["id"] == "projects")
+        .find(|m| m["id"] == "system")
         .unwrap();
-    assert_eq!(projects["configValues"]["wrapAround"]["value"], false);
+    assert_eq!(system["configValues"]["allowCommands"]["value"], true);
 }
 
 #[test]
@@ -1084,13 +1221,9 @@ fn projects_stay_in_their_profile() {
             }
         }),
     );
-    assert!(
-        select
-            .unwrap_err()
-            .as_str()
-            .unwrap()
-            .contains("does not belong to this profile")
-    );
+    // `projects.select` is the Projects plugin's now (WP-C6): without its
+    // definition here the action is refused either way.
+    assert!(select.is_err());
 
     // Copying is explicit and creates an independent project.
     let copy = h.ok(
@@ -1120,11 +1253,12 @@ fn projects_stay_in_their_profile() {
     );
 }
 
-/// The real commands against a running agent: generic project actions with
-/// structured results, explicit project copies and module enable/disable.
-#[allow(clippy::too_many_lines)]
+/// The real commands against a running agent without plugins (a build
+/// without the `plugins` feature): projects and their explicit copies are
+/// core data; switching belongs to the Projects plugin and the agent
+/// refuses it on every path, without touching the configuration.
 #[test]
-fn modules_and_project_copies_work_with_the_running_agent() {
+fn project_copies_work_with_the_running_agent_and_switching_needs_the_plugin() {
     let h = Harness::new();
     let work = new_profile(&h, "Work");
     let home = new_profile(&h, "Home");
@@ -1143,123 +1277,45 @@ fn modules_and_project_copies_work_with_the_running_agent() {
         "set_resource_binding",
         json!({ "key": "shop.repository", "kind": "directory", "value": "/src/shop" }),
     );
-    let action = |name: &str, action_type: &str, parameters: Value| {
-        h.ok(
-            "create_action",
-            json!({
-                "profileId": work,
-                "action": { "name": name, "actionType": action_type, "parameters": parameters }
-            }),
-        )["id"]
-            .as_str()
-            .unwrap()
-            .to_owned()
-    };
-    let repository = action("Repository", "projects.repository", json!({}));
-    let select_cmr = action(
-        "CMR",
-        "projects.select",
-        json!({ "project_id": { "type": "project", "value": projects[1] } }),
-    );
-    let current = action("Current", "projects.select", json!({ "project_id": null }));
 
     let (_runtime, _mock) = start_agent(&h.paths);
     h.unlock();
     wait_for(&h, |s| s["running"] == true);
-    let run = |id: &str| h.ok("run_action", json!({ "profileId": work, "actionId": id }));
-
-    // Generic types with structured results; the current project is the default.
-    let resolved = run(&repository);
-    assert_eq!(resolved["status"], "succeeded", "{resolved}");
-    assert_eq!(resolved["data"]["value"], "/src/shop");
-    assert_eq!(resolved["data"]["projectKey"], "SHOP");
-    assert_eq!(resolved["data"]["kind"], "directory");
-    let reported = run(&current);
-    assert_eq!(reported["data"]["projectKey"], "SHOP");
-    assert!(reported.get("effects").is_none(), "{reported}");
-    run(&select_cmr);
-    wait_for(&h, |s| s["status"]["activeProject"]["key"] == "CMR");
-    // CMR's repository is not bound on this machine.
-    let missing = run(&repository);
-    assert_eq!(missing["status"], "failed");
-    assert!(missing["message"].as_str().unwrap().contains("not bound"));
 
     // An explicit copy is an independent project of the other profile.
     let copy = h.ok(
         "copy_project",
         json!({ "profileId": work, "projectId": projects[0], "targetProfileId": home }),
     );
-    h.ok("set_active_profile", json!({ "profileId": home }));
-    let status = wait_for(&h, |s| s["status"]["activeProfile"]["name"] == "Home");
-    assert_eq!(status["status"]["activeProject"]["id"], copy["id"]);
-    // Projects of the inactive profile cannot be selected.
-    assert!(
-        h.call(
-            "select_project",
-            json!({ "profileId": home, "projectId": projects[1] }),
-        )
-        .is_err()
-    );
-    h.ok("set_active_profile", json!({ "profileId": work }));
-    wait_for(&h, |s| s["status"]["activeProject"]["key"] == "CMR");
-
-    // Disabling the module stops its actions and project switching in the
-    // agent, through every path, without touching the configuration.
-    h.ok(
-        "set_module_enabled",
-        json!({ "moduleId": "projects", "enabled": false }),
-    );
-    let refused = run(&repository);
-    assert_eq!(refused["status"], "failed");
-    assert!(
-        refused["message"].as_str().unwrap().contains("disabled"),
-        "{refused}"
-    );
-    assert!(
-        h.call(
+    let home_view = h.ok("get_profile", json!({ "profileId": home }));
+    assert_eq!(home_view["profile"]["projects"][0]["id"], copy["id"]);
+    // No project is shown without a provider; switching is refused.
+    wait_for(&h, |s| {
+        s["status"]["activeProfile"]["name"] == "Work" && s["status"]["activeProject"].is_null()
+    });
+    for (cmd, args) in [
+        (
             "cycle_project",
-            json!({ "profileId": work, "direction": "next" })
-        )
-        .is_err()
-    );
-    assert!(
-        h.call(
+            json!({ "profileId": work, "direction": "next" }),
+        ),
+        (
             "select_project",
-            json!({ "profileId": work, "projectId": projects[0] })
-        )
-        .is_err()
-    );
-    assert!(
-        h.call("check_resources", json!({ "profileId": work }))
-            .is_err()
-    );
+            json!({ "profileId": work, "projectId": projects[1] }),
+        ),
+    ] {
+        let refused = h.call(cmd, args).unwrap_err();
+        assert!(
+            refused
+                .as_str()
+                .unwrap()
+                .contains("the Projects plugin is not active"),
+            "{cmd}: {refused}"
+        );
+    }
+    // The resource bindings are core (Settings › Resources): still checked.
+    h.ok("check_resources", json!({ "profileId": work }));
     let view = h.ok("get_profile", json!({ "profileId": work }));
-    assert_eq!(view["profile"]["actions"].as_array().unwrap().len(), 3);
-    wait_for(&h, |s| s["status"]["activeProject"]["key"] == "CMR");
-
-    // Enabled again with wrap-around off: the agent's switching follows the
-    // module setting, just like the actions.
-    h.ok(
-        "set_module_enabled",
-        json!({ "moduleId": "projects", "enabled": true }),
-    );
-    h.ok(
-        "set_module_config",
-        json!({ "moduleId": "projects", "config": { "wrapAround": { "type": "boolean", "value": false } } }),
-    );
-    let at_end = h.call(
-        "cycle_project",
-        json!({ "profileId": work, "direction": "next" }),
-    );
-    assert!(
-        at_end
-            .unwrap_err()
-            .as_str()
-            .unwrap()
-            .contains("last project"),
-        "the agent applies wrapAround"
-    );
-    assert_eq!(run(&select_cmr)["status"], "succeeded");
+    assert_eq!(view["profile"]["projects"].as_array().unwrap().len(), 2);
 
     h.ok("stop_agent", json!({}));
     wait_for(&h, |s| s["running"] == false);
@@ -3890,7 +3946,11 @@ fn plugin_actions_are_validated_against_what_the_agent_reported() {
 
     // Enabled: offered, validated (required parameters included) and saved.
     let state = h.window.state::<AppState>();
-    state.plugin_actions().replace(&[hello_weather(true)]);
+    // With the Workflows plugin, whose screens the graph edits below need.
+    state.plugin_actions().replace(&[
+        hello_weather(true),
+        first_party("deckpilot.workflows", "enabled"),
+    ]);
     let after = types(&h);
     assert_eq!(after.len(), before.len() + 1);
     assert!(after.contains(&"acme.hello-weather.greet".to_owned()));
@@ -4110,10 +4170,10 @@ fn constrained_plugin() -> deckpilot_ipc::plugins::PluginSummary {
 fn invalid_plugin_actions_are_refused_when_saved_like_built_in_ones() {
     let h = Harness::new();
     let profile_id = new_profile(&h, "Work");
-    h.window
-        .state::<AppState>()
-        .plugin_actions()
-        .replace(&[constrained_plugin()]);
+    h.window.state::<AppState>().plugin_actions().replace(&[
+        constrained_plugin(),
+        first_party("deckpilot.workflows", "enabled"),
+    ]);
     let create = |action_type: &str, parameters: Value| {
         h.call(
             "create_action",
