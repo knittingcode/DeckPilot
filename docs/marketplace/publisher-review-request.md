@@ -104,10 +104,12 @@ C. **Order and bounds.** The signature is capped at `MAX_SIGNATURE_BYTES`
    signatures before the archive; `verify_package` then re-checks against
    the registry's manifest hash and permissions; the store receives only
    that `VerifiedPackage`.
-D. **Rollback floor.** `effective_floor` takes the higher of the recorded
-   floor and the compiled bundled pin; equal versions with other files are
-   refused; `raise_floor` persists before the store acts and never lowers
-   a floor; a corrupt or unknown-version `floors.json` refuses everything
+D. **Rollback floor.** `effective_floor` takes the highest of the
+   recorded floor, the compiled bundled pin and the compiled
+   `released-pins.json` floor for this platform; equal versions with other
+   files are refused; `Compiled::check_locked` adds the artifact lock's
+   minimum; `record_release` persists before the store acts and never
+   lowers a floor; a corrupt or unknown-version `floors.json` refuses everything
    and is never rewritten. Decide whether a local file (outside the
    encrypted `plugins.db`) is an acceptable home: deleting it resets only
    the recorded floors, the bundled pins still apply.
@@ -115,11 +117,13 @@ E. **Revocation at run time.** `revoked_installed` covers registry copies
    of `deckpilot.*` only, by compiled lock and by revoked signer of the
    recorded release; `apply_verdicts` runs at every start, also without a
    registry (quarantine only), and after every refresh with the registry's
-   verdicts underneath (`official::Verdicts`). Check that a quarantined
-   plugin cannot be enabled, and that an official revocation cannot be
-   lifted by a registry `Run` verdict while the agent still revokes it.
-   Note the limit: a signer is known only for the version recorded as the
-   floor (the latest verified one).
+   verdicts underneath (`official::Verdicts`); `check_verdict` (enable,
+   every invocation) and `rollback` apply the official revocations too.
+   Signers are recorded for every verified version; a registry copy whose
+   version has no record, or whose record cannot be read, is not run
+   (fail closed). Check that a quarantined plugin cannot be enabled, and
+   that an official revocation cannot be lifted by a registry `Run`
+   verdict while the agent still revokes it.
 F. **Authenticity is not authorization.** Nothing in `official.rs` writes
    a grant, consent, tier or source. The store's install and update get
    the user's consent only; a transition from the bundle derives nothing
@@ -128,9 +132,13 @@ F. **Authenticity is not authorization.** Nothing in `official.rs` writes
 G. **The gate.** `PRIVILEGED_GATE` is `Closed`; it is a `const`, read in
    `Official::with` only; `admit_privileged` returns the original refusal
    unless `Open` and every review condition holds (threshold at least 2 and
-   at least the review's, plugin listed, every privileged grant key
-   listed), and then uses only the bundled reader. The store still refuses
-   privileged kinds from a registry source (`check_privileged_source`).
+   at least the review's, counted over the keys that actually signed;
+   plugin listed; every privileged construct of
+   `privileged_constructs` listed; the registry's manifest hash and
+   permissions), and then uses only the bundled reader. The store still
+   refuses every privileged construct from a non-bundled source
+   (`check_privileged_source`), and `check_gate` refuses an unparsable
+   manifest.
    Confirm no other code constructs `PrivilegedGate::Open` outside tests.
 H. **Transition.** `check_transition` runs only for a record whose source
    is `bundled`, before `trial_load`; it refuses dropped action ids,
@@ -139,11 +147,16 @@ H. **Transition.** `check_transition` runs only for a record whose source
    Seeding leaves a registry copy alone; `restoreBundledPlugin` still
    restores the bundle after an uninstall.
 I. **Audit log.** Every verification (accepted or refused, including
-   unparsable signatures and floor failures) writes one chained line; a
-   write failure is logged and does not change the outcome. Decide
+   unparsable signatures and floor failures), every refusal in `pins`
+   before a download and every missing or undownloadable signature writes
+   one chained line; five rotated generations are kept; a write failure is
+   logged and does not change the outcome. The limits are documented in
+   publisher-signature.md ("Limits of the audit log"). Decide
    whether tamper-evidence (hash chain, head hash in the agent log) is
    enough or a signed or remote log is required.
-J. **Known open items** (not blockers for the closed state):
+J. **Migration.** `migration.rs` derives grants only onto a bundled copy;
+   `PluginManager::derive_grants` refuses any other source.
+K. **Known open items** (not blockers for the closed state):
    `release verify --keys` exists in release builds of the CLI (Agent A's
    finding 3; the plugin repository's CI relies on it with throwaway
    keys); only one `.minisig` per release is fetched, so a threshold above

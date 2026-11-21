@@ -1347,6 +1347,19 @@ impl Engine<'_> {
                 }
             }
         }
+        // Derived grants are for the copy shipped inside the app only: a
+        // newer copy from a registry (an official release included) keeps
+        // exactly what the user granted it; what it lacks waits for the
+        // user's consent like any other permission.
+        let bundled_copy = self
+            .manager
+            .store()
+            .plugin(&m.plugin)
+            .map_err(failed)?
+            .is_some_and(|record| record.source == InstallSource::Bundled);
+        if !bundled_copy {
+            return Ok(());
+        }
         let manifest = self.active_manifest(m)?;
         let keys: BTreeSet<GrantKey> = GrantSet::from_manifest(&manifest)
             .iter()

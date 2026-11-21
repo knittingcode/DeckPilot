@@ -1216,9 +1216,20 @@ impl PluginService {
         // publisher keys compiled into this agent, on top of the registry's
         // pins (`official.rs`). Nothing is installed before it verified.
         if deckpilot_plugin_store::is_first_party(id) {
-            let signature = registry
-                .signature(&target.url)
-                .map_err(|e| download_error(&e))?;
+            let signature = match registry.signature(&target.url) {
+                Ok(signature) => signature,
+                Err(e) => {
+                    let refused = download_error(&e);
+                    self.official.refused_before_verification(
+                        id,
+                        Some(version),
+                        Some(&target.expected.package),
+                        &format!("the publisher signature: {}", refused.message),
+                        Utc::now(),
+                    );
+                    return Err(refused);
+                }
+            };
             let host = host_environment();
             self.official
                 .verify(&official::Delivery {
@@ -1248,6 +1259,13 @@ impl PluginService {
         if deckpilot_plugin_store::is_first_party(id)
             && let Err(why) = self.official.ready()
         {
+            self.official.refused_before_verification(
+                id,
+                Some(version),
+                None,
+                &format!("refused before any download: {why}"),
+                Utc::now(),
+            );
             let what = if deckpilot_plugin_bundled::is_bundled_id(id, &self.bundle.pins) {
                 "is bundled with DeckPilot and comes only from the application bundle"
             } else {
@@ -1514,10 +1532,31 @@ impl PluginService {
         self.announce_dropped(id.as_str(), &dropped);
     }
 
-    /// The registry's verdict on the installed version; a `disable`
-    /// quarantines the plugin.
+    /// The official revocations and the registry's verdict on the installed
+    /// version; a `disable` quarantines the plugin.
     fn check_verdict(&mut self, record: &PluginRecord) -> Result<(), IpcError> {
-        let (Some(registry), Some(active)) = (self.registry.as_ref(), record.active()) else {
+        let Some(active) = record.active() else {
+            return Ok(());
+        };
+        let revoked = self
+            .official
+            .revoked_installed(std::slice::from_ref(record));
+        if let Some(why) = revoked.get(&(record.id.clone(), active.version.clone())) {
+            self.stop_host(&record.id);
+            if record.state != PluginState::Quarantined {
+                let _ = self
+                    .manager
+                    .quarantine(&record.id, &format!("revoked: {why}"));
+                self.sync_grants(&record.id);
+                self.changed(&record.id);
+            }
+            return Err(error(
+                ErrorCode::Failed,
+                reason::REVOKED,
+                format!("{} {} is not run: {why}", record.id, active.version),
+            ));
+        }
+        let Some(registry) = self.registry.as_ref() else {
             return Ok(());
         };
         if let InstalledVerdict::Disable { reason: why, .. } = registry
@@ -2147,10 +2186,18 @@ impl PluginService {
     fn rollback(&mut self, id: &PluginId) -> Result<Response, IpcError> {
         self.check_rollback(id)?;
         self.stop_host(id);
-        let result = match self.registry.as_ref() {
-            Some(registry) => self.manager.rollback(id, registry.client()),
-            None => self.manager.rollback(id, &NoRevocations),
+        // The version rolled back to must pass the official revocations
+        // too (a revoked release, a revoked signer, no record of it).
+        let records = self.manager.store().plugins().unwrap_or_default();
+        let revoked = self.official.revoked_installed(&records);
+        let verdicts = official::Verdicts {
+            official: &revoked,
+            registry: match self.registry.as_ref() {
+                Some(registry) => registry.client(),
+                None => &NoRevocations,
+            },
         };
+        let result = self.manager.rollback(id, &verdicts);
         result.map_err(|e| store_error(&e))?;
         self.after_version_change(id);
         self.changed(id);
