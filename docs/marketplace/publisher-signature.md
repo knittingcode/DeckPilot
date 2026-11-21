@@ -187,6 +187,27 @@ it to the store's update with source `registry`:
   can restore the bundled one (`restoreBundledPlugin`), which the compiled
   pins vouch for whatever the floor.
 
+**What turns it on (owner actions, none done).** Registry delivery of an
+official plugin needs all of these. The first two are independent
+authorities, and each is required:
+
+1. A production publisher key pinned in `publisher/first-party.json`
+   ([Keys](#keys)), shipped in an application release.
+2. A production registry key set (root-signed, U-10/U-12) whose
+   `first_party` field authorizes the `deckpilot` namespace, an index
+   that lists `deckpilot` as a verified publisher, and the registry root
+   keys embedded in the application (`DECKPILOT_REGISTRY_ROOT_PUBKEYS`,
+   [agent-integration.md](agent-integration.md#trusted-root-keys)).
+3. Each release published with its `<package>.minisig` next to the
+   package in the plugin repository's release.
+
+The exception to "the registry never serves a bundled id" (X12) is
+exactly this path. No unsigned, third-party, file or development path
+accepts a `deckpilot.*` id: the store refuses sideloaded and dev
+installs of them (`InstallSource::allows`), the third-party reader rules
+refuse the reserved publisher, and `PluginService::fetch` runs the
+publisher verification for every registry download of a `deckpilot.*` id.
+
 The plugins that declare privileged kinds (Docker, Git, Projects,
 Workflows, Workspace) cannot make this transition while the gate is
 closed, and the store refuses privileged kinds from any non-bundled source
