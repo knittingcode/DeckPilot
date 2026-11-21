@@ -949,6 +949,38 @@ fn not_granted<'a>(
         .map(|(key, _)| key.clone())
 }
 
+/// Every plugin API 1.9 privileged construct `manifest` declares (X12):
+/// each privileged grant key (`tools:git`, `resources`, `hostViews`,
+/// `openUrl:from-params`, …) and every other gated construct the manifest
+/// rules name, by the label the rules use ("a \`resource\` parameter",
+/// "\`node.changesContext\`", "the host source \`…\`", "the \`projects\`
+/// view", "\`statusItems\`", "\`dashboardCards\`"), whether or not the
+/// manifest is otherwise valid.
+/// Empty: nothing privileged.
+pub fn privileged_constructs(manifest: &deckpilot_plugin_manifest::Manifest) -> BTreeSet<String> {
+    let mut found: BTreeSet<String> = GrantSet::from_manifest(manifest)
+        .keys()
+        .filter(|key| key.is_first_party_only())
+        .map(ToString::to_string)
+        .collect();
+    if let Err(errors) = manifest.validate() {
+        for issue in errors.0 {
+            // Permissions are named by their grant keys above.
+            if issue.code == deckpilot_plugin_manifest::IssueCode::FirstPartyOnly
+                && !issue.path.starts_with("permissions[")
+            {
+                let what = issue
+                    .message
+                    .split(" is only for")
+                    .next()
+                    .unwrap_or(&issue.message);
+                found.insert(what.to_owned());
+            }
+        }
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

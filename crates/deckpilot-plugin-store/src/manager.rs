@@ -228,7 +228,7 @@ impl PluginManager {
         let id = package.manifest().id.clone();
         store::check_source(&id, source)?;
         let declared = GrantSet::from_manifest(package.manifest());
-        check_privileged_source(&id, &declared, source)?;
+        check_privileged_source(&id, package.manifest(), source)?;
         check_consent(&id, &declared, consent)?;
         if *source == InstallSource::Bundled {
             check_bundled_consent(&id, &declared, consent)?;
@@ -765,6 +765,15 @@ impl PluginManager {
         decided_by: &str,
     ) -> Result<Vec<GrantKey>> {
         let plugin = self.plugin(id)?;
+        // Derived grants are for copies shipped inside the app only: a copy
+        // from a registry (even of a `deckpilot.*` id) gets what the user
+        // grants, nothing derived.
+        if plugin.source != InstallSource::Bundled {
+            return Err(StoreError::SourceNotAllowed {
+                id: id.clone(),
+                origin: plugin.source.as_str(),
+            });
+        }
         let active = active_of(&plugin)?;
         let declared = active.grants();
         let consent = Consent::of(keys.iter().cloned(), decided_by);
@@ -976,7 +985,7 @@ impl PluginManager {
     ) -> Result<UpdateOutcome> {
         let id = package.manifest().id.clone();
         store::check_source(&id, source)?;
-        check_privileged_source(&id, &GrantSet::from_manifest(package.manifest()), source)?;
+        check_privileged_source(&id, package.manifest(), source)?;
         let pending = pending_version(package)?;
         self.tx(|tx, ctx| {
             ensure_idle(tx, &id)?;
@@ -1584,10 +1593,12 @@ fn check_consent(id: &PluginId, declared: &GrantSet, consent: &Consent) -> Resul
 /// recording them from another source all the same.
 fn check_privileged_source(
     id: &PluginId,
-    declared: &GrantSet,
+    manifest: &deckpilot_plugin_manifest::Manifest,
     source: &InstallSource,
 ) -> Result<()> {
-    if *source != InstallSource::Bundled && declared.keys().any(GrantKey::is_first_party_only) {
+    if *source != InstallSource::Bundled
+        && !crate::grants::privileged_constructs(manifest).is_empty()
+    {
         return Err(StoreError::SourceNotAllowed {
             id: id.clone(),
             origin: source.as_str(),
@@ -1889,6 +1900,65 @@ fn apply_grant_changes(
         )?;
     }
     Ok(())
+}
+
+/// The store's own X12 backstop, whatever the manifest rules said.
+#[cfg(test)]
+mod privileged_source_tests {
+    use super::*;
+
+    type Edit = fn(&mut serde_json::Value);
+
+    fn manifest(edit: impl FnOnce(&mut serde_json::Value)) -> deckpilot_plugin_manifest::Manifest {
+        let mut value: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../plugins/first-party/test-fixtures/example-default/manifest.json"
+        ))
+        .unwrap();
+        edit(&mut value);
+        deckpilot_plugin_manifest::Manifest::from_slice(&serde_json::to_vec(&value).unwrap())
+            .unwrap()
+    }
+
+    /// Every privileged construct, not only the privileged permissions, is
+    /// refused from any source but the bundle (even one no manifest rule
+    /// would have let through: no `hostViews` permission at all).
+    #[test]
+    fn every_privileged_construct_is_bundled_only() {
+        let id = PluginId::parse("deckpilot.example-default").unwrap();
+        let registry = InstallSource::Registry {
+            registry: "https://registry.example/".into(),
+        };
+        let plain = manifest(|_| {});
+        check_privileged_source(&id, &plain, &registry).unwrap();
+        let edits: [(&str, Edit); 4] = [
+            ("`statusItems`", |m| {
+                m["contributes"]["statusItems"] = serde_json::json!(["activeProject"]);
+            }),
+            ("`dashboardCards`", |m| {
+                m["contributes"]["dashboardCards"] = serde_json::json!(["activeProject"]);
+            }),
+            ("`node.changesContext`", |m| {
+                m["contributes"]["actions"][0]["node"]["changesContext"] = serde_json::json!(true);
+            }),
+            ("a `resource` parameter", |m| {
+                m["contributes"]["actions"][0]["parameters"][0]["kind"] =
+                    serde_json::json!({ "type": "resource", "kinds": ["directory"] });
+            }),
+        ];
+        for (what, edit) in edits {
+            let m = manifest(edit);
+            let constructs = crate::grants::privileged_constructs(&m);
+            assert!(constructs.contains(what), "{what}: {constructs:?}");
+            assert!(
+                matches!(
+                    check_privileged_source(&id, &m, &registry),
+                    Err(StoreError::SourceNotAllowed { .. })
+                ),
+                "{what}"
+            );
+            check_privileged_source(&id, &m, &InstallSource::Bundled).unwrap();
+        }
+    }
 }
 
 #[cfg(all(test, feature = "sqlcipher"))]

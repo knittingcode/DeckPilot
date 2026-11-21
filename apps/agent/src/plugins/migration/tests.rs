@@ -722,6 +722,39 @@ fn derived_grants_are_never_high_tier_and_never_overwrite() {
     );
 }
 
+/// A newer copy from a registry (an official release, `deckpilot.*`) is
+/// used by the migration as it is, but gets no derived grant: the low and
+/// medium tiers wait for the user's consent like everything else.
+#[test]
+fn a_registry_copy_gets_no_derived_grants() {
+    let env = Env::new();
+    let newer = env.bundle_with("0.2.0", |_| {});
+    let package = bundled::verified(&newer, &newer.pins.plugins[0]).unwrap();
+    let mut manager = env.open();
+    manager
+        .install(
+            &package,
+            &InstallSource::Registry {
+                registry: "https://registry.example/".into(),
+            },
+            &Consent::of(Vec::new(), "user"),
+        )
+        .unwrap();
+    let bundle = env.bundle();
+    start(&mut manager, &bundle, &env.snapshot());
+    let plugin = manager.store().plugin(&plugin_id()).unwrap().unwrap();
+    assert!(matches!(plugin.source, InstallSource::Registry { .. }));
+    assert_eq!(grants(manager.store()), []);
+    assert!(
+        manager
+            .store()
+            .grants(&plugin_id())
+            .unwrap()
+            .iter()
+            .all(|g| g.source != GrantSource::Derived)
+    );
+}
+
 #[test]
 fn the_snapshot_reads_nothing_without_aliases() {
     let env = Env::new();

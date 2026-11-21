@@ -124,40 +124,65 @@ dependency installs alike):
    from the registry's pins (id, version, sha256, size), the pinned keys,
    the compiled lock's `revoked`, the running host
    (`HostEnvironment`: app version, plugin API 1.9, platform; a missing
-   host refuses) and the **effective floor**: the higher of the floor this
-   agent recorded for the plugin and the bundled pin it compiles in
-   (equal versions must have equal files, or the release is refused). A
+   host refuses) and the **effective floor**: the highest of the floor this
+   agent recorded for the plugin, the bundled pin it compiles in, and the
+   highest version any DeckPilot release shipped on this platform
+   (`plugins/first-party/released-pins.json`, compiled in), so a fresh
+   install of a plugin that is not bundled has a floor too. Equal versions
+   must have equal files, or the release is refused. The compiled artifact
+   lock adds a minimum of its own: never below a locked release, and at its
+   version only its package (`Compiled::check_locked`). A
    registry that pins other bytes than the publisher signed, a signature
    of another id or version, a revoked key, a revoked release, a lower
    version or the same version with other files are all refusals.
 4. The package is verified once more against the registry pins with the
    first-party rules (`verify_package`), which yields the only type the
    store installs.
-5. The floor is raised and saved (`<data dir>/plugin-official/floors.json`,
-   atomically) **before** the store installs anything. A floor that cannot
-   be saved refuses the release. An interrupted install is retried with
-   the same bytes and nothing older.
+5. The release is recorded (its version and the keys that signed it, for
+   every verified version, not only the highest) and the floor is raised,
+   both saved (`<data dir>/plugin-official/floors.json`, atomically)
+   **before** the store installs anything. A record that cannot be saved
+   refuses the release. An interrupted install is retried with the same
+   bytes and nothing older.
 6. Every outcome is appended to `<data dir>/plugin-official/audit.jsonl`:
    `{"prev": <sha256 of the previous line>, "record": AuditRecord}`,
-   hash-chained from `genesis` and across the rotation to
-   `audit.jsonl.1` (above 1 MiB); the agent's log carries each line's hash
-   (`official audit line`). This is tamper-evident (an edited, removed or
-   reordered line breaks the chain), not tamper-proof: whoever can write
-   the data directory can rewrite the whole chain.
+   hash-chained from `genesis` and across the rotations (above 1 MiB the
+   log becomes `audit.jsonl.1`, older ones shift up to `audit.jsonl.5`,
+   the oldest is dropped); the agent's log carries each line's hash
+   (`official audit line`). Refusals before a verification are audited
+   too: `pins` refusing because nothing can be verified (no key, an invalid
+   lock, unreadable floors), and a signature that is missing or cannot be
+   downloaded.
+
+   **Limits of the audit log.** It is tamper-evident, not tamper-proof: an
+   edited, removed or reordered line breaks the chain, but whoever can
+   write the data directory (the user's own account, or malware running
+   as the user) can rewrite or truncate the whole chain or delete the
+   files; the last line is anchored only by its hash in the agent's log,
+   which the same account can edit; the first line of the oldest kept
+   generation chains to a file that was dropped; a write failure is
+   logged and never refuses a release. It records what this agent
+   decided, for diagnosis and review, and is not evidence against a local
+   attacker. A signed or remote log would be needed for that.
 
 Then the store's install or update runs exactly as for any registry
 plugin: the user's consent only, a permission escalation staged until the
 user approves it, trial load before activation, the crash-safe journal.
 
-**Run-time revocation.** At every start (with or without a registry,
-offline included) and after every registry refresh, the installed
-**registry** copies of official plugins are checked
-(`Official::revoked_installed`): an active version that the compiled lock
-revokes, or whose recorded release was signed by a key the pinned keys
-now list in `revokedKeys`, is quarantined like a registry `disable`
-verdict (`official::Verdicts` on top of the registry's verdicts; without
-a registry, quarantine only, nothing is lifted). Bundled copies are
-trusted by the compiled pins and are not affected. A revocation therefore
+**Run-time revocation.** The installed **registry** copies of official
+plugins are checked (`Official::revoked_installed`) at every start (with
+or without a registry, offline included), after every registry refresh,
+at every enable and every invocation (`check_verdict`), and for the
+target of every rollback (`rollback` passes `official::Verdicts`, so a
+rollback to a revoked version is refused). A version is not run if the
+compiled lock revokes it, if the release this agent recorded for that
+version was signed by a key the pinned keys now list in `revokedKeys`, if
+this agent has no record of verifying that version at all (a deleted or
+reset floors file: **fail closed**), or if the floors cannot be read. It
+is quarantined like a registry `disable` verdict (`official::Verdicts` on
+top of the registry's verdicts; without a registry, quarantine only,
+nothing is lifted). Bundled copies are trusted by the compiled pins and
+are not affected. A revocation therefore
 reaches users with an application release (the lock and the keys) or
 with the registry's own signed revocations, which apply as before.
 
@@ -217,9 +242,24 @@ closed, and the store refuses privileged kinds from any non-bundled source
 through `PRIVILEGED_GATE = Open(&GateReview)`, a reviewed code change. It
 applies only to an artifact whose size, sha256, signatures and revocations
 already passed, and needs the review's `min_threshold` (at least 2) of
-distinct keys, the plugin named by the review, every privileged grant key
-of the manifest named by the review, then the bundled reader rules
+distinct keys that actually signed (counted again, and recorded as the
+signers), the plugin named by the review, **every** privileged construct
+of the manifest named by the review
+(`deckpilot_plugin_store::privileged_constructs`: the privileged grant
+keys and the `resource` parameters, `node.changesContext`, host variable
+sources, host views, `statusItems` and `dashboardCards`), the registry's
+manifest hash and permissions, then the bundled reader rules
 (`verify_bundled_files`, `validate_bundled`), compatibility and the floor.
+The store's backstop (`check_privileged_source`) refuses the same
+constructs from every source but the bundle, whatever the manifest rules
+said. The publisher verifier's gate itself refuses a manifest that does
+not parse (`check_gate`).
+
+**Derived grants are for bundled copies only.** The module migration
+derives low and medium grants (§5.5 of module-migration.md) only onto a
+copy installed from the bundle; a newer registry copy of the same
+`deckpilot.*` id keeps exactly what the user granted, and the store
+refuses `derive_grants` for any other source.
 Tested behind a test-only gate (`the_opening_path_needs_its_review_conditions_and_meets_the_store_lock`),
 which also shows the store's second lock.
 
