@@ -976,7 +976,13 @@ fn cli_signs_with_two_keys_verifies_audits_and_unpacks() {
     let out = cli
         .sign_with("publisher-b.key", &["--out-dir", &cli.path("job-b")])
         .unwrap();
-    let file_b_job = cli.path(&format!("job-b/{PACKAGE}.{id_b}.minisig"));
+    let file_b_job = cli
+        .dir
+        .path()
+        .join("job-b")
+        .join(format!("{PACKAGE}.{id_b}.minisig"))
+        .display()
+        .to_string();
     assert!(out.contains(&file_b_job), "{out}");
     // Combined next to the package.
     let file_b = cli.path(&format!("{PACKAGE}.{id_b}.minisig"));
