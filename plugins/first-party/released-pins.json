@@ -126,8 +126,8 @@
               "size": 25781
             },
             "plugin.wasm": {
-              "sha256": "ad022ba14b471ec56017a60f88606d1b7a24b3ed3ce564cffe98dee1e8e0284d",
-              "size": 367024
+              "sha256": "e08804b01804af368d49c56a26b68ba06b80be039d54f462b025568b7010e648",
+              "size": 367032
             }
           }
         },
@@ -156,8 +156,8 @@
               "size": 20278
             },
             "plugin.wasm": {
-              "sha256": "0941f09ad008b4358d1c2bd06a95387b19ed6450ae7124bbda74327594ab74bf",
-              "size": 346523
+              "sha256": "36cad7463f6f967d66b3a1e734f89665cb1fa42f1ee5634ecc564d51eaa2c28c",
+              "size": 346475
             }
           }
         },
@@ -178,8 +178,8 @@
               "size": 14244
             },
             "plugin.wasm": {
-              "sha256": "c156c8253bfb35186270d1728e1509f8c0696a77123084b0fb91638c782c1f73",
-              "size": 320671
+              "sha256": "f8f9361ab08574c509a2c572e99f20ed8643e6248b8e676bcd681409c320e05c",
+              "size": 320647
             }
           }
         },
@@ -200,8 +200,8 @@
               "size": 14610
             },
             "plugin.wasm": {
-              "sha256": "c6a252b0e00513a4156d2cb8cc49d919822778b2b7721faa8d0309cbd926f354",
-              "size": 322382
+              "sha256": "a1f13b78b7f878c98afdc3864a3afa87d9407e38ee41ba283b090624ca7fa7bf",
+              "size": 322342
             }
           }
         },
@@ -222,8 +222,8 @@
               "size": 10462
             },
             "plugin.wasm": {
-              "sha256": "f6b84019016211571889079400f8756a90608d1da487a2cd8e234a8f256be6ac",
-              "size": 302945
+              "sha256": "7187a36a5f1391f3ed92fdecae17b4dce7aab981e7121c99568e8fc913efca96",
+              "size": 302937
             }
           }
         },
@@ -244,8 +244,8 @@
               "size": 7039
             },
             "plugin.wasm": {
-              "sha256": "62ae12e1a10d9b650078053cb922c16ace74ce106537e592d7fc2b196b4be535",
-              "size": 253473
+              "sha256": "bbc3cdd5f3cffa9f18fd39063b3475c7b654fca76f63b85beb223ed8f064c289",
+              "size": 253481
             }
           }
         },
@@ -274,8 +274,8 @@
               "size": 17244
             },
             "plugin.wasm": {
-              "sha256": "ab295290d1bcd010fa18996e001de546f3845627232c70f04d284e17816d970f",
-              "size": 294842
+              "sha256": "36ed8f83c1bac82ae194aa43182dcd868bb0fd1f2d04fc19950ce502f2c3217b",
+              "size": 294850
             }
           }
         },
@@ -304,8 +304,8 @@
               "size": 1275
             },
             "plugin.wasm": {
-              "sha256": "787526af398cd8c34dac7628833d30ff3ef74645aafe2ea122da438fed18238a",
-              "size": 214998
+              "sha256": "57d01ed184367ded890994b1d2ab23a2087378c15bfabc6a35ec72dd6f0c7a5d",
+              "size": 215006
             }
           }
         },
@@ -334,8 +334,8 @@
               "size": 10233
             },
             "plugin.wasm": {
-              "sha256": "60381e0ac646c6721cf76a7cc12c220ebe88686983d5ea903599b066242901ce",
-              "size": 296320
+              "sha256": "9828e462a4f1c44ef55df07390b97ab32050e9030f06b45d7c5f9a13f9cd21e8",
+              "size": 296328
             }
           }
         }
