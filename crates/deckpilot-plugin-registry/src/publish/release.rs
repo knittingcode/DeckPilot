@@ -56,8 +56,14 @@ pub fn sign(package: &[u8], key: &SigningKey) -> Result<(String, ReleaseClaim)> 
         revoked: &[],
         limits: &limits,
     };
-    publisher::verify_release(package, &signature, &keys, &claim, &policy)
-        .map_err(|e| PublishError(format!("refusing to sign: {e}")))?;
+    publisher::verify_release(
+        package,
+        std::slice::from_ref(&signature),
+        &keys,
+        &claim,
+        &policy,
+    )
+    .map_err(|e| PublishError(format!("refusing to sign: {e}")))?;
     Ok((signature, claim))
 }
 
@@ -163,7 +169,8 @@ pub fn revocations_of(bytes: &[u8]) -> Result<Vec<RevokedRelease>> {
 #[derive(Debug)]
 pub struct VerifyRequest<'a> {
     pub package: &'a Path,
-    pub signature: &'a Path,
+    /// One signature file per key (a threshold of them must verify).
+    pub signatures: Vec<&'a Path>,
     /// `None`: the pinned keys.
     pub keys: Option<&'a Path>,
     pub claim: ReleaseClaim,
@@ -236,8 +243,15 @@ fn verify_inner(request: &VerifyRequest<'_>) -> Result<publisher::VerifiedReleas
     }
     .map_err(Refusal::Publisher)?;
     let package = read(request.package)?;
-    let signature =
-        publisher::read_signature(&read(request.signature)?).map_err(Refusal::Publisher)?;
+    let signatures = request
+        .signatures
+        .iter()
+        .map(|path| {
+            read(path)
+                .map_err(Refusal::Tool)
+                .and_then(|bytes| publisher::read_signature(&bytes).map_err(Refusal::Publisher))
+        })
+        .collect::<Result<Vec<_>, Refusal>>()?;
     let floor = request
         .released_pins
         .map(|path| {
@@ -257,7 +271,7 @@ fn verify_inner(request: &VerifyRequest<'_>) -> Result<publisher::VerifiedReleas
         revoked: &revoked,
         limits: &limits,
     };
-    publisher::verify_release(&package, &signature, &keys, &request.claim, &policy)
+    publisher::verify_release(&package, &signatures, &keys, &request.claim, &policy)
         .map_err(Refusal::Publisher)
 }
 

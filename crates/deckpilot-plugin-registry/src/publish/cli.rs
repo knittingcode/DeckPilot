@@ -65,7 +65,7 @@ First-party release artifacts (the publisher signature, crate::publisher):
   release sign --package FILE.dpplugin (--key FILE | --key-env NAME) --out FILE.minisig
       Signs a deckpilot.* package with the publisher key after the verifier's own
       checks. --key-env reads the secret key text from an environment variable.
-  release verify --package FILE.dpplugin --signature FILE.minisig --id ID --version V
+  release verify --package FILE.dpplugin --signature FILE.minisig... --id ID --version V
                  --sha256 HEX --size N --app-version V --plugin-api MAJOR.MINOR
                  [--platform macos|windows|linux] [--keys FILE] [--released-pins FILE]
                  [--revocations FILE] [--audit FILE.jsonl] [--unpack DIR]
@@ -619,7 +619,14 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
         }
         "release verify" => {
             let package = PathBuf::from(opts.required("package")?);
-            let signature = PathBuf::from(opts.required("signature")?);
+            let signatures: Vec<PathBuf> = opts
+                .all("signature")
+                .into_iter()
+                .map(PathBuf::from)
+                .collect();
+            if signatures.is_empty() {
+                return fail("--signature is required (once per publisher key that signed)");
+            }
             let claim = crate::publisher::ReleaseClaim {
                 id: plugin_id(&opts.required("id")?)?,
                 version: opts
@@ -652,7 +659,7 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
             opts.finish()?;
             super::release::verify(&super::release::VerifyRequest {
                 package: &package,
-                signature: &signature,
+                signatures: signatures.iter().map(PathBuf::as_path).collect(),
                 keys: keys.as_deref(),
                 claim,
                 host,

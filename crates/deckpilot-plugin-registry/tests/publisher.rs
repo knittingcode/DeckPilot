@@ -86,7 +86,8 @@ impl Case {
             revoked,
             limits: &self.limits,
         };
-        verify_release(&self.bytes, signature, keys, &self.claim, &policy)
+        let signatures: Vec<String> = signature.split('|').map(str::to_owned).collect();
+        verify_release(&self.bytes, &signatures, keys, &self.claim, &policy)
     }
 }
 
@@ -241,6 +242,29 @@ fn revoked_keys_and_thresholds() {
             error,
             PublisherError::Signature(SigError::BelowThreshold { .. })
         ),
+        "{error}"
+    );
+    // Both signatures (the test helper splits signatures at `|`, which
+    // base64 never contains).
+    let by_new = sign(&new, &case.bytes, &case.claim);
+    let both_signed = format!("{by_old}|{by_new}");
+    let verified = case
+        .verify(&both_signed, &keys(&[&old, &new], 2, &[]), None, &[])
+        .unwrap();
+    assert_eq!(verified.signers().len(), 2);
+    // The same signature twice is one key.
+    let twice = format!("{by_old}|{by_old}");
+    assert!(
+        case.verify(&twice, &keys(&[&old, &new], 2, &[]), None, &[])
+            .is_err()
+    );
+    // A valid current signature does not outweigh a revoked one.
+    let third = ThrowawayKey::generate();
+    let error = case
+        .verify(&both_signed, &keys(&[&new, &third], 1, &[&old]), None, &[])
+        .unwrap_err();
+    assert!(
+        matches!(error, PublisherError::RevokedKey { .. }),
         "{error}"
     );
 }

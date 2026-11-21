@@ -375,6 +375,8 @@ pub enum PublisherError {
     NotFirstParty { found: String },
     #[error("the signature is {size} bytes; at most {MAX_SIGNATURE_BYTES}")]
     SignatureTooLarge { size: usize },
+    #[error("{count} signatures; at most {MAX_KEYS} (one per key)")]
+    TooManySignatures { count: usize },
     #[error("the package is {actual}, the claim says {expected}")]
     DigestMismatch { expected: String, actual: String },
     #[error("signed by a revoked publisher key ({fingerprint})")]
@@ -544,12 +546,13 @@ impl AuditRecord {
 }
 
 /// Verifies a first-party release artifact (`package`, the `.dpplugin`
-/// bytes, and `signature`, its base64 minisign signature) against the
-/// publisher `keys`, the reviewed `claim` and the `policy`. See the module
-/// documentation for the order of the checks.
+/// bytes, and `signatures`, its base64 minisign signatures: one per key, a
+/// threshold of them needed) against the publisher `keys`, the reviewed
+/// `claim` and the `policy`. See the module documentation for the order of
+/// the checks.
 pub fn verify_release(
     package: &[u8],
-    signature: &str,
+    signatures: &[String],
     keys: &PublisherKeys,
     claim: &ReleaseClaim,
     policy: &ReleasePolicy<'_>,
@@ -563,13 +566,18 @@ pub fn verify_release(
             found: claim.id.to_string(),
         });
     }
-    if signature.len() > MAX_SIGNATURE_BYTES {
+    if signatures.len() > MAX_KEYS {
+        return Err(PublisherError::TooManySignatures {
+            count: signatures.len(),
+        });
+    }
+    if let Some(signature) = signatures.iter().find(|s| s.len() > MAX_SIGNATURE_BYTES) {
         return Err(PublisherError::SignatureTooLarge {
             size: signature.len(),
         });
     }
     check_bytes(package, claim, policy.limits)?;
-    let signers = check_signers(package, signature, keys, claim)?;
+    let signers = check_signers(package, signatures, keys, claim)?;
     if let Some(revoked) = policy
         .revoked
         .iter()
@@ -646,24 +654,26 @@ fn check_bytes(
 /// and no revoked key did. Returns the fingerprints of the signers.
 fn check_signers(
     package: &[u8],
-    signature: &str,
+    signatures: &[String],
     keys: &PublisherKeys,
     claim: &ReleaseClaim,
 ) -> Result<Vec<String>, PublisherError> {
     let comment = release_comment(&claim.id, &claim.version, &claim.package);
-    for revoked in &keys.revoked_keys {
-        if sig::verify_exact(revoked, signature, package, &comment).is_ok() {
-            return Err(PublisherError::RevokedKey {
-                fingerprint: fingerprint(revoked).unwrap_or_default(),
-            });
-        }
+    let signed_by = |key: &String| {
+        signatures
+            .iter()
+            .any(|signature| sig::verify_exact(key, signature, package, &comment).is_ok())
+    };
+    if let Some(revoked) = keys.revoked_keys.iter().find(|key| signed_by(key)) {
+        return Err(PublisherError::RevokedKey {
+            fingerprint: fingerprint(revoked).unwrap_or_default(),
+        });
     }
-    let signatures = [signature.to_owned()];
-    sig::verify_role(&keys.role(), &signatures, package, &comment)?;
+    sig::verify_role(&keys.role(), signatures, package, &comment)?;
     Ok(keys
         .keys
         .iter()
-        .filter(|key| sig::verify_exact(key, signature, package, &comment).is_ok())
+        .filter(|key| signed_by(key))
         .filter_map(|key| fingerprint(key))
         .collect())
 }
