@@ -222,8 +222,8 @@ jobs:
           jq -c '[.plugins[] | {id, class}] | sort_by(.id)' "$RUNNER_TEMP/bundle-release/bundled/pins.json" | tr -d '\r' > "$RUNNER_TEMP/release-set.json"
           # What bundled.json lists (each directory's manifest id is
           # `deckpilot.<directory>`, checked here too), as the built pins must say.
-          for path in $(jq -r '.plugins[].path' plugins/first-party/bundled.json); do
-            id=$(jq -r .id "plugins/first-party/$path/manifest.json")
+          for path in $(jq -r '.plugins[].path' plugins/first-party/bundled.json | tr -d '\r'); do
+            id=$(jq -r .id "plugins/first-party/$path/manifest.json" | tr -d '\r')
             [ "$id" = "deckpilot.$path" ] || { echo "plugins/first-party/$path has id $id"; exit 1; }
           done
           jq -c '[.plugins[] | {id: ("deckpilot." + .path), class}] | sort_by(.id)' plugins/first-party/bundled.json | tr -d '\r' | diff - "$RUNNER_TEMP/release-set.json"
