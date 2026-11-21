@@ -418,6 +418,33 @@ impl Registry {
         };
         Ok(bytes)
     }
+
+    /// The publisher signature next to the package at `url`
+    /// (`<package>.minisig`): from `releases/` or downloaded, at most
+    /// [`publisher::MAX_SIGNATURE_BYTES`] bytes. Only the publisher
+    /// verifier decides what it is worth (`official.rs`).
+    ///
+    /// [`publisher::MAX_SIGNATURE_BYTES`]: deckpilot_plugin_registry::publisher::MAX_SIGNATURE_BYTES
+    pub fn signature(&self, url: &str) -> Result<Vec<u8>, DownloadError> {
+        match &self.source {
+            Source::Https(https) => https.signature(url),
+            Source::Directory { releases, .. } => {
+                let not_ours = || {
+                    DownloadError::Refused(format!("{url} is not a release asset of this registry"))
+                };
+                let relative = url.strip_prefix(DOWNLOAD_PREFIX).ok_or_else(not_ours)?;
+                let path = below(releases, &format!("{relative}.minisig")).ok_or_else(not_ours)?;
+                let limit =
+                    u64::try_from(deckpilot_plugin_registry::publisher::MAX_SIGNATURE_BYTES)
+                        .unwrap_or(u64::MAX);
+                read_capped(&path, limit).map_err(|e| {
+                    DownloadError::Unavailable(format!(
+                        "the publisher signature {relative}.minisig could not be read: {e}"
+                    ))
+                })
+            }
+        }
+    }
 }
 
 #[cfg(test)]

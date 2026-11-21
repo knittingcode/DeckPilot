@@ -58,6 +58,7 @@ use super::executor::{DataAccess, Executor, Opener, OwnVariables, SharedData, Tr
 use super::lane::{Done, Ended, Job, Lane, LaneEnd, LaneError, Reply, StateDone};
 use super::locales::Locales;
 use super::migration::LegacySnapshot;
+use super::official::{self, Official};
 use super::registry::{Registry, download_error};
 use super::variables::PublishedVariables;
 use super::worker::{EngineFailure, EngineReply, Events, StateReply};
@@ -335,6 +336,9 @@ pub(super) struct PluginService {
     /// The first-party plugins of the application bundle and the pins
     /// compiled into the agent (`bundled.rs`).
     bundle: Bundle,
+    /// Official releases from a registry: publisher keys, revocations,
+    /// rollback floors and their audit log (`official.rs`).
+    official: Official,
     /// What `deckpilot.db` said about the modules that can migrate at the
     /// agent's last module load (the user's decisions need it); `None`
     /// until then and whenever no alias exists. Its secrets never leave
@@ -502,6 +506,7 @@ impl PluginService {
             values,
             health: HealthLog::default(),
             bundle,
+            official: Official::open(&data_dir.join(official::STATE_DIR)),
             snapshot: None,
             builtins: BTreeMap::new(),
             plan_cache: None,
@@ -510,8 +515,10 @@ impl PluginService {
         };
         if service.registry.is_some() {
             let _ = service.refresh();
-            service.apply_verdicts();
         }
+        // Also offline and without a registry: the official revocations
+        // compiled into this agent.
+        service.apply_verdicts();
         for record in service.manager.store().plugins()? {
             service.sync_grants(&record.id);
         }
@@ -1107,10 +1114,39 @@ impl PluginService {
 
     /// Applies the stored revocations to installed plugins (also offline).
     fn apply_verdicts(&mut self) {
+        let records = self.manager.store().plugins().unwrap_or_default();
+        let revoked = self.official.revoked_installed(&records);
         let Some(registry) = self.registry.as_ref() else {
+            // No registry: only the official revocations, which quarantine
+            // (nothing is lifted without the registry's verdicts).
+            for ((id, version), why) in &revoked {
+                let quarantine = records.iter().any(|r| {
+                    r.id == *id
+                        && r.state != PluginState::Quarantined
+                        && r.state.is_stable()
+                        && r.active().is_some_and(|a| a.version == *version)
+                });
+                if quarantine {
+                    match self.manager.quarantine(id, &format!("revoked: {why}")) {
+                        Ok(()) => {
+                            info!(plugin = %id, %version, %why, "official revocation applied");
+                            self.stop_host(id);
+                            self.sync_grants(id);
+                            self.changed(id);
+                        }
+                        Err(e) => {
+                            warn!(plugin = %id, error = %e, "official revocation not applied");
+                        }
+                    }
+                }
+            }
             return;
         };
-        match self.manager.apply_verdicts(registry.client()) {
+        let verdicts = official::Verdicts {
+            official: &revoked,
+            registry: registry.client(),
+        };
+        match self.manager.apply_verdicts(&verdicts) {
             Ok(changes) => {
                 for change in changes {
                     info!(?change, "registry verdict applied");
@@ -1172,10 +1208,29 @@ impl PluginService {
         version: &Version,
     ) -> Result<(ExpectedPackage, Vec<u8>), IpcError> {
         let target = self.pins(id, version)?;
-        let bytes = self
-            .registry()?
+        let registry = self.registry()?;
+        let bytes = registry
             .package(&target.url, &target.expected.package)
             .map_err(|e| download_error(&e))?;
+        // An official plugin: a first-party release signed by the
+        // publisher keys compiled into this agent, on top of the registry's
+        // pins (`official.rs`). Nothing is installed before it verified.
+        if deckpilot_plugin_store::is_first_party(id) {
+            let signature = registry
+                .signature(&target.url)
+                .map_err(|e| download_error(&e))?;
+            let host = host_environment();
+            self.official
+                .verify(&official::Delivery {
+                    expected: &target.expected,
+                    package: &bytes,
+                    signatures: std::slice::from_ref(&signature),
+                    pin: self.bundle.pins.get(id),
+                    host: host.as_ref(),
+                    now: Utc::now(),
+                })
+                .map_err(|refusal| refusal.to_ipc(id))?;
+        }
         Ok((target.expected, bytes))
     }
 
@@ -1185,16 +1240,24 @@ impl PluginService {
         id: &PluginId,
         version: &Version,
     ) -> Result<deckpilot_plugin_registry::InstallTarget, IpcError> {
-        // The plugins the application bundles come only from the bundle,
-        // verified against the pins compiled into this agent: never from a
-        // registry, even one authorized to serve `deckpilot.*`.
-        if deckpilot_plugin_bundled::is_bundled_id(id, &self.bundle.pins) {
+        // An official plugin (`deckpilot.*`, the bundled ones included)
+        // comes from a registry only as a first-party release signed by the
+        // publisher keys compiled into this agent (`official.rs`); without
+        // them (none are provisioned yet) it is refused before any download
+        // and a bundled one comes only from the application bundle.
+        if deckpilot_plugin_store::is_first_party(id)
+            && let Err(why) = self.official.ready()
+        {
+            let what = if deckpilot_plugin_bundled::is_bundled_id(id, &self.bundle.pins) {
+                "is bundled with DeckPilot and comes only from the application bundle"
+            } else {
+                "is an official DeckPilot plugin and is never installed from a registry"
+            };
             return Err(error(
                 ErrorCode::InvalidRequest,
                 reason::INVALID_PACKAGE,
                 format!(
-                    "{id} is bundled with DeckPilot and comes only from the application \
-                     bundle; a registry never serves it"
+                    "{id} {what} unless the release is signed by the DeckPilot publisher: {why}"
                 ),
             ));
         }
@@ -1930,6 +1993,15 @@ impl PluginService {
             self.progress(id.as_str(), PluginOperation::Update, PluginStage::Verifying);
             let verified = verify_package(&bytes, &expected, &Limits::default())
                 .map_err(|e| package_error(&e))?;
+            // Bundled → Marketplace-managed: the update replaces the bundled
+            // copy only if it keeps what the user's configuration refers to;
+            // the bundled copy stays active until the store committed it.
+            if record.source == InstallSource::Bundled
+                && let Some(active) = record.active()
+            {
+                official::check_transition(&active.manifest, verified.manifest())
+                    .map_err(|m| error(ErrorCode::Failed, reason::INVALID_PACKAGE, m))?;
+            }
             self.trial_load(id, &verified)?;
             self.progress(
                 id.as_str(),

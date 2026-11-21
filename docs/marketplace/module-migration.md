@@ -2063,8 +2063,12 @@ workflows needs its own review.
 bundle on disk. A registry compromise delivering a privileged
 `deckpilot.*` update.
 
-*Mitigations.* The gate above. The registry never serves
-`BUNDLED_PLUGIN_IDS`. Updates to these plugins ride app releases only.
+*Mitigations.* The gate above. The registry serves a `deckpilot.*`
+package (`BUNDLED_PLUGIN_IDS` included) only as a first-party release
+signed by the publisher keys compiled into the agent, and never with these
+kinds ([publisher-signature.md](publisher-signature.md#the-agent-installing-and-updating-official-plugins);
+no key is pinned yet, so it serves none). Updates that need these kinds
+ride app releases only.
 
 *Residual.* The trust is DeckPilot's release pipeline. A compromised
 release compromises the agent anyway, so the gate adds no new trust root.

@@ -43,6 +43,8 @@ mod locales;
 #[cfg(feature = "plugins")]
 mod migration;
 #[cfg(feature = "plugins")]
+mod official;
+#[cfg(feature = "plugins")]
 mod origins;
 #[cfg(feature = "plugins")]
 mod registry;
