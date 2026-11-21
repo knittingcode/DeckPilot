@@ -15,9 +15,9 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use deckpilot_plugin_manifest::{
-    ApiLevel, FIRST_PARTY_PUBLISHER, HostEnvironment, Manifest, PackageDigest, Platform, PluginId,
+    ApiLevel, FIRST_PARTY_PUBLISHER, HostEnvironment, PackageDigest, Platform, PluginId,
 };
-use deckpilot_plugin_package::{Limits, MANIFEST, read_archive};
+use deckpilot_plugin_package::Limits;
 use semver::Version;
 use serde::Deserialize;
 
@@ -32,20 +32,47 @@ fn read(path: &Path) -> Result<Vec<u8>> {
     std::fs::read(path).map_err(|e| PublishError(format!("{}: {e}", path.display())))
 }
 
-/// Signs `package` with `key`: checks it first exactly as
-/// [`publisher::verify_release`] will (first-party rules, the gate), so a
-/// package that could never verify is never signed. Returns the signature
-/// (base64 minisign) and the claim it covers.
-pub fn sign(package: &[u8], key: &SigningKey) -> Result<(String, ReleaseClaim)> {
-    let claim = claim_of(package)?;
+/// Step 1 of `release sign`, before the secret key is loaded: the claim is
+/// the given `id` and `version` (from the release tag, never from the
+/// package) with the package's digest, and the package passes every check
+/// [`publisher::verify_release`] applies without a signature (first-party
+/// rules, the gate, id and version equal to the claim). Nothing that could
+/// never verify is signed, and no archive is parsed while the key is in
+/// memory.
+pub fn preflight(package: &[u8], id: PluginId, version: Version) -> Result<ReleaseClaim> {
+    let claim = ReleaseClaim {
+        id,
+        version,
+        package: publisher::digest_of(package),
+    };
+    publisher::check_release_package(package, &claim, &Limits::default())
+        .map_err(|e| PublishError(format!("refusing to sign: {e}")))?;
+    Ok(claim)
+}
+
+/// Step 2: the signature of exactly the claimed bytes. Only hashing: the
+/// package is not parsed here.
+pub fn sign(package: &[u8], claim: &ReleaseClaim, key: &SigningKey) -> Result<String> {
+    if publisher::digest_of(package) != claim.package {
+        return fail("the package changed since the preflight");
+    }
     let comment = publisher::release_comment(&claim.id, &claim.version, &claim.package);
-    let signature = key.sign(package, &comment)?;
-    // The checks the verifier runs, with this key alone pinned (the host's
-    // compatibility is the verifier's: it knows the host).
+    key.sign(package, &comment)
+}
+
+/// Step 3, after the secret key is dropped: the signature verifies with
+/// the verifier's rules against `public_key` alone (the host's
+/// compatibility is the application build's check: it knows the host).
+pub fn check_signed(
+    package: &[u8],
+    signature: &str,
+    public_key: &str,
+    claim: &ReleaseClaim,
+) -> Result<()> {
     let keys = PublisherKeys {
         publisher_keys_version: publisher::KEYS_VERSION,
         publisher: FIRST_PARTY_PUBLISHER.to_owned(),
-        keys: vec![key.public().to_owned()],
+        keys: vec![public_key.to_owned()],
         threshold: 1,
         revoked_keys: Vec::new(),
     };
@@ -56,34 +83,9 @@ pub fn sign(package: &[u8], key: &SigningKey) -> Result<(String, ReleaseClaim)> 
         revoked: &[],
         limits: &limits,
     };
-    publisher::verify_release(
-        package,
-        std::slice::from_ref(&signature),
-        &keys,
-        &claim,
-        &policy,
-    )
-    .map_err(|e| PublishError(format!("refusing to sign: {e}")))?;
-    Ok((signature, claim))
-}
-
-/// The id, version and digest of a package, from its own manifest.
-fn claim_of(package: &[u8]) -> Result<ReleaseClaim> {
-    let manifest = manifest_of(package)?;
-    Ok(ReleaseClaim {
-        id: manifest.id.clone(),
-        version: manifest.version.clone(),
-        package: publisher::digest_of(package),
-    })
-}
-
-fn manifest_of(package: &[u8]) -> Result<Manifest> {
-    let files =
-        read_archive(package, &Limits::default()).map_err(|e| PublishError(e.to_string()))?;
-    let bytes = files
-        .get(MANIFEST)
-        .ok_or_else(|| PublishError(format!("the package has no {MANIFEST}")))?;
-    Manifest::from_slice(bytes).map_err(|e| PublishError(format!("{MANIFEST}: {e}")))
+    publisher::verify_release(package, &[signature.to_owned()], &keys, claim, &policy)
+        .map(|_| ())
+        .map_err(|e| PublishError(format!("the new signature does not verify: {e}")))
 }
 
 /// `released-pins.json` (format 1), only what the floor needs.

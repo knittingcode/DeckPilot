@@ -590,22 +590,7 @@ pub fn verify_release(
         });
     }
 
-    // The package, with the first-party rules. The privileged kinds are
-    // named first, so the refusal says it is the gate.
-    let files = read_archive(package, policy.limits)?;
-    let manifest_bytes = files
-        .get(MANIFEST)
-        .ok_or_else(|| PublisherError::Package(format!("{MANIFEST} is missing")))?;
-    check_gate(manifest_bytes)?;
-    let expected = ExpectedPackage {
-        id: claim.id.clone(),
-        version: claim.version.clone(),
-        package: claim.package.clone(),
-        manifest_sha256: sha256(manifest_bytes),
-        permissions: None,
-        first_party: true,
-    };
-    let verified = verify_package(package, &expected, policy.limits)?;
+    let verified = check_contents(package, claim, policy.limits)?;
     if let Some(host) = policy.host {
         verified
             .manifest()
@@ -621,6 +606,48 @@ pub fn verify_release(
         files: verified.files().clone(),
         signers,
     })
+}
+
+/// What [`verify_release`] checks of a package besides its signature,
+/// revocation, host and floor: the claimed bytes, the privileged-kinds gate
+/// and the first-party package rules, with the claim's id and version.
+/// `release sign` runs it **before** it loads the secret key, so no
+/// archive is parsed while the key is in memory.
+pub fn check_release_package(
+    package: &[u8],
+    claim: &ReleaseClaim,
+    limits: &Limits,
+) -> Result<Manifest, PublisherError> {
+    if claim.id.publisher() != FIRST_PARTY_PUBLISHER {
+        return Err(PublisherError::NotFirstParty {
+            found: claim.id.to_string(),
+        });
+    }
+    check_bytes(package, claim, limits)?;
+    Ok(check_contents(package, claim, limits)?.manifest().clone())
+}
+
+/// The package, with the first-party rules. The privileged kinds are named
+/// first, so the refusal says it is the gate.
+fn check_contents(
+    package: &[u8],
+    claim: &ReleaseClaim,
+    limits: &Limits,
+) -> Result<deckpilot_plugin_package::VerifiedPackage, PublisherError> {
+    let files = read_archive(package, limits)?;
+    let manifest_bytes = files
+        .get(MANIFEST)
+        .ok_or_else(|| PublisherError::Package(format!("{MANIFEST} is missing")))?;
+    check_gate(manifest_bytes)?;
+    let expected = ExpectedPackage {
+        id: claim.id.clone(),
+        version: claim.version.clone(),
+        package: claim.package.clone(),
+        manifest_sha256: sha256(manifest_bytes),
+        permissions: None,
+        first_party: true,
+    };
+    Ok(verify_package(package, &expected, limits)?)
 }
 
 /// The bytes are the claimed bytes, before anything parses them.

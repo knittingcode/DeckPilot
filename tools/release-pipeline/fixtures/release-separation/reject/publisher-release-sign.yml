@@ -1,0 +1,11 @@
+# expect: runs a registry publishing or signing command
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    steps:
+      - run: target/release/deckpilot-registry release sign --package p.dpplugin --key-env KEY --out p.sig

@@ -62,9 +62,12 @@ DECKPILOT_REGISTRY_KEY_PASSWORD; never printed.
   verify-site [--roots FILE] [--state DIR] [--min-remaining 3d] [--require-packages]
 
 First-party release artifacts (the publisher signature, crate::publisher):
-  release sign --package FILE.dpplugin (--key FILE | --key-env NAME) --out FILE.minisig
-      Signs a deckpilot.* package with the publisher key after the verifier's own
-      checks. --key-env reads the secret key text from an environment variable.
+  release sign --package FILE.dpplugin --id ID --version V (--key FILE | --key-env NAME)
+               --out FILE.minisig
+      Signs a deckpilot.* package as ID V (from the release tag; the package must
+      say the same) with the publisher key, after the verifier's own checks, which
+      run before the key is loaded. --key-env reads the secret key text from an
+      environment variable.
   release verify --package FILE.dpplugin --signature FILE.minisig... --id ID --version V
                  --sha256 HEX --size N --app-version V --plugin-api MAJOR.MINOR
                  [--platform macos|windows|linux] [--keys FILE] [--released-pins FILE]
@@ -595,16 +598,27 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
         "release sign" => {
             let package = std::fs::read(opts.required("package")?)
                 .map_err(|e| PublishError(format!("--package: {e}")))?;
+            let id = plugin_id(&opts.required("id")?)?;
+            let version: Version = opts
+                .parsed("version")?
+                .ok_or_else(|| PublishError("--version is required".into()))?;
             let out = PathBuf::from(opts.required("out")?);
-            let key = release_key(&opts, io)?;
-            opts.finish()?;
             if out.exists() {
                 return fail(format!(
                     "{} already exists; refusing to overwrite",
                     out.display()
                 ));
             }
-            let (signature, claim) = super::release::sign(&package, &key)?;
+            // Every check that parses the package runs before the secret
+            // key is loaded, and the key is dropped before the signature is
+            // verified.
+            let claim = super::release::preflight(&package, id, version)?;
+            let key = release_key(&opts, io)?;
+            opts.finish()?;
+            let signature = super::release::sign(&package, &claim, &key)?;
+            let public = key.public().to_owned();
+            drop(key);
+            super::release::check_signed(&package, &signature, &public, &claim)?;
             std::fs::write(&out, format!("{signature}\n"))
                 .map_err(|e| PublishError(format!("{}: {e}", out.display())))?;
             format!(
@@ -613,7 +627,7 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
                 claim.version,
                 claim.package.sha256,
                 claim.package.size,
-                crate::publisher::fingerprint(key.public()).unwrap_or_default(),
+                crate::publisher::fingerprint(&public).unwrap_or_default(),
                 out.display()
             )
         }
