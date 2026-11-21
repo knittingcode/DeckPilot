@@ -1,0 +1,12 @@
+# expect: runs in the registry environment official-release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    environment: official-release
+    steps:
+      - run: echo nothing

@@ -69,7 +69,7 @@ Secret keys never belong in this directory.
 | `sign-index --key FILE [--seq N]` | `index/<seq>.json.minisig` with `deckpilot-registry v1 role:index seq:<seq> keys:<n>` | the index key |
 | `timestamp --key FILE [--expires-in 7d]` | re-signs `timestamp.json` for the newest signed index | the timestamp key |
 | `verify-site [--roots F] [--state DIR] [--min-remaining 3d] [--require-packages]` | runs the client end to end (see below) | — |
-| `release sign --package F.dpplugin (--key FILE \| --key-env NAME) --out F.dpplugin.minisig` | the first-party publisher signature of a release artifact, after the verifier's own checks ([publisher-signature.md](../../docs/marketplace/publisher-signature.md)); only in `knittingcode/deckpilot-plugins`' release environment | the publisher key |
+| `release sign --package F.dpplugin --id ID --version V (--key FILE \| --key-env NAME) --out F.dpplugin.minisig` | the first-party publisher signature of a release artifact as `ID V` (from the release tag; the package must say the same), after the verifier's own checks, which run before the key is loaded; the key is dropped before the new signature is verified ([publisher-signature.md](../../docs/marketplace/publisher-signature.md)); only in `knittingcode/deckpilot-plugins`' release environment | the publisher key |
 | `release verify --package F --signature F.minisig… --id ID --version V --sha256 H --size N --app-version V --plugin-api M.N [--platform P] [--keys F] [--released-pins F] [--revocations F] [--audit F.jsonl] [--unpack DIR]` | verifies a release artifact against the claim, the pinned publisher keys, revocations, the host and the rollback floor; audits the outcome; grants nothing | — |
 
 `--now <RFC 3339>` replaces the system clock in every command that records

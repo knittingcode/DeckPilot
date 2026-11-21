@@ -198,8 +198,11 @@ job `gate`) on every pull request that touches a workflow or
   refused. Tests: `tools/release-pipeline/test-publication.sh`.
 - `tools/release-pipeline/check-release-separation.py`: no workflow
   publishes plugin packages or registry metadata, runs a registry signing
-  or publishing command, signs a plugin package, or uses a registry secret
-  or environment, and none mixes them with the application's signing
+  or publishing command (including `release sign`; `release verify` only
+  reads), signs a plugin package, or uses a registry or publisher secret
+  (`REGISTRY_*`, `DECKPILOT_PUBLISHER_*`, as `secrets.X` or `secrets['X']`,
+  or the whole context with `toJSON(secrets)`) or environment
+  (`registry-*`, `official-release`), and none mixes them with the application's signing
   secrets or `production-release`. Tests:
   `tools/release-pipeline/test-release-separation.sh` with the fixtures in
   `tools/release-pipeline/fixtures/release-separation/`.

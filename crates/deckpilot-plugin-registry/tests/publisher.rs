@@ -473,6 +473,10 @@ fn cli_signs_verifies_audits_and_unpacks() {
             "sign",
             "--package",
             &cli.path("alpha.dpplugin"),
+            "--id",
+            "deckpilot.alpha",
+            "--version",
+            "1.2.0",
             "--key-env",
             "PUBLISHER_KEY",
             "--out",
@@ -577,6 +581,10 @@ fn cli_refuses_to_sign_what_could_never_verify() {
             "sign",
             "--package",
             &cli.path("acme.dpplugin"),
+            "--id",
+            "acme.alpha",
+            "--version",
+            "1.0.0",
             "--key",
             &cli.path("publisher.key"),
             "--out",
@@ -585,20 +593,37 @@ fn cli_refuses_to_sign_what_could_never_verify() {
         .unwrap_err();
     assert!(error.contains("refusing to sign"), "{error}");
     assert!(!Path::new(&cli.path("acme.minisig")).exists());
-    cli.env.clear();
-    let error = cli
-        .run(&[
+
+    let bytes = package("deckpilot.alpha", "1.2.0").bytes;
+    std::fs::write(cli.path("alpha.dpplugin"), &bytes).unwrap();
+    let sign = |cli: &Cli, id: &str, version: &str, key_env: &str| {
+        cli.run(&[
             "release",
             "sign",
             "--package",
-            &cli.path("acme.dpplugin"),
+            &cli.path("alpha.dpplugin"),
+            "--id",
+            id,
+            "--version",
+            version,
             "--key-env",
-            "MISSING",
+            key_env,
             "--out",
-            &cli.path("acme.minisig"),
+            &cli.path("alpha.minisig"),
         ])
-        .unwrap_err();
+    };
+    // The tag's id and version, not the package's: a package that says
+    // otherwise is refused, before the key is loaded (MISSING is never read).
+    cli.env.clear();
+    for (id, version) in [("deckpilot.alpha", "1.2.1"), ("deckpilot.beta", "1.2.0")] {
+        let error = sign(&cli, id, version, "MISSING").unwrap_err();
+        assert!(error.contains("refusing to sign"), "{error}");
+        assert!(!error.contains("MISSING"), "{error}");
+    }
+    // A package that passes the preflight then needs the key.
+    let error = sign(&cli, "deckpilot.alpha", "1.2.0", "MISSING").unwrap_err();
     assert!(error.contains("MISSING is not set"), "{error}");
+    assert!(!Path::new(&cli.path("alpha.minisig")).exists());
 }
 
 // ------------------------------------------------------------ the app's files

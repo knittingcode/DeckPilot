@@ -1,0 +1,13 @@
+# A build verifies a first-party release artifact against the pinned
+# publisher keys (docs/marketplace/publisher-signature.md): reading only.
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          target/release/deckpilot-registry release verify --package p.dpplugin --signature p.dpplugin.minisig \
+            --id deckpilot.example --version 0.2.1 --sha256 "$SHA" --size "$SIZE" --app-version 0.10.0 --plugin-api 1.9
