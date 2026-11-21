@@ -79,8 +79,9 @@ impl Notes {
 
 impl Executor {
     /// The host-held `git` and `docker` settings (tests; the agent's
-    /// default is [`ToolHost::from_agent`]).
-    #[cfg(test)]
+    /// default is [`ToolHost::from_agent`]). The runs that use it start
+    /// shell-script stand-ins, so they are Unix-only.
+    #[cfg(all(test, unix))]
     pub fn with_tools(mut self, tools: ToolHost) -> Self {
         self.tools = tools;
         self
