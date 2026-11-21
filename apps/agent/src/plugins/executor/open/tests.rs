@@ -894,6 +894,9 @@ fn only_text_and_list_parameters_are_kept_for_urls() {
 /// leaves the folder (`..`, a link out of it), does not exist, comes with a
 /// handle that is not a folder, or asks for a line in a folder is refused
 /// before anything starts. The record names the binding, never the path.
+// Symbolic links need extra rights on Windows; the escapes through them
+// are what this test covers.
+#[cfg(unix)]
 #[test]
 #[allow(clippy::too_many_lines)] // one fixture, every case
 fn a_path_inside_a_bound_folder_opens_and_nothing_outside_it() {

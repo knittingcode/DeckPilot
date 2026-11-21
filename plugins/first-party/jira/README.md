@@ -165,3 +165,15 @@ cd plugins/runtime && cargo test -p deckpilot-jira           # unit tests
 No `url` crate in the module: the few URLs it needs are built and checked
 by `../support` (`deckpilot-first-party-support`), whose tests compare it
 with the `url` crate.
+
+## Versions
+
+A changed plugin gets a new version (`manifest.json`, `Cargo.toml` and
+`plugins/runtime/Cargo.lock`): an installation keeps its copy unless the
+bundled version is higher, and refuses a copy whose files differ from the
+pins of the same version (`../README.md`, "Versions").
+
+| Version | Shipped in | What changed |
+| --- | --- | --- |
+| 0.1.0 | DeckPilot 0.7.0 to 0.9.0 | The first release |
+| 0.1.1 | the next DeckPilot release | Rebuilt with the current plugin SDK and `deckpilot-first-party-support`; the manifest and the actions are unchanged |

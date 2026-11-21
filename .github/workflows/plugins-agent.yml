@@ -25,6 +25,8 @@ on:
       - Cargo.lock
       - rust-toolchain.toml
       - tools/ci/rust-pinned-toolchain.sh
+      - tools/release-pipeline/check-bundled-plugins.sh
+      - tools/release-pipeline/check-released-pins.sh
       - .github/workflows/plugins-agent.yml
   pull_request:
     paths:
@@ -37,6 +39,8 @@ on:
       - Cargo.lock
       - rust-toolchain.toml
       - tools/ci/rust-pinned-toolchain.sh
+      - tools/release-pipeline/check-bundled-plugins.sh
+      - tools/release-pipeline/check-released-pins.sh
       - .github/workflows/plugins-agent.yml
   workflow_dispatch:
 
@@ -199,9 +203,9 @@ jobs:
         run: cargo test -p deckpilot-agent --features plugins --test plugins_git --test plugins_docker --locked -- --nocapture
       # The bundle layout as the release builds it (and
       # DECKPILOT_RELEASE_PLUGINS=1 locally), with the test fixture: built twice from clean
-      # target directories (reproducible on this platform), the agent
-      # compiled with the pins, and the release check against both. Last,
-      # because it rebuilds the agent.
+      # target directories (reproducible on this platform), no released
+      # version with other files, the agent compiled with the pins, and the
+      # release check against both. Last, because it rebuilds the agent.
       - name: Bundle layout dry run
         run: |
           exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
@@ -209,6 +213,12 @@ jobs:
           # classes. The fixture builds below contain it too, and are checked
           # against an agent compiled with their pins.
           plugins/first-party/build.sh --out "$RUNNER_TEMP/bundle-release"
+          # A released version never changes (plugins/first-party/README.md,
+          # "Versions"): no plugin of the release set has the id and version
+          # of one a release shipped, recorded in
+          # plugins/first-party/released-pins.json for this platform, with
+          # other files. check-bundled-plugins.sh below checks it again.
+          tools/release-pipeline/check-released-pins.sh "$RUNNER_TEMP/bundle-release/bundled/pins.json"
           jq -c '[.plugins[] | {id, class}] | sort_by(.id)' "$RUNNER_TEMP/bundle-release/bundled/pins.json" | tr -d '\r' > "$RUNNER_TEMP/release-set.json"
           # What bundled.json lists (each directory's manifest id is
           # `deckpilot.<directory>`, checked here too), as the built pins must say.

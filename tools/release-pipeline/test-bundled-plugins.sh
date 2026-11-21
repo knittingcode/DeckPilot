@@ -249,6 +249,79 @@ fresh
 printf '#!/usr/bin/env bash\nexit 2\n' > "$work/case/agent"
 fails "an agent without --print-bundled-pins" "--print-bundled-pins failed"
 
+echo "== released versions (check-released-pins.sh)"
+case "$(uname -s)" in
+  Darwin) platform=macos other=linux ;;
+  Linux) platform=linux other=windows ;;
+  *) platform=windows other=macos ;;
+esac
+released="$work/released.json"
+# release <platform> <pins.json>: the released pins hold <pins.json> as
+# DeckPilot 0.0.1 on <platform>.
+release() {
+  jq --arg platform "$1" '{releasedPinsVersion: 1, releases: [{release: "0.0.1", platform: $platform, source: "test",
+    plugins: [.plugins[] | {id, version, files}]}]}' "$2" > "$released"
+}
+fresh
+release "$platform" "$work/case/bundled/pins.json"
+export DECKPILOT_RELEASED_PINS="$released"
+passes "a released plugin rebuilt with the same files"
+printf 'X' >> "$plugin/plugin.wasm"
+pin "$work/case/bundled"
+agent_pins "$work/case/bundled/pins.json"
+fails "a released version rebuilt with other files" "$id 0.1.0: released in DeckPilot 0.0.1 ($platform) with other files: plugin.wasm"
+fresh
+release "$platform" "$work/case/bundled/pins.json"
+cp "$fixture/assets/icon-128.png" "$plugin/assets/extra.png"
+pin "$work/case/bundled"
+agent_pins "$work/case/bundled/pins.json"
+fails "a released version with another file set" "with other files: assets/extra.png"
+fresh
+release "$other" "$work/case/bundled/pins.json"
+printf 'X' >> "$plugin/plugin.wasm"
+pin "$work/case/bundled"
+agent_pins "$work/case/bundled/pins.json"
+passes "other files than another platform's release (reproducible on one platform only)"
+fresh
+release "$platform" "$work/case/bundled/pins.json"
+printf 'X' >> "$plugin/plugin.wasm"
+jq '.version = "0.1.1"' "$fixture/manifest.json" > "$plugin/manifest.json"
+pin "$work/case/bundled"
+agent_pins "$work/case/bundled/pins.json"
+passes "a changed plugin with a new version"
+fresh
+jq '.releases[0].plugins[0].files.LICENSE.sha256 = "x"' <<< '{"releasedPinsVersion":1,"releases":[{"release":"0.0.1","platform":"macos","source":"","plugins":[{"id":"deckpilot.x","version":"0.1.0","files":{"LICENSE":{"sha256":"0","size":1}}}]}]}' > "$released"
+fails "malformed released pins" "is not released pins format 1"
+fresh
+release "$platform" "$work/case/bundled/pins.json"
+jq '.releases += .releases' "$released" > "$work/r.json" && mv "$work/r.json" "$released"
+fails "a release recorded twice for a platform" "is not released pins format 1"
+fresh
+rm -f "$released"
+fails "no released pins" "does not exist"
+unset DECKPILOT_RELEASED_PINS
+
+# --record, as release preparation runs it.
+record() { "$here/check-released-pins.sh" --record "$1" "$2" --platform "$platform" --released "$released" > "$work/check.log" 2>&1; }
+fresh
+printf '{"releasedPinsVersion":1,"releases":[]}\n' > "$released"
+record 0.0.1 "$work/case/bundled/pins.json" && [ "$(jq '.releases | length' "$released")" = 1 ] \
+  && ok "--record adds a release" || bad "--record adds a release: $(cat "$work/check.log")"
+record 0.0.1 "$work/case/bundled/pins.json" && [ "$(jq '.releases | length' "$released")" = 1 ] \
+  && ok "--record of the same pins again changes nothing" || bad "--record again: $(cat "$work/check.log")"
+cp "$work/case/bundled/pins.json" "$work/case/old.json"
+printf 'X' >> "$plugin/plugin.wasm"
+pin "$work/case/bundled"
+if record 0.0.1 "$work/case/bundled/pins.json"; then bad "--record of other pins for a recorded release: passes"
+elif grep -q -F "already records other pins for DeckPilot 0.0.1" "$work/check.log"; then ok "--record of other pins for a recorded release is refused"
+else bad "--record of other pins for a recorded release: $(cat "$work/check.log")"; fi
+if record 0.0.2 "$work/case/bundled/pins.json"; then bad "--record of a released version with other files: passes"
+elif grep -q -F "released in DeckPilot 0.0.1" "$work/check.log"; then ok "--record of a released version with other files is refused"
+else bad "--record of a released version with other files: $(cat "$work/check.log")"; fi
+if "$here/check-released-pins.sh" "$work/case/old.json" > "$work/check.log" 2>&1; then
+  ok "the repository's released pins (plugins/first-party/released-pins.json) are well-formed"
+else bad "the repository's released pins: $(cat "$work/check.log")"; fi
+
 echo "== an agent of another architecture (--without-running)"
 check() { "$here/check-bundled-plugins.sh" "$work/case/bundled" "$work/case/agent" --without-running > "$work/check.log" 2>&1; }
 # embedded <file>: an "executable" this machine cannot run, with <file>'s

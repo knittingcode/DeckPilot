@@ -393,7 +393,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-gitlab"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "deckpilot-first-party-support",
  "deckpilot-plugin-abi",
@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-jira"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "deckpilot-first-party-support",
  "deckpilot-plugin-abi",
@@ -425,7 +425,7 @@ dependencies = [
 
 [[package]]
 name = "deckpilot-notifications"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "deckpilot-plugin-sdk",
  "jsonschema",

@@ -389,6 +389,31 @@ request and **never creates a tag**:
 5. commits only the five version files, pushes the branch and opens the
    pull request (`gh pr create`). `--local` stops after the commit.
 
+Before the pull request is merged, the release's bundled plugins are
+recorded in `plugins/first-party/released-pins.json`
+([plugins/first-party/README.md](../plugins/first-party/README.md),
+"Versions"), as a commit on the same branch, built on macOS from the
+release branch:
+
+```sh
+plugins/first-party/build.sh --out target/bundled-plugins
+tools/release-pipeline/check-released-pins.sh --record <version> \
+  target/bundled-plugins/bundled/pins.json --platform macos \
+  --source "plugins/first-party/build.sh at the release commit"
+```
+
+From then on `check-bundled-plugins.sh` (every package and release build)
+and the *Plugins in the agent* workflow refuse a bundled plugin with the id
+and version of a released one but other files: an installation upgraded
+from that release would keep its copy and show it as broken. The release's
+own macOS builds compare their pins with the recorded ones, so a build
+that is not reproducible fails before anything is published. After
+publication, the pins in the published app
+(`DeckPilot_aarch64.app.tar.gz`, `Contents/Resources/bundled/pins.json`)
+are the authority; the Linux and Windows pins (`bundled/pins.json` in the
+`.deb` and the MSI) may be added with `--platform linux` and
+`--platform windows`.
+
 After the pull request is merged and the required checks have passed on
 the merge commit, a maintainer tags **that commit** by hand and pushes the
 tag; that push starts the release workflow.

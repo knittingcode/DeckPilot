@@ -29,6 +29,9 @@
 #     pinned size and sha256, and the manifest names the pinned id and
 #     version;
 #   * there is no .dpplugin, no .minisig and no symbolic link anywhere;
+#   * no plugin has the id and version of a released one with other files
+#     (check-released-pins.sh against plugins/first-party/released-pins.json,
+#     or $DECKPILOT_RELEASED_PINS, for this platform);
 #   * the pins file equals the pins compiled into the agent.
 #
 # Needs bash, jq and sha256sum or shasum (and python3 for
@@ -150,6 +153,10 @@ while IFS=$'\t' read -r id version class; do
     || fail "$id: manifest.json is $manifest_id@$manifest_version, $id@$version is pinned"
   count=$((count + 1))
 done < <(jq -r '.plugins[] | [.id, .version, .class] | @tsv' "$pins")
+
+# A released version never changes: an installation upgraded from that
+# release would keep its copy and find it broken.
+"$(dirname "$0")/check-released-pins.sh" "$pins"
 
 # The agent trusts the digests compiled into it, never this file: they
 # must be the same.

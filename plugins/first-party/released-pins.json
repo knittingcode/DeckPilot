@@ -1,0 +1,100 @@
+{
+  "releasedPinsVersion": 1,
+  "releases": [
+    {
+      "release": "0.9.0",
+      "platform": "macos",
+      "source": "v0.9.0 release asset DeckPilot_aarch64.app.tar.gz (sha256 977e56e741d4cf3dfeb7afcf8d91b6e092e854ed668e220a666b6da7d21418eb), Contents/Resources/bundled/pins.json; both macOS apps are built on the same arm64 runner",
+      "plugins": [
+        {
+          "id": "deckpilot.github",
+          "version": "0.1.0",
+          "files": {
+            "LICENSE": {
+              "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+              "size": 11358
+            },
+            "assets/icon-128.png": {
+              "sha256": "71bbc3b30bb606f478b660eb467179c6edf7fe07a89247108a1a5637406f2182",
+              "size": 604
+            },
+            "manifest.json": {
+              "sha256": "41558ef61b0566d631312fca906c00e1fde72fb16c9f5d4ca1695b276a0872a7",
+              "size": 13927
+            },
+            "plugin.wasm": {
+              "sha256": "422feee7190cf64ed75df97c7f6f9749ef523080ccadef1686d7d44b71018236",
+              "size": 297362
+            }
+          }
+        },
+        {
+          "id": "deckpilot.gitlab",
+          "version": "0.1.0",
+          "files": {
+            "LICENSE": {
+              "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+              "size": 11358
+            },
+            "assets/icon-128.png": {
+              "sha256": "9d2933996589db073f93ad5b9a65451b1c071437b7bb180a727272a21366d158",
+              "size": 4189
+            },
+            "manifest.json": {
+              "sha256": "2b80114d961a491de2eb52bcfafe8b90b83ffd15ee789ffc0f3772f82794daee",
+              "size": 14610
+            },
+            "plugin.wasm": {
+              "sha256": "90a6ab0c7d8165e1634c18f9182290e27c849e9fad6e39d1fd8166dc3a0eef03",
+              "size": 305681
+            }
+          }
+        },
+        {
+          "id": "deckpilot.jira",
+          "version": "0.1.0",
+          "files": {
+            "LICENSE": {
+              "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+              "size": 11358
+            },
+            "assets/icon-128.png": {
+              "sha256": "d3c3d4aa2340c7d6761c521e7570dfaec03df2369efb38cf47280cb056295b04",
+              "size": 4144
+            },
+            "manifest.json": {
+              "sha256": "72c15526e27bd7f6087e3db96793231d9c292c4d05231d9e72e465ee60fb1889",
+              "size": 10462
+            },
+            "plugin.wasm": {
+              "sha256": "750275a6cf49d268811ade481af717179ab3d1ebe60c6840d7ddfb96b13ed640",
+              "size": 286260
+            }
+          }
+        },
+        {
+          "id": "deckpilot.notifications",
+          "version": "0.1.0",
+          "files": {
+            "LICENSE": {
+              "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+              "size": 11358
+            },
+            "assets/icon-128.png": {
+              "sha256": "ff054792b14c9564df6641ec69a06e3e839594d3c6174d99ffa060082dcc2262",
+              "size": 673
+            },
+            "manifest.json": {
+              "sha256": "8139c34a29186449c7df64a676070e3ae72ee6e30ebe4b8e14a41a48d3c8df82",
+              "size": 7039
+            },
+            "plugin.wasm": {
+              "sha256": "d519f2981f96d8e1928ac489e4dbcaa7dc3ba09c8bc3a377a558cc30a908d1b5",
+              "size": 237183
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

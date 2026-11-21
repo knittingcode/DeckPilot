@@ -326,6 +326,11 @@ released either. 0.6.0 is the first version intended for publication.
 
 ### Fixed
 
+- The Notifications, GitLab and Jira plugins that come with DeckPilot are
+  now version 0.1.1: they were rebuilt with the current plugin SDK under
+  0.1.0, so an installation upgraded from 0.9.0 would have kept its 0.1.0
+  copy and shown the plugin as broken. A release check now refuses a
+  bundled plugin with the version of a released one but other files.
 - *Choose from icon library…* showed only the icons imported into the
   profile, so on a new installation it was empty: the library had no
   built-in collection and plugins' icons were never listed.
