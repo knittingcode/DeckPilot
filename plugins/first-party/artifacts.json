@@ -1,0 +1,6 @@
+{
+  "$comment": "First-party release artifacts (signed .dpplugin packages from knittingcode/deckpilot-plugins) that a release build stages as bundled plugins instead of building them from source here (docs/marketplace/publisher-signature.md). Each entry is the claim (id, version, sha256, size) the publisher signature is verified against; `revoked` lists releases no build may use. Empty until the publisher key is provisioned and the first plugin moves (Wave B).",
+  "artifactsVersion": 1,
+  "plugins": [],
+  "revoked": []
+}

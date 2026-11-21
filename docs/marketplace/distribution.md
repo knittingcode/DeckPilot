@@ -120,7 +120,12 @@ in any environment: no `deckpilot-registry` signing or publishing command,
 no registry secret, no `registry-*` environment, and never with the
 application's signing secrets or the `production-release` environment.
 This repository's CI only *tests* the registry tooling, with throwaway keys
-made inside the tests.
+made inside the tests. The same holds for the first-party publisher
+signature of release artifacts ([publisher-signature.md](publisher-signature.md)):
+this repository only *verifies* it (against the public keys pinned in
+`crates/deckpilot-plugin-registry/publisher/first-party.json`, none yet);
+`release sign` runs only in `knittingcode/deckpilot-plugins`' release
+environment.
 
 ## `knittingcode/deckpilot-plugins`: the registry and the packages
 

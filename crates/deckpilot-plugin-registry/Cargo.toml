@@ -75,3 +75,8 @@ jsonschema = { version = "0.61", default-features = false }
 
 [lints]
 workspace = true
+
+# The first-party publisher signature and `release sign|verify`.
+[[test]]
+name = "publisher"
+required-features = ["publish"]

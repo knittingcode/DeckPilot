@@ -25,6 +25,10 @@
 //!
 //! With the `publish` feature, the `publish` module and the `deckpilot-registry`
 //! binary add the offline tooling that generates and signs the site.
+//!
+//! [`publisher`] verifies the first-party publisher signature of a
+//! `.dpplugin` release artifact of DeckPilot's own plugins, before an
+//! application build bundles it (authenticity only; it grants nothing).
 
 mod client;
 mod datetime;
@@ -32,6 +36,7 @@ mod error;
 mod model;
 #[cfg(feature = "publish")]
 pub mod publish;
+pub mod publisher;
 pub mod roots;
 #[cfg(test)]
 mod roots_check;

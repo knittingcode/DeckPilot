@@ -33,7 +33,7 @@ site/v1/ (the Pages tree). Times default to the system clock (--now RFC 3339
 overrides). Passwords: --password-stdin, --password-env NAME, or
 DECKPILOT_REGISTRY_KEY_PASSWORD; never printed.
 
-  keys generate --role root|index|timestamp --out FILE [--no-password]
+  keys generate --role root|index|timestamp|publisher --out FILE [--no-password]
       Local and test keys only; production keys come from the key ceremony.
   keyset init --root PUB [--root PUB] [--root-threshold N] --index PUB --timestamp PUB
               [--seq-floor N] [--first-party]
@@ -60,6 +60,19 @@ DECKPILOT_REGISTRY_KEY_PASSWORD; never printed.
   sign-index --key FILE [--seq N]
   timestamp --key FILE [--expires-in 7d]             (at most 14d)
   verify-site [--roots FILE] [--state DIR] [--min-remaining 3d] [--require-packages]
+
+First-party release artifacts (the publisher signature, crate::publisher):
+  release sign --package FILE.dpplugin (--key FILE | --key-env NAME) --out FILE.minisig
+      Signs a deckpilot.* package with the publisher key after the verifier's own
+      checks. --key-env reads the secret key text from an environment variable.
+  release verify --package FILE.dpplugin --signature FILE.minisig --id ID --version V
+                 --sha256 HEX --size N --app-version V --plugin-api MAJOR.MINOR
+                 [--platform macos|windows|linux] [--keys FILE] [--released-pins FILE]
+                 [--revocations FILE] [--audit FILE.jsonl] [--unpack DIR]
+      Verifies an artifact against the claim (id, version, sha256, size), the pinned
+      publisher keys (--keys: others, for tests), revocations, the host and the
+      released pins (rollback); appends the outcome to --audit; --unpack writes the
+      files of a verified artifact. Authenticity only: it grants no permission.
 ";
 
 /// Where a command reads secrets and writes its output. Tests pass their
@@ -230,6 +243,25 @@ fn signing_key(opts: &Opts, io: &mut Io<'_>) -> Result<SigningKey> {
     SigningKey::load(&path, password.as_ref())
 }
 
+/// `--key FILE` or `--key-env NAME` (the secret key text in an environment
+/// variable, for a CI secret that never touches the disk).
+fn release_key(opts: &Opts, io: &mut Io<'_>) -> Result<SigningKey> {
+    let file = opts.path("key")?;
+    let env = opts.value("key-env")?;
+    let password = password(opts, io)?;
+    match (file, env) {
+        (Some(path), None) => SigningKey::load(&path, password.as_ref()),
+        (None, Some(name)) => {
+            let text =
+                zeroize::Zeroizing::new((io.env)(&name).filter(|v| !v.is_empty()).ok_or_else(
+                    || PublishError(format!("the environment variable {name} is not set")),
+                )?);
+            SigningKey::from_text(&text, &format!("${name}"), password.as_ref())
+        }
+        _ => fail("give either --key FILE or --key-env NAME"),
+    }
+}
+
 fn role_of(opts: &Opts, name: &str) -> Result<Option<Role>> {
     opts.path(name)?
         .map(|path| {
@@ -281,7 +313,7 @@ fn action_of(text: &str) -> Result<RevocationAction> {
 #[allow(clippy::too_many_lines)] // one arm per command
 pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
     let (command, rest) = match args {
-        [group, sub, rest @ ..] if group == "keys" || group == "keyset" => {
+        [group, sub, rest @ ..] if group == "keys" || group == "keyset" || group == "release" => {
             (format!("{group} {sub}"), rest)
         }
         [command, rest @ ..] => (command.clone(), rest),
@@ -559,6 +591,77 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
                 report.packages_verified,
                 report.revocations
             )
+        }
+        "release sign" => {
+            let package = std::fs::read(opts.required("package")?)
+                .map_err(|e| PublishError(format!("--package: {e}")))?;
+            let out = PathBuf::from(opts.required("out")?);
+            let key = release_key(&opts, io)?;
+            opts.finish()?;
+            if out.exists() {
+                return fail(format!(
+                    "{} already exists; refusing to overwrite",
+                    out.display()
+                ));
+            }
+            let (signature, claim) = super::release::sign(&package, &key)?;
+            std::fs::write(&out, format!("{signature}\n"))
+                .map_err(|e| PublishError(format!("{}: {e}", out.display())))?;
+            format!(
+                "signed {} {} (sha256 {}, {} bytes) with publisher key {} to {}",
+                claim.id,
+                claim.version,
+                claim.package.sha256,
+                claim.package.size,
+                crate::publisher::fingerprint(key.public()).unwrap_or_default(),
+                out.display()
+            )
+        }
+        "release verify" => {
+            let package = PathBuf::from(opts.required("package")?);
+            let signature = PathBuf::from(opts.required("signature")?);
+            let claim = crate::publisher::ReleaseClaim {
+                id: plugin_id(&opts.required("id")?)?,
+                version: opts
+                    .parsed("version")?
+                    .ok_or_else(|| PublishError("--version is required".into()))?,
+                package: deckpilot_plugin_manifest::PackageDigest {
+                    sha256: crate::publisher::parse_sha256(&opts.required("sha256")?)
+                        .map_err(|e| PublishError(format!("--sha256: {e}")))?,
+                    size: opts
+                        .parsed("size")?
+                        .ok_or_else(|| PublishError("--size is required".into()))?,
+                },
+            };
+            let platform = opts
+                .value("platform")?
+                .map(|p| super::release::parse_platform(&p))
+                .transpose()?;
+            let host = super::release::host(
+                opts.parsed("app-version")?
+                    .ok_or_else(|| PublishError("--app-version is required".into()))?,
+                &opts.required("plugin-api")?,
+                platform,
+            )?;
+            let keys = opts.path("keys")?;
+            let released_pins = opts.path("released-pins")?;
+            let revocations = opts.path("revocations")?;
+            let audit = opts.path("audit")?;
+            let unpack = opts.path("unpack")?;
+            let now = opts.now()?;
+            opts.finish()?;
+            super::release::verify(&super::release::VerifyRequest {
+                package: &package,
+                signature: &signature,
+                keys: keys.as_deref(),
+                claim,
+                host,
+                released_pins: released_pins.as_deref(),
+                revocations: revocations.as_deref(),
+                audit: audit.as_deref(),
+                unpack: unpack.as_deref(),
+                now,
+            })?
         }
         other => return fail(format!("unknown command `{other}`; see `help`")),
     };

@@ -20,6 +20,7 @@ mod keys;
 mod keyset;
 mod layout;
 mod pack;
+mod release;
 mod verify;
 
 use std::fmt;
@@ -29,6 +30,7 @@ pub use cli::{Io, run};
 pub use keys::{KeyRole, Password, SigningKey, generate_key};
 pub use layout::{SiteSource, Workspace};
 pub use pack::package;
+pub use release::{VerifyRequest, floor_from_released_pins, sign as sign_release};
 pub use verify::{SiteReport, verify_site};
 
 /// Why a publishing command failed. The message never contains a secret.

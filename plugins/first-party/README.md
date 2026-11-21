@@ -34,6 +34,7 @@ pipeline does not package plugins at all (see "Packaging" below).
 | --- | --- |
 | `bundled.json` | The plugins a release bundles: `{"path": "<dir>", "class": "default" \| "migration"}` |
 | `released-pins.json` | The pins of the published releases, per platform: the id, version and the size and sha256 of every file of each bundled plugin (see "Versions") |
+| `artifacts.json` | The signed release artifacts from `knittingcode/deckpilot-plugins` a build is to bundle instead of building from source here, and the releases no build may use ([publisher-signature.md](../../docs/marketplace/publisher-signature.md)). Empty: every plugin is still built from source |
 | `docker/` | `deckpilot.docker`, class `migration` (plugin API 1.9): the replacement of the former built-in `docker` module over `tool.run` and resource handles; [docker/README.md](docker/README.md) lists the differences; checked by its unit tests and `apps/agent/tests/plugins_docker.rs` |
 | `git/` | `deckpilot.git`, class `migration` (plugin API 1.9): the replacement of the former built-in `git` module over `tool.run` and resource handles; [git/README.md](git/README.md) lists the differences; checked by its unit tests and `apps/agent/tests/plugins_git.rs` |
 | `github/` | `deckpilot.github`, class `migration`: the replacement of the former built-in `github` module, checked against its frozen contract (`crates/deckpilot-modules/legacy/`) by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_github.rs` |
