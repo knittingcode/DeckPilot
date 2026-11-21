@@ -75,10 +75,12 @@ may do. Nothing in `VerifiedRelease` is a grant or a tier. Once staged as
 a bundled plugin, the copy is trusted by the pins compiled into the agent
 like every bundled plugin; seeding derives only low-tier grants;
 credentials, private network, process execution and every other medium-
-or high-tier permission wait for the user's consent as before. The
-registry path is unchanged: the registry never serves the bundled ids, a
-`deckpilot.*` registry package is checked with the first-party rules and
-never receives the 1.9 privileged kinds.
+or high-tier permission wait for the user's consent as before. On the
+registry path ([below](#the-agent-installing-and-updating-official-plugins))
+a verified release is installed through the store's ordinary install or
+update with exactly the consent the user gave: a `deckpilot.*` registry
+package is checked with the first-party rules and never receives the 1.9
+privileged kinds.
 
 **The privileged-kinds gate is closed.** A signed artifact that declares
 any plugin API 1.9 privileged kind (`tools`, i.e. process execution;
@@ -88,10 +90,130 @@ any plugin API 1.9 privileged kind (`tools`, i.e. process execution;
 covers Docker, Git, Projects, Workflows and Workspace; GitHub, GitLab,
 Jira and Notifications pass it (unit test
 `the_privileged_kinds_gate_is_closed`). There is no flag, key or
-configuration that opens it. Opening it needs the independent review of
+configuration that opens it; the agent's copy of the gate
+(`apps/agent/src/plugins/official.rs`, `PRIVILEGED_GATE`) is a compiled
+constant, `Closed`. Opening it needs the independent review of
 [publisher-review-request.md](publisher-review-request.md) and a code
 change (the reader would apply `Manifest::validate_bundled` to such an
 artifact, and the X12 tests would grow a "signed artifact" case).
+
+## The agent: installing and updating official plugins
+
+Status: **implemented, inert until a key is provisioned.** Every agent
+build refuses every registry-delivered `deckpilot.*` package before any
+download today, because `publisher/first-party.json` pins no key
+(`this_build_cannot_verify_any_official_release`). Nothing changes for the
+bundled copies: they are seeded offline from the application bundle and
+trusted by the compiled pins exactly as before.
+
+`apps/agent/src/plugins/official.rs` (`Official`), called from
+`PluginService::fetch` for every `deckpilot.*` id (install, update and
+dependency installs alike):
+
+1. **Before any download** (`PluginService::pins`): the keys must be valid
+   and provisioned, the compiled artifact lock valid and the floors file
+   readable (`Official::ready`); otherwise the request is refused
+   (`invalidPackage`). The registry chain then resolves the target as for
+   any plugin: root-signed key set authorizing `deckpilot`, verified
+   `deckpilot` publisher record, pinned size, sha256, manifest hash and
+   permissions (`expected.first_party`).
+2. The package (pinned digest) and `<package>.minisig` (at most
+   `MAX_SIGNATURE_BYTES`) are downloaded from the registry's release
+   location (`Registry::signature`). Where they were hosted never counts.
+3. `Official::verify`: `publisher::verify_release` with the claim taken
+   from the registry's pins (id, version, sha256, size), the pinned keys,
+   the compiled lock's `revoked`, the running host
+   (`HostEnvironment`: app version, plugin API 1.9, platform; a missing
+   host refuses) and the **effective floor**: the higher of the floor this
+   agent recorded for the plugin and the bundled pin it compiles in
+   (equal versions must have equal files, or the release is refused). A
+   registry that pins other bytes than the publisher signed, a signature
+   of another id or version, a revoked key, a revoked release, a lower
+   version or the same version with other files are all refusals.
+4. The package is verified once more against the registry pins with the
+   first-party rules (`verify_package`), which yields the only type the
+   store installs.
+5. The floor is raised and saved (`<data dir>/plugin-official/floors.json`,
+   atomically) **before** the store installs anything. A floor that cannot
+   be saved refuses the release. An interrupted install is retried with
+   the same bytes and nothing older.
+6. Every outcome is appended to `<data dir>/plugin-official/audit.jsonl`:
+   `{"prev": <sha256 of the previous line>, "record": AuditRecord}`,
+   hash-chained from `genesis` and across the rotation to
+   `audit.jsonl.1` (above 1 MiB); the agent's log carries each line's hash
+   (`official audit line`). This is tamper-evident (an edited, removed or
+   reordered line breaks the chain), not tamper-proof: whoever can write
+   the data directory can rewrite the whole chain.
+
+Then the store's install or update runs exactly as for any registry
+plugin: the user's consent only, a permission escalation staged until the
+user approves it, trial load before activation, the crash-safe journal.
+
+**Run-time revocation.** At every start (with or without a registry,
+offline included) and after every registry refresh, the installed
+**registry** copies of official plugins are checked
+(`Official::revoked_installed`): an active version that the compiled lock
+revokes, or whose recorded release was signed by a key the pinned keys
+now list in `revokedKeys`, is quarantined like a registry `disable`
+verdict (`official::Verdicts` on top of the registry's verdicts; without
+a registry, quarantine only, nothing is lifted). Bundled copies are
+trusted by the compiled pins and are not affected. A revocation therefore
+reaches users with an application release (the lock and the keys) or
+with the registry's own signed revocations, which apply as before.
+
+**Bundled → Marketplace-managed.** The user's `updatePlugin` of a plugin
+installed from the bundle fetches the official release as above and hands
+it to the store's update with source `registry`:
+
+- the plugin id is the same, so settings, credentials, storage, grants and
+  every binding in profiles, layouts, projects and workflows stay; the
+  update is refused if the new version would drop an action id, a setting
+  or a credential slot the bundled version declares
+  (`official::check_transition`);
+- grants: kept where the new version declares them alike, narrowed where
+  it narrows them, and anything new or broadened waits for the user's
+  consent (the store's permission diff); nothing is derived or
+  auto-granted, not even low tiers;
+- the bundled copy stays active until the store commits the new one;
+  every refusal (signature, floor, revocation, host, transition, consent)
+  leaves it running. After a crash, recovery either completes the verified
+  update or undoes it; the floor stays raised, so the retry needs the same
+  bytes;
+- idempotent: the same release again is "not newer" and changes nothing;
+- offline: the managed copy keeps working from the store; seeding never
+  replaces a copy from another source, so it is left alone, and a fresh or
+  offline start without a registry still seeds the bundled copies;
+- nothing uninstalls a bundled plugin: a user who removes the managed copy
+  can restore the bundled one (`restoreBundledPlugin`), which the compiled
+  pins vouch for whatever the floor.
+
+The plugins that declare privileged kinds (Docker, Git, Projects,
+Workflows, Workspace) cannot make this transition while the gate is
+closed, and the store refuses privileged kinds from any non-bundled source
+(`check_privileged_source`) even if it were open.
+
+**The gate's opening path** (`official::admit_privileged`): reachable only
+through `PRIVILEGED_GATE = Open(&GateReview)`, a reviewed code change. It
+applies only to an artifact whose size, sha256, signatures and revocations
+already passed, and needs the review's `min_threshold` (at least 2) of
+distinct keys, the plugin named by the review, every privileged grant key
+of the manifest named by the review, then the bundled reader rules
+(`verify_bundled_files`, `validate_bundled`), compatibility and the floor.
+Tested behind a test-only gate (`the_opening_path_needs_its_review_conditions_and_meets_the_store_lock`),
+which also shows the store's second lock.
+
+Tests: `apps/agent/src/plugins/official/tests.rs` (tampered package,
+swapped and replayed signatures, foreign key, registry permission and
+namespace tampering, downgrade and same-version rebuilds, the bundled pin
+as a floor, revoked keys and releases before and after install,
+incompatible host, the closed gate and its opening path, the transition
+keeping settings and grants, new privileges staged, a dropped action
+refused, crash recovery at every update failpoint, offline start,
+fail-closed floors, the hash chain), and
+`apps/agent/tests/plugins_registry_https.rs`
+(`first_party_plugins_need_the_root_authorization_and_a_verified_publisher`:
+an unsigned bundled id refused over HTTPS, the signed one installed; test
+keys through `DECKPILOT_TEST_PUBLISHER_KEYS`, feature `test-hooks` only).
 
 ## Keys
 

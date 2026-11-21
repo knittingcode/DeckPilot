@@ -126,6 +126,12 @@ this repository only *verifies* it (against the public keys pinned in
 `crates/deckpilot-plugin-registry/publisher/first-party.json`, none yet);
 `release sign` runs only in `knittingcode/deckpilot-plugins`' release
 environment.
+The agent verifies it too, at run time, before it installs or updates any
+`deckpilot.*` package a registry delivers (both signatures are needed: the
+registry's for the listing and the pins, the publisher's for the release),
+and keeps a rollback floor, run-time revocations and an audit log of its
+own ([publisher-signature.md](publisher-signature.md#the-agent-installing-and-updating-official-plugins)).
+Without a pinned publisher key every such package is refused.
 
 ## `knittingcode/deckpilot-plugins`: the registry and the packages
 

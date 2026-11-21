@@ -340,6 +340,51 @@ impl HttpsSource {
         Ok(bytes)
     }
 
+    /// The publisher signature published next to the pinned package
+    /// `pinned` (`<package>.minisig`, at most
+    /// [`publisher::MAX_SIGNATURE_BYTES`]), from the same place the package
+    /// comes from. Its content is checked by the publisher verifier; where
+    /// it was hosted never counts.
+    ///
+    /// [`publisher::MAX_SIGNATURE_BYTES`]: deckpilot_plugin_registry::publisher::MAX_SIGNATURE_BYTES
+    pub fn signature(&self, pinned: &str) -> Result<Vec<u8>, DownloadError> {
+        let relative = pinned
+            .strip_prefix(DOWNLOAD_PREFIX)
+            .and_then(plain_path)
+            .ok_or_else(|| {
+                DownloadError::Refused(format!("{pinned} is not a release asset of this registry"))
+            })?;
+        let base = match &self.config.releases {
+            Some(releases) => releases.clone(),
+            None => {
+                Url::parse(DOWNLOAD_PREFIX).map_err(|e| DownloadError::Refused(e.to_string()))?
+            }
+        };
+        let url = base
+            .join(&format!("{relative}.minisig"))
+            .map_err(|e| DownloadError::Refused(format!("{relative}.minisig: {e}")))?;
+        let limit = u64::try_from(deckpilot_plugin_registry::publisher::MAX_SIGNATURE_BYTES)
+            .unwrap_or(u64::MAX);
+        self.get(
+            &url,
+            limit,
+            Redirects::OrHosts(&self.config.package_redirect_hosts),
+            DOCUMENT_TIMEOUT,
+        )
+        .map_err(|e| match e {
+            FetchError::NotFound => DownloadError::Unavailable(format!(
+                "{} (the publisher signature) was not found",
+                shown(&url)
+            )),
+            FetchError::Unavailable(m) => {
+                DownloadError::Unavailable(format!("{} could not be downloaded: {m}", shown(&url)))
+            }
+            FetchError::Refused(m) => {
+                DownloadError::Refused(format!("{} was refused: {m}", shown(&url)))
+            }
+        })
+    }
+
     /// `url`, following allowed redirects, at most `limit` bytes.
     fn get(
         &self,
