@@ -16,6 +16,33 @@ use super::*;
 
 const HANDLE: &str = "0123456789abcdef0123456789abcdef";
 
+/// `unix`, an absolute Unix path, as an absolute path of this platform
+/// (on Windows under `C:`, with `\` for `/`).
+fn absolute(unix: &str) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(format!("C:{}", unix.replace('/', "\\")))
+    } else {
+        PathBuf::from(unix)
+    }
+}
+
+/// `entries` joined as a `PATH` of this platform (`;` on Windows), each
+/// absolute one (`/…`) made [`absolute`].
+fn path_of(entries: &[&str]) -> String {
+    let separator = if cfg!(windows) { ";" } else { ":" };
+    entries
+        .iter()
+        .map(|e| {
+            if e.starts_with('/') {
+                absolute(e).to_string_lossy().into_owned()
+            } else {
+                (*e).to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(separator)
+}
+
 /// Everything the host's table allows, declared, with both sub-grants.
 fn everything(tool: Tool) -> ToolDeclaration {
     let executable = executable_of(tool);
@@ -635,16 +662,18 @@ fn the_executable_must_be_the_tools_own() {
         host.executable(Tool::Git).unwrap_err().code,
         codes::INVALID_EXECUTABLE
     );
-    let host = ToolHost::for_test()
-        .with_environment(&[])
-        .with_executable(Tool::Docker, "/nonexistent/bin/docker");
+    let host = ToolHost::for_test().with_environment(&[]).with_executable(
+        Tool::Docker,
+        absolute("/nonexistent/bin").join(executable_name(Tool::Docker)),
+    );
     assert_eq!(
         host.executable(Tool::Docker).unwrap_err().code,
         codes::NOT_FOUND
     );
     // Without a setting the agent's PATH is searched (and, on macOS,
     // Homebrew's and Docker Desktop's folders), never a relative entry.
-    let host = ToolHost::for_test().with_environment(&[("PATH", ".:bin")]);
+    let relative = path_of(&[".", "bin"]);
+    let host = ToolHost::for_test().with_environment(&[("PATH", &relative)]);
     assert!(
         host.search_path(Tool::Docker)
             .iter()
@@ -811,26 +840,34 @@ fn credentials_in_queries_and_passwords_with_slashes_are_redacted() {
 /// folder.
 #[test]
 fn only_absolute_path_entries_reach_the_child() {
-    let host = ToolHost::for_test().with_environment(&[("PATH", "/usr/bin::.:relative/bin:/bin")]);
-    let env = host.environment(&[], Path::new("/opt/tools/git"));
+    let agent_path = path_of(&["/usr/bin", "", ".", "relative/bin", "/bin"]);
+    let host = ToolHost::for_test().with_environment(&[("PATH", &agent_path)]);
+    let env = host.environment(
+        &[],
+        &absolute("/opt/tools").join(executable_name(Tool::Git)),
+    );
     let path = env
         .iter()
         .find(|(n, _)| n == "PATH")
         .map(|(_, v)| v.clone());
-    assert_eq!(path, Some(OsString::from("/usr/bin:/bin:/opt/tools")));
+    assert_eq!(
+        path,
+        Some(OsString::from(path_of(&["/usr/bin", "/bin", "/opt/tools"])))
+    );
     assert_eq!(
         host.path_entries(),
-        [PathBuf::from("/usr/bin"), PathBuf::from("/bin")]
+        [absolute("/usr/bin"), absolute("/bin")]
     );
 }
 
 /// I1: the user's settings of the built-in modules are the host's.
 #[test]
 fn the_users_module_settings_are_the_hosts() {
+    let git_setting = absolute("/opt/git/bin").join(executable_name(Tool::Git));
     let git = deckpilot_core::ActionParameters::new()
         .with(
             "gitExecutable",
-            deckpilot_core::ParameterValue::Text("/opt/git/bin/git".into()),
+            deckpilot_core::ParameterValue::Text(git_setting.to_string_lossy().into_owned()),
         )
         .with(
             "networkTimeoutSeconds",
@@ -853,7 +890,7 @@ fn the_users_module_settings_are_the_hosts() {
     assert_eq!(
         settings,
         ToolSettings {
-            git: Some(PathBuf::from("/opt/git/bin/git")),
+            git: Some(git_setting.clone()),
             docker: None,
             docker_context: Some("colima".into()),
             network_seconds: Some(60),
