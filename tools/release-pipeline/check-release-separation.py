@@ -52,7 +52,9 @@ import sys
 import yaml
 
 APP_ENVIRONMENT = "production-release"
-APP_SECRET = re.compile(r"secrets\.(APPLE_|TAURI_SIGNING_)")
+# Secret names are case-insensitive in GitHub Actions (secrets.apple_x is
+# secrets.APPLE_X), so every secret pattern here ignores case.
+APP_SECRET = re.compile(r"secrets\s*(\.\s*|\[\s*['\"])(APPLE_|TAURI_SIGNING_)", re.I)
 
 # Files of the plugin registry repository.
 REGISTRY_FILE = re.compile(
@@ -93,7 +95,7 @@ PLUGIN_SIGNING = re.compile(r"\b(minisign|rsign|signer\s+sign)\b[^\n]*\.dpplugin
 # The registry role keys and the first-party publisher key, in either
 # expression syntax (secrets.X, secrets['X']), and the whole secrets context.
 REGISTRY_SECRET = re.compile(
-    r"secrets\s*(\.\s*|\[\s*['\"])(REGISTRY_|DECKPILOT_PUBLISHER_)|toJSON\(\s*secrets\s*\)"
+    r"secrets\s*(\.\s*|\[\s*['\"])(REGISTRY_|DECKPILOT_PUBLISHER_)|toJSON\(\s*secrets\s*\)", re.I
 )
 # The registry's environments and the publisher key's (official-release).
 REGISTRY_ENVIRONMENT = re.compile(r"^(registry-|official-release$)")
