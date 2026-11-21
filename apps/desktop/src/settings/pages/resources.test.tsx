@@ -5,10 +5,11 @@ import { cleanup, screen, within } from "@testing-library/react"
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { i18n } from "@/i18n"
-import { moduleInfo } from "@/lib/test-fixtures"
+import { pluginModules } from "@/lib/plugin-actions"
 import type { ResourceCheck } from "@/lib/types"
 import { api, resetApi } from "@/test/api-mock"
 import { installDomStubs } from "@/test/dom"
+import { projectsPlugin } from "@/test/first-party"
 import { renderWithApp } from "@/test/render"
 import { resetToasts } from "@/test/toast"
 
@@ -66,10 +67,15 @@ describe("Settings › Resources", () => {
   })
 
   it("shows the project roles using each resource while Projects is active", async () => {
-    renderWithApp(<ResourcesSettings />, { modules: [moduleInfo({ id: "projects" })] })
-    expect(await screen.findByText("shop.docs")).toBeInTheDocument()
-    expect(screen.getByText("Used by SHOP repository")).toBeInTheDocument()
-    expect(screen.getByText("Used by SHOP docs")).toBeInTheDocument()
+    vi.stubEnv("VITE_DECKPILOT_PLUGINS", "1")
+    try {
+      renderWithApp(<ResourcesSettings />, { pluginModules: pluginModules([projectsPlugin()]) })
+      expect(await screen.findByText("shop.docs")).toBeInTheDocument()
+      expect(screen.getByText("Used by SHOP repository")).toBeInTheDocument()
+      expect(screen.getByText("Used by SHOP docs")).toBeInTheDocument()
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it("speaks Polish", async () => {

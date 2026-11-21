@@ -524,6 +524,24 @@ impl PluginRuntime {
         deckpilot_core::alias::LegacyRouting::default()
     }
 
+    /// The `wrapAround` setting of the project-context provider (the
+    /// Projects plugin, `deckpilot.projects`), if one holds
+    /// `projectContext`; `None` without one, without the `plugins` feature
+    /// and while locked.
+    pub(crate) fn project_wrap_around(&self, provider: &str) -> Option<bool> {
+        #[cfg(feature = "plugins")]
+        if let Some(worker) = &self.worker {
+            return worker
+                .catalog()
+                .into_iter()
+                .find(|plugin| plugin.id == provider)
+                .and_then(|plugin| plugin.wrap_around);
+        }
+        #[cfg(not(feature = "plugins"))]
+        let _ = provider;
+        None
+    }
+
     /// The visual assets of the enabled plugins keys may draw now
     /// (`contributes.visualAssets`, checked and decoded by the worker).
     /// Empty without the `plugins` feature, with plugins off and while

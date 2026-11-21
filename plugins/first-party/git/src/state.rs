@@ -1,7 +1,7 @@
 //! Key state of `status` and `branch` keys: the branch as the key's
 //! second line and, for `status`, whether the work tree is clean (green),
-//! has changes (amber) or conflicts (red), as the built-in shows it
-//! (`modules/git/src/state.rs`).
+//! has changes (amber) or conflicts (red), as the former built-in `git`
+//! module (removed in WP-C6) showed it.
 //!
 //! **What changed.** The built-in read the repository for a shown key
 //! every 30 s. The agent allows no `tool.run` in a plugin's state call

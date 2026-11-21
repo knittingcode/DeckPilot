@@ -15,6 +15,17 @@
 //! The current agent must do exactly the same with the database and must
 //! not rewrite a stored row while doing it.
 //!
+//! Since the built-in `projects` module is gone (`docs/marketplace/
+//! module-migration.md` §11 D1) nothing provides the project context
+//! without the Projects plugin: the status shows no active project
+//! (`status.activeProject` is `null` now), the app's project switch is
+//! refused, so the "project change" is the other project stored as the
+//! active one while the agent is stopped (a run starts with the stored
+//! one, which gives exactly the recorded results), and `projects.current.*`
+//! are unavailable as they were with the module disabled (in
+//! `movedReferences` too now). The stored state that disables `projects`
+//! names a module that no longer exists and changes nothing.
+//!
 //! `movedReferences` and `movedReferencesModulesDisabled` were added with
 //! the extraction's variable aliases (WP-C2), recorded by this agent: the
 //! legacy `system.project.current.*` keep their values with or without the
@@ -520,7 +531,8 @@ async fn set_enabled(agent: &TestAgent, data: &Data, module: &str, enabled: bool
 
 /// What the agent does with the data. Between the read-only part and the
 /// part that changes the active project and module states, the agent is
-/// stopped and every stored row is compared with before.
+/// stopped and every stored row is compared with before; the other project
+/// is then stored as the active one.
 async fn observe(data: &Data) -> Value {
     let profile = data
         .store()
@@ -563,16 +575,26 @@ async fn observe(data: &Data) -> Value {
         "tables were added or removed"
     );
 
+    // The other project, stored as the active one while the agent is
+    // stopped: without the Projects plugin nothing switches projects (the
+    // app's request is refused), and a run starts with the stored one.
+    data.store()
+        .set_active_project(profile.id, Some(profile.projects[1].id))
+        .unwrap();
     let agent =
         TestAgent::start_with_gestures(&data.paths, &data.key, &mock, None, Some(hooks.clone()));
     agent.unlock().await;
     wait_connected(&agent, &device).await;
-    agent
+    let refused = agent
         .request(Request::SelectProject {
-            project: profile.projects[1].id,
+            project: profile.projects[0].id,
         })
-        .await
-        .unwrap();
+        .await;
+    assert!(
+        matches!(&refused, Err(deckpilot_ipc::ClientError::Agent(e))
+            if e.reason.as_deref() == Some("projectsOff")),
+        "{refused:?}"
+    );
     let other_project = run_actions(&agent, &profile).await;
     let references = previews(&agent, &profile).await;
     set_enabled(&agent, data, "projects", false).await;

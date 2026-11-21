@@ -175,10 +175,13 @@ receive through the execution context. No such handler exists yet.
 
 ### Feature modules (`modules/*`, `deckpilot-modules`)
 
-Action types and feature pages come from modules: `modules/general` and
-`modules/projects`. `deckpilot-modules` is the only crate that lists them; the
-agent and the app build their registries from it. See
-[Feature modules](modules.md).
+Action types and feature pages come from modules: `modules/deck`,
+`general`, `http`, `notifications`, `system` and `work-session`.
+`deckpilot-modules` is the only crate that lists them; the agent and the app
+build their registries from it. The former built-in `github`, `gitlab`,
+`jira`, `git`, `docker`, `workspace` and `projects` modules (removed in
+WP-C5/WP-C6) are first-party plugins now; their legacy action ids stay in
+`ACTION_ALIASES`. See [Feature modules](modules.md).
 
 ### `deckpilot-portability`
 

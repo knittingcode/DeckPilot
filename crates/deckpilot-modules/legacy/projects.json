@@ -1,0 +1,598 @@
+{
+  "actionTypes": [
+    {
+      "category": "Projects",
+      "controls": {
+        "encoder": ["press", "rotate-clockwise", "rotate-counter-clockwise", "click"],
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Makes the next or previous project of the profile active.",
+      "id": "projects.cycle",
+      "name": "Cycle projects",
+      "node": {
+        "cancellable": false,
+        "changesContext": true,
+        "effect": "modifies",
+        "icon": "folder",
+        "idempotent": false,
+        "outputs": [
+          {
+            "always": true,
+            "key": "projectId",
+            "kind": "text",
+            "label": "Project id"
+          },
+          {
+            "always": true,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project key"
+          },
+          {
+            "always": true,
+            "key": "projectName",
+            "kind": "text",
+            "label": "Project name"
+          }
+        ],
+        "retrySafe": false,
+        "timeoutMs": 5000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "default": {
+            "type": "choice",
+            "value": "next"
+          },
+          "description": "Next or previous project in the profile's order. Whether the ends wrap around is a setting of the Projects module.",
+          "key": "direction",
+          "kind": {
+            "options": ["next", "previous"],
+            "type": "choice"
+          },
+          "label": "Direction",
+          "required": true
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Projects",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Makes a project of the profile active. Without a project it reports the current one.",
+      "id": "projects.select",
+      "name": "Select project",
+      "node": {
+        "cancellable": false,
+        "changesContext": true,
+        "effect": "modifies",
+        "icon": "folder",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "projectId",
+            "kind": "text",
+            "label": "Project id"
+          },
+          {
+            "always": true,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project key"
+          },
+          {
+            "always": true,
+            "key": "projectName",
+            "kind": "text",
+            "label": "Project name"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 5000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "Leave on “Current project” to use whichever project is active.",
+          "key": "project_id",
+          "kind": {
+            "type": "project"
+          },
+          "label": "Project",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Projects",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Reports the current project of the profile.",
+      "id": "projects.current",
+      "name": "Current project",
+      "node": {
+        "cancellable": false,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "folder",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "projectId",
+            "kind": "text",
+            "label": "Project id"
+          },
+          {
+            "always": true,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project key"
+          },
+          {
+            "always": true,
+            "key": "projectName",
+            "kind": "text",
+            "label": "Project name"
+          },
+          {
+            "always": true,
+            "key": "profileId",
+            "kind": "text",
+            "label": "Profile id"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 5000,
+        "version": 1
+      },
+      "parameters": [],
+      "requiresProject": false
+    },
+    {
+      "category": "Projects",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Resolves the repository of a project on this computer.",
+      "id": "projects.repository",
+      "name": "Project repository",
+      "node": {
+        "cancellable": false,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "folder",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "projectId",
+            "kind": "text",
+            "label": "Project id"
+          },
+          {
+            "always": true,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project key"
+          },
+          {
+            "always": true,
+            "key": "projectName",
+            "kind": "text",
+            "label": "Project name"
+          },
+          {
+            "always": true,
+            "key": "resource",
+            "kind": "text",
+            "label": "Resource name"
+          },
+          {
+            "always": true,
+            "key": "resourceKey",
+            "kind": "text",
+            "label": "Resource key"
+          },
+          {
+            "always": true,
+            "key": "kind",
+            "kind": "text",
+            "label": "Resource kind"
+          },
+          {
+            "always": true,
+            "key": "value",
+            "kind": "text",
+            "label": "Value on this computer"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 5000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "Leave on “Current project” to use whichever project is active.",
+          "key": "project_id",
+          "kind": {
+            "type": "project"
+          },
+          "label": "Project",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Projects",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Resolves the documentation of a project on this computer.",
+      "id": "projects.documentation",
+      "name": "Project documentation",
+      "node": {
+        "cancellable": false,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "folder",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "projectId",
+            "kind": "text",
+            "label": "Project id"
+          },
+          {
+            "always": true,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project key"
+          },
+          {
+            "always": true,
+            "key": "projectName",
+            "kind": "text",
+            "label": "Project name"
+          },
+          {
+            "always": true,
+            "key": "resource",
+            "kind": "text",
+            "label": "Resource name"
+          },
+          {
+            "always": true,
+            "key": "resourceKey",
+            "kind": "text",
+            "label": "Resource key"
+          },
+          {
+            "always": true,
+            "key": "kind",
+            "kind": "text",
+            "label": "Resource kind"
+          },
+          {
+            "always": true,
+            "key": "value",
+            "kind": "text",
+            "label": "Value on this computer"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 5000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "Leave on “Current project” to use whichever project is active.",
+          "key": "project_id",
+          "kind": {
+            "type": "project"
+          },
+          "label": "Project",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Projects",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Resolves a named resource of a project on this computer.",
+      "id": "projects.resolve-resource",
+      "name": "Resolve project resource",
+      "node": {
+        "cancellable": false,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "folder",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "projectId",
+            "kind": "text",
+            "label": "Project id"
+          },
+          {
+            "always": true,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project key"
+          },
+          {
+            "always": true,
+            "key": "projectName",
+            "kind": "text",
+            "label": "Project name"
+          },
+          {
+            "always": true,
+            "key": "resource",
+            "kind": "text",
+            "label": "Resource name"
+          },
+          {
+            "always": true,
+            "key": "resourceKey",
+            "kind": "text",
+            "label": "Resource key"
+          },
+          {
+            "always": true,
+            "key": "kind",
+            "kind": "text",
+            "label": "Resource kind"
+          },
+          {
+            "always": true,
+            "key": "value",
+            "kind": "text",
+            "label": "Value on this computer"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 5000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "Leave on “Current project” to use whichever project is active.",
+          "key": "project_id",
+          "kind": {
+            "type": "project"
+          },
+          "label": "Project",
+          "required": false
+        },
+        {
+          "description": "The resource name in the project, for example repository or docs.",
+          "key": "resource",
+          "kind": {
+            "max_length": 64,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Resource",
+          "required": true
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Projects",
+      "controls": {
+        "encoder": ["press", "rotate-clockwise", "rotate-counter-clockwise", "click"],
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "deprecated": true,
+      "description": "Makes the next project of the profile active.",
+      "id": "projects.next",
+      "name": "Next project",
+      "node": {
+        "cancellable": false,
+        "changesContext": true,
+        "effect": "modifies",
+        "icon": "folder",
+        "idempotent": false,
+        "outputs": [
+          {
+            "always": true,
+            "key": "projectId",
+            "kind": "text",
+            "label": "Project id"
+          },
+          {
+            "always": true,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project key"
+          },
+          {
+            "always": true,
+            "key": "projectName",
+            "kind": "text",
+            "label": "Project name"
+          }
+        ],
+        "retrySafe": false,
+        "timeoutMs": 5000,
+        "version": 1
+      },
+      "parameters": [],
+      "requiresProject": false
+    },
+    {
+      "category": "Projects",
+      "controls": {
+        "encoder": ["press", "rotate-clockwise", "rotate-counter-clockwise", "click"],
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "deprecated": true,
+      "description": "Makes the previous project of the profile active.",
+      "id": "projects.previous",
+      "name": "Previous project",
+      "node": {
+        "cancellable": false,
+        "changesContext": true,
+        "effect": "modifies",
+        "icon": "folder",
+        "idempotent": false,
+        "outputs": [
+          {
+            "always": true,
+            "key": "projectId",
+            "kind": "text",
+            "label": "Project id"
+          },
+          {
+            "always": true,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project key"
+          },
+          {
+            "always": true,
+            "key": "projectName",
+            "kind": "text",
+            "label": "Project name"
+          }
+        ],
+        "retrySafe": false,
+        "timeoutMs": 5000,
+        "version": 1
+      },
+      "parameters": [],
+      "requiresProject": false
+    },
+    {
+      "category": "Projects",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "deprecated": true,
+      "description": "Reports the active project of the profile.",
+      "id": "projects.active",
+      "name": "Get active project",
+      "node": {
+        "cancellable": false,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "folder",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "projectId",
+            "kind": "text",
+            "label": "Project id"
+          },
+          {
+            "always": true,
+            "key": "projectKey",
+            "kind": "projectKey",
+            "label": "Project key"
+          },
+          {
+            "always": true,
+            "key": "projectName",
+            "kind": "text",
+            "label": "Project name"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 5000,
+        "version": 1
+      },
+      "parameters": [],
+      "requiresProject": false
+    }
+  ],
+  "manifest": {
+    "capabilities": ["profile-read", "project-context", "machine-resources"],
+    "config": [
+      {
+        "default": {
+          "type": "boolean",
+          "value": true
+        },
+        "description": "Next after the last project selects the first one, and vice versa.",
+        "key": "wrapAround",
+        "kind": {
+          "type": "boolean"
+        },
+        "label": "Wrap around",
+        "required": true
+      }
+    ],
+    "dependencies": [],
+    "description": "Projects of a profile, their logical resources and actions that switch between them.",
+    "enabledByDefault": true,
+    "id": "projects",
+    "name": "Projects",
+    "pages": [
+      {
+        "icon": "folder-kanban",
+        "id": "projects",
+        "order": 10,
+        "title": "Projects"
+      }
+    ],
+    "platforms": [],
+    "portability": {
+      "settings": {
+        "wrapAround": "portable"
+      },
+      "version": 1
+    },
+    "variables": [
+      {
+        "description": "Id of the project in the context",
+        "id": "projects.current.id",
+        "name": "Project id",
+        "readOnly": true,
+        "requires": ["project"],
+        "scope": "project",
+        "valueType": {
+          "type": "projectId"
+        }
+      },
+      {
+        "description": "Key of the project in the context",
+        "id": "projects.current.key",
+        "name": "Project key",
+        "readOnly": true,
+        "requires": ["project"],
+        "scope": "project",
+        "valueType": {
+          "type": "string"
+        }
+      },
+      {
+        "description": "Name of the project in the context",
+        "id": "projects.current.name",
+        "name": "Project name",
+        "readOnly": true,
+        "requires": ["project"],
+        "scope": "project",
+        "valueType": {
+          "type": "string"
+        }
+      }
+    ],
+    "version": "0.9.0",
+    "windows": []
+  }
+}

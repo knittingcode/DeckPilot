@@ -161,10 +161,7 @@ function Studio() {
   const { modules } = data
   // What the plugins provide now: the Workflows and Projects screens, the
   // active project's status item. Follows every plugin change.
-  const features = useMemo(
-    () => pluginFeatures(modules ?? [], data.pluginModules),
-    [modules, data.pluginModules],
-  )
+  const features = useMemo(() => pluginFeatures(data.pluginModules), [data.pluginModules])
 
   // Which locations exist depends on the enabled modules and plugins.
   const exists = useMemo(

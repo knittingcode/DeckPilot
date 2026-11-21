@@ -1,5 +1,5 @@
-//! Key state of Docker keys, as the built-in shows it
-//! (`modules/docker/src/state.rs`): whether Docker is available, how many
+//! Key state of Docker keys, as the former built-in `docker` module
+//! (removed in WP-C6) showed it: whether Docker is available, how many
 //! containers run, and whether a key's Compose project is up (with a
 //! toggle on up and down keys). Logs keys have none; see below for the
 //! Compose changes.

@@ -1841,9 +1841,14 @@ mod extraction {
         /// The four plugins as `build.sh` stages them (manifest, licence,
         /// icons, locales), each pinned with class `migration`.
         fn bundle(&self) -> Bundle {
+            self.bundle_of(&MODULES)
+        }
+
+        /// [`Shipped::bundle`] with the plugins of `modules`.
+        fn bundle_of(&self, modules: &[&str]) -> Bundle {
             let bundled = self.root.path().join("resources").join(BUNDLED_DIR);
             let mut pinned = Vec::new();
-            for module in MODULES {
+            for &module in modules {
                 let id = plugin(module);
                 let dir = bundled.join(id.as_str());
                 let _ = std::fs::remove_dir_all(&dir);
@@ -1955,9 +1960,13 @@ mod extraction {
                 manager.store().plugin(&plugin(module)).unwrap().is_none(),
                 "{module}"
             );
+            // No built-in to fall back to (WP-C6): the plugin's, which is
+            // not installed, so a legacy key is unavailable with that
+            // reason (`ModuleRegistry::resolve_alias`).
+            assert!(super::super::removed(module), "{module}");
             assert_eq!(
                 route_of(&manager, &bundle, module),
-                LegacyRoute::Builtin,
+                LegacyRoute::Plugin,
                 "{module}"
             );
         }
@@ -2103,9 +2112,50 @@ mod extraction {
         );
     }
 
+    /// The removed server built-ins (`github`, `gitlab`, `jira`; WP-C5)
+    /// have no fallback either: a 0.9.x configuration that uses them is
+    /// migrated through their descriptors and waits for the consent with
+    /// its keys unavailable (with the reason), never routed to a built-in.
+    #[test]
+    fn removed_server_builtins_wait_without_a_fallback() {
+        for (module, action) in [
+            ("github", "github.pull-requests"),
+            ("gitlab", "gitlab.merge-requests"),
+            ("jira", "jira.issues"),
+        ] {
+            let mut env = Shipped::new();
+            env.save(module, &[]);
+            env.uses("Key", action, &[]);
+            let bundle = env.bundle_of(&[module]);
+            let snapshot = env.backed_up();
+            let described = snapshot
+                .modules
+                .iter()
+                .find(|m| m.module.as_str() == module)
+                .unwrap();
+            assert!(described.descriptor.is_some(), "{module} is described");
+            assert_eq!(described.instances, 1, "{module}");
+            let mut manager = env.open();
+            start(&mut manager, &bundle, &snapshot);
+            let record = phase(&manager, module).unwrap();
+            assert_eq!(record.phase, MigrationPhase::AwaitingConsent, "{module}");
+            assert_eq!(
+                route_of(&manager, &bundle, module),
+                LegacyRoute::AwaitingConsent,
+                "{module}"
+            );
+            let reason = info(&manager, &bundle, Some(&snapshot), module)
+                .unwrap()
+                .route_reason
+                .unwrap();
+            assert!(reason.contains("waits for your consent"), "{reason}");
+        }
+    }
+
     /// A decline keeps the keys unavailable (recoverable) until Retry asks
     /// again; a backup that could not be written fails the cut-over, and
-    /// the built-in serves while it is compiled in.
+    /// with the built-in removed nothing falls back: the route is the
+    /// plugin's, which is not enabled, so the keys stay unavailable.
     #[test]
     fn a_decline_waits_and_a_failed_backup_falls_back() {
         let mut env = Shipped::new();
@@ -2159,7 +2209,16 @@ mod extraction {
         let record = phase(&manager, "git").unwrap();
         assert_eq!(record.phase, MigrationPhase::Failed, "{record:?}");
         assert!(record.reason.unwrap().contains("could not be backed up"));
-        assert_eq!(route_of(&manager, &bundle, "git"), LegacyRoute::Builtin);
+        assert_eq!(route_of(&manager, &bundle, "git"), LegacyRoute::Plugin);
+        assert_ne!(
+            manager
+                .store()
+                .plugin(&plugin("git"))
+                .unwrap()
+                .unwrap()
+                .state,
+            PluginState::Enabled
+        );
         assert_eq!(manager.store().host_setting(BACKUP_NOTE).unwrap(), None);
         // The next start with a backup retries and waits no more.
         start(&mut manager, &bundle, &snapshot);

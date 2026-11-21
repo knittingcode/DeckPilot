@@ -1,14 +1,16 @@
 # deckpilot.git
 
-The first-party Git plugin: the replacement of the built-in `git` module
-(`modules/git`), extracted under the owner's decision D1 of 2026-11-20
+The first-party Git plugin: the replacement of the former built-in `git`
+module (removed in WP-C6) and now its only implementation, extracted under the owner's decision D1 of 2026-11-20
 (`docs/marketplace/module-migration.md` §11, WP-B1 of the extraction
 plan). Bundled with class `migration` (`../bundled.json`); plugin API
 `^1.9`, so it validates only as a bundled, pinned first-party plugin.
 
-**Not routed yet.** The alias block `git.<action>` →
-`deckpilot.git.<action>` and the migration plan are WP-C1. Until then the
-built-in serves every stored `git.*` key.
+**Routed since WP-C1.** The alias block `git.<action>` →
+`deckpilot.git.<action>` and the migration plan run every stored `git.*`
+key here once the user consented; until then, and with the plugin
+disabled or uninstalled, they are unavailable with the reason (no
+built-in fallback since WP-C6).
 
 Read-only. It never runs a process itself: every git is the agent's
 `tool.run` (§7 X3a) of the user's own `git`, with the agent's fixed prefix
@@ -21,7 +23,7 @@ subcommand and options its manifest declares and parses the output.
 
 | Kind | Declared | Tier | Why |
 | --- | --- | --- | --- |
-| `tools` | git `status` (`--porcelain=v2`, `--branch`, `-z`, `--untracked-files`), `log` (`-1`, `--no-show-signature`, `--format`), `config` (`--get`), `remote`, `rev-parse` (`--verify`, `-q`), `ls-remote`; `network: true` | high (`tools:git`), high (`tools:git:network`) | exactly what the built-in runs (`modules/git/src/repo.rs`, `actions.rs`); `ls-remote` only for `remote-status` with `refresh`, the only network use |
+| `tools` | git `status` (`--porcelain=v2`, `--branch`, `-z`, `--untracked-files`), `log` (`-1`, `--no-show-signature`, `--format`), `config` (`--get`), `remote`, `rev-parse` (`--verify`, `-q`), `ls-remote`; `network: true` | high (`tools:git`), high (`tools:git:network`) | exactly what the former built-in ran; `ls-remote` only for `remote-status` with `refresh`, the only network use |
 | `resources` | `paths: true`, `open: true` | medium, medium, high | the repository folder handle; its path for the `repository` output and messages (as the built-in); `open-repository` |
 | `profile` | `read: ["project"]` | medium | the active project's key for `projectKey` |
 | `device` | `state: true` | low | `status` and `branch` keys |

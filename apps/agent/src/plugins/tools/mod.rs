@@ -321,9 +321,14 @@ pub(crate) fn neutral_directory() -> Result<PathBuf, Denial> {
         out
     });
     let dir = std::env::temp_dir().join(format!("deckpilot-empty-{name}"));
-    let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    let builder = {
+        let mut builder = std::fs::DirBuilder::new();
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder
+    };
+    #[cfg(not(unix))]
+    let builder = std::fs::DirBuilder::new();
     // `create`, never `create_all`: a folder that exists already is not
     // the agent's.
     builder.create(&dir).map_err(|_| unavailable())?;

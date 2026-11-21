@@ -14,6 +14,18 @@ the new host capabilities are in
 Where this document says that one of those modules "stays built-in" or
 "stays core" (§1, §3.3, §5.7, G12, G13, G15), §11 governs.
 
+**Status: WP-C5 and WP-C6 are done (P34, P35).** The `github`, `gitlab`,
+`jira`, `git`, `docker`, `workspace` and `projects` built-ins are removed
+from the workspace, `crates/deckpilot-modules` and the app. Wherever this
+document describes the built-in as a fallback (a migration not cut over,
+failed or not eligible, a build or start without plugins), the legacy
+action types are now **unavailable with the plugin's reason until the
+plugin serves** (installed, enabled, consented); nothing is rewritten, so
+they come back unchanged. The migration from 0.9.x and the contract
+checks keep working without the crates: the legacy descriptors (X13) and
+the frozen 0.9.0 contracts in `crates/deckpilot-modules/legacy/<id>.json`
+([§9](#9-pr-sequence)).
+
 The evidence, module by module, with `file:line` citations, is in
 [module-matrix.md](module-matrix.md). This document makes the decisions.
 Line numbers are from `origin/main` at `21fc2de2`. The capability baseline
@@ -84,7 +96,7 @@ be cut: the agent's plugin executor imports
 and `jira`. The transport moves to a core crate (`crates/deckpilot-net`)
 before `http` or its dependants change ([§9](#9-pr-sequence), P2).
 Similarly, `workspace` depends on the `system` crate for path helpers
-(`modules/workspace/src/actions.rs:13-14`). Those helpers move to the core
+(the former built-in's `src/actions.rs:13-14`). Those helpers move to the core
 next to `launch` if `workspace` ever moves.
 
 ### 3.1 `general`, action by action
@@ -351,6 +363,12 @@ then registers, for each alias:
 | `Plugin` | any | disabled or uninstalled **by the user** | unavailable: "GitHub (`deckpilot.github`) is disabled". The user's choice is respected; there is no fallback |
 | `Plugin` | no | not registered | unavailable, naming the plugin, with "install from Marketplace" |
 
+*Since WP-C5 and WP-C6* the built-in of a moved module is never compiled
+in: the migration engine never routes such a module to `Builtin`
+(`removed()` in `apps/agent/src/plugins/migration.rs`), so every row that
+named the built-in reads "unavailable with the reason" ("`<legacy>` now
+comes from <Plugin> (`<id>`): …") until the plugin serves.
+
 `ActionRegistry::dispatch`, `definition`, `check_parameters` and
 `decorate_face` (`crates/deckpilot-core/src/registry.rs:204,315`) look up the
 legacy id as today and find the `AliasHandler`. Nothing in the engine
@@ -398,8 +416,8 @@ compiled in.
 `ParamRule` exists for the one unavoidable difference: parameter kinds that
 plugins cannot have (`credential`, `resource`; `crates/deckpilot-plugin-manifest/src/model.rs:405-460`).
 The only one the migratable modules use is the optional `credential`
-override (`modules/github/src/actions.rs:89-97`, and the same in gitlab and
-jira). The rules:
+override (the former built-in `github`'s `src/actions.rs:89-97`, and the
+same in gitlab and jira). The rules:
 
 - `DropIfDefault("credential")`: an instance whose `credential` is empty or
   equals the module's configured credential is translated by dropping it.
@@ -632,6 +650,13 @@ replaced by accepting a known cost: a user whose migration is
 `awaiting_consent`, `failed` or `not_eligible` sees recoverable Unavailable
 keys and has no built-in fallback.
 
+*Done (WP-C5, WP-C6).* All seven built-ins are removed. The contract test
+runs against their frozen 0.9.0 contracts
+(`crates/deckpilot-modules/legacy/<id>.json`,
+`crates/deckpilot-modules/tests/contracts.rs`), the migration reads their
+stored rows through the legacy descriptors (X13), and WP-T1
+(`apps/agent/tests/core_without_plugins.rs`) is a CI job.
+
 ### 5.8 Fresh installs
 
 A fresh install has no `deckpilot.db` before the first start, so no
@@ -655,7 +680,9 @@ gate, not a code switch.
 Turning plugins off on the same data (`--disable-plugins` or
 `DECKPILOT_ENABLE_PLUGINS=0`, see [§5.10](#510-plugins-on-by-default))
 behaves like an older app: `plugins/` is not opened, and the legacy ids
-run their built-ins again.
+run their built-ins again. *Since WP-C5 and WP-C6* the moved modules have
+no built-in: their legacy ids are unavailable with the reason until
+plugins are on again, and come back unchanged.
 
 So a **downgrade is safe**, with three documented losses:
 
@@ -686,7 +713,7 @@ medium tiers; credentials and private networks wait for the user).
 | Switch | Plugins |
 | --- | --- |
 | none (the app, the login item) | on with the feature, off without it |
-| `--disable-plugins`, or `DECKPILOT_ENABLE_PLUGINS=0` | off: plugin requests are refused with `pluginsUnavailable`, `plugins/` is not opened, the legacy ids run their built-ins |
+| `--disable-plugins`, or `DECKPILOT_ENABLE_PLUGINS=0` | off: plugin requests are refused with `pluginsUnavailable`, `plugins/` is not opened, the legacy ids of the remaining built-ins run them; those of the removed ones (WP-C5, WP-C6) are unavailable with the reason |
 | `--enable-plugins` (kept for compatibility), or `DECKPILOT_ENABLE_PLUGINS=1` | on with the feature; nothing without it |
 
 The command line wins over the variable, and of two switches the last.
@@ -789,9 +816,12 @@ feature from the first release after v0.6.0 (v0.6.0 and older do not).
   `not_eligible`; disabling the plugin makes the legacy actions
   unavailable, with no fallback; uninstalling and upgrading again does
   not reinstall it; a decline keeps the built-in until Retry. The
-  built-in's requests go to a stand-in on 127.0.0.1
+  built-in's requests went to a stand-in on 127.0.0.1
   (`DECKPILOT_TEST_BUILTIN_GITHUB_API`, feature `test-hooks`, never in a
-  release build), its stored settings untouched.
+  release build), its stored settings untouched. *Since WP-C5* the
+  built-in and that test hook are gone; the test runs against the plugin
+  only, and where it ran the built-in the legacy actions are now
+  unavailable with the reason.
 - Found by that test and fixed: a built-in network action (`github`,
   `http`, `gitlab`, `jira`) bound to a key, or run with `runAction`, runs
   on the agent's service task, where `deckpilot-net` blocked on a runtime
@@ -918,9 +948,11 @@ and older do not).
   uninstall withdraw the legacy actions and an upgrade does not bring the
   plugin back); GitLab.com; a GitLab on a private network (declined,
   restarted, Retry, allowed); servers a plugin cannot reach; and a
-  computer that does not use the module. The built-ins' requests go to
+  computer that does not use the module. The built-ins' requests went to
   stand-ins on 127.0.0.1 (`DECKPILOT_TEST_BUILTIN_GITLAB_API`,
-  `DECKPILOT_TEST_BUILTIN_JIRA_SITE`, feature `test-hooks`).
+  `DECKPILOT_TEST_BUILTIN_JIRA_SITE`, feature `test-hooks`); *since WP-C5*
+  the built-ins and those test hooks are gone, and the test runs against
+  the plugins only.
 - Follow-ups: GitHub Enterprise through the same mechanism (a user-origin
   slot in `deckpilot.github` and `entered: true` in its plan; its web
   host is not derivable from the API URL on GitHub Enterprise Cloud, so
@@ -1350,8 +1382,8 @@ no panic. Over 20 calls per invocation gives `Throttled`.
 This is the largest risk in the plan.
 
 *Purpose.* Let `deckpilot.git` and `deckpilot.docker` run the user's own
-`git` and `docker` executables, as the built-ins do (`modules/git/src/repo.rs:115-149`,
-`modules/docker/src/actions.rs:565-595`). The owner gets removability: with
+`git` and `docker` executables, as the former built-ins did (`git`'s
+`src/repo.rs:115-149`, `docker`'s `src/actions.rs:565-595`). The owner gets removability: with
 the plugin disabled or uninstalled, no process authority is in use. The
 parsing and logic can also be released independently.
 
@@ -1368,7 +1400,7 @@ tool, in the proposed `apps/agent/src/plugins/tools/{mod,git,docker}.rs`:
 - **Allowed options for each subcommand.** Each option must be an exact
   token or a `--name=<value>` whose value passes a typed validator. Each
   positional fills a typed slot: a ref name, a remote name, a container,
-  service or project name (`modules/docker/src/cli.rs:74-101`), a bounded
+  service or project name (the former built-in `docker`'s `src/cli.rs:74-101`), a bounded
   integer, or a `--since` value. Anything not listed is refused. This
   allowlist is the security boundary.
 - **Denylist.** The dangerous flags below are checked first, for a precise
@@ -1703,7 +1735,7 @@ optionally at a line and column.
 *Design.* `resource.open {handle, with?: handle, position?: {line,
 column}, editor?}`. `with` must be a handle of kind `application`. `editor`
 picks a host-held argument plan (`vscode`, `cursor`, `jetbrains`, `zed`,
-`sublime`, `other`), ported from `modules/workspace/src/editor.rs:48-67`.
+`sublime`, `other`), ported from the former built-in `workspace`'s `src/editor.rs:48-67`.
 The launch goes through `crates/deckpilot-core/src/launch.rs`.
 
 *Threats.* Launching an arbitrary program. Argument injection into the
@@ -2106,13 +2138,16 @@ before the first cut-over.
   user (and after a decline, until Retry), its legacy action types are
   unavailable with the reason ("… waits for your consent: allow it in
   Settings › Plugins"): `LegacyRoute::AwaitingConsent`, not the built-in.
-  A failed step still falls back to the built-in while it is compiled in.
+  A failed step still falls back to the built-in while it is compiled in
+  (since WP-C5 and WP-C6 never: the legacy types stay unavailable with
+  the reason).
 - **The pre-extraction backup.** The service task writes the encrypted
   backup `backups/deckpilot-pre-plugin-extraction-<ms>.db` of
   `deckpilot.db` when a module of the set is in use, and the first cut-over
   journals it once in `plugins.db` (`host_settings`
   `migration.backup.pre-plugin-extraction`, `{"file": …}`); a backup that
-  could not be written fails the cut-over, which then falls back.
+  could not be written fails the cut-over, which then falls back (since
+  WP-C6: the keys stay unavailable until Retry).
 - **Plugin store schema 6.** `host_settings` (additive, after the store's
   encrypted backup) holds what the host keeps for itself: the built-ins'
   `gitExecutable`, `networkTimeoutSeconds`, `dockerExecutable`, `context`
@@ -2153,7 +2188,12 @@ before the first cut-over.
   `descriptors.rs`'s tests hold every descriptor equal to its built-in
   while both exist; `without_the_builtin_crates_the_descriptors_migrate`
   migrates a 0.9.x configuration with none of the crates registered.
-  WP-C5 and WP-C6 can therefore remove the crates.
+  WP-C5 and WP-C6 can therefore remove the crates, and did: the
+  descriptors are now the only description of the removed modules in the
+  agent, and the saved settings of a removed module are handed to the
+  module registry (`ModuleRegistry::set_legacy_config`), so a per-action
+  `credential` override naming the module's own credential is still
+  dropped (`ParamRule::DropIfDefault`).
 - **End to end.** `apps/agent/tests/plugins_cutover_git.rs`,
   `plugins_cutover_projects.rs` and `plugins_cutover_workspace.rs`: a used
   module waits for consent with its stored keys unavailable, then the same
@@ -2281,8 +2321,24 @@ crate, both schema copies, the runtime `abi`/`broker`, `bundled.json`,
 | P31 | WP-C3 | Desktop gating; resource-binding editor to Settings › Resources | P30 | Parallel with P32 |
 | P32 | WP-C4 | Agent and Tauri gating (`require_projects`, `settle_project`, tray) | P30 | |
 | P33 | WP-T1 | "Core without optional plugins" check, a required CI job | P31, P32 | Acceptance gate for P34 and P35 |
-| P34 | WP-C5 | Remove the `github`, `gitlab`, `jira` built-ins | P17, P33 | §5.7 criterion 1 waived (D2) |
-| P35 | WP-C6 | Remove the `git`, `docker`, `workspace`, `projects` built-ins; `ProjectCatalog` to the core | P33, P29's legacy descriptors | **Before v0.10.0** (D1, D5), not "one release later" |
+| P34 | WP-C5 | Remove the `github`, `gitlab`, `jira` built-ins | P17, P33 | §5.7 criterion 1 waived (D2). *Done* |
+| P35 | WP-C6 | Remove the `git`, `docker`, `workspace`, `projects` built-ins; `ProjectCatalog` to the core | P33, P29's legacy descriptors | **Before v0.10.0** (D1, D5), not "one release later". *Done* |
+
+*Done (P34, P35).* The seven crates are gone from the workspace,
+`crates/deckpilot-modules/src/lib.rs` and the app; the remaining built-ins
+are `deck`, `general`, `http`, `notifications`, `system` and
+`work-session`. `ACTION_ALIASES` keeps every legacy id; without the plugin
+it is unavailable with the reason, never a built-in. The frozen 0.9.0
+contracts (`crates/deckpilot-modules/legacy/<id>.json`) keep the contract
+test, and the legacy descriptors (X13) the 0.9.x migration.
+`crates/deckpilot-modules/tests/integration_services.rs` and
+`live_smoke.rs` were deleted with the built-ins, and with them the test
+hooks `DECKPILOT_TEST_BUILTIN_GITHUB_API`, `…_GITLAB_API` and
+`…_JIRA_SITE`; `apps/agent/tests/plugins_{github,gitlab,jira}.rs` are
+plugin-only regression tests. `ProjectCatalog` and `CatalogError` are in
+`crates/deckpilot-core/src/project_catalog.rs`; the Projects plugin is the
+only project-context provider. `tools/dev`'s seed stores the legacy ids
+directly. WP-T1 (`apps/agent/tests/core_without_plugins.rs`) runs in CI.
 
 **Release cut line.** v0.10.0 is cut only after P35 has merged and the
 whole set is green: full CI, WP-T1, the denial matrix, the migration tests

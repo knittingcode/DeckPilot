@@ -46,7 +46,7 @@ const fn policy(
     }
 }
 
-/// What the built-in git module runs today (`modules/git/src/repo.rs`), X3a.
+/// What the former built-in `git` module ran (removed in WP-C6), X3a.
 pub const GIT_POLICY: &[ToolPolicy] = &[
     policy(
         "status",
@@ -64,8 +64,8 @@ pub const GIT_POLICY: &[ToolPolicy] = &[
     policy("ls-remote", &[], ToolGrant::Network),
 ];
 
-/// What the built-in docker module runs today (`modules/docker/src/cli.rs`,
-/// `actions.rs`), X3b and X3c. `compose` subcommands always get the bound
+/// What the former built-in `docker` module ran (removed in WP-C6), X3b
+/// and X3c. `compose` subcommands always get the bound
 /// compose file, project directory and project name from the host (from
 /// the binding), never from the plugin.
 pub const DOCKER_POLICY: &[ToolPolicy] = &[

@@ -14,11 +14,16 @@
 //! - to the plugin's handler, through an
 //!   [`AliasHandler`](crate::registry::AliasHandler) with the plugin's
 //!   capabilities, when the agent's [`LegacyRouting`] says the module was
-//!   migrated and the plugin is registered, enabled and compatible;
-//! - to the built-in handler, as before, otherwise (a fallback when the
-//!   plugin is broken, quarantined, incompatible or missing);
-//! - to nothing, with a reason, when the user disabled or removed the
-//!   plugin, or when there is no built-in to fall back to.
+//!   migrated, or its built-in is no longer compiled in (`github`,
+//!   `gitlab`, `jira`, `git`, `docker`, `workspace`, `projects`; removed
+//!   by WP-C5 and WP-C6), and the plugin is registered, enabled and
+//!   compatible;
+//! - to the built-in handler, as before, while a built-in is compiled in
+//!   and not migrated (a fallback when the plugin is broken, quarantined,
+//!   incompatible or missing);
+//! - to nothing, with a reason ("`<legacy>` now comes from <plugin>: …"),
+//!   when the user disabled or removed the plugin, while its migration
+//!   waits for consent, or when there is no built-in to fall back to.
 //!
 //! The table is checked when the crate compiles ([`validate`]): a legacy id
 //! is a built-in id, a target is always an action type of the plugin

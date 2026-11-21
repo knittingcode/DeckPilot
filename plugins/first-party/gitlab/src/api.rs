@@ -2,7 +2,8 @@
 //! are used, how the token is named, how answers and failures are read,
 //! how far lists are paged, and the action's time limit.
 //!
-//! A port of the built-in module's `modules/gitlab/src/api.rs`, with the
+//! A port of the former built-in `gitlab` module's API code (removed in
+//! WP-C5), with the
 //! differences a sandboxed plugin has (`plugins/first-party/gitlab/README.md`):
 //!
 //! * the API is `https://gitlab.com/api/v4` (the manifest's `network`
@@ -40,7 +41,7 @@ pub const SMALL_PAGE: usize = 10;
 /// built-in's 5 pages of 100.
 pub const MAX_ITEMS: usize = 500;
 
-/// Stable error codes, the built-in module's (`deckpilot_module_gitlab::codes`);
+/// Stable error codes, the former built-in `gitlab` module's (WP-C5);
 /// each is declared in `manifest.json` `contributes.errorCodes`.
 pub mod codes {
     pub const INVALID_API_URL: &str = "invalid-api-url";

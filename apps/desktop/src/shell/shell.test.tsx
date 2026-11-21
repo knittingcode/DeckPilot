@@ -783,6 +783,89 @@ describe("main window with plugins", { timeout: 20_000 }, () => {
     expect(screen.queryByText("No projects in this profile")).not.toBeInTheDocument()
   })
 
+  // WP-T1 (docs/marketplace/module-migration.md §11): the core alone. The
+  // agent reports only the built-ins that stay core and no plugin is
+  // installed: nothing of Workflows management, Projects or the developer
+  // modules (Git, Docker, Workspace, GitHub, GitLab, Jira) is drawn, while
+  // the core's own pages keep working.
+  it("draws no optional feature with no plugin installed", async () => {
+    api.agentStatus.mockResolvedValue(
+      agentConnection({
+        status: agentStatus({
+          activeProfile: { id: "work", name: "Work" },
+          activeProject: { id: "p1", key: "SHOP", name: "Shop", resources: {} },
+          devices: [deviceInfo({ id: { model: plus.id, serial: "PLUS-1" }, modelName: plus.name })],
+        }),
+      }),
+    )
+    api.getOverview.mockResolvedValue({
+      appVersion: "0.10.0",
+      os: "macOs",
+      databasePath: "/data/deckpilot.db",
+      development: false,
+      profileCount: 2,
+      activeProfile: { id: "work", name: "Work", updatedAt: 0 },
+      activeProject: { id: "p1", key: "SHOP", name: "Shop", resources: {} },
+      actionTypeCount: 0,
+      deviceModelCount: 2,
+      resourceBindingCount: 0,
+    })
+    api.launchInfo.mockResolvedValue({
+      launch: null,
+      encryption: { enabled: true, passwordRequired: false },
+    })
+    const { moduleInfo } = await import("@/lib/test-fixtures")
+    api.listModules.mockResolvedValue(
+      (
+        [
+          ["deck", "Deck"],
+          ["general", "General"],
+          ["http", "HTTP"],
+          ["notifications", "Notifications"],
+          ["system", "System"],
+          ["work-session", "Work Session"],
+        ] as const
+      ).map(([id, name]) => moduleInfo({ id, name })),
+    )
+    vi.resetModules()
+    const { App: WithPlugins } = await import("@/App")
+    const { PluginClientContext } = await import("@/plugins/api")
+    const { createFakePluginClient } = await import("@/test/plugins")
+    const client = createFakePluginClient()
+    client.listPlugins.mockResolvedValue([])
+    const user = userEvent.setup()
+    render(
+      <PluginClientContext value={client}>
+        <WithPlugins />
+      </PluginClientContext>,
+    )
+    const toolbar = await screen.findByRole("banner", { name: "Toolbar" }, { timeout: 10_000 })
+    await screen.findByRole("group", { name: /controls$/ }, { timeout: 10_000 })
+    await waitFor(() => {
+      expect(client.listPlugins).toHaveBeenCalled()
+    })
+    // No Workflows nav, no Projects page, no project status item.
+    expect(screen.queryByRole("button", { name: "Workflows" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Projects" })).not.toBeInTheDocument()
+    const bar = within(screen.getByRole("contentinfo", { name: "Status bar" }))
+    expect(bar.queryByText("SHOP")).not.toBeInTheDocument()
+    // No project switcher anywhere in the toolbar.
+    expect(within(toolbar).queryByText("SHOP")).not.toBeInTheDocument()
+    expect(within(toolbar).queryByRole("button", { name: /project/i })).not.toBeInTheDocument()
+    // The dashboard: no active project card.
+    await user.click(screen.getByRole("button", { name: "Dashboard" }))
+    await screen.findByRole("heading", { name: "Dashboard" })
+    expect(screen.queryByText("Active project")).not.toBeInTheDocument()
+    expect(screen.queryByText(/SHOP/)).not.toBeInTheDocument()
+    // Settings: the core modules only, no developer module and no Projects.
+    await user.click(gearOf(toolbar))
+    await screen.findByRole("generic", { name: "Settings" })
+    for (const name of ["Git", "Docker", "Workspace", "GitHub", "GitLab", "Jira", "Projects"]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument()
+      expect(screen.queryByRole("link", { name })).not.toBeInTheDocument()
+    }
+  })
+
   it("has the Marketplace between notifications and settings", async () => {
     // The flag is read when the module loads.
     vi.resetModules()

@@ -1482,25 +1482,19 @@ impl Agent {
     }
 
     /// Whether something provides the project context now: the Projects
-    /// plugin (`deckpilot.projects`) is enabled, or the built-in `projects`
-    /// module is enabled and was not migrated to it. Plugins' project
-    /// operations (plugin API 1.9, `service/plugin_projects.rs`),
-    /// [`Agent::require_projects`], the project a workflow leaves behind
-    /// and the tray ask it. Nothing is deleted while it is off: the
-    /// profile's projects and the stored active project stay as they are.
+    /// plugin (`deckpilot.projects`) is enabled. The built-in `projects`
+    /// module is gone (`module-migration.md` §11 D1, WP-C6); the project
+    /// data model stays in the core. Plugins' project operations (plugin
+    /// API 1.9, `service/plugin_projects.rs`), [`Agent::require_projects`],
+    /// the project a workflow leaves behind and the tray ask it. Nothing is
+    /// deleted while it is off: the profile's projects and the stored
+    /// active project stay as they are.
     pub(crate) fn project_context_active(&self) -> bool {
-        let plugin = deckpilot_core::ModuleId::new(PROJECTS_PLUGIN)
-            .is_ok_and(|id| self.modules.is_enabled(&id));
-        let builtin = deckpilot_modules::projects::module_id();
-        plugin
-            || (self.modules.is_enabled(&builtin)
-                && self.modules.legacy_routing().route(&builtin)
-                    == deckpilot_core::alias::LegacyRoute::Builtin)
+        deckpilot_core::ModuleId::new(PROJECTS_PLUGIN).is_ok_and(|id| self.modules.is_enabled(&id))
     }
 
-    /// Project switching belongs to the Projects plugin (or the built-in
-    /// module while it is not migrated) and is refused, with the reason
-    /// [`PROJECTS_OFF`], while no project context provider is active
+    /// Project switching belongs to the Projects plugin and is refused,
+    /// with the reason [`PROJECTS_OFF`], while it is not active
     /// ([`Agent::project_context_active`]).
     fn require_projects(&self) -> Result<(), IpcError> {
         if self.project_context_active() {
@@ -1508,7 +1502,7 @@ impl Agent {
         } else {
             Err(IpcError::new(
                 ErrorCode::Failed,
-                "the Projects plugin is off: turn it on in Settings › Plugins",
+                "the Projects plugin is not active: turn it on in Settings › Plugins",
             )
             .with_reason(PROJECTS_OFF))
         }
@@ -1520,10 +1514,13 @@ impl Agent {
             .runtime
             .profile()
             .ok_or_else(|| engine_error(&EngineError::NoActiveProfile))?;
-        // Same order and wrap-around setting as the projects actions.
-        let wrap = deckpilot_modules::projects::switching::wrap_around(&self.modules);
-        let target = deckpilot_modules::projects::switching::step(
-            profile,
+        // Same order and wrap-around setting as the plugin's `cycle`.
+        let wrap = self
+            .plugins
+            .project_wrap_around(PROJECTS_PLUGIN)
+            .unwrap_or(true);
+        let target = deckpilot_core::ProjectSwitcher::step(
+            &profile.projects,
             self.runtime.active_project_id(),
             direction,
             wrap,

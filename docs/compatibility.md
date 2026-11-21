@@ -128,6 +128,31 @@ and `jira` modules serve the stored legacy ids again, since the migration
 never changes `deckpilot.db`. Going back with plugins means restoring the
 `plugins-schema5-…` backup as `plugins.db`.
 
+Legacy action ids of the removed built-ins (WP-C5, WP-C6,
+[marketplace/module-migration.md](marketplace/module-migration.md) §11 D1,
+D2): this build has no `github`, `gitlab`, `jira`, `git`, `docker`,
+`workspace` or `projects` module; their bundled first-party plugins
+(`deckpilot.<id>`) are the only implementation. Every legacy id
+(`github.pull-requests`, `projects.cycle`) stays in `ACTION_ALIASES`
+(`crates/deckpilot-core/src/alias.rs`) for good, and stored profiles,
+layouts, workflows and exports are never rewritten. While the plugin does
+not serve (not installed, disabled or uninstalled by the user, waiting for
+consent, plugins off with `--disable-plugins`), a legacy id is unavailable
+with the reason ("`<legacy>` now comes from <Plugin> (`<id>`): …"), never
+an unknown type; there is no built-in fallback. Once the plugin serves, the
+same keys and nodes run again unchanged. An upgrade from 0.9.x migrates
+without the built-in crates: static descriptors
+(`apps/agent/src/plugins/migration/descriptors.rs`, X13) read the stored
+`modules` rows, and a removed module's saved settings go to
+`ModuleRegistry::set_legacy_config`, so a per-action `credential` override
+naming the module's own credential is still dropped. Settings, credentials,
+projects and resource bindings are kept; without the Projects plugin
+project switching is refused ("the Projects plugin is not active"), and
+nothing is deleted. Tests: `apps/agent/tests/core_without_plugins.rs`
+(WP-T1), the `plugins_cutover*.rs` upgrades, and
+`crates/deckpilot-modules/tests/contracts.rs` against the frozen 0.9.0
+contracts in `crates/deckpilot-modules/legacy/`.
+
 Before it, protocol 13 and plugin API 1.6: localization
 ([i18n.md](i18n.md#plugin-localization),
 [marketplace/sdk/localization.md](marketplace/sdk/localization.md)).

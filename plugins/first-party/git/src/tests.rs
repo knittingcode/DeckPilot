@@ -1,8 +1,8 @@
 //! Native unit tests: the definition agrees with manifest.json, the
 //! manifest is valid against the schema, the translations are complete,
 //! and every action behaves on recorded `git` output, with the agent
-//! replaced by `MockHost`. The scenarios are the built-in's
-//! (`modules/git/src/actions/tests.rs`, which runs real repositories),
+//! replaced by `MockHost`. The scenarios are the former built-in `git`
+//! module's (removed in WP-C6; it ran real repositories),
 //! here with the output real git printed for them. The end-to-end run
 //! through the real agent, host and a fake `git` is
 //! `apps/agent/tests/plugins_git.rs`.

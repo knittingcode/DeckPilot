@@ -1,4 +1,12 @@
-//! Contract tests over every built-in module and action type.
+//! Contract tests over every built-in module and action type, and of the
+//! first-party plugins against the built-ins they replaced.
+//!
+//! The built-ins that moved to plugins (`github`, `gitlab`, `jira`, `git`,
+//! `docker`, `workspace`, `projects`) are removed (`module-migration.md`
+//! §11 D1, D2). Their contracts, as 0.9.0 declared them, are frozen in
+//! `crates/deckpilot-modules/legacy/<id>.json` (written from the crates
+//! before they were removed); [`first_party`] holds each plugin to its
+//! frozen contract, so the legacy action types keep meaning what they did.
 //!
 //! The checks are generic: they read manifests, action type definitions and
 //! parameter schemas, and run every action twice on a fixture profile that
@@ -26,10 +34,7 @@ use deckpilot_core::{
     Profile, Progress, Project, ProjectId, ProjectKey, ResourceKey, ResourceRef, Secret,
     SettingScope,
 };
-use deckpilot_modules::{
-    builtin, deck, docker, general, git, github, gitlab, http, jira, notifications, projects,
-    system, work_session, workspace,
-};
+use deckpilot_modules::{builtin, deck, general, http, notifications, system, work_session};
 
 /// The planted secret: no result may ever contain it.
 const SECRET: &str = "contract-PLANTED-s3cret-7f3a9c";
@@ -45,11 +50,6 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Accepted findings: subject (module or action type id), check, reason.
 const KNOWN: &[(&str, &str, &str)] = &[
     // Heuristic limits.
-    (
-        "gitlab.merge-requests",
-        "action-effect",
-        "“merge requests” is a noun here; the action only lists them",
-    ),
     (
         "general.wait",
         "run-denied-succeeds",
@@ -174,18 +174,11 @@ fn modules(launcher: &Arc<RecordingLauncher>) -> Vec<Box<dyn FeatureModule>> {
     let opener: Arc<dyn Launcher> = launcher.clone();
     vec![
         Box::new(deck::DeckModule::new()),
-        Box::new(docker::DockerModule::new()),
         Box::new(general::GeneralModule::new()),
-        Box::new(git::GitModule::with_launcher(opener.clone())),
-        Box::new(github::GithubModule::with_launcher(opener.clone())),
-        Box::new(gitlab::GitlabModule::with_launcher(opener.clone())),
         Box::new(http::HttpModule::new()),
-        Box::new(jira::JiraModule::with_launcher(opener.clone())),
         Box::new(notifications::NotificationsModule::new()),
-        Box::new(projects::ProjectsModule::new()),
-        Box::new(system::SystemModule::with_launcher(opener.clone())),
+        Box::new(system::SystemModule::with_launcher(opener)),
         Box::new(work_session::WorkSessionModule::new()),
-        Box::new(workspace::WorkspaceModule::with_launcher(opener)),
     ]
 }
 
@@ -1327,6 +1320,84 @@ mod first_party {
 
     use super::*;
 
+    /// A removed built-in as its frozen contract
+    /// (`crates/deckpilot-modules/legacy/<id>.json`): its manifest and
+    /// action types, served as a module whose handlers only describe
+    /// (nothing of it runs any more).
+    struct Frozen {
+        manifest: ModuleManifest,
+        action_types: Vec<ActionType>,
+    }
+
+    /// Describes a frozen action type; never runs.
+    struct Described(ActionType);
+
+    impl ActionHandler for Described {
+        fn definition(&self) -> &ActionType {
+            &self.0
+        }
+
+        fn execute(
+            &self,
+            _parameters: &ActionParameters,
+            _context: &ExecutionContext<'_>,
+        ) -> ActionResult {
+            ActionResult::error("removed", "the built-in was removed")
+        }
+    }
+
+    impl FeatureModule for Frozen {
+        fn manifest(&self) -> &ModuleManifest {
+            &self.manifest
+        }
+
+        fn action_handlers(&self, _config: &ActionParameters) -> Vec<Box<dyn ActionHandler>> {
+            self.action_types
+                .iter()
+                .map(|t| Box::new(Described(t.clone())) as Box<dyn ActionHandler>)
+                .collect()
+        }
+    }
+
+    macro_rules! frozen {
+        ($id:literal) => {{
+            let text = include_str!(concat!("../legacy/", $id, ".json"));
+            let mut json: Value = serde_json::from_str(text).expect("a frozen contract parses");
+            let frozen = Frozen {
+                manifest: serde_json::from_value(json["manifest"].take())
+                    .expect("the frozen manifest parses"),
+                action_types: serde_json::from_value(json["actionTypes"].take())
+                    .expect("the frozen action types parse"),
+            };
+            assert_eq!(frozen.manifest.id.as_str(), $id);
+            frozen
+        }};
+    }
+
+    /// The setting keys of the removed built-ins that these checks name.
+    mod github {
+        pub const CREDENTIAL: &str = "credential";
+        pub const ALLOW_PRIVATE: &str = "allowPrivateHost";
+    }
+    mod gitlab {
+        pub const CREDENTIAL: &str = "credential";
+        pub const API_URL: &str = "apiUrl";
+        pub const ALLOW_PRIVATE: &str = "allowPrivateHost";
+    }
+    mod jira {
+        pub const CREDENTIAL: &str = "credential";
+        pub const SITE_URL: &str = "siteUrl";
+        pub const ALLOW_PRIVATE: &str = "allowPrivateHost";
+    }
+    mod git {
+        pub const EXECUTABLE: &str = "gitExecutable";
+    }
+    mod docker {
+        pub const EXECUTABLE: &str = "dockerExecutable";
+        pub const CONTEXT: &str = "context";
+        pub const ALLOW_STATE_CHANGES: &str = "allowStateChanges";
+    }
+
     /// The `github` aliases the cut-over (P9) added to `ACTION_ALIASES`,
     /// written out again so a change to the shipped block shows here:
     /// the per-action `credential` override is dropped when it names the
@@ -1557,7 +1628,7 @@ mod first_party {
     fn the_github_plugin_honours_the_builtin_contract() {
         let manifest = manifest(GITHUB_MANIFEST);
         assert_eq!(manifest.id.as_str(), "deckpilot.github");
-        let module = github::GithubModule::new();
+        let module = frozen!("github");
         let builtin = builtin_types(&module);
 
         // Every built-in action has its alias, and every plugin action is
@@ -1644,7 +1715,7 @@ mod first_party {
     /// credential slot `token`, filled by the migration's credential
     /// import) and the private-network switch (G3; a computer with it on
     /// keeps the built-in, `not_eligible`).
-    fn github_settings(module: &github::GithubModule, manifest: &Manifest) {
+    fn github_settings(module: &Frozen, manifest: &Manifest) {
         let config = &module.manifest().config;
         let scopes = &module.manifest().portability.settings;
         let mut kept = Vec::new();
@@ -1882,7 +1953,7 @@ mod first_party {
     fn the_gitlab_plugin_honours_the_builtin_contract() {
         let manifest = manifest(GITLAB_MANIFEST);
         assert_eq!(manifest.id.as_str(), "deckpilot.gitlab");
-        let module = gitlab::GitlabModule::new();
+        let module = frozen!("gitlab");
         honours_the_contract(GITLAB, &manifest, &module);
         mirrors_the_settings(
             &module,
@@ -1974,7 +2045,7 @@ mod first_party {
     fn the_jira_plugin_honours_the_builtin_contract() {
         let manifest = manifest(JIRA_MANIFEST);
         assert_eq!(manifest.id.as_str(), "deckpilot.jira");
-        let module = jira::JiraModule::new();
+        let module = frozen!("jira");
         honours_the_contract(JIRA, &manifest, &module);
         mirrors_the_settings(&module, &manifest, &[jira::ALLOW_PRIVATE, jira::CREDENTIAL]);
         entered_server(&manifest, jira::SITE_URL, "credential", &[]);
@@ -2302,9 +2373,9 @@ mod first_party {
         let manifest = bundled_manifest(GIT_MANIFEST);
         assert_eq!(manifest.id.as_str(), "deckpilot.git");
         let aliases =
-            honours_the_extraction_contract(&manifest, &git::GitModule::new(), &[git::EXECUTABLE]);
+            honours_the_extraction_contract(&manifest, &frozen!("git"), &[git::EXECUTABLE]);
         assert_eq!(aliases.len(), 6);
-        assert_eq!(module_variables(&git::GitModule::new()), 0);
+        assert_eq!(module_variables(&frozen!("git")), 0);
         assert_eq!(manifest.contributes.variables().len(), 0);
     }
 
@@ -2319,7 +2390,7 @@ mod first_party {
         assert_eq!(manifest.id.as_str(), "deckpilot.docker");
         let aliases = honours_the_extraction_contract(
             &manifest,
-            &docker::DockerModule::new(),
+            &frozen!("docker"),
             &[
                 docker::ALLOW_STATE_CHANGES,
                 docker::CONTEXT,
@@ -2350,8 +2421,7 @@ mod first_party {
     fn the_workspace_plugin_honours_the_builtin_contract() {
         let manifest = bundled_manifest(WORKSPACE_MANIFEST);
         assert_eq!(manifest.id.as_str(), "deckpilot.workspace");
-        let aliases =
-            honours_the_extraction_contract(&manifest, &workspace::WorkspaceModule::new(), &[]);
+        let aliases = honours_the_extraction_contract(&manifest, &frozen!("workspace"), &[]);
         assert_eq!(aliases.len(), 3);
         assert_eq!(manifest.contributes.variables().len(), 0);
     }
@@ -2365,7 +2435,7 @@ mod first_party {
     fn the_projects_plugin_honours_the_builtin_contract() {
         let manifest = bundled_manifest(PROJECTS_MANIFEST);
         assert_eq!(manifest.id.as_str(), "deckpilot.projects");
-        let module = projects::ProjectsModule::new();
+        let module = frozen!("projects");
         let aliases = honours_the_extraction_contract(&manifest, &module, &[]);
         assert_eq!(aliases.len(), 9);
         let declared: BTreeSet<String> = module
@@ -2435,7 +2505,7 @@ mod first_party {
     #[test]
     fn the_github_contract_check_finds_differences() {
         let manifest = manifest(GITHUB_MANIFEST);
-        let module = github::GithubModule::new();
+        let module = frozen!("github");
         let builtin = builtin_types(&module);
         let action = manifest
             .contributes
@@ -2471,14 +2541,7 @@ mod first_party {
 /// The built-in action types that step once per event (a key, or a
 /// dial's detent or press); every other built-in is keys only
 /// (`docs/device-controls.md`).
-const STEP_ACTIONS: &[&str] = &[
-    "deck.brightness",
-    "deck.next-page",
-    "deck.previous-page",
-    "projects.cycle",
-    "projects.next",
-    "projects.previous",
-];
+const STEP_ACTIONS: &[&str] = &["deck.brightness", "deck.next-page", "deck.previous-page"];
 
 /// Every built-in action type declares its controls: none relies on the
 /// legacy default of types without a declaration. Every declaration is
@@ -2533,5 +2596,5 @@ fn every_builtin_action_declares_its_controls() {
             );
         }
     }
-    assert!(table.len() > 50, "{} built-in action types", table.len());
+    assert!(table.len() > 25, "{} built-in action types", table.len());
 }

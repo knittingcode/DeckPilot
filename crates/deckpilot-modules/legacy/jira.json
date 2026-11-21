@@ -1,0 +1,435 @@
+{
+  "actionTypes": [
+    {
+      "category": "Jira",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "The account the credential belongs to; also checks that it works.",
+      "id": "jira.myself",
+      "name": "Current Jira user",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "user",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "displayName",
+            "kind": "text",
+            "label": "Name"
+          },
+          {
+            "always": true,
+            "key": "account",
+            "kind": "text",
+            "label": "Account id or user name"
+          },
+          {
+            "always": false,
+            "key": "timeZone",
+            "kind": "text",
+            "label": "Time zone"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 130000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "The name of a stored credential. Empty: the module's (Settings › Modules › Jira). Never the secret itself.",
+          "key": "credential",
+          "kind": {
+            "type": "credential"
+          },
+          "label": "Credential",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Jira",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "An issue's summary, status, type, priority and assignee.",
+      "id": "jira.issue",
+      "name": "Jira issue",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "file-text",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "key",
+            "kind": "text",
+            "label": "Key"
+          },
+          {
+            "always": true,
+            "key": "summary",
+            "kind": "text",
+            "label": "Summary",
+            "sensitive": true
+          },
+          {
+            "always": true,
+            "key": "status",
+            "kind": "text",
+            "label": "Status"
+          },
+          {
+            "always": true,
+            "key": "statusCategory",
+            "kind": "text",
+            "label": "Status category (todo, in-progress, done)"
+          },
+          {
+            "always": false,
+            "key": "type",
+            "kind": "text",
+            "label": "Type"
+          },
+          {
+            "always": false,
+            "key": "priority",
+            "kind": "text",
+            "label": "Priority"
+          },
+          {
+            "always": false,
+            "key": "assignee",
+            "kind": "text",
+            "label": "Assignee"
+          },
+          {
+            "always": false,
+            "key": "updated",
+            "kind": "text",
+            "label": "Updated"
+          },
+          {
+            "always": true,
+            "key": "url",
+            "kind": "url",
+            "label": "Page"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 130000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "An issue key such as ABC-123.",
+          "key": "issue",
+          "kind": {
+            "max_length": 40,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Issue",
+          "required": true
+        },
+        {
+          "description": "The name of a stored credential. Empty: the module's (Settings › Modules › Jira). Never the secret itself.",
+          "key": "credential",
+          "kind": {
+            "type": "credential"
+          },
+          "label": "Credential",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Jira",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Counts and lists the issues assigned to you, or those of a saved filter.",
+      "id": "jira.issues",
+      "name": "Jira issues",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "list-checks",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "count",
+            "kind": "integer",
+            "label": "Issues"
+          },
+          {
+            "always": true,
+            "key": "countExact",
+            "kind": "boolean",
+            "label": "Count complete"
+          },
+          {
+            "always": true,
+            "key": "listed",
+            "kind": "integer",
+            "label": "Listed"
+          },
+          {
+            "always": true,
+            "key": "items",
+            "kind": "text",
+            "label": "Issues",
+            "sensitive": true
+          },
+          {
+            "always": true,
+            "key": "truncated",
+            "kind": "boolean",
+            "label": "List truncated"
+          },
+          {
+            "always": false,
+            "key": "firstKey",
+            "kind": "text",
+            "label": "First issue"
+          },
+          {
+            "always": false,
+            "key": "firstUrl",
+            "kind": "url",
+            "label": "First issue's page"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 130000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "default": {
+            "type": "choice",
+            "value": "assigned-to-me"
+          },
+          "description": "assigned-to-me: assigned to you; filter: a saved filter.",
+          "key": "source",
+          "kind": {
+            "options": ["assigned-to-me", "filter"],
+            "type": "choice"
+          },
+          "label": "Issues",
+          "required": true
+        },
+        {
+          "description": "The saved filter's number (in its address, ?filter=12345).",
+          "key": "filterId",
+          "kind": {
+            "min": 1,
+            "type": "integer"
+          },
+          "label": "Filter",
+          "required": false
+        },
+        {
+          "description": "Only issues of this project key, e.g. WEB. Empty: every project.",
+          "key": "project",
+          "kind": {
+            "max_length": 255,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Project",
+          "required": false
+        },
+        {
+          "default": {
+            "type": "boolean",
+            "value": false
+          },
+          "description": "Off: only issues whose status is not in the Done category.",
+          "key": "includeDone",
+          "kind": {
+            "type": "boolean"
+          },
+          "label": "Include done issues",
+          "required": true
+        },
+        {
+          "default": {
+            "type": "integer",
+            "value": 20
+          },
+          "description": "At most this many issues in the list.",
+          "key": "limit",
+          "kind": {
+            "max": 100,
+            "min": 1,
+            "type": "integer"
+          },
+          "label": "Listed",
+          "required": true
+        },
+        {
+          "description": "The name of a stored credential. Empty: the module's (Settings › Modules › Jira). Never the secret itself.",
+          "key": "credential",
+          "kind": {
+            "type": "credential"
+          },
+          "label": "Credential",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "Jira",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Opens an issue or a Jira page in the browser.",
+      "id": "jira.open",
+      "name": "Open in Jira",
+      "node": {
+        "cancellable": false,
+        "changesContext": false,
+        "effect": "opens",
+        "icon": "link",
+        "idempotent": false,
+        "outputs": [
+          {
+            "always": true,
+            "key": "url",
+            "kind": "url",
+            "label": "Opened"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 15000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "An https page on the configured Jira site. Empty: the issue below.",
+          "key": "url",
+          "kind": {
+            "max_length": 2048,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Page",
+          "required": false
+        },
+        {
+          "description": "An issue key such as ABC-123.",
+          "key": "issue",
+          "kind": {
+            "max_length": 40,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Issue",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    }
+  ],
+  "manifest": {
+    "capabilities": ["network", "credentials", "open-external"],
+    "config": [
+      {
+        "description": "e.g. https://your-team.atlassian.net, or your Data Center address. Only for this computer.",
+        "key": "siteUrl",
+        "kind": {
+          "max_length": 512,
+          "multiline": false,
+          "type": "text"
+        },
+        "label": "Site",
+        "required": false
+      },
+      {
+        "default": {
+          "type": "choice",
+          "value": "cloud"
+        },
+        "description": "cloud: email:api-token as the credential; data-center: a personal access token.",
+        "key": "deployment",
+        "kind": {
+          "options": ["cloud", "data-center"],
+          "type": "choice"
+        },
+        "label": "Jira",
+        "required": true
+      },
+      {
+        "default": {
+          "type": "text",
+          "value": "jira.token"
+        },
+        "description": "The name of a credential stored on this computer (Settings › HTTP › Credentials). Never the secret itself.",
+        "key": "credential",
+        "kind": {
+          "type": "credential"
+        },
+        "label": "Credential",
+        "required": true
+      },
+      {
+        "default": {
+          "type": "integer",
+          "value": 20
+        },
+        "description": "For all requests of one action.",
+        "key": "timeoutSeconds",
+        "kind": {
+          "max": 120,
+          "min": 1,
+          "type": "integer"
+        },
+        "label": "Time limit (s)",
+        "required": true
+      },
+      {
+        "default": {
+          "type": "boolean",
+          "value": false
+        },
+        "description": "For Jira Data Center inside a company network: lets requests to the site's host reach private addresses. Off by default; only for this computer.",
+        "key": "allowPrivateHost",
+        "kind": {
+          "type": "boolean"
+        },
+        "label": "Site may be on a private network",
+        "required": true
+      }
+    ],
+    "dependencies": [],
+    "description": "Issues assigned to you, saved filters and single issues from Jira Cloud or Data Center. Read-only.",
+    "enabledByDefault": true,
+    "id": "jira",
+    "name": "Jira",
+    "pages": [],
+    "platforms": [],
+    "portability": {
+      "settings": {
+        "allowPrivateHost": "machineSpecific",
+        "credential": "portable",
+        "deployment": "machineSpecific",
+        "siteUrl": "machineSpecific",
+        "timeoutSeconds": "portable"
+      },
+      "version": 1
+    },
+    "version": "0.9.0",
+    "windows": []
+  }
+}

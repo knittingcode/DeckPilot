@@ -1034,14 +1034,21 @@ fn every_run_is_audited_by_names_never_by_values() {
     assert_eq!(records[1].record.outcome, Some("tool-option-denied"));
     assert_eq!(records[2].record.outcome, Some("tool-invalid-argument"));
     let text = format!("{records:?}");
-    for secret in [
+    for (index, secret) in [
         "secret-format",
         "secret-ref",
         "core.sshCommand",
         "evil",
         repo.to_str().unwrap(),
-    ] {
-        assert!(!text.contains(secret), "{secret} in {text}");
+    ]
+    .iter()
+    .enumerate()
+    {
+        // Never print the value or the records holding it.
+        assert!(
+            !text.contains(*secret),
+            "forbidden value #{index} reached the audit records"
+        );
     }
 }
 
@@ -1093,7 +1100,8 @@ fn setup_git(git: &Path, home: &Path, dir: &Path, args: &[&str]) {
         .stderr(std::process::Stdio::null())
         .status()
         .unwrap();
-    assert!(status.success(), "git {args:?}");
+    // The step is not printed: its arguments may hold the planted values.
+    assert!(status.success(), "a git setup step failed");
 }
 
 fn real_git_fixture(git: &Path, home: &Path, grants: &str) -> Fixture {

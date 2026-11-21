@@ -615,33 +615,62 @@ const PROJECTS_MODULE: LegacyDescriptor = LegacyDescriptor {
 mod tests {
     use std::collections::BTreeSet;
 
-    use deckpilot_core::FeatureModule;
+    use serde::Deserialize;
 
     use super::*;
 
-    fn builtins() -> Vec<Box<dyn FeatureModule>> {
-        use deckpilot_modules as m;
-        vec![
-            Box::new(m::github::GithubModule::new()),
-            Box::new(m::gitlab::GitlabModule::new()),
-            Box::new(m::jira::JiraModule::new()),
-            Box::new(m::git::GitModule::new()),
-            Box::new(m::docker::DockerModule::new()),
-            Box::new(m::workspace::WorkspaceModule::new()),
-            Box::new(m::projects::ProjectsModule::new()),
-        ]
+    /// The frozen contract of a removed built-in: its manifest and action
+    /// types as 0.9.0 declared them (`crates/deckpilot-modules/legacy`,
+    /// written from the crates before they were removed).
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Frozen {
+        manifest: ModuleManifest,
+        action_types: Vec<ActionType>,
     }
 
-    /// While the built-ins are compiled in, every descriptor is exactly
-    /// what the migration read of its built-in: name, default state,
-    /// capabilities, platforms (all), every setting's key, kind, default
-    /// and `required`, every action type with its parameter keys.
+    macro_rules! frozen {
+        ($id:literal) => {
+            (
+                $id,
+                include_str!(concat!(
+                    "../../../../../crates/deckpilot-modules/legacy/",
+                    $id,
+                    ".json"
+                )),
+            )
+        };
+    }
+
+    fn builtins() -> Vec<Frozen> {
+        [
+            frozen!("github"),
+            frozen!("gitlab"),
+            frozen!("jira"),
+            frozen!("git"),
+            frozen!("docker"),
+            frozen!("workspace"),
+            frozen!("projects"),
+        ]
+        .into_iter()
+        .map(|(id, text)| {
+            let frozen: Frozen = serde_json::from_str(text).expect("a frozen contract parses");
+            assert_eq!(frozen.manifest.id.as_str(), id);
+            frozen
+        })
+        .collect()
+    }
+
+    /// Every descriptor is exactly what the migration read of its
+    /// built-in, as frozen when the crate was removed: name, default
+    /// state, capabilities, platforms (all), every setting's key, kind,
+    /// default and `required`, every action type with its parameter keys.
     #[test]
     fn every_descriptor_is_its_builtin() {
         let modules = builtins();
         assert_eq!(modules.len(), DESCRIPTORS.len());
         for module in modules {
-            let builtin = module.manifest();
+            let builtin = &module.manifest;
             let descriptor = of(builtin.id.as_str())
                 .unwrap_or_else(|| panic!("no descriptor of {}", builtin.id));
             let described = descriptor.manifest();
@@ -677,10 +706,9 @@ mod tests {
                 .filter_map(|s| s.default.clone().map(|d| (s.key.clone(), d)))
                 .fold(ActionParameters::new(), |p, (k, v)| p.with(k, v));
             let actions: Vec<(String, Vec<String>)> = module
-                .action_handlers(&config)
+                .action_types
                 .iter()
-                .map(|h| {
-                    let d = h.definition();
+                .map(|d| {
                     (
                         d.id.to_string(),
                         d.parameters.iter().map(|p| p.key.clone()).collect(),
@@ -702,35 +730,74 @@ mod tests {
         }
     }
 
-    /// The keys the plans and the host's tool settings name are the
-    /// built-ins'.
+    /// The keys the plans and the host's tool settings name are settings
+    /// the built-ins declared.
     #[test]
     fn the_named_keys_are_the_builtins() {
-        use deckpilot_modules as m;
-        assert_eq!(github::MODULE_ID, m::github::MODULE_ID);
-        assert_eq!(github::CREDENTIAL, m::github::CREDENTIAL);
-        assert_eq!(github::API_URL, m::github::API_URL);
-        assert_eq!(github::DEFAULT_API_URL, m::github::DEFAULT_API_URL);
-        assert_eq!(github::ALLOW_PRIVATE, m::github::ALLOW_PRIVATE);
-        assert_eq!(gitlab::MODULE_ID, m::gitlab::MODULE_ID);
-        assert_eq!(gitlab::CREDENTIAL, m::gitlab::CREDENTIAL);
-        assert_eq!(gitlab::API_URL, m::gitlab::API_URL);
-        assert_eq!(gitlab::DEFAULT_API_URL, m::gitlab::DEFAULT_API_URL);
-        assert_eq!(gitlab::ALLOW_PRIVATE, m::gitlab::ALLOW_PRIVATE);
-        assert_eq!(jira::MODULE_ID, m::jira::MODULE_ID);
-        assert_eq!(jira::CREDENTIAL, m::jira::CREDENTIAL);
-        assert_eq!(jira::SITE_URL, m::jira::SITE_URL);
-        assert_eq!(jira::ALLOW_PRIVATE, m::jira::ALLOW_PRIVATE);
-        assert_eq!(git::MODULE_ID, m::git::MODULE_ID);
-        assert_eq!(git::EXECUTABLE, m::git::EXECUTABLE);
-        assert_eq!(git::NETWORK_TIMEOUT, m::git::NETWORK_TIMEOUT);
-        assert_eq!(docker::MODULE_ID, m::docker::MODULE_ID);
-        assert_eq!(docker::EXECUTABLE, m::docker::EXECUTABLE);
-        assert_eq!(docker::CONTEXT, m::docker::CONTEXT);
-        assert_eq!(docker::ALLOW_STATE_CHANGES, m::docker::ALLOW_STATE_CHANGES);
-        assert_eq!(docker::TIMEOUT, m::docker::TIMEOUT);
-        assert_eq!(workspace::MODULE_ID, m::workspace::MODULE_ID);
-        assert_eq!(projects::MODULE_ID, m::projects::MODULE_ID);
+        let modules = builtins();
+        let declares = |module: &str, key: &str| {
+            let frozen = modules
+                .iter()
+                .find(|m| m.manifest.id.as_str() == module)
+                .unwrap_or_else(|| panic!("{module} is frozen"));
+            assert!(
+                frozen.manifest.config.iter().any(|s| s.key == key),
+                "{module} declares `{key}`"
+            );
+        };
+        for (module, keys) in [
+            (
+                github::MODULE_ID,
+                &[github::CREDENTIAL, github::API_URL, github::ALLOW_PRIVATE][..],
+            ),
+            (
+                gitlab::MODULE_ID,
+                &[gitlab::CREDENTIAL, gitlab::API_URL, gitlab::ALLOW_PRIVATE],
+            ),
+            (
+                jira::MODULE_ID,
+                &[jira::CREDENTIAL, jira::SITE_URL, jira::ALLOW_PRIVATE],
+            ),
+            (git::MODULE_ID, &[git::EXECUTABLE, git::NETWORK_TIMEOUT]),
+            (
+                docker::MODULE_ID,
+                &[
+                    docker::EXECUTABLE,
+                    docker::CONTEXT,
+                    docker::ALLOW_STATE_CHANGES,
+                    docker::TIMEOUT,
+                ],
+            ),
+        ] {
+            for key in keys {
+                declares(module, key);
+            }
+        }
+        let default = |module: &str, key: &str| {
+            modules
+                .iter()
+                .find(|m| m.manifest.id.as_str() == module)
+                .and_then(|m| m.manifest.config.iter().find(|s| s.key == key))
+                .and_then(|s| s.default.clone())
+        };
+        assert_eq!(
+            default(github::MODULE_ID, github::API_URL),
+            Some(ParameterValue::Text(github::DEFAULT_API_URL.into()))
+        );
+        assert_eq!(
+            default(gitlab::MODULE_ID, gitlab::API_URL),
+            Some(ParameterValue::Text(gitlab::DEFAULT_API_URL.into()))
+        );
+        assert!(
+            modules
+                .iter()
+                .any(|m| m.manifest.id.as_str() == workspace::MODULE_ID)
+        );
+        assert!(
+            modules
+                .iter()
+                .any(|m| m.manifest.id.as_str() == projects::MODULE_ID)
+        );
     }
 
     /// One descriptor per module, each with a plan and an alias block,

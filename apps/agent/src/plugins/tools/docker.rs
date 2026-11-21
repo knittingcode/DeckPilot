@@ -1,5 +1,5 @@
-//! `docker` for `tool.run` (X3b, X3c): what the built-in docker module
-//! runs (`modules/docker/src/cli.rs`, `actions.rs`), and nothing else.
+//! `docker` for `tool.run` (X3b, X3c): what the former built-in `docker`
+//! module ran (removed in WP-C6), and nothing else.
 //!
 //! | Subcommand | Allowed | Grant |
 //! | --- | --- | --- |
@@ -387,7 +387,8 @@ fn small_file(path: &Path) -> Option<String> {
 }
 
 /// A name Docker accepts for a context, container or service, which can
-/// never be taken for an option (`modules/docker/src/cli.rs`).
+/// never be taken for an option (as the former built-in `docker` module
+/// checked it).
 pub(super) fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 128

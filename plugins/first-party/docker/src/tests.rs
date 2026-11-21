@@ -2,9 +2,8 @@
 //! manifest is valid against the schema, the translations are complete,
 //! the tools policy is what the actions run, and every action behaves on
 //! recorded `docker` output, with the agent replaced by `MockHost`. The
-//! scenarios and the recorded output are the built-in's
-//! (`modules/docker/src/actions/tests.rs`, whose fake `docker` prints
-//! them). The end-to-end run through the real agent, host and a fake
+//! scenarios and the recorded output are the former built-in `docker`
+//! module's (removed in WP-C6; its fake `docker` printed them). The end-to-end run through the real agent, host and a fake
 //! `docker` is `apps/agent/tests/plugins_docker.rs`.
 
 use std::cell::RefCell;

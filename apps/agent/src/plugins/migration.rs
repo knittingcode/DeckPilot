@@ -134,8 +134,6 @@ pub(crate) mod descriptors;
 #[cfg(feature = "test-hooks")]
 pub(crate) mod fixture;
 pub(crate) mod legacy;
-#[cfg(feature = "test-hooks")]
-mod standin;
 #[cfg(all(test, feature = "test-hooks"))]
 mod tests;
 
@@ -170,9 +168,9 @@ pub(crate) struct MigrationPlan {
 ///
 /// - **no fallback while it waits:** until the user consents (or after
 ///   they declined), the legacy action types are unavailable with the
-///   reason ([`LegacyRoute::AwaitingConsent`]), not served by the
-///   built-in; a failed step still falls back to the built-in while it is
-///   compiled in;
+///   reason ([`LegacyRoute::AwaitingConsent`]); the built-ins are removed
+///   (WP-C5, WP-C6), so no step falls back to one ([`removed`]): the
+///   plugin serves them once it can, and they are unavailable until then;
 /// - **a backup first:** the first cut-over of any of them needs the
 ///   encrypted backup `pre-plugin-extraction` of `deckpilot.db`, taken by
 ///   the service task ([`LegacySnapshot::backup`]) and journaled once;
@@ -449,15 +447,25 @@ pub(crate) fn configured(states: &ModuleStates) -> (ModuleRegistry, Vec<String>)
         let problems = registry.apply_states(states);
         return (registry, problems);
     }
-    #[cfg(feature = "test-hooks")]
-    {
-        let mut registry = deckpilot_modules::builtin(deckpilot_core::Os::current());
-        if standin::apply(&mut registry) {
-            let problems = registry.apply_states(states);
-            return (registry, problems);
-        }
+    let (mut registry, problems) = deckpilot_modules::configured(states);
+    set_legacy_configs(&mut registry, states);
+    (registry, problems)
+}
+
+/// Hands the registry the saved settings of every removed built-in
+/// ([`removed`]), read from its stored `modules` row through its
+/// descriptor as the built-in read them: the alias rules of its legacy
+/// action types compare stored parameters with them (a per-action
+/// credential naming the module's own is dropped, the plugin's imported
+/// one used). Nothing is written.
+fn set_legacy_configs(registry: &mut ModuleRegistry, states: &ModuleStates) {
+    for descriptor in descriptors::DESCRIPTORS {
+        let Ok(module) = ModuleId::new(descriptor.module) else {
+            continue;
+        };
+        let config = descriptor.config(states.get(&module));
+        registry.set_legacy_config(module, config);
     }
-    deckpilot_modules::configured(states)
 }
 
 /// A decision of the user's: the requests `decideModuleMigration` and
@@ -975,7 +983,10 @@ fn needed_grants(
 /// [`LegacyRoute::AwaitingConsent`]); `None` for every other module and
 /// phase.
 fn waiting_reason(manager: &PluginManager, record: &ModuleMigration) -> Option<String> {
-    plan_for(&record.module_id)?.extraction?;
+    let plan = plan_for(&record.module_id)?;
+    if plan.extraction.is_none() && !removed(&record.module_id) {
+        return None;
+    }
     match record.phase {
         MigrationPhase::AwaitingConsent => Some(format!(
             "{} waits for your consent: allow it in Settings › Plugins",
@@ -1174,12 +1185,18 @@ impl Engine<'_> {
             contract(m, &self.active_manifest(m)?)
                 .map_err(|why| Stop::Failed(format!("health check: {why}")))?;
         }
-        // The user declined in the consent dialog: the built-in stays, at
-        // every start, until the user asks again (Retry).
+        // The user declined in the consent dialog: the built-in stays (a
+        // removed one: its keys stay unavailable), at every start, until
+        // the user asks again (Retry).
         let declined = self.declined(m)?;
         if !declined.is_empty() {
+            let after = if removed(m.module.as_str()) {
+                "its keys are unavailable until you ask again"
+            } else {
+                "the built-in stays until you ask again"
+            };
             return Err(Stop::NotEligible(format!(
-                "you declined {}; the built-in stays until you ask again",
+                "you declined {}; {after}",
                 declined
                     .iter()
                     .map(ToString::to_string)
@@ -1913,9 +1930,39 @@ pub(super) fn decide(
     Ok(engine.touched)
 }
 
+/// Whether `module`'s built-in was removed from the app (`github`,
+/// `gitlab`, `jira`, `git`, `docker`, `workspace`, `projects`;
+/// `module-migration.md` §11 D1, D2, WP-C5, WP-C6): only a descriptor of it
+/// is left (`descriptors.rs`). Such a module has nothing to fall back to.
+pub(crate) fn removed(module: &str) -> bool {
+    descriptors::of(module).is_some()
+}
+
 /// The route of one journaled module (§5.2), and why it is unavailable
-/// when the user withdrew the plugin.
+/// when the user withdrew the plugin or the migration waits for consent.
+///
+/// A removed built-in ([`removed`]) is never routed to: where the route
+/// would fall back to it (a migration that has not cut over yet, failed,
+/// or was not eligible; a build without the bundled plugin), the legacy
+/// action types go to the plugin instead, which serves them once it can
+/// (installed, enabled, consented) and leaves them unavailable with its
+/// reason until then. Stored documents are never rewritten, so they come
+/// back unchanged.
 fn route_of(
+    manager: &PluginManager,
+    bundle: &Bundle,
+    record: &ModuleMigration,
+) -> (LegacyRoute, Option<String>) {
+    match route_with_builtin(manager, bundle, record) {
+        (LegacyRoute::Builtin, reason) if removed(&record.module_id) => {
+            (LegacyRoute::Plugin, reason)
+        }
+        other => other,
+    }
+}
+
+/// [`route_of`] while the built-in is compiled in.
+fn route_with_builtin(
     manager: &PluginManager,
     bundle: &Bundle,
     record: &ModuleMigration,

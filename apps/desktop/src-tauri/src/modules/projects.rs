@@ -12,11 +12,10 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use deckpilot_core::{
-    ActiveProjectContext, CycleDirection, MachineResourceBinding, ProfileId, Project, ProjectId,
-    ProjectKey, ResourceKey, ResourceKind,
+    ActiveProjectContext, CycleDirection, MachineResourceBinding, ProfileId, Project,
+    ProjectCatalog, ProjectId, ProjectKey, ProjectSwitcher, ResourceKey, ResourceKind,
 };
 use deckpilot_ipc::{ClientError, Request, Response};
-use deckpilot_modules::projects::{ProjectCatalog, switching};
 use deckpilot_storage::ConfigStore;
 
 use crate::agent;
@@ -179,13 +178,15 @@ pub async fn cycle_project(
         Ok(Response::ActiveProject { project }) => Ok(project.map(|p| p.id)),
         Ok(other) => Err(unexpected(&other)),
         Err(ClientError::NotRunning) => {
-            let wrap = switching::wrap_around(&state.modules());
+            // The Projects plugin's `wrapAround` lives in the agent's
+            // plugin store: without the agent, its default (on).
             let store = state.store()?;
             let profile = load_profile(&store, profile_id)?;
             let context =
                 ActiveProjectContext::restore(&profile, store.active_project(profile_id)?);
-            let active = switching::step(&profile, context.project_id(), direction, wrap)
-                .map_err(|e| CommandError::Invalid(e.to_string()))?;
+            let active =
+                ProjectSwitcher::step(&profile.projects, context.project_id(), direction, true)
+                    .map_err(|e| CommandError::Invalid(e.to_string()))?;
             store.set_active_project(profile_id, Some(active))?;
             Ok(Some(active))
         }

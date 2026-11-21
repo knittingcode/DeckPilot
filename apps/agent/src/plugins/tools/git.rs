@@ -1,5 +1,5 @@
-//! `git` for `tool.run` (X3a): what the built-in git module runs
-//! (`modules/git/src/repo.rs`, `actions.rs`), and nothing else.
+//! `git` for `tool.run` (X3a): what the former built-in `git` module ran
+//! (removed in WP-C6), and nothing else.
 //!
 //! | Subcommand | Allowed |
 //! | --- | --- |

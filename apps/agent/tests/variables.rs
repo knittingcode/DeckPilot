@@ -109,14 +109,14 @@ fn store_variables(store: &SqliteStore, work: &Profile) {
             &[VariableScope::Profile],
         )
     });
-    // Declared by the Docker module, which is disabled.
+    // Declared by the HTTP module, which is disabled.
     let conflicts = store
         .declare_module_variables(
-            &ModuleId::new("docker").unwrap(),
+            &ModuleId::new("http").unwrap(),
             &[VariableDefinition {
                 default: Some(VariableValue::Boolean(true)),
                 ..VariableDefinition::new(
-                    key("docker.flag"),
+                    key("http.flag"),
                     VariableType::Boolean,
                     &[VariableScope::Global],
                 )
@@ -127,7 +127,7 @@ fn store_variables(store: &SqliteStore, work: &Profile) {
 }
 
 /// A data directory with `work` active, `home` beside it, the test
-/// variables and the Docker module disabled.
+/// variables and the HTTP module disabled.
 fn prepare(dir: &TempDir, work: &Profile, home: Option<&Profile>) -> (AgentPaths, DatabaseKey) {
     let (paths, db_key) = data_dir(dir, work, &[]);
     let store = support::open_store(&paths, &db_key);
@@ -136,7 +136,7 @@ fn prepare(dir: &TempDir, work: &Profile, home: Option<&Profile>) -> (AgentPaths
     }
     store
         .set_module_state(
-            &ModuleId::new("docker").unwrap(),
+            &ModuleId::new("http").unwrap(),
             &ModuleSettings {
                 enabled: false,
                 config: ActionParameters::new(),
@@ -261,7 +261,7 @@ async fn previews_report_every_status_without_secrets() {
                 ("shared.team.name", None),
                 ("shared.team.size", Some(ParameterKind::Project)),
                 ("shared.team.nope", None),
-                ("shared.docker.flag", None),
+                ("shared.http.flag", None),
                 ("shared.vault.pin", None),
                 ("workflow.execution.id", None),
                 ("{{ env.home }}", None),
@@ -396,15 +396,21 @@ async fn the_catalog_is_metadata_filtered_for_the_field() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn actions_resolve_references_when_they_run() {
     let s = setup().await;
-    // The active project is SHOP: its value wins over the global one.
+    // The active project is SHOP: its value wins over the global one (a
+    // project without one gets the global one: the previews above).
     assert_eq!(s.run(s.greet).await, "hi shop crew on SHOP");
-    s.agent
+    // Without the Projects plugin it stays SHOP.
+    let refused = s
+        .agent
         .request(Request::SelectProject {
             project: s.work.projects[1].id,
         })
-        .await
-        .unwrap();
-    assert_eq!(s.run(s.greet).await, "hi crew on CMR");
+        .await;
+    assert!(
+        matches!(&refused, Err(ClientError::Agent(e)) if e.reason.as_deref() == Some("projectsOff")),
+        "{refused:?}"
+    );
+    assert_eq!(s.run(s.greet).await, "hi shop crew on SHOP");
     // Sensitive values never come back.
     assert_eq!(s.run(s.pin).await, "pin [redacted]");
     s.agent.shutdown().await;
@@ -449,22 +455,26 @@ async fn a_changed_value_is_used_by_the_next_run_and_announced() {
         .await;
     assert_eq!(previews[0]["status"]["value"]["value"], "night shift");
     s.agent.request(Request::ReloadConfiguration).await.unwrap();
+    // A later change is announced; the reload in between announced
+    // nothing, so the change is the next announcement.
     s.agent
-        .request(Request::SelectProject {
-            project: s.work.projects[1].id,
-        })
-        .await
-        .unwrap();
-    let next = next_matching(&mut events, "projectChanged", |e| {
-        matches!(
-            e,
-            AgentEvent::SharedVariablesChanged { .. } | AgentEvent::ProjectChanged { .. }
+        .store()
+        .set_shared_variable_value(
+            &key("team.size"),
+            &ScopeKey::Global,
+            &VariableValue::Integer(5),
         )
+        .unwrap();
+    s.agent.request(Request::ReloadConfiguration).await.unwrap();
+    let next = next_matching(&mut events, "sharedVariablesChanged", |e| {
+        matches!(e, AgentEvent::SharedVariablesChanged { .. })
     })
     .await;
-    assert!(
-        matches!(next, AgentEvent::ProjectChanged { .. }),
-        "{next:?}"
+    assert_eq!(
+        next,
+        AgentEvent::SharedVariablesChanged {
+            keys: vec!["team.size".into()]
+        }
     );
     s.agent.shutdown().await;
 }
@@ -497,25 +507,7 @@ async fn context_changes_are_announced_to_new_clients_only() {
     assert!(!old.supports(Capability::Variables));
     old.subscribe().await.unwrap();
 
-    let cmr = s.work.projects[1].id;
-    s.agent
-        .request(Request::SelectProject { project: cmr })
-        .await
-        .unwrap();
-    let changed = next_matching(&mut current, "projectChanged", |e| {
-        matches!(e, AgentEvent::ProjectChanged { .. })
-    })
-    .await;
-    assert_eq!(
-        changed,
-        AgentEvent::ProjectChanged {
-            profile: s.work.id,
-            project: Some(cmr),
-            source: ProjectSource::Application,
-            plugin: None,
-        }
-    );
-
+    // (`projectChanged` needs the Projects plugin: `plugins_projects.rs`.)
     s.agent
         .request(Request::SetActiveProfile { profile: s.home.id })
         .await
@@ -691,13 +683,15 @@ async fn graph_runs_resolve_mappings_and_instance_references() {
 
 /// The unified registry over IPC: owners and canonical ids for protocol 9,
 /// the old catalog for older clients, and a disabled module's variables
-/// unavailable (never lost) until it is enabled again.
+/// unavailable (never lost) until it is enabled again. The module is the
+/// work session's (`workSession.…`, formerly `system.work.session.…`);
+/// the project variables (`system.project.current.…`) are the core's.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)] // One module, disabled and enabled again.
 async fn module_variables_have_owners_and_follow_the_module() {
     use deckpilot_core::variables::{VariableGroup, VariableOwner};
     let s = setup().await;
-    let projects = ModuleId::new("projects").unwrap();
+    let module = ModuleId::new("work-session").unwrap();
     let everything = CatalogFilter {
         include_unavailable: true,
         ..CatalogFilter::default()
@@ -710,49 +704,54 @@ async fn module_variables_have_owners_and_follow_the_module() {
             .unwrap_or_else(|| panic!("{reference} is listed"))
             .clone()
     };
-    let canonical = entry("projects.current.key");
+    let canonical = entry("workSession.state");
     assert_eq!(canonical.group, VariableGroup::Module);
     assert_eq!(
         canonical.owner,
         Some(VariableOwner::Module {
-            module: projects.clone()
+            module: module.clone()
         })
     );
     assert!(canonical.read_only && canonical.deprecated.is_none());
     assert_eq!(
         canonical.declared_scope,
-        Some(deckpilot_core::variables::DeclaredScope::Project)
+        Some(deckpilot_core::variables::DeclaredScope::WorkSession)
     );
-    let legacy = entry("system.project.current.key");
+    let legacy = entry("system.work.session.state");
     assert_eq!(
         legacy.deprecated.unwrap().canonical.as_str(),
-        "projects.current.key"
+        "workSession.state"
     );
     assert_eq!(entry("system.platform").owner, Some(VariableOwner::Core));
     let team = entry("shared.team.name");
     assert_eq!(team.owner, Some(VariableOwner::User));
     assert!(!team.read_only);
     assert_eq!(
-        entry("shared.docker.flag").owner,
+        entry("shared.http.flag").owner,
         Some(VariableOwner::Module {
-            module: ModuleId::new("docker").unwrap()
+            module: ModuleId::new("http").unwrap()
         })
     );
 
-    // Both spellings resolve alike.
+    // Both spellings resolve alike (no session: no value).
     let both = [
-        ("projects.current.key", None),
-        ("system.project.current.key", None),
+        ("workSession.state", None),
+        ("system.work.session.state", None),
     ];
     let previews = s
         .preview(s.context(0, ProjectSource::Explicit), &both)
         .await;
     assert_eq!(previews[0]["status"], previews[1]["status"]);
-    assert_eq!(previews[0]["status"]["value"]["value"], "SHOP");
-    // A preview of the application's project without naming one sees the
-    // active project, as a key press would.
+    // The project variables stay in the core: a preview of the
+    // application's project without naming one sees the active project, as
+    // a key press would.
+    let project = [("system.project.current.key", None)];
+    let explicit = s
+        .preview(s.context(0, ProjectSource::Explicit), &project)
+        .await;
+    assert_eq!(explicit[0]["status"]["value"]["value"], "SHOP");
     let active = s
-        .preview(ResolutionContext::preview(s.work.id), &both)
+        .preview(ResolutionContext::preview(s.work.id), &project)
         .await;
     assert_eq!(active[0]["status"]["value"]["value"], "SHOP");
     // The connected device, through the agent's descriptor.
@@ -796,20 +795,20 @@ async fn module_variables_have_owners_and_follow_the_module() {
         assert!(entry.get("deprecated").is_none(), "{entry}");
         assert!(entry.get("declaredScope").is_none(), "{entry}");
     }
-    assert!(
-        listed
-            .iter()
-            .any(|e| e.reference.to_string() == "system.project.current.key")
-    );
+    for reference in ["system.project.current.key", "system.work.session.state"] {
+        assert!(
+            listed.iter().any(|e| e.reference.to_string() == reference),
+            "{reference}"
+        );
+    }
 
-    // Disabling the projects module makes its canonical ids unavailable
-    // and says so. Legacy ids keep resolving exactly as before, and the
-    // configuration that uses them keeps running.
+    // Disabling the module makes its canonical ids unavailable and says
+    // so; the configuration that uses them is kept and keeps running.
     let mut events = s.agent.events().await;
     s.agent
         .store()
         .set_module_state(
-            &projects,
+            &module,
             &ModuleSettings {
                 enabled: false,
                 config: ActionParameters::new(),
@@ -818,26 +817,26 @@ async fn module_variables_have_owners_and_follow_the_module() {
         .unwrap();
     s.agent.request(Request::ReloadConfiguration).await.unwrap();
     let changed = next_matching(&mut events, "sharedVariablesChanged", |e| {
-        matches!(e, AgentEvent::SharedVariablesChanged { keys } if keys.iter().any(|k| k.starts_with("projects.")))
+        matches!(e, AgentEvent::SharedVariablesChanged { keys } if keys.iter().any(|k| k.starts_with("workSession.")))
     })
     .await;
     let AgentEvent::SharedVariablesChanged { keys } = changed else {
         unreachable!();
     };
-    assert!(keys.iter().any(|k| k == "projects.current.key"), "{keys:?}");
+    assert!(keys.iter().any(|k| k == "workSession.state"), "{keys:?}");
     let previews = s
         .preview(s.context(0, ProjectSource::Explicit), &both)
         .await;
     assert_eq!(
         previews[0]["status"],
-        json!({"status": "unavailable", "owner": "projects"})
+        json!({"status": "unavailable", "owner": "work-session"})
     );
-    assert_eq!(previews[1]["status"]["value"]["value"], "SHOP");
     let listed = s.list(everything.clone()).await;
     assert_eq!(
-        entry_of(&listed, "projects.current.key").availability,
+        entry_of(&listed, "workSession.state").availability,
         ReferenceAvailability::Unavailable
     );
+    // The core's project variables are not affected.
     assert_eq!(
         entry_of(&listed, "system.project.current.key").availability,
         ReferenceAvailability::Available
@@ -868,11 +867,11 @@ async fn module_variables_have_owners_and_follow_the_module() {
         ))
     );
 
-    // Enabled again, the same references resolve.
+    // Enabled again, the same references resolve as before.
     s.agent
         .store()
         .set_module_state(
-            &projects,
+            &module,
             &ModuleSettings {
                 enabled: true,
                 config: ActionParameters::new(),
@@ -880,6 +879,14 @@ async fn module_variables_have_owners_and_follow_the_module() {
         )
         .unwrap();
     s.agent.request(Request::ReloadConfiguration).await.unwrap();
+    let again = s
+        .preview(s.context(0, ProjectSource::Explicit), &both)
+        .await;
+    assert_eq!(again[0]["status"], again[1]["status"]);
+    assert_ne!(
+        again[0]["status"],
+        json!({"status": "unavailable", "owner": "work-session"})
+    );
     assert_eq!(s.run(s.greet).await, "hi shop crew on SHOP");
     s.agent.shutdown().await;
 }

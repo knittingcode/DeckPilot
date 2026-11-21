@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use deckpilot_core::ProjectCatalog as _;
 use deckpilot_core::{
     ActionParameters, BindingTarget, ControlBinding, DeviceLayout, LayoutStatus, Os,
     ParameterValue, Profile, Project, ProjectKey, Trigger,
@@ -31,7 +32,6 @@ use deckpilot_ipc::{
     AgentClient, AgentEvent, AgentPaths, AgentStatus, ClientKind, KeyMaterial, Request, Response,
 };
 use deckpilot_modules::general;
-use deckpilot_modules::projects::ProjectCatalog as _;
 use deckpilot_storage::crypto::Password;
 use deckpilot_storage::vault::Vault;
 use deckpilot_storage::{ConfigStore as _, DatabaseKey, Encryption, SqliteStore};

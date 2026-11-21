@@ -18,7 +18,7 @@ use deckpilot_core::{
     ActionHandler, ActionParameters, ActionRegistry, ActionResult, ActionType, ExecutionContext,
     ModuleId,
 };
-use deckpilot_ipc::plugins::{MigrationRoute, ModuleMigrationInfo, PluginState, PluginSummary};
+use deckpilot_ipc::plugins::{PluginState, PluginSummary};
 
 /// `definition` with its editor navigation (plugin API 1.7) only when the
 /// host's own rules accept it: an allowlisted operation whose target is one
@@ -45,9 +45,6 @@ pub struct PluginActions {
     /// took over keep their behaviour from before the extraction
     /// ([`PluginActions::feature`]).
     answered: bool,
-    /// The routes of the last `listModuleMigrations` answer, by built-in
-    /// module id.
-    routes: BTreeMap<String, MigrationRoute>,
 }
 
 /// Whether a feature a first-party plugin owns (`deckpilot.workflows`,
@@ -91,21 +88,6 @@ impl PluginActions {
     pub fn clear(&mut self) {
         self.answered = true;
         self.plugins.clear();
-    }
-
-    /// The module migrations are exactly `migrations` (a
-    /// `listModuleMigrations` answer).
-    pub fn record_migrations(&mut self, migrations: &[ModuleMigrationInfo]) {
-        self.routes = migrations
-            .iter()
-            .map(|m| (m.module.clone(), m.route))
-            .collect();
-    }
-
-    /// The last known route of a built-in module's legacy action types;
-    /// `None` when no migration is known for it.
-    pub fn route(&self, module: &str) -> Option<MigrationRoute> {
-        self.routes.get(module).copied()
     }
 
     /// The state of the feature `plugin` owns.
@@ -380,22 +362,22 @@ mod tests {
         // A built-in type claimed by a plugin, a plugin id that is not a
         // plugin id, and a type of another plugin: all ignored.
         let mut claims_builtin = plugin("acme.hello-weather", false);
-        claims_builtin.actions[0].action_type = "projects.next".into();
-        claims_builtin.actions[0].definition = Some(definition("projects.next"));
-        let mut not_a_plugin = plugin("projects", true);
-        not_a_plugin.actions[0].action_type = "projects.greet".into();
-        not_a_plugin.actions[0].definition = Some(definition("projects.greet"));
+        claims_builtin.actions[0].action_type = "system.cpu".into();
+        claims_builtin.actions[0].definition = Some(definition("system.cpu"));
+        let mut not_a_plugin = plugin("system", true);
+        not_a_plugin.actions[0].action_type = "system.greet".into();
+        not_a_plugin.actions[0].definition = Some(definition("system.greet"));
         let mut other = plugin("acme.hello-weather", true);
         other.id = "acme.other".into();
         let mut actions = PluginActions::default();
         actions.replace(&[claims_builtin, not_a_plugin, other]);
         let registry = registry(&actions);
-        let next = ActionTypeId::new("projects.next").unwrap();
+        let next = ActionTypeId::new("system.cpu").unwrap();
         assert!(registry.definition(&next).is_some());
         assert!(registry.unavailable_reason(&next).is_none());
         assert!(
             registry
-                .definition(&ActionTypeId::new("projects.greet").unwrap())
+                .definition(&ActionTypeId::new("system.greet").unwrap())
                 .is_none()
         );
         assert!(registry.definition(&greet()).is_none());

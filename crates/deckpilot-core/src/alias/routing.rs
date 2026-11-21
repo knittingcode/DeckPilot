@@ -84,8 +84,21 @@ fn the_shipped_table_routes_only_what_it_lists() {
     assert_eq!(statuses.len(), ACTION_ALIASES.len());
     for status in &statuses {
         assert_ne!(status.plugin, id("deckpilot.legacy"));
-        // Not routed by the agent: the built-in's, never the plugin's.
-        assert_eq!(status.outcome, AliasOutcome::Builtin, "{}", status.legacy);
+        // Not routed by the agent and no built-in registered here (the
+        // shipped modules are not): nothing to fall back to, unavailable
+        // with the plugin they now come from.
+        assert_eq!(
+            status.outcome,
+            AliasOutcome::Unavailable {
+                reason: format!(
+                    "`{}` now comes from `{}`: `{}` is not installed; install it from the \
+                     Marketplace",
+                    status.legacy, status.plugin, status.plugin
+                )
+            },
+            "{}",
+            status.legacy
+        );
     }
     assert_eq!(
         run(&registry, &fetch(), &message("hi")),
@@ -372,7 +385,8 @@ fn without_the_builtin_the_plugin_is_the_only_way() {
     );
 
     let missing = modules(false, None, migrated());
-    let reason = "`deckpilot.legacy` is not installed; install it from the Marketplace";
+    let reason = "`legacy.fetch` now comes from `deckpilot.legacy`: `deckpilot.legacy` is not \
+                  installed; install it from the Marketplace";
     assert_eq!(
         outcome(&missing),
         AliasOutcome::Unavailable {
@@ -393,7 +407,9 @@ fn without_the_builtin_the_plugin_is_the_only_way() {
     assert_eq!(
         outcome(&faulty),
         AliasOutcome::Unavailable {
-            reason: "the plugin's files were modified".into()
+            reason: "`legacy.fetch` now comes from Legacy plugin (`deckpilot.legacy`): the \
+                     plugin's files were modified"
+                .into()
         }
     );
     assert_eq!(
@@ -402,6 +418,93 @@ fn without_the_builtin_the_plugin_is_the_only_way() {
             module: id("deckpilot.legacy"),
             name: "Legacy plugin".into()
         }
+    );
+}
+
+/// A removed built-in (§11 D1, D2) that the agent never routed: there is
+/// no built-in to fall back to, so the plugin serves the legacy type when
+/// it can, and otherwise it is unavailable with the plugin it now comes
+/// from, never an unknown action type.
+#[test]
+fn a_removed_builtin_is_served_by_its_plugin_or_unavailable() {
+    let served = modules(false, Some(PluginFixture::new()), LegacyRouting::new());
+    assert_eq!(outcome(&served), AliasOutcome::Plugin);
+    assert_eq!(
+        run(&served, &fetch(), &message("hi")),
+        "plugin: hi [message]"
+    );
+    assert_eq!(served.availability(&fetch()), Availability::Available);
+
+    let missing = modules(false, None, LegacyRouting::new());
+    let reason = "`legacy.fetch` now comes from `deckpilot.legacy`: `deckpilot.legacy` is not \
+                  installed; install it from the Marketplace";
+    assert_eq!(
+        outcome(&missing),
+        AliasOutcome::Unavailable {
+            reason: reason.into()
+        }
+    );
+    assert_eq!(
+        run(&missing, &fetch(), &message("hi")),
+        format!("refused: action type `legacy.fetch` is unavailable: {reason}")
+    );
+
+    let faulty = modules(
+        false,
+        Some(PluginFixture::faulty("the plugin's files were modified")),
+        LegacyRouting::new(),
+    );
+    assert_eq!(
+        outcome(&faulty),
+        AliasOutcome::Unavailable {
+            reason: "`legacy.fetch` now comes from Legacy plugin (`deckpilot.legacy`): the \
+                     plugin's files were modified"
+                .into()
+        }
+    );
+    // Waiting for consent stays unavailable, with that reason.
+    let waiting = modules(
+        false,
+        Some(PluginFixture::new()),
+        LegacyRouting::new().with(id("legacy"), LegacyRoute::AwaitingConsent),
+    );
+    assert!(matches!(
+        outcome(&waiting),
+        AliasOutcome::Unavailable { reason } if reason.contains("waits for your consent")
+    ));
+}
+
+/// Without the built-in, its saved settings (the agent hands them over
+/// from the stored `modules` row) still decide the alias rules: a stored
+/// per-action credential that names the module's own is dropped, any
+/// other is refused, as while the built-in was compiled in.
+#[test]
+fn a_removed_builtins_saved_settings_still_drop_its_default_credential() {
+    let with = |credential: &str| {
+        message("hi").with("credential", ParameterValue::Text(credential.into()))
+    };
+    let mut registry = modules(false, Some(PluginFixture::new()), migrated());
+    assert!(run(&registry, &fetch(), &with(LEGACY_CREDENTIAL)).starts_with("refused"));
+    registry.set_legacy_config(
+        id("legacy"),
+        ActionParameters::new().with("credential", ParameterValue::Text(LEGACY_CREDENTIAL.into())),
+    );
+    assert_eq!(
+        run(&registry, &fetch(), &with(LEGACY_CREDENTIAL)),
+        "plugin: hi [message]"
+    );
+    assert_eq!(run(&registry, &fetch(), &with("")), "plugin: hi [message]");
+    assert!(run(&registry, &fetch(), &with("personal")).starts_with("refused"));
+    // A registered module's own settings count: the legacy ones are not
+    // recorded for it.
+    let mut builtin = modules(true, Some(PluginFixture::new()), migrated());
+    builtin.set_legacy_config(
+        id("legacy"),
+        ActionParameters::new().with("credential", ParameterValue::Text("other".into())),
+    );
+    assert_eq!(
+        run(&builtin, &fetch(), &with(LEGACY_CREDENTIAL)),
+        "plugin: hi [message]"
     );
 }
 

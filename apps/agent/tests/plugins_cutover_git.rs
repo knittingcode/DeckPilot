@@ -189,7 +189,8 @@ async fn a_used_git_module_waits_for_consent_then_runs_through_the_plugin() {
         BundleClass::Migration,
         Some((&profile, Some(project))),
         Some(&machine),
-    );
+    )
+    .with_projects(BundleClass::Migration);
     // The built-in `git` saved with the user's executable.
     {
         let store = support::open_store(&env.paths, &env.key);

@@ -123,12 +123,13 @@ fn exports_portable_data_without_machine_values() {
         !text.contains("/home/someone"),
         "machine paths are never exported"
     );
-    // Portable module settings only: the projects module exports wrapAround.
-    assert_eq!(payload.modules["projects"].version, 1);
+    // Portable module settings only: the notifications module exports
+    // where notifications show.
+    assert_eq!(payload.modules["notifications"].version, 1);
     assert!(
-        payload.modules["projects"]
+        payload.modules["notifications"]
             .settings
-            .boolean("wrapAround")
+            .boolean("desktop")
             .is_some()
     );
     assert_eq!(round_trip(&payload), payload);
@@ -281,13 +282,23 @@ fn module_settings_follow_the_portability_contract() {
     let (store, _) = store_with(&[]);
     let mut payload = exported(&store);
     payload.modules.insert(
-        "projects".into(),
+        "notifications".into(),
         ModuleExport {
             version: 1,
             enabled: false,
             settings: ActionParameters::new()
-                .with("wrapAround", ParameterValue::Boolean(false))
+                .with("desktop", ParameterValue::Boolean(false))
                 .with("somethingLocal", ParameterValue::Text("x".into())),
+        },
+    );
+    // A 0.9.x export with a removed built-in's settings (`projects`, now
+    // the Projects plugin's): nothing here takes them.
+    payload.modules.insert(
+        "projects".into(),
+        ModuleExport {
+            version: 1,
+            enabled: true,
+            settings: ActionParameters::new().with("wrapAround", ParameterValue::Boolean(false)),
         },
     );
     payload.modules.insert(
@@ -318,8 +329,9 @@ fn module_settings_follow_the_portability_contract() {
     );
     let preview = preview(&payload, &store, &modules(), Vec::new()).unwrap();
     let status = |id: &str| preview.modules.iter().find(|m| m.id == id).unwrap().clone();
-    assert_eq!(status("projects").status, ModuleStatus::Ready);
-    assert_eq!(status("projects").skipped_settings, ["somethingLocal"]);
+    assert_eq!(status("notifications").status, ModuleStatus::Ready);
+    assert_eq!(status("notifications").skipped_settings, ["somethingLocal"]);
+    assert_eq!(status("projects").status, ModuleStatus::Missing);
     assert_eq!(status("general").status, ModuleStatus::Incompatible);
     assert_eq!(status("home-automation").status, ModuleStatus::Missing);
 
@@ -333,32 +345,20 @@ fn module_settings_follow_the_portability_contract() {
     );
     assert_eq!(
         summary.modules,
-        [
-            "deck",
-            "docker",
-            "git",
-            "github",
-            "gitlab",
-            "http",
-            "jira",
-            "notifications",
-            "projects",
-            "system",
-            "work-session",
-            "workspace"
-        ]
+        ["deck", "http", "notifications", "system", "work-session"]
     );
     assert_eq!(status("system").skipped_settings, ["allowCommands"]);
     let stored = store.module_states().unwrap();
-    let projects = &stored[&ModuleId::new("projects").unwrap()];
-    assert!(!projects.enabled);
-    assert_eq!(projects.config.boolean("wrapAround"), Some(false));
-    assert_eq!(projects.config.text("somethingLocal"), None);
+    let notifications = &stored[&ModuleId::new("notifications").unwrap()];
+    assert!(!notifications.enabled);
+    assert_eq!(notifications.config.boolean("desktop"), Some(false));
+    assert_eq!(notifications.config.text("somethingLocal"), None);
+    assert!(!stored.contains_key(&ModuleId::new("projects").unwrap()));
     let system = &stored[&ModuleId::new("system").unwrap()];
     assert_eq!(system.config.boolean("allowCommands"), Some(false));
     // One state per imported module of the list above.
     assert_eq!(stored.len(), summary.modules.len());
-    assert_eq!(stored.len(), 12);
+    assert_eq!(stored.len(), 5);
 }
 
 #[test]
@@ -947,7 +947,17 @@ fn incompatible_bindings_are_kept_and_reported() {
 
     let (source, profiles) = store_with(&["Work"]);
     let mut work = profiles[0].clone();
-    let action = work.actions[0].id;
+    // A built-in action for keys only.
+    let log = modules()
+        .action_registry()
+        .create_instance(
+            "Log",
+            ActionTypeId::new("general.log").unwrap(),
+            &ActionParameters::new().with("message", ParameterValue::Text("hi".into())),
+        )
+        .unwrap();
+    let action = log.id;
+    work.actions.push(log);
     let mut layout = DeviceLayout::new("Plus", models::stream_deck_plus().id);
     layout.pages[0].bindings = vec![
         ControlBinding::new(

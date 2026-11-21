@@ -7,23 +7,24 @@ mod support;
 
 use std::time::Duration;
 
+use deckpilot_core::ProjectCatalog;
 use deckpilot_core::{
     ActionParameters, BindingTarget, ControlBinding, DeviceLayout, LayoutPage, Profile, Project,
     ProjectKey, Trigger,
 };
 use deckpilot_device::mock::MockBackend;
 use deckpilot_device::{ConnectionState, ControlId, DeviceBackend, DeviceId, Frame, models};
-use deckpilot_ipc::{AgentStatus, Request};
+use deckpilot_ipc::{AgentClient, AgentEvent, AgentStatus, Request};
 use deckpilot_modules::general;
-use deckpilot_modules::projects::{ProjectCatalog, actions};
 use support::{TIMEOUT, TempDir, TestAgent};
 
 fn key(index: u16) -> ControlId {
     ControlId::Key { index }
 }
 
-/// SHOP, CMR and CMS; "Next project" on key 0, "Announce" on key 1, and a
-/// "Folder" page opened by key 5 that has "Next project" on key 2.
+/// SHOP, CMR and CMS; "Next" on key 0, "Announce" on key 1, and a
+/// "Folder" page opened by key 5 that has "In folder" on key 2 (log
+/// actions: switching projects is the Projects plugin's, WP-C6).
 fn profile() -> Profile {
     let registry = support::registry();
     let mut profile = Profile::new("Work");
@@ -33,10 +34,21 @@ fn profile() -> Profile {
             .unwrap();
     }
     profile.default_project = Some(profile.projects[0].id);
-    let next = registry
-        .create_instance("Next project", actions::next_id(), &ActionParameters::new())
-        .unwrap();
-    let next_id = next.id;
+    let log = |name: &str, message: &str| {
+        registry
+            .create_instance(
+                name,
+                general::log_id(),
+                &ActionParameters::new().with(
+                    "message",
+                    deckpilot_core::ParameterValue::Text(message.into()),
+                ),
+            )
+            .unwrap()
+    };
+    let next = log("Next", "next");
+    let in_folder = log("In folder", "folder");
+    let in_folder_id = in_folder.id;
     profile.actions.push(next);
     profile.actions.push(
         registry
@@ -51,11 +63,13 @@ fn profile() -> Profile {
             .unwrap(),
     );
     let mut layout = DeviceLayout::generate("Main", &models::stream_deck_mk2(), &profile);
+    // After generating: the folder's action has a key only in the folder.
+    profile.actions.push(in_folder);
     let mut folder = LayoutPage::new("Folder");
     folder.bindings.push(ControlBinding::new(
         key(2),
         Trigger::Press,
-        BindingTarget::action(next_id),
+        BindingTarget::action(in_folder_id),
     ));
     layout.pages[0].bindings.push(ControlBinding::new(
         key(5),
@@ -99,8 +113,17 @@ fn connected(status: &AgentStatus, device: &DeviceId) -> bool {
         .any(|d| d.id == *device && d.state == ConnectionState::Connected)
 }
 
-fn project(status: &AgentStatus) -> Option<&str> {
-    status.active_project.as_ref().map(|p| p.key.as_str())
+/// The name of the next action that completed.
+async fn completed(events: &mut AgentClient) -> String {
+    loop {
+        let event = tokio::time::timeout(TIMEOUT, events.next_event())
+            .await
+            .expect("event in time")
+            .unwrap();
+        if let AgentEvent::ActionCompleted { name, .. } = event {
+            return name;
+        }
+    }
 }
 
 async fn wait_brightness(mock: &MockBackend, device: &DeviceId, percent: u8) {
@@ -184,7 +207,7 @@ async fn unplugging_while_keys_are_redrawn_recovers() {
     let agent = TestAgent::start_unlocked(&paths, &key_material, &mock, None).await;
     home_frames(&mock, &device);
 
-    // Every press of key 0 switches the project and redraws key 0; unplug
+    // Every press of key 0 runs its action and redraws key 0; unplug
     // and replug in the middle of a burst of them.
     for round in 0..5 {
         for _ in 0..4 {
@@ -211,9 +234,9 @@ async fn unplugging_while_keys_are_redrawn_recovers() {
     );
 
     // And input works on the latest connection.
-    let before = project(&agent.status().await).map(str::to_owned);
+    let mut events = agent.events().await;
     mock.tap(&device, key(0));
-    wait_status(&agent, |s| project(s).map(str::to_owned) != before).await;
+    assert_eq!(completed(&mut events).await, "Next");
     agent.shutdown().await;
 }
 
@@ -244,12 +267,12 @@ async fn several_devices_have_their_own_pages_and_connections() {
 
     // Key 2 is bound only in the folder: pressing it on B (home, unbound)
     // does nothing, pressing it on A runs the action.
-    let start = project(&agent.status().await).map(str::to_owned);
+    let mut events = agent.events().await;
     mock.tap(&b, key(2));
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(project(&agent.status().await).map(str::to_owned), start);
     mock.tap(&a, key(2));
-    wait_status(&agent, |s| project(s).map(str::to_owned) != start).await;
+    // The first action to complete is A's: B's press ran nothing.
+    assert_eq!(completed(&mut events).await, "In folder");
 
     // Losing A does not disturb B.
     mock.unplug(&a);

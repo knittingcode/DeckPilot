@@ -98,12 +98,11 @@ export function ActionEditor({
   // available now.
   const offered = (m: ModuleInfo | undefined) =>
     creatableTypes(m?.actionTypes ?? []).filter((type) => !m || !pluginTypeUnavailable(m, type.id))
-  // Project placeholders while a project context provider is active (the
-  // Projects plugin, or its legacy module before the migration).
-  const projectsEnabled = pluginFeatures(
-    modules,
-    modules.filter((m) => m.plugin),
-  ).isPluginActive(PROJECTS_PLUGIN)
+  // Project placeholders while the project context provider (the Projects
+  // plugin) is active.
+  const projectsEnabled = pluginFeatures(modules.filter((m) => m.plugin)).isPluginActive(
+    PROJECTS_PLUGIN,
+  )
   const usable = modules.filter((m) => m.enabled && m.supported && offered(m).length > 0)
   const chosenType = action?.actionType ?? initialType
   const availability = chosenType ? typeAvailability(modules, chosenType) : undefined

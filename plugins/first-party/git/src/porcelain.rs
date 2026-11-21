@@ -1,6 +1,6 @@
 //! Parsing `git status --porcelain=v2 --branch -z`, a format Git keeps
-//! stable for scripts. Ported unchanged from the built-in
-//! (`modules/git/src/porcelain.rs`), its tests included.
+//! stable for scripts. Ported unchanged from the former built-in `git`
+//! module (removed in WP-C6), its tests included.
 
 /// The branch part of a status.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

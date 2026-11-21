@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use deckpilot_agent::Clock;
+use deckpilot_core::ProjectCatalog;
 use deckpilot_core::graph::{
     NodeStatus, ValueKind, WorkflowInput, WorkflowOutput, WorkflowVariable,
 };
@@ -21,7 +22,6 @@ use deckpilot_core::{
 use deckpilot_device::mock::MockBackend;
 use deckpilot_device::models;
 use deckpilot_ipc::{AgentClient, AgentEvent, Request};
-use deckpilot_modules::projects::ProjectCatalog;
 use deckpilot_modules::{general, http};
 use serde_json::json;
 use support::http::{MockServer, Reply};

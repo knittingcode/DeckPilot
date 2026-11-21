@@ -31,8 +31,8 @@ const NEVER_EXPORTED: &[&str] = &[
     "SECRET-jira-51e0d2",
     "CREDENTIAL-DESCRIPTION-marker",
     // Machine-specific module settings.
-    "ghe-internal-marker.example",
     "private-host-marker.example",
+    "private-host-crafted-marker.example",
     // Machine resource values.
     "/home/MACHINE-PATH-marker/src/shop",
     // Security settings and runtime state.
@@ -95,22 +95,6 @@ fn populated() -> (SqliteStore, Profile, Profile) {
 
     store
         .set_module_state(
-            &ModuleId::new("github").unwrap(),
-            &ModuleSettings {
-                enabled: true,
-                config: ActionParameters::new()
-                    .with(
-                        "apiUrl",
-                        ParameterValue::Text("https://ghe-internal-marker.example/api".into()),
-                    )
-                    .with("credential", ParameterValue::Text("github.token".into()))
-                    .with("timeoutSeconds", ParameterValue::Integer(17))
-                    .with("allowPrivateHost", ParameterValue::Boolean(true)),
-            },
-        )
-        .unwrap();
-    store
-        .set_module_state(
             &ModuleId::new("http").unwrap(),
             &ModuleSettings {
                 enabled: true,
@@ -119,7 +103,8 @@ fn populated() -> (SqliteStore, Profile, Profile) {
                     .with(
                         "privateHosts",
                         ParameterValue::Text("private-host-marker.example".into()),
-                    ),
+                    )
+                    .with("maxResponseKb", ParameterValue::Integer(17)),
             },
         )
         .unwrap();
@@ -184,13 +169,11 @@ fn an_export_never_contains_secrets_or_values_of_this_computer() {
     for marker in NEVER_EXPORTED {
         assert!(!text.contains(marker), "the export contains {marker}");
     }
-    // Not vacuous: portable settings and credential *names* do travel.
-    let github = &payload.modules["github"];
-    assert_eq!(github.settings.text("credential"), Some("github.token"));
-    assert_eq!(github.settings.integer("timeoutSeconds"), Some(17));
-    assert_eq!(github.settings.text("apiUrl"), None);
-    assert_eq!(github.settings.boolean("allowPrivateHost"), None);
-    assert_eq!(payload.modules["http"].settings.text("privateHosts"), None);
+    // Not vacuous: portable settings do travel, machine-specific ones not.
+    let http = &payload.modules["http"];
+    assert_eq!(http.settings.integer("maxResponseKb"), Some(17));
+    assert_eq!(http.settings.text("privateHosts"), None);
+    assert_eq!(http.settings.boolean("allowPrivateNetworks"), None);
     assert!(text.contains("WorkIsolationMarker"));
 
     // The archive is encrypted: not even the profile names are readable,
@@ -209,7 +192,7 @@ fn an_export_never_contains_secrets_or_values_of_this_computer() {
     let visible = [
         r#""name":"WorkIsolationMarker""#,
         r#""key":"WORKX""#,
-        r#""credential":"#,
+        r#""maxResponseKb":"#,
         "work.repo",
     ];
     for needle in visible {
@@ -237,9 +220,9 @@ fn importing_never_brings_or_replaces_credentials() {
     value["credentials"] = serde_json::json!([
         {"id": "github.token", "secret": "SECRET-crafted-0a1b"},
     ]);
-    value["modules"]["github"]["settings"]["apiUrl"] = serde_json::to_value(ParameterValue::Text(
-        "https://ghe-internal-marker.example/api".into(),
-    ))
+    value["modules"]["http"]["settings"]["privateHosts"] = serde_json::to_value(
+        ParameterValue::Text("private-host-crafted-marker.example".into()),
+    )
     .unwrap();
     let crafted: payload::Payload = serde_json::from_value(value).unwrap();
     let sealed = seal(&crafted);
@@ -266,10 +249,13 @@ fn importing_never_brings_or_replaces_credentials() {
         Some(Secret::new("local-secret"))
     );
     assert_eq!(target.credentials().unwrap().len(), 1);
-    let github = &target.module_states().unwrap()[&ModuleId::new("github").unwrap()];
-    // The machine-specific URL was dropped; this computer keeps its own.
-    assert_eq!(github.config.text("apiUrl"), Some("https://api.github.com"));
-    assert_eq!(github.config.text("credential"), Some("github.token"));
+    let http = &target.module_states().unwrap()[&ModuleId::new("http").unwrap()];
+    // The machine-specific hosts were dropped; this computer keeps its own.
+    assert_ne!(
+        http.config.text("privateHosts"),
+        Some("private-host-crafted-marker.example")
+    );
+    assert_eq!(http.config.integer("maxResponseKb"), Some(17));
     // Nothing of the source computer arrived.
     assert_eq!(target.load_machine_config().unwrap(), None);
     assert_eq!(target.setting("security.autoLock").unwrap(), None);

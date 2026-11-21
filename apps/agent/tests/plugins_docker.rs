@@ -249,7 +249,8 @@ fn env(name: &str, f: &Fixture) -> Env {
         BundleClass::Default,
         Some((&f.profile, Some(f.project))),
         Some(&f.machine),
-    );
+    )
+    .with_projects(BundleClass::Default);
     let path = std::env::var_os("PATH").unwrap_or_default();
     let mut dirs = vec![f.bin.clone()];
     dirs.extend(std::env::split_paths(&path));
@@ -648,7 +649,8 @@ async fn reads_need_no_resource() {
         BundleClass::Default,
         Some((&f.profile, None)),
         Some(&f.machine),
-    );
+    )
+    .with_projects(BundleClass::Default);
     let mut env = env;
     let path = std::env::var_os("PATH").unwrap_or_default();
     let mut dirs = vec![f.bin.clone()];

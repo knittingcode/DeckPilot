@@ -12,9 +12,10 @@
 // stays in the profile and keys that use it keep running.
 //
 // Builds without the plugin runtime (no `VITE_DECKPILOT_PLUGINS=1`) cannot
-// have plugins at all, so the features keep their pre-plugin behaviour
-// there, exactly like the agent (`Agent::project_context_active`): the
-// Workflows screen is always there, Projects follows its legacy module.
+// have plugins at all: the Workflows screen keeps its pre-plugin behaviour
+// there and is always shown. Projects have no provider without their
+// plugin (the built-in `projects` module is gone, WP-C6), exactly like the
+// agent (`Agent::project_context_active`).
 
 import { useMemo } from "react"
 
@@ -24,24 +25,6 @@ import type { ModuleInfo } from "./types"
 
 export const WORKFLOWS_PLUGIN = "deckpilot.workflows"
 export const PROJECTS_PLUGIN = "deckpilot.projects"
-
-/** The built-in module Projects had before its plugin. */
-export const LEGACY_PROJECTS_MODULE = "projects"
-
-/**
- * Built-in modules whose user interface moved to a first-party plugin, by
- * module id. In builds with plugins their settings pages and module cards
- * are not shown: the plugin's own (Settings › Plugins) replace them.
- */
-export const EXTRACTED_MODULES: Readonly<Record<string, string>> = {
-  git: "deckpilot.git",
-  docker: "deckpilot.docker",
-  workspace: "deckpilot.workspace",
-  github: "deckpilot.github",
-  gitlab: "deckpilot.gitlab",
-  jira: "deckpilot.jira",
-  projects: PROJECTS_PLUGIN,
-}
 
 /** The app's own screens a plugin can activate. */
 export type HostViewKind = "workflows" | "projects"
@@ -68,10 +51,8 @@ const HOST_CONTRIBUTIONS: Record<
 
 export interface PluginFeatures {
   /**
-   * Whether the plugin is installed and enabled. `deckpilot.projects` is
-   * also active while its legacy module provides the project context (not
-   * migrated yet), and in builds without plugins `deckpilot.workflows` and
-   * `deckpilot.projects` answer as the core did before them.
+   * Whether the plugin is installed and enabled. In builds without plugins
+   * `deckpilot.workflows` answers as the core did before it.
    */
   isPluginActive: (id: string) => boolean
   /** The app's own screens to show. */
@@ -88,33 +69,17 @@ const ALL_ACTIVE: PluginFeatures = {
   dashboardCards: new Set<HostDashboardCard>(["activeProject"]),
 }
 
-/** The legacy Projects module provides the project context. */
-function legacyProjects(modules: ModuleInfo[], plugins: ModuleInfo[], withPlugins: boolean) {
-  const builtin = modules.find((m) => m.id === LEGACY_PROJECTS_MODULE)
-  if (!builtin?.enabled || !builtin.supported) return false
-  if (!withPlugins) return true
-  // Only while the module is not migrated: once the plugin took over (or
-  // the user withdrew it), the plugin alone decides.
-  const route =
-    plugins.find((p) => p.id === PROJECTS_PLUGIN)?.plugin?.route ??
-    plugins.flatMap((p) => p.plugin?.aliases ?? []).find((a) => a.module === LEGACY_PROJECTS_MODULE)
-      ?.route
-  return route === undefined || route === "builtin"
-}
-
 /**
- * The features of `modules` (the built-in modules) and `plugins` (one
- * module per installed plugin, `usePluginModules`).
+ * The features of `plugins` (one module per installed plugin,
+ * `usePluginModules`).
  */
 export function pluginFeatures(
-  modules: ModuleInfo[],
   plugins: ModuleInfo[],
   withPlugins: boolean = pluginsEnabled(),
 ): PluginFeatures {
   const enabled = new Set(
     withPlugins ? plugins.filter((p) => p.plugin?.state === "enabled").map((p) => p.id) : [],
   )
-  const projectsLegacy = legacyProjects(modules, plugins, withPlugins)
   const hostViews = new Set<HostViewKind>()
   const statusItems = new Set<HostStatusItem>()
   const dashboardCards = new Set<HostDashboardCard>()
@@ -128,18 +93,9 @@ export function pluginFeatures(
     for (const card of allowed.dashboardCards)
       if (listed.dashboardCards?.includes(card)) dashboardCards.add(card)
   }
-  // Without plugins (or before Projects is migrated) the core shows what it
-  // showed before the plugins.
+  // Without plugins the core shows the Workflows screen it showed before.
   if (!withPlugins) hostViews.add("workflows")
-  if (projectsLegacy) {
-    hostViews.add("projects")
-    statusItems.add("activeProject")
-    dashboardCards.add("activeProject")
-  }
-  const isPluginActive = (id: string) => {
-    if (!withPlugins) return id === WORKFLOWS_PLUGIN || (id === PROJECTS_PLUGIN && projectsLegacy)
-    return enabled.has(id) || (id === PROJECTS_PLUGIN && projectsLegacy)
-  }
+  const isPluginActive = (id: string) => (withPlugins ? enabled.has(id) : id === WORKFLOWS_PLUGIN)
   return { isPluginActive, hostViews, statusItems, dashboardCards }
 }
 
@@ -150,11 +106,11 @@ export function pluginFeatures(
  */
 export function usePluginFeatures(): PluginFeatures {
   const app = useOptionalAppContext()
-  const modules = app?.modules
+  const inMainWindow = app !== null
   const plugins = app?.pluginModules
   return useMemo(
-    () => (modules ? pluginFeatures(modules, plugins ?? []) : ALL_ACTIVE),
-    [modules, plugins],
+    () => (inMainWindow ? pluginFeatures(plugins ?? []) : ALL_ACTIVE),
+    [inMainWindow, plugins],
   )
 }
 
@@ -170,9 +126,4 @@ function useOptionalAppContext(): AppContextValue | null {
 /** Whether the plugin `id` is active now (see `PluginFeatures.isPluginActive`). */
 export function useIsPluginActive(id: string): boolean {
   return usePluginFeatures().isPluginActive(id)
-}
-
-/** Whether a built-in module's UI moved to a plugin (and so is not shown here). */
-export function isExtractedModule(id: string, withPlugins: boolean = pluginsEnabled()): boolean {
-  return withPlugins && Object.hasOwn(EXTRACTED_MODULES, id)
 }

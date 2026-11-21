@@ -1,6 +1,6 @@
 //! How Docker's errors are classified, the names a plugin passes to
-//! Docker, and parsing its JSON output: ported unchanged from the built-in
-//! (`modules/docker/src/cli.rs`), its tests included. The command lines
+//! Docker, and parsing its JSON output: ported unchanged from the former
+//! built-in `docker` module (removed in WP-C6), its tests included. The command lines
 //! themselves are the agent's (`tool.run`): it adds `--context`, the
 //! compose file and folder, never the plugin.
 

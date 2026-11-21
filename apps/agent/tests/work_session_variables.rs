@@ -93,15 +93,17 @@ async fn setup() -> Setup {
         ),
     ));
     let (paths, key) = data_dir(&dir, &profile, &[]);
+    // The stored active project: without the Projects plugin nothing
+    // switches it, and runs start with it.
+    deckpilot_storage::ConfigStore::set_active_project(
+        &support::open_store(&paths, &key),
+        profile.id,
+        Some(profile.projects[0].id),
+    )
+    .unwrap();
     let mock = MockBackend::new();
     let jump = Jump::default();
     let agent = TestAgent::start_unlocked(&paths, &key, &mock, Some(jump.clock())).await;
-    agent
-        .request(Request::SelectProject {
-            project: profile.projects[0].id,
-        })
-        .await
-        .unwrap();
     Setup {
         agent,
         profile,

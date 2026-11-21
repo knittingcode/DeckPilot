@@ -833,11 +833,7 @@ pub async fn list_module_migrations(
     state: State<'_, AppState>,
 ) -> PluginResult<Vec<ModuleMigrationInfo>> {
     match plugin_request(&state, Request::ListModuleMigrations).await? {
-        Response::ModuleMigrations { migrations } => {
-            // Whether the built-in still serves a feature (`require_feature`).
-            state.plugin_actions().record_migrations(&migrations);
-            Ok(migrations)
-        }
+        Response::ModuleMigrations { migrations } => Ok(migrations),
         other => Err(PluginError::unexpected(&other)),
     }
 }

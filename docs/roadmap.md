@@ -142,6 +142,15 @@ Remaining:
 - The GitHub, GitLab and Jira integrations and notifications run as
   bundled first-party plugins
 
+## Developer features as plugins (done; not released yet)
+
+- Git, Docker, Workspace, GitHub, GitLab, Jira and Projects come only from
+  their bundled first-party plugins, and workflow management from
+  `deckpilot.workflows`; the built-in modules are removed (WP-C5, WP-C6 of
+  [marketplace/module-migration.md](marketplace/module-migration.md)).
+  Stored keys keep their ids and are unavailable with the reason until the
+  plugin serves; the core runs without any optional plugin
+
 ## System monitor keys (done; not released yet)
 
 - CPU, memory, network and disk keys in the System module (`system.cpu`,

@@ -13,7 +13,7 @@ import {
 } from "./host-views"
 
 const withPlugins = (plugins: Parameters<typeof pluginModules>[0]) =>
-  pluginFeatures([], pluginModules(plugins), true)
+  pluginFeatures(pluginModules(plugins), true)
 
 describe("host views", () => {
   it("draws nothing without the plugins", () => {

@@ -1,6 +1,5 @@
 import { Box, FolderKanban, Puzzle, type LucideIcon } from "lucide-react"
 
-import { isExtractedModule } from "@/lib/plugin-features"
 import type { ToolbarContext } from "@/lib/toolbar-context"
 import type { ModuleInfo } from "@/lib/types"
 
@@ -109,19 +108,11 @@ export interface ModuleSettingsPage {
 
 /**
  * Settings pages of enabled modules: their own view, or one generated from
- * the settings their manifest declares. Modules without either have none,
- * and so do modules whose UI moved to a plugin (builds with plugins: the
- * plugin's settings replace them).
+ * the settings their manifest declares. Modules without either have none.
  */
 export function moduleSettingsPages(modules: ModuleInfo[]): ModuleSettingsPage[] {
   return modules
-    .filter(
-      (m) =>
-        m.enabled &&
-        m.supported &&
-        !isExtractedModule(m.id) &&
-        (m.config.length > 0 || frontend(m.id)?.settings),
-    )
+    .filter((m) => m.enabled && m.supported && (m.config.length > 0 || frontend(m.id)?.settings))
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((module) => ({
       id: moduleSettingsId(module.id),

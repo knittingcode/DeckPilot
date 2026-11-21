@@ -729,8 +729,12 @@ credential: "github.token" (or the module's configured id), slot:
 `openUrl:github.com` are derived and never listed. A GitHub Enterprise
 or private-host configuration is `notEligible` with the reason. Once
 `cutOver`, the stored `github.*` actions, keys and workflow nodes run in
-the plugin under their legacy ids (`route: plugin`); an agent without
-plugins, or with `route: builtin`, runs the built-in on the same data.
+the plugin under their legacy ids (`route: plugin`). Since WP-C5 and
+WP-C6 a removed built-in (`github`, `gitlab`, `jira`, `git`, `docker`,
+`workspace`, `projects`) is never reported `route: builtin`: until the
+plugin serves, its legacy ids are unavailable with `routeReason`, also in
+an agent without plugins; only an older app on the same data runs its
+built-in.
 
 GitLab's and Jira's migrations (P11) carry the server the user entered
 in the built-in (a self-managed GitLab, a Jira site). While they wait,

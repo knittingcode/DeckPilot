@@ -213,7 +213,8 @@ async fn every_action_opens_bound_resources_through_the_launcher() {
         BundleClass::Default,
         Some((&f.profile, Some(f.project))),
         Some(&f.machine),
-    );
+    )
+    .with_projects(BundleClass::Default);
     let agent = env.start().await;
 
     // ---- seeded, waiting for consent: `resources.open` is high tier.
@@ -359,7 +360,8 @@ async fn nothing_opens_in_a_run_the_user_did_not_start() {
         BundleClass::Default,
         Some((&f.profile, Some(f.project))),
         Some(&f.machine),
-    );
+    )
+    .with_projects(BundleClass::Default);
     let agent = env.start().await;
     agent.seeded().await;
     agent.enable().await;
@@ -421,7 +423,8 @@ async fn a_path_inside_the_bound_folder_opens_and_nothing_outside_it() {
         BundleClass::Default,
         Some((&f.profile, Some(f.project))),
         Some(&f.machine),
-    );
+    )
+    .with_projects(BundleClass::Default);
     let agent = env.start().await;
     agent.seeded().await;
     agent.enable().await;

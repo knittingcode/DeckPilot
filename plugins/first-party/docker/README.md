@@ -1,16 +1,19 @@
 # deckpilot.docker
 
-The first-party Docker plugin: the replacement of the built-in `docker`
-module (`modules/docker`), extracted under the owner's decision D1 of
+The first-party Docker plugin: the replacement of the former built-in
+`docker` module (removed in WP-C6) and now its only implementation,
+extracted under the owner's decision D1 of
 2026-11-20 (`docs/marketplace/module-migration.md` §11, WP-B2 of the
 extraction plan). Bundled with class `migration` (`../bundled.json`);
 plugin API `^1.9`, so it validates only as a bundled, pinned first-party
 plugin.
 
-**Not routed yet.** The alias block `docker.<action>` →
+**Routed since WP-C1.** The alias block `docker.<action>` →
 `deckpilot.docker.<action>` and the migration plan (`allowStateChanges`
-→ offer `tools:docker:modify`, never derived) are WP-C1. Until then the
-built-in serves every stored `docker.*` key.
+→ offer `tools:docker:modify`, never derived) run every stored
+`docker.*` key here once the user consented; until then, and with the
+plugin disabled or uninstalled, they are unavailable with the reason (no
+built-in fallback since WP-C6).
 
 It never runs a process itself: every docker is the agent's `tool.run`
 (§7 X3b, X3c) of the user's own `docker`. The agent adds the context (a
@@ -78,7 +81,7 @@ Optional dependency on `deckpilot.projects` (the compose role).
 ## Tests
 
 - `src/tests.rs`, `src/cli.rs`: the built-in's CLI and state fixtures and
-  every scenario of `modules/docker/src/actions/tests.rs` on its recorded
+  every scenario of the former built-in's action tests on its recorded
   docker output with `MockHost`, the manifest against the definition, the
   schema and both locales, and the tools policy against what the actions
   run.

@@ -6,10 +6,15 @@ release build and shipped **inside the installers** as app components
 `knittingcode/deckpilot-plugins` by pinned commit for registry updates;
 that is a separate step, not part of this directory.
 
-Experimental, like all of the plugin marketplace. Four plugins are bundled:
-`deckpilot.github` (class `migration`, [github/README.md](github/README.md)),
-to which a plugin-enabled agent routes the built-in `github.*` action
-types once a computer's migration is cut over
+Experimental, like all of the plugin marketplace. The plugins of
+`bundled.json` are bundled. The `migration`-class ones are the only
+implementation of the former built-in `github`, `gitlab`, `jira`, `git`,
+`docker`, `workspace` and `projects` modules (removed in WP-C5 and WP-C6):
+their legacy action ids are unavailable with the reason until the plugin
+serves. Among them `deckpilot.github` (class `migration`,
+[github/README.md](github/README.md)), to which a plugin-enabled agent
+routes the legacy `github.*` action types once a computer's migration is
+cut over
 (`docs/marketplace/module-migration.md` §6 and §9, P9),
 `deckpilot.gitlab` (class `migration`, [gitlab/README.md](gitlab/README.md))
 and `deckpilot.jira` (class `migration`, [jira/README.md](jira/README.md)),
@@ -17,7 +22,10 @@ routed the same way through the alias blocks `gitlab.*` and `jira.*`, for
 GitLab.com or the server the user had entered and allows (P11), and
 `deckpilot.notifications` (class `default`, the first of the default set,
 [notifications/README.md](notifications/README.md)), seeded on every
-computer and routed through the alias block `notifications.*` (P10). The published release
+computer and routed through the alias block `notifications.*` (P10), and
+`deckpilot.workflows` (class `default`), which owns the Workflows screens.
+Git, Docker, Workspace and Projects (plugin API 1.9) are routed since
+WP-C1. The published release
 pipeline does not package plugins at all (see "Packaging" below).
 
 ## Layout
@@ -25,11 +33,11 @@ pipeline does not package plugins at all (see "Packaging" below).
 | Path | What |
 | --- | --- |
 | `bundled.json` | The plugins a release bundles: `{"path": "<dir>", "class": "default" \| "migration"}` |
-| `docker/` | `deckpilot.docker`, class `migration` (plugin API 1.9): the replacement of the built-in `docker` module over `tool.run` and resource handles, not routed until WP-C1; [docker/README.md](docker/README.md) lists the differences; checked by its unit tests and `apps/agent/tests/plugins_docker.rs` |
-| `git/` | `deckpilot.git`, class `migration` (plugin API 1.9): the replacement of the built-in `git` module over `tool.run` and resource handles, not routed until WP-C1; [git/README.md](git/README.md) lists the differences; checked by its unit tests and `apps/agent/tests/plugins_git.rs` |
-| `github/` | `deckpilot.github`, class `migration`: the replacement of the built-in `github` module, checked against it by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_github.rs` |
-| `gitlab/` | `deckpilot.gitlab`, class `migration`: the replacement of the built-in `gitlab` module, for GitLab.com or a self-managed GitLab the user enters and allows; checked against the built-in by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_gitlab.rs` |
-| `jira/` | `deckpilot.jira`, class `migration`: the replacement of the built-in `jira` module, for the Jira Cloud site or Data Center the user enters and allows (it has no host of its own); checked against the built-in by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_jira.rs` |
+| `docker/` | `deckpilot.docker`, class `migration` (plugin API 1.9): the replacement of the former built-in `docker` module over `tool.run` and resource handles; [docker/README.md](docker/README.md) lists the differences; checked by its unit tests and `apps/agent/tests/plugins_docker.rs` |
+| `git/` | `deckpilot.git`, class `migration` (plugin API 1.9): the replacement of the former built-in `git` module over `tool.run` and resource handles; [git/README.md](git/README.md) lists the differences; checked by its unit tests and `apps/agent/tests/plugins_git.rs` |
+| `github/` | `deckpilot.github`, class `migration`: the replacement of the former built-in `github` module, checked against its frozen contract (`crates/deckpilot-modules/legacy/`) by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_github.rs` |
+| `gitlab/` | `deckpilot.gitlab`, class `migration`: the replacement of the former built-in `gitlab` module, for GitLab.com or a self-managed GitLab the user enters and allows; checked against its frozen contract by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_gitlab.rs` |
+| `jira/` | `deckpilot.jira`, class `migration`: the replacement of the former built-in `jira` module, for the Jira Cloud site or Data Center the user enters and allows (it has no host of its own); checked against its frozen contract by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_jira.rs` |
 | `support/` | `deckpilot-first-party-support`: a library the plugins for a user-entered server (`gitlab`, `jira`, `github` for GitHub Enterprise Server) share (URLs without a URL parser, the time limit counted with `Date` headers, text helpers). Compiled into each plugin's module; never bundled by itself |
 | `notifications/` | `deckpilot.notifications`, class `default`: the replacement of the built-in `notifications` module, checked against it by `crates/deckpilot-modules/tests/contracts.rs` and `apps/agent/tests/plugins_notifications.rs` |
 | `<name>/` | One plugin: `Cargo.toml` (a member of the `plugins/runtime` workspace), `src/`, `manifest.json` (id `deckpilot.<name>`), `LICENSE`, its icons (and plugin API 1.8 visual assets, PNG or JPEG) in `assets/` and its translations in `locales/<tag>.json` (plugin API 1.6) |

@@ -1,0 +1,650 @@
+{
+  "actionTypes": [
+    {
+      "category": "GitLab",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "The account the token belongs to; also checks that the token works.",
+      "id": "gitlab.current-user",
+      "name": "Current GitLab user",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "user",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "username",
+            "kind": "text",
+            "label": "Username"
+          },
+          {
+            "always": false,
+            "key": "name",
+            "kind": "text",
+            "label": "Name"
+          },
+          {
+            "always": true,
+            "key": "url",
+            "kind": "url",
+            "label": "Profile"
+          },
+          {
+            "always": false,
+            "key": "rateLimitRemaining",
+            "kind": "integer",
+            "label": "Requests left"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 130000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "The name of a stored credential with a GitLab token. Empty: the module's (Settings › Modules › GitLab). Never the token itself.",
+          "key": "credential",
+          "kind": {
+            "type": "credential"
+          },
+          "label": "Token credential",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "GitLab",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "A project's default branch, visibility, counts and last activity.",
+      "id": "gitlab.project",
+      "name": "GitLab project",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "book-open",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "path",
+            "kind": "text",
+            "label": "Project"
+          },
+          {
+            "always": false,
+            "key": "description",
+            "kind": "text",
+            "label": "Description",
+            "sensitive": true
+          },
+          {
+            "always": false,
+            "key": "defaultBranch",
+            "kind": "text",
+            "label": "Default branch"
+          },
+          {
+            "always": true,
+            "key": "visibility",
+            "kind": "text",
+            "label": "Visibility"
+          },
+          {
+            "always": true,
+            "key": "archived",
+            "kind": "boolean",
+            "label": "Archived"
+          },
+          {
+            "always": false,
+            "key": "openIssues",
+            "kind": "integer",
+            "label": "Open issues"
+          },
+          {
+            "always": true,
+            "key": "stars",
+            "kind": "integer",
+            "label": "Stars"
+          },
+          {
+            "always": true,
+            "key": "forks",
+            "kind": "integer",
+            "label": "Forks"
+          },
+          {
+            "always": true,
+            "key": "url",
+            "kind": "url",
+            "label": "Page"
+          },
+          {
+            "always": false,
+            "key": "lastActivityAt",
+            "kind": "text",
+            "label": "Last activity"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 130000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "group/project (with subgroups), or the project's numeric id.",
+          "key": "project",
+          "kind": {
+            "max_length": 1000,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Project",
+          "required": true
+        },
+        {
+          "description": "The name of a stored credential with a GitLab token. Empty: the module's (Settings › Modules › GitLab). Never the token itself.",
+          "key": "credential",
+          "kind": {
+            "type": "credential"
+          },
+          "label": "Token credential",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "GitLab",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Counts and lists open merge requests of a project, or yours across projects.",
+      "id": "gitlab.merge-requests",
+      "name": "Open merge requests",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "git-branch",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "count",
+            "kind": "integer",
+            "label": "Open merge requests"
+          },
+          {
+            "always": true,
+            "key": "countExact",
+            "kind": "boolean",
+            "label": "Count complete"
+          },
+          {
+            "always": true,
+            "key": "listed",
+            "kind": "integer",
+            "label": "Listed"
+          },
+          {
+            "always": true,
+            "key": "items",
+            "kind": "text",
+            "label": "Merge requests",
+            "sensitive": true
+          },
+          {
+            "always": true,
+            "key": "truncated",
+            "kind": "boolean",
+            "label": "List truncated"
+          },
+          {
+            "always": false,
+            "key": "firstUrl",
+            "kind": "url",
+            "label": "First merge request"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 130000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "group/project (with subgroups), or the project's numeric id. Empty: every project.",
+          "key": "project",
+          "kind": {
+            "max_length": 1000,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Project",
+          "required": false
+        },
+        {
+          "default": {
+            "type": "choice",
+            "value": "all"
+          },
+          "description": "all: every open merge request of the project; author-me: opened by you; review-requested: where you are a reviewer.",
+          "key": "filter",
+          "kind": {
+            "options": ["all", "author-me", "review-requested"],
+            "type": "choice"
+          },
+          "label": "Which",
+          "required": true
+        },
+        {
+          "default": {
+            "type": "integer",
+            "value": 20
+          },
+          "description": "At most this many merge requests in the list.",
+          "key": "limit",
+          "kind": {
+            "max": 100,
+            "min": 1,
+            "type": "integer"
+          },
+          "label": "Listed",
+          "required": true
+        },
+        {
+          "description": "The name of a stored credential with a GitLab token. Empty: the module's (Settings › Modules › GitLab). Never the token itself.",
+          "key": "credential",
+          "kind": {
+            "type": "credential"
+          },
+          "label": "Token credential",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "GitLab",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Open merge requests where you are a reviewer, in every project or one.",
+      "id": "gitlab.review-requests",
+      "name": "Review requests",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "search",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "count",
+            "kind": "integer",
+            "label": "Open merge requests"
+          },
+          {
+            "always": true,
+            "key": "countExact",
+            "kind": "boolean",
+            "label": "Count complete"
+          },
+          {
+            "always": true,
+            "key": "listed",
+            "kind": "integer",
+            "label": "Listed"
+          },
+          {
+            "always": true,
+            "key": "items",
+            "kind": "text",
+            "label": "Merge requests",
+            "sensitive": true
+          },
+          {
+            "always": true,
+            "key": "truncated",
+            "kind": "boolean",
+            "label": "List truncated"
+          },
+          {
+            "always": false,
+            "key": "firstUrl",
+            "kind": "url",
+            "label": "First merge request"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 130000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "group/project (with subgroups), or the project's numeric id. Empty: every project.",
+          "key": "project",
+          "kind": {
+            "max_length": 1000,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Project",
+          "required": false
+        },
+        {
+          "default": {
+            "type": "integer",
+            "value": 20
+          },
+          "description": "At most this many merge requests in the list.",
+          "key": "limit",
+          "kind": {
+            "max": 100,
+            "min": 1,
+            "type": "integer"
+          },
+          "label": "Listed",
+          "required": true
+        },
+        {
+          "description": "The name of a stored credential with a GitLab token. Empty: the module's (Settings › Modules › GitLab). Never the token itself.",
+          "key": "credential",
+          "kind": {
+            "type": "credential"
+          },
+          "label": "Token credential",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "GitLab",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "The latest pipeline of a branch, tag or commit, or a merge request's head pipeline: overall ok, failing or pending, and job counts.",
+      "id": "gitlab.pipeline",
+      "name": "Pipeline status",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "list-checks",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "state",
+            "kind": "text",
+            "label": "State (ok, failing, pending, none)"
+          },
+          {
+            "always": false,
+            "key": "status",
+            "kind": "text",
+            "label": "GitLab status"
+          },
+          {
+            "always": false,
+            "key": "pipelineId",
+            "kind": "integer",
+            "label": "Pipeline"
+          },
+          {
+            "always": false,
+            "key": "sha",
+            "kind": "text",
+            "label": "Commit"
+          },
+          {
+            "always": true,
+            "key": "total",
+            "kind": "integer",
+            "label": "Jobs"
+          },
+          {
+            "always": true,
+            "key": "passed",
+            "kind": "integer",
+            "label": "Passed"
+          },
+          {
+            "always": true,
+            "key": "failed",
+            "kind": "integer",
+            "label": "Failed"
+          },
+          {
+            "always": true,
+            "key": "pending",
+            "kind": "integer",
+            "label": "Pending or running"
+          },
+          {
+            "always": true,
+            "key": "skipped",
+            "kind": "integer",
+            "label": "Skipped or manual"
+          },
+          {
+            "always": true,
+            "key": "failing",
+            "kind": "text",
+            "label": "Failing jobs"
+          },
+          {
+            "always": true,
+            "key": "truncated",
+            "kind": "boolean",
+            "label": "Not all read"
+          },
+          {
+            "always": false,
+            "key": "url",
+            "kind": "url",
+            "label": "Page"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 130000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "group/project (with subgroups), or the project's numeric id.",
+          "key": "project",
+          "kind": {
+            "max_length": 1000,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Project",
+          "required": true
+        },
+        {
+          "description": "Used when no merge request is given.",
+          "key": "ref",
+          "kind": {
+            "max_length": 250,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Branch, tag or commit",
+          "required": false
+        },
+        {
+          "description": "Its head pipeline is checked (the number after !).",
+          "key": "mergeRequest",
+          "kind": {
+            "min": 1,
+            "type": "integer"
+          },
+          "label": "Merge request",
+          "required": false
+        },
+        {
+          "description": "The name of a stored credential with a GitLab token. Empty: the module's (Settings › Modules › GitLab). Never the token itself.",
+          "key": "credential",
+          "kind": {
+            "type": "credential"
+          },
+          "label": "Token credential",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "GitLab",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Opens a project, a merge request or a GitLab page in the browser.",
+      "id": "gitlab.open",
+      "name": "Open on GitLab",
+      "node": {
+        "cancellable": false,
+        "changesContext": false,
+        "effect": "opens",
+        "icon": "link",
+        "idempotent": false,
+        "outputs": [
+          {
+            "always": true,
+            "key": "url",
+            "kind": "url",
+            "label": "Opened"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 15000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "An https page on the configured GitLab, e.g. a merge request's URL from an earlier node. Empty: the project below.",
+          "key": "url",
+          "kind": {
+            "max_length": 2048,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Page",
+          "required": false
+        },
+        {
+          "description": "group/project (with subgroups), or the project's numeric id. Empty: every project.",
+          "key": "project",
+          "kind": {
+            "max_length": 1000,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Project",
+          "required": false
+        },
+        {
+          "description": "Opens this merge request of the project.",
+          "key": "mergeRequest",
+          "kind": {
+            "min": 1,
+            "type": "integer"
+          },
+          "label": "Merge request",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    }
+  ],
+  "manifest": {
+    "capabilities": ["network", "credentials", "open-external"],
+    "config": [
+      {
+        "default": {
+          "type": "text",
+          "value": "https://gitlab.com/api/v4"
+        },
+        "description": "https://gitlab.com/api/v4, or https://<host>/api/v4 for a self-managed GitLab. Only for this computer.",
+        "key": "apiUrl",
+        "kind": {
+          "max_length": 512,
+          "multiline": false,
+          "type": "text"
+        },
+        "label": "API URL",
+        "required": true
+      },
+      {
+        "default": {
+          "type": "text",
+          "value": "gitlab.token"
+        },
+        "description": "The name of a credential stored on this computer (Settings › HTTP › Credentials) that holds a GitLab token with read_api. Never the token itself.",
+        "key": "credential",
+        "kind": {
+          "type": "credential"
+        },
+        "label": "Token credential",
+        "required": true
+      },
+      {
+        "default": {
+          "type": "integer",
+          "value": 20
+        },
+        "description": "For all requests of one action.",
+        "key": "timeoutSeconds",
+        "kind": {
+          "max": 120,
+          "min": 1,
+          "type": "integer"
+        },
+        "label": "Time limit (s)",
+        "required": true
+      },
+      {
+        "default": {
+          "type": "boolean",
+          "value": false
+        },
+        "description": "For a self-managed GitLab inside a company network: lets requests to the API host reach private addresses. Off by default; only for this computer.",
+        "key": "allowPrivateHost",
+        "kind": {
+          "type": "boolean"
+        },
+        "label": "API host may be on a private network",
+        "required": true
+      }
+    ],
+    "dependencies": [],
+    "description": "Merge requests, review requests, pipelines and projects from GitLab.com or a self-managed GitLab. Read-only.",
+    "enabledByDefault": true,
+    "id": "gitlab",
+    "name": "GitLab",
+    "pages": [],
+    "platforms": [],
+    "portability": {
+      "settings": {
+        "allowPrivateHost": "machineSpecific",
+        "apiUrl": "machineSpecific",
+        "credential": "portable",
+        "timeoutSeconds": "portable"
+      },
+      "version": 1
+    },
+    "version": "0.9.0",
+    "windows": []
+  }
+}

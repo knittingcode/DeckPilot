@@ -14,7 +14,6 @@ use deckpilot_storage::{
 
 use crate::error::{CommandError, CommandResult};
 use crate::plugin_actions::{FeatureState, PluginActions};
-use deckpilot_ipc::plugins::MigrationRoute;
 
 /// Setting with the app version for which the user last authenticated.
 /// With the "after updates" policy, authentication is asked for once after
@@ -275,29 +274,17 @@ impl AppState {
     /// Fails unless the feature the first-party plugin `plugin` owns is on
     /// (decision D1/D6 of 2026-11-20): [`WORKFLOWS_PLUGIN`] or
     /// [`PROJECTS_PLUGIN`]. Before any plugin answer (a build without
-    /// plugins) a feature behaves as before the extraction: Workflows are
-    /// on, Projects follow the built-in module. Projects are also on while
-    /// the built-in `projects` module serves them, enabled and not
-    /// migrated to the plugin, as the agent decides
+    /// plugins) Workflows behave as before the extraction and are on.
+    /// Projects are on only while the Projects plugin is enabled: the
+    /// built-in `projects` module is gone (WP-C6), as the agent decides
     /// (`Agent::project_context_active`). Nothing is deleted while a
     /// feature is off.
     pub fn require_feature(&self, plugin: &str) -> CommandResult<()> {
-        let (state, route) = {
-            let plugins = self.plugin_actions();
-            (plugins.feature(plugin), plugins.route("projects"))
-        };
-        let on = match (plugin, state) {
-            (_, FeatureState::Enabled) | (WORKFLOWS_PLUGIN, FeatureState::Unknown) => true,
-            (PROJECTS_PLUGIN, state) => {
-                let builtin = self
-                    .modules()
-                    .is_enabled(&deckpilot_modules::projects::module_id());
-                builtin
-                    && (state == FeatureState::Unknown
-                        || matches!(route, None | Some(MigrationRoute::Builtin)))
-            }
-            _ => false,
-        };
+        let state = self.plugin_actions().feature(plugin);
+        let on = matches!(
+            (plugin, state),
+            (_, FeatureState::Enabled) | (WORKFLOWS_PLUGIN, FeatureState::Unknown)
+        );
         if on {
             return Ok(());
         }

@@ -210,7 +210,7 @@ Security alerts (read with `gh api`, open alerts only): code scanning
 | Manual platform checks (macOS, Windows, Linux) | macOS partly verified (native, ad-hoc signed release build); Windows and Linux not verified | macOS: app and agent, system-key storage, tray presence, agent restart, physical MK.2 ([mvp-acceptance.md](mvp-acceptance.md)). Not done: password protection, notifications, opening applications, update, a signed and notarized build |
 | Physical Stream Deck MK.2 | verified (physical, one device) | `hardware-test` with the debug agent from `5569a14`, then real use on the release app: [Physical MK.2 (2026-11-13)](mvp-acceptance.md#physical-mk2-2026-11-13). Multiple devices not verified |
 | MVP acceptance checklist | not passed | [mvp-acceptance.md](mvp-acceptance.md): steps 2–12 PASS (step 9 with the D1 fix #172 merged as `c683489`), step 13 partial (ShowWindow PASS, tray click NOT VERIFIED), steps 1, 14 and 15 NOT VERIFIED, no open FAIL |
-| GitHub, GitLab and Jira modules against real servers | not verified | tested against local mock servers only |
+| GitHub, GitLab and Jira (now first-party plugins) against real servers | not verified | tested against canned answers only; the former built-ins' live smoke tests were removed with them (WP-C5) |
 
 ### Definition of Done (macOS MVP)
 

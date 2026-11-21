@@ -38,8 +38,12 @@ make up        # or: pnpm dev (same session, in the foreground; Ctrl+C stops it)
    logical resources — `repository`, `compose` and `editor` of the current
    project — bound in the dev machine configuration (`.dev/workspace/shop`
    with a `compose.yaml`; TextEdit on macOS, Notepad on Windows; bind
-   `dev.editor` yourself on Linux). Starting and stopping services only
-   happens after Settings › Docker allows it. Demonstration data exists only in
+   `dev.editor` yourself on Linux). The seed stores the legacy action ids
+   (`git.status`, `docker.compose-up`, `projects.current`) directly; they run
+   once the Git, Docker and Projects plugins serve them, after
+   their consent in Settings › Plugins. Starting and stopping services only
+   happens after the Docker plugin's `tools:docker:modify` is allowed.
+   Demonstration data exists only in
    this seed; a production database starts with no profiles and an empty
    Action Library. The seed runs once per data directory, so demo data you
    delete does not come back (`make seed` with `--reset` starts over).
@@ -218,6 +222,7 @@ the desktop crate on a fresh checkout (`make build` does this).
 | Rust lints          | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
 | Rust tests          | `cargo test --workspace --locked`                                |
 | SQLCipher storage   | `cargo test -p deckpilot-storage --features sqlcipher --locked`  |
+| Core without optional plugins (WP-T1) | `cargo test -p deckpilot-agent --features plugins,test-hooks --test core_without_plugins` |
 | Version consistency | `cargo run --locked -p deckpilot-dev -- check-versions`          |
 | Frontend formatting | `pnpm format:check` (fix with `pnpm format`)                     |
 | Frontend lint       | `pnpm lint`                                                      |
@@ -227,6 +232,18 @@ the desktop crate on a fresh checkout (`make build` does this).
 CI (`.github/workflows/ci.yml`) runs the frontend checks on Linux and the
 Rust checks on Linux, macOS and Windows. Agent tests use simulated devices and
 real local IPC; no hardware is needed.
+
+The job "Core without optional plugins" (`ci.yml`, Linux) runs
+`apps/agent/tests/core_without_plugins.rs`: the agent with
+`--disable-plugins`, with every first-party plugin disabled and with every
+one uninstalled, each time a profile of every legacy action id of the
+removed built-ins, which must resolve unavailable with a reason and come
+back once the plugins are on again
+([module-migration.md](marketplace/module-migration.md) §9, P33). It
+builds the plugin host and every first-party plugin to wasm first
+(`cargo build --locked --target wasm32-unknown-unknown --profile guest -p
+deckpilot-<name> …` in `plugins/runtime`); the test builds them itself
+when they are missing.
 
 The required checks (Frontend, Storage with SQLCipher, Rust on ubuntu, macos
 and windows, Updater signing keys match) run on every pull request; none of

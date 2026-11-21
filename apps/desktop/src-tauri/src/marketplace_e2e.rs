@@ -73,6 +73,7 @@ impl Commands {
         self.app = Some(Running { window, _app: app });
         // The unlock window's command, with the password.
         self.ok("unlock", json!({"password": PASSWORD}));
+        marketplace::wait_for_bundled_plugins(self);
     }
 }
 

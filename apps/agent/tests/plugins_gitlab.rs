@@ -1,6 +1,7 @@
-//! `deckpilot.gitlab` against the built-in `gitlab` module it replaces
-//! (`docs/marketplace/module-migration.md` §9, P11), on the same GitLab
-//! answers (feature `plugins`):
+//! `deckpilot.gitlab`, the first-party plugin that replaced the removed
+//! built-in `gitlab` module (`docs/marketplace/module-migration.md` §9,
+//! P11), as a regression test of every action on known GitLab answers
+//! (feature `plugins`):
 //!
 //! * the plugin (`plugins/first-party/gitlab`) is built to wasm with the
 //!   `guest` profile and bundled as an installed application ships it;
@@ -8,24 +9,24 @@
 //!   stores its token, and every action runs in the real sandboxed host,
 //!   invoked over IPC like the configuration app does;
 //! * its HTTP goes to canned answers (`DECKPILOT_TEST_PLUGIN_HTTP`, feature
-//!   `test-hooks`) and its opened pages to a file
+//!   `test-hooks`) built from one function ([`answer`]) for the requests
+//!   the scenarios make, and its opened pages to a file
 //!   (`DECKPILOT_TEST_PLUGIN_OPEN_URL`): never a real GitLab, never a
 //!   browser;
-//! * the built-in runs in this process against a stand-in GitLab on
-//!   127.0.0.1 (its API URL, allowed on a private host) that serves the
-//!   same answers from the same function ([`answer`]), with a recording
-//!   launcher;
-//! * every action's result is compared: the same status, message, outputs
-//!   and error code. Where the two cannot agree the difference is listed
-//!   in [`DIFFERENT_MESSAGES`] with its reason (and in
-//!   `plugins/first-party/gitlab/README.md`);
+//! * every scenario's result is checked: status, error code, and on
+//!   success the message and the key outputs. The plugin was proven to
+//!   answer exactly as the built-in did before the built-in was removed
+//!   (§11 D2); these expectations are those answers. Its action
+//!   definitions are checked against the built-in's frozen 0.9.0 contract
+//!   (`crates/deckpilot-modules/legacy/gitlab.json`), as the cut-over's
+//!   aliases need;
 //! * twice: on GitLab.com (the plugin's declared host), and (the scenarios
 //!   of [`ON_THE_ENTERED_GITLAB`]) on a self-managed GitLab under a path
 //!   that the user enters in the plugin's `apiUrl` setting, which is
 //!   reached, sent the token and opened only after the user allowed
-//!   exactly that server;
+//!   exactly that server, and no more once the consent is revoked;
 //! * network failures (a name that does not resolve, a certificate that
-//!   is not trusted) report the built-in's transport code on both sides.
+//!   is not trusted) end in the transport's code and retryability.
 //!
 //! The plugin is pinned here as a `default`-class plugin and invoked by its
 //! own action types: `migration`-class plugins are installed only by the
@@ -33,23 +34,16 @@
 //! after a computer's migration is cut over.
 #![cfg(feature = "plugins")]
 
-#[path = "support/https.rs"]
-mod https;
 #[path = "support/parity.rs"]
 mod parity;
 mod support;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 use std::time::Duration;
 
-use deckpilot_core::alias::{self, ActionAlias, ParamRule};
-use deckpilot_core::launch::RecordingLauncher;
-use deckpilot_core::{ActionParameters, ModuleRegistry, Os, ParameterValue};
 use deckpilot_ipc::plugins::{PluginActionOutcome, PluginSecret, PluginState, UserOriginStatus};
 use deckpilot_ipc::{Request, Response};
-use deckpilot_modules::gitlab;
-use parity::{Answer, Outcome, Server, blocking, compare, json_answer, query};
+use parity::{Answer, Expect, json_answer, query};
 use serde_json::{Value, json};
 
 const PLUGIN: parity::Plugin = parity::Plugin {
@@ -65,7 +59,7 @@ const GRANTS: &[&str] = &[
     "openUrl:gitlab.com",
     "openUrl:user-origin:apiUrl",
 ];
-/// The token the user stores, for the plugin and for the built-in.
+/// The token the user stores.
 const TOKEN: &str = "glpat-parity-7c2e9b-not-a-real-token";
 /// GitLab.com's API: the plugin's default.
 const API: &str = "https://gitlab.com/api/v4";
@@ -75,19 +69,8 @@ const API_SUFFIX: &str = "/api/v4";
 /// What the plugin answers may use of the IPC message limit.
 const ANSWER_BUDGET: usize = deckpilot_ipc::framing::MAX_MESSAGE_BYTES / 2;
 
-/// Failures whose message differs, by scenario, and why. The code is the
-/// same.
-const DIFFERENT_MESSAGES: &[(&str, &str)] = &[
-    (
-        "project group/revoked",
-        "the built-in names the credential id (`gitlab.token`); the plugin has a slot, not an id",
-    ),
-    (
-        "current-user without a token",
-        "the built-in names the credential id and Settings › HTTP › Credentials; the plugin \
-         names its slot in Settings › Plugins › GitLab",
-    ),
-];
+/// The built-in's frozen 0.9.0 contract.
+const CONTRACT: &str = include_str!("../../../crates/deckpilot-modules/legacy/gitlab.json");
 
 // ------------------------------------------------------- GitLab's answers
 
@@ -227,10 +210,9 @@ fn project(base: &str, name: &str) -> Answer {
     }
 }
 
-/// The stand-in GitLab: the answer to `GET <base><target>`, where `base`
-/// is the API's address and `target` the path below it with the query.
-/// The plugin's answers and the built-in's (on 127.0.0.1) come from here,
-/// so both see the same data.
+/// GitLab's answer to `GET <base><target>`, where `base` is the API's
+/// address and `target` the path below it with the query: the plugin's
+/// canned answers come from here.
 fn answer(base: &str, target: &str) -> Answer {
     let path = target.split('?').next().unwrap();
     let query = query(target);
@@ -291,126 +273,387 @@ fn answer(base: &str, target: &str) -> Answer {
 
 // ------------------------------------------------------------ scenarios
 
-/// An action, its parameters, and a name for messages.
+/// An action, its parameters, a name for messages, and what it ends in.
 struct Scenario {
     name: &'static str,
     action: &'static str,
     params: Value,
+    expect: Expect,
 }
 
-fn scenario(name: &'static str, action: &'static str, params: Value) -> Scenario {
+fn scenario(name: &'static str, action: &'static str, params: Value, expect: Expect) -> Scenario {
     Scenario {
         name,
         action,
         params,
+        expect,
     }
 }
 
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
 /// Every read action, on success and on each failure GitLab can answer.
+/// `{web}` in an expectation is the GitLab's web address.
 #[allow(clippy::too_many_lines)] // one list
 fn readings() -> Vec<Scenario> {
-    let project = |name, project: &str| scenario(name, "project", json!({ "project": project }));
+    let project = |name, project: &str, expect| {
+        scenario(name, "project", json!({ "project": project }), expect)
+    };
+    let failed = Expect::Failed;
     vec![
-        scenario("current-user", "current-user", json!({})),
-        project("project group/app", "group/app"),
-        project("project group/bare (fallbacks)", "group/bare.git"),
-        project("project by its id", "42"),
-        project("project not a project", "not a project"),
-        project("project group/missing", "group/missing"),
-        project("project group/forbidden", "group/forbidden"),
-        project("project group/broken", "group/broken"),
-        project("project group/limited", "group/limited"),
-        project("project group/secondary", "group/secondary"),
-        project("project group/revoked", "group/revoked"),
-        project("project group/html", "group/html"),
-        project("project group/shape", "group/shape"),
+        scenario(
+            "current-user",
+            "current-user",
+            json!({}),
+            Expect::Ok(
+                "signed in to GitLab as dev",
+                &[
+                    ("username", "dev"),
+                    ("name", "Dev Eloper"),
+                    ("url", "{web}/dev"),
+                    ("rateLimitRemaining", "1987"),
+                ],
+            ),
+        ),
+        project(
+            "project group/app",
+            "group/app",
+            Expect::Ok(
+                "read group/app",
+                &[
+                    ("path", "group/app"),
+                    ("defaultBranch", "main"),
+                    ("visibility", "private"),
+                    ("archived", "false"),
+                    ("openIssues", "12"),
+                    ("stars", "345"),
+                    ("forks", "6"),
+                    ("url", "{web}/group/app"),
+                    ("description", "The  web app of the group"),
+                    ("lastActivityAt", "2026-11-15T08:00:00Z"),
+                ],
+            ),
+        ),
+        project(
+            "project group/bare (fallbacks)",
+            "group/bare.git",
+            Expect::Ok(
+                "read group/bare",
+                &[
+                    ("path", "group/bare"),
+                    ("archived", "true"),
+                    ("visibility", "unknown"),
+                    ("stars", "0"),
+                    ("forks", "0"),
+                    ("url", "{web}/group/bare"),
+                ],
+            ),
+        ),
+        project(
+            "project by its id",
+            "42",
+            Expect::Ok(
+                "read group/app",
+                &[
+                    ("path", "group/app"),
+                    ("defaultBranch", "main"),
+                    ("visibility", "private"),
+                    ("archived", "false"),
+                    ("openIssues", "12"),
+                    ("stars", "345"),
+                    ("forks", "6"),
+                    ("url", "{web}/group/app"),
+                    ("description", "The  web app of the group"),
+                    ("lastActivityAt", "2026-11-15T08:00:00Z"),
+                ],
+            ),
+        ),
+        project(
+            "project not a project",
+            "not a project",
+            failed("invalid-project"),
+        ),
+        project(
+            "project group/missing",
+            "group/missing",
+            failed("not-found"),
+        ),
+        project(
+            "project group/forbidden",
+            "group/forbidden",
+            failed("forbidden"),
+        ),
+        project(
+            "project group/broken",
+            "group/broken",
+            failed("gitlab-error"),
+        ),
+        project(
+            "project group/limited",
+            "group/limited",
+            failed("rate-limited"),
+        ),
+        project(
+            "project group/secondary",
+            "group/secondary",
+            failed("rate-limited"),
+        ),
+        project(
+            "project group/revoked",
+            "group/revoked",
+            failed("unauthorized"),
+        ),
+        project(
+            "project group/html",
+            "group/html",
+            failed("invalid-response"),
+        ),
+        project(
+            "project group/shape",
+            "group/shape",
+            failed("invalid-response"),
+        ),
         scenario(
             "merge-requests of a project",
             "merge-requests",
             json!({"project": "group/app"}),
+            Expect::Ok(
+                "73 open merge requests in group/app (all)",
+                &[
+                    ("count", "73"),
+                    ("countExact", "true"),
+                    ("listed", "20"),
+                    ("truncated", "true"),
+                    ("firstUrl", "{web}/group/app/-/merge_requests/999"),
+                ],
+            ),
         ),
         scenario(
             "merge-requests, 70 listed",
             "merge-requests",
             json!({"project": "group/app", "limit": 70}),
+            Expect::Ok(
+                "73 open merge requests in group/app (all)",
+                &[
+                    ("count", "73"),
+                    ("countExact", "true"),
+                    ("listed", "70"),
+                    ("truncated", "true"),
+                    ("firstUrl", "{web}/group/app/-/merge_requests/999"),
+                ],
+            ),
         ),
         scenario(
             "merge-requests, 100 listed",
             "merge-requests",
             json!({"project": "group/app", "limit": 100}),
+            Expect::Ok(
+                "73 open merge requests in group/app (all)",
+                &[
+                    ("count", "73"),
+                    ("countExact", "true"),
+                    ("listed", "73"),
+                    ("truncated", "false"),
+                    ("firstUrl", "{web}/group/app/-/merge_requests/999"),
+                ],
+            ),
         ),
         scenario(
             "merge-requests, mine",
             "merge-requests",
             json!({"filter": "author-me"}),
+            Expect::Ok(
+                "3 open merge requests (author-me)",
+                &[
+                    ("count", "3"),
+                    ("countExact", "true"),
+                    ("listed", "3"),
+                    ("truncated", "false"),
+                    ("firstUrl", "{web}/group/app/-/merge_requests/999"),
+                    (
+                        "items",
+                        "group/app!999 Fix the  build now (@dev1)\n\
+                         group/api!998 Change number 2 (@dev2)\n\
+                         group/app!997 Change number 3 (@dev0)",
+                    ),
+                ],
+            ),
         ),
         scenario(
             "merge-requests, review requested in a project",
             "merge-requests",
             json!({"project": "group/app", "filter": "review-requested", "limit": 1}),
+            Expect::Ok(
+                "2 open merge requests in group/app (review-requested)",
+                &[
+                    ("count", "2"),
+                    ("countExact", "true"),
+                    ("listed", "1"),
+                    ("truncated", "true"),
+                    ("firstUrl", "{web}/group/app/-/merge_requests/999"),
+                    ("items", "group/app!999 Fix the  build now (@dev1)"),
+                ],
+            ),
         ),
         scenario(
             "merge-requests, all without a project",
             "merge-requests",
             json!({"filter": "all"}),
+            failed("invalid-project"),
         ),
         scenario(
             "merge-requests, not counted by GitLab",
             "merge-requests",
             json!({"project": "group/mid"}),
+            Expect::Ok(
+                "130 open merge requests in group/mid (all)",
+                &[
+                    ("count", "130"),
+                    ("countExact", "true"),
+                    ("listed", "20"),
+                    ("truncated", "true"),
+                    ("firstUrl", "{web}/group/mid/-/merge_requests/999"),
+                ],
+            ),
         ),
         scenario(
             "merge-requests, more than are counted",
             "merge-requests",
             json!({"project": "group/huge"}),
+            Expect::Ok(
+                "at least 500 open merge requests in group/huge (all)",
+                &[
+                    ("count", "500"),
+                    ("countExact", "false"),
+                    ("listed", "20"),
+                    ("truncated", "true"),
+                    ("firstUrl", "{web}/group/huge/-/merge_requests/999"),
+                ],
+            ),
         ),
-        scenario("review-requests", "review-requests", json!({})),
+        scenario(
+            "review-requests",
+            "review-requests",
+            json!({}),
+            Expect::Ok(
+                "5 merge requests wait for your review",
+                &[
+                    ("count", "5"),
+                    ("countExact", "true"),
+                    ("listed", "5"),
+                    ("truncated", "false"),
+                    ("firstUrl", "{web}/group/app/-/merge_requests/999"),
+                ],
+            ),
+        ),
         scenario(
             "review-requests in a project",
             "review-requests",
             json!({"project": "group/app", "limit": 1}),
+            Expect::Ok(
+                "2 merge requests wait for your review in group/app",
+                &[
+                    ("count", "2"),
+                    ("countExact", "true"),
+                    ("listed", "1"),
+                    ("truncated", "true"),
+                    ("firstUrl", "{web}/group/app/-/merge_requests/999"),
+                ],
+            ),
         ),
         scenario(
             "pipeline of a branch",
             "pipeline",
             json!({"project": "group/app", "ref": "main"}),
+            Expect::Ok(
+                "group/app@main: ok (2 passed, 2 failed, 1 pending)",
+                &[
+                    ("state", "ok"),
+                    ("status", "success"),
+                    ("pipelineId", "77"),
+                    ("sha", "0123abc"),
+                    ("total", "7"),
+                    ("passed", "2"),
+                    ("failed", "2"),
+                    ("pending", "1"),
+                    ("skipped", "2"),
+                    ("failing", "unit  tests\njob-2"),
+                    ("truncated", "false"),
+                    ("url", "{web}/group/app/-/pipelines/77"),
+                ],
+            ),
         ),
         scenario(
             "pipeline of a merge request (paged)",
             "pipeline",
             json!({"project": "group/app", "mergeRequest": 9, "ref": "ignored"}),
+            Expect::Ok(
+                "group/app!9: failing (37 passed, 38 failed, 19 pending)",
+                &[
+                    ("state", "failing"),
+                    ("status", "failed"),
+                    ("pipelineId", "501"),
+                    ("sha", "sha9"),
+                    ("total", "130"),
+                    ("skipped", "36"),
+                    ("truncated", "false"),
+                    ("url", "{web}/group/app/-/merge_requests/9"),
+                ],
+            ),
         ),
         scenario(
             "pipeline of a merge request without one",
             "pipeline",
             json!({"project": "group/app", "mergeRequest": 10}),
+            Expect::Ok(
+                "group/app!10: no pipeline",
+                &[
+                    ("state", "none"),
+                    ("total", "0"),
+                    ("url", "{web}/group/app/-/merge_requests/10"),
+                ],
+            ),
         ),
         scenario(
             "pipeline with more than 500 jobs (truncated)",
             "pipeline",
             json!({"project": "group/app", "ref": "huge"}),
+            Expect::Ok(
+                "group/app@huge: pending (142 passed, 144 failed, 72 pending)",
+                &[
+                    ("pipelineId", "900"),
+                    ("sha", "f00d"),
+                    ("skipped", "142"),
+                    ("truncated", "true"),
+                ],
+            ),
         ),
         scenario(
             "pipeline of a commit without one",
             "pipeline",
             json!({"project": "group/app", "ref": SHA}),
+            Expect::Ok(
+                "group/app@0123456789abcdef0123456789abcdef01234567: no pipeline",
+                &[("state", "none"), ("total", "0")],
+            ),
         ),
         scenario(
             "pipeline of a missing merge request",
             "pipeline",
             json!({"project": "group/app", "mergeRequest": 404}),
+            failed("not-found"),
         ),
         scenario(
             "pipeline of an invalid ref",
             "pipeline",
             json!({"project": "group/app", "ref": "a..b"}),
+            failed("invalid-ref"),
         ),
         scenario(
             "pipeline without a ref",
             "pipeline",
             json!({"project": "group/app"}),
+            failed("invalid-parameters"),
         ),
     ]
 }
@@ -436,10 +679,8 @@ const ON_THE_ENTERED_GITLAB: &[&str] = &[
 /// Most requests one scenario sends (a list of more than 500).
 const MOST_REQUESTS: usize = 12;
 
-/// Projects whose request gets no answer, and the transport's code:
-/// canned for the plugin, real for the built-in (a name under `.invalid`,
-/// which never resolves; a local HTTPS server whose throwaway CA the
-/// built-in does not trust).
+/// Projects whose request gets no answer, and the transport's code (a
+/// name that never resolves, a certificate that is not trusted), canned.
 const NETWORK_FAILURES: &[(&str, &str)] = &[
     ("group/unresolved", "dns-failed"),
     ("group/untrusted", "tls-failed"),
@@ -515,162 +756,85 @@ fn plugin_routes(base: &str) -> Vec<Value> {
     parity::routes(base, answer, &urls, &failures)
 }
 
-// ------------------------------------------------------------- built-in
+/// What one run covered: scenario, whether it succeeded, its code.
+type Covered = Vec<(&'static str, bool, Option<&'static str>)>;
 
-/// The built-in module, configured with `config` and the launcher, as the
-/// agent registers it.
-fn builtin(config: &ActionParameters, launcher: &Arc<RecordingLauncher>) -> ModuleRegistry {
-    let mut modules = ModuleRegistry::new(Os::current());
-    modules
-        .register(Box::new(gitlab::GitlabModule::with_launcher(
-            launcher.clone(),
-        )))
-        .unwrap();
-    modules.set_config(&gitlab::module_id(), config).unwrap();
-    modules
-}
-
-/// The built-in reading from the stand-in `server`.
-fn reading_from(server: &Server, launcher: &Arc<RecordingLauncher>) -> ModuleRegistry {
-    builtin(
-        &ActionParameters::new()
-            .with(gitlab::API_URL, ParameterValue::Text(server.base()))
-            .with(gitlab::ALLOW_PRIVATE, ParameterValue::Boolean(true)),
-        launcher,
-    )
-}
-
-fn run_builtin(
-    modules: &ModuleRegistry,
-    action: &str,
-    params: &Value,
-    token: Option<&str>,
-) -> Outcome {
-    parity::run_builtin(
-        modules,
-        &format!("gitlab.{action}"),
-        &parity::parameters(params, &["filter"]),
-        gitlab::DEFAULT_CREDENTIAL,
-        token,
-    )
-}
-
-/// The aliases the cut-over adds (`crates/deckpilot-modules/tests/contracts.rs`).
-fn gitlab_alias(action: &str) -> ActionAlias {
-    let legacy: &'static str = Box::leak(format!("gitlab.{action}").into_boxed_str());
-    let target: &'static str = Box::leak(format!("{ID}.{action}").into_boxed_str());
-    ActionAlias {
-        legacy,
-        target,
-        module: "gitlab",
-        plugin: ID,
-        since: "0.6.0",
-        params: if action == "open" {
-            &[]
-        } else {
-            &[ParamRule::DropIfDefault("credential")]
-        },
-    }
-}
-
-/// What one comparison covered: scenario, whether it succeeded, its code.
-type Compared = Vec<(&'static str, bool, Option<String>)>;
-
-/// The plugin's side of a comparison.
+/// The plugin under test.
 struct Side<'a> {
     env: &'a parity::Env,
     agent: &'a parity::Agent,
     pace: &'a parity::Pace,
 }
 
-/// The readings (all, or those named in `only`) on both sides: the plugin
-/// on the GitLab at `api`, the built-in on its stand-in `server` (whose
-/// web address is shown as the plugin's).
-async fn compare_readings(
-    side: &Side<'_>,
+/// The readings (all, or those named in `only`) on the GitLab at `api`.
+async fn check_readings(
+    under_test: &Side<'_>,
     api: &str,
-    server: &Server,
-    reads: &ModuleRegistry,
     only: Option<&[&str]>,
     problems: &mut Vec<String>,
-) -> Compared {
-    let agent = side.agent;
-    let local = format!("{}/", web(&server.base()));
-    let shown = format!("{}/", web(api));
-    let mut compared = Vec::new();
+) -> Covered {
+    let vars = [("{web}", web(api))];
+    let mut covered = Vec::new();
     for s in readings() {
         if only.is_some_and(|only| !only.contains(&s.name)) {
             continue;
         }
-        side.pace.room_for(side.env, MOST_REQUESTS).await;
-        let plugin = agent.invoke(s.action, &s.params).await;
-        let builtin = blocking(|| run_builtin(reads, s.action, &s.params, Some(TOKEN)))
-            .replacing(&local, &shown);
-        compare(s.name, &builtin, &plugin, DIFFERENT_MESSAGES, problems);
-        compared.push((s.name, builtin.ok, builtin.code));
+        under_test
+            .pace
+            .room_for(under_test.env, MOST_REQUESTS)
+            .await;
+        let outcome = under_test.agent.invoke(s.action, &s.params).await;
+        parity::check(s.name, &outcome, s.expect, &vars, problems);
+        covered.push((s.name, s.expect.ok(), s.expect.code()));
     }
-    compared
+    covered
 }
 
-/// Open on both sides: the same page opened, shown without its query.
-/// (One page per 2 s for a plugin.)
-async fn compare_opens(
+/// Opens pages, one per 2 s (a plugin's limit).
+async fn check_opens(
     agent: &parity::Agent,
-    opens: &ModuleRegistry,
-    pages: &[(&'static str, Value)],
+    pages: &[(&'static str, Value, Expect)],
     problems: &mut Vec<String>,
-) -> Compared {
-    let mut compared = Vec::new();
-    for (name, params) in pages {
+) -> Covered {
+    let mut covered = Vec::new();
+    for (name, params, expect) in pages {
         tokio::time::sleep(Duration::from_millis(2_100)).await;
-        let plugin = agent.invoke("open", params).await;
-        let builtin = blocking(|| run_builtin(opens, "open", params, None));
-        compare(name, &builtin, &plugin, DIFFERENT_MESSAGES, problems);
-        compared.push((*name, builtin.ok, builtin.code));
+        let outcome = agent.invoke("open", params).await;
+        parity::check(name, &outcome, *expect, &[], problems);
+        covered.push((*name, expect.ok(), expect.code()));
     }
-    compared
+    covered
 }
 
-/// What the plugin sent since `from`: only GET to the API at `api`, each
-/// with the token in GitLab's header, and the same requests as the
-/// built-in's on `server` but for the page size.
-fn same_requests(sent: &[String], api: &str, server: &Server) {
+/// What the plugin sent: only GET to the API at `api`, each with the
+/// token in GitLab's header, and only what the scenarios ask for.
+fn sent_only_to(sent: &[String], api: &str, routes: &[Value]) {
     assert_ne!(sent.len(), 0);
     for line in sent {
         let (url, credential) = line.split_once('\t').unwrap_or((line, ""));
         assert!(url.starts_with(&format!("{api}/")), "{line}");
         assert_eq!(credential, format!("PRIVATE-TOKEN: {TOKEN}"), "{url}");
     }
-    let seen = server.seen();
-    for line in &seen {
-        assert!(!line.starts_with("OUTSIDE"), "{line}");
-        assert!(line.ends_with(&format!("\t{TOKEN}")), "{line}");
-    }
-    assert_eq!(parity::paths(sent, api), parity::paths(&seen, ""));
+    assert_eq!(parity::unrouted(sent, routes), Vec::<String>::new());
 }
 
 // ---------------------------------------------------------------- test
 
-/// Every action of `deckpilot.gitlab` against the built-in, on the same
-/// answers: identical results, the documented differences aside; on
-/// GitLab.com and on a GitLab the user enters.
+/// Every action of `deckpilot.gitlab` on known answers, with the results
+/// the built-in gave; on GitLab.com and on a GitLab the user enters.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[allow(clippy::too_many_lines)] // the steps of one comparison, in order
-async fn the_plugin_answers_as_the_builtin_does() {
+#[allow(clippy::too_many_lines)] // the steps of one run, in order
+async fn the_plugin_answers_as_the_builtin_did() {
     let mut routes = plugin_routes(API);
     routes.extend(plugin_routes(OWN_API));
     let env = parity::Env::new(PLUGIN, &routes);
     let agent = env.start().await;
     let pace = parity::Pace::start();
-    let plugin_side = Side {
+    let under_test = Side {
         env: &env,
         agent: &agent,
         pace: &pace,
     };
-    let server = Server::start(API_SUFFIX, answer, "private-token");
-    let launcher = Arc::new(RecordingLauncher::new());
-    let reads = reading_from(&server, &launcher);
-    let opens = builtin(&ActionParameters::new(), &launcher);
 
     // Seeded, waiting for the user's consent to its permissions.
     let summary = match agent.request(Request::ListPlugins).await.unwrap() {
@@ -682,22 +846,10 @@ async fn the_plugin_answers_as_the_builtin_does() {
     };
     assert_ne!(summary.state, PluginState::Enabled, "{}", agent.log());
 
-    // The definitions as the agent's engine registers them: §5.3's rules
-    // hold against the built-in's, the check the registry makes before it
-    // routes a legacy type to the plugin.
-    let registry = opens.action_registry();
-    let mut problems = Vec::new();
-    for action in &summary.actions {
-        let definition = action.definition.as_ref().expect("every action converts");
-        let alias = gitlab_alias(&action.action);
-        let builtin = registry
-            .definition(&alias.legacy_id())
-            .unwrap_or_else(|| panic!("{} is not a built-in action", alias.legacy));
-        for problem in alias::incompatibilities(&alias, builtin, definition) {
-            problems.push(format!("{}: {problem}", alias.legacy));
-        }
-    }
+    // The definitions as the agent's engine registers them hold §5.3's
+    // rules against the built-in's frozen ones.
     assert_eq!(summary.actions.len(), 6);
+    let problems = parity::contract_problems("gitlab", ID, CONTRACT, &summary.actions);
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 
     agent
@@ -718,12 +870,20 @@ async fn the_plugin_answers_as_the_builtin_does() {
         other => panic!("unexpected {other:?}"),
     }
 
-    // Without a token neither sends anything.
-    let name = "current-user without a token";
-    let plugin = agent.invoke("current-user", &json!({})).await;
-    let without = blocking(|| run_builtin(&reads, "current-user", &json!({}), None));
-    assert_eq!(plugin.code.as_deref(), Some("credential-missing"));
-    compare(name, &without, &plugin, DIFFERENT_MESSAGES, &mut problems);
+    // Without a token nothing is sent; the plugin names its slot.
+    let mut problems = Vec::new();
+    let without = agent.invoke("current-user", &json!({})).await;
+    parity::check(
+        "current-user without a token",
+        &without,
+        Expect::Failed("credential-missing"),
+        &[],
+        &mut problems,
+    );
+    assert!(
+        without.message.contains("Settings › Plugins › GitLab"),
+        "{without:?}"
+    );
     assert_eq!(env.sent().len(), 0);
 
     agent
@@ -735,25 +895,38 @@ async fn the_plugin_answers_as_the_builtin_does() {
         .await;
 
     // ---- GitLab.com: the plugin's declared host, no consent of its own.
-    let mut compared =
-        compare_readings(&plugin_side, API, &server, &reads, None, &mut problems).await;
+    let mut covered = check_readings(&under_test, API, None, &mut problems).await;
     let pages = [
         (
             "open a merge request",
             json!({"project": "group/app", "mergeRequest": 12}),
+            Expect::Ok(
+                "opened https://gitlab.com/group/app/-/merge_requests/12",
+                &[("url", "https://gitlab.com/group/app/-/merge_requests/12")],
+            ),
         ),
         (
             "open a page",
             json!({"url": " https://GitLab.com/group/app/-/pipelines/77?scope=failed#jobs "}),
+            // Shown without its query.
+            Expect::Ok(
+                "opened https://gitlab.com/group/app/-/pipelines/77",
+                &[("url", "https://gitlab.com/group/app/-/pipelines/77")],
+            ),
         ),
         (
             "open another host",
             json!({"url": "https://about.gitlab.com/pricing"}),
+            Expect::Failed("url-not-allowed"),
         ),
-        ("open a project by its id", json!({"project": "42"})),
-        ("open nothing", json!({})),
+        (
+            "open a project by its id",
+            json!({"project": "42"}),
+            Expect::Failed("invalid-project"),
+        ),
+        ("open nothing", json!({}), Expect::Failed("invalid-project")),
     ];
-    compared.extend(compare_opens(&agent, &opens, &pages, &mut problems).await);
+    covered.extend(check_opens(&agent, &pages, &mut problems).await);
     let on_gitlab_com = [
         "https://gitlab.com/group/app/-/merge_requests/12",
         "https://gitlab.com/group/app/-/pipelines/77?scope=failed#jobs",
@@ -766,7 +939,7 @@ async fn the_plugin_answers_as_the_builtin_does() {
         agent.log()
     );
     // The scenarios cover success and every failure code of the module.
-    let codes: BTreeSet<_> = compared.iter().filter_map(|(_, _, c)| c.clone()).collect();
+    let codes: BTreeSet<_> = covered.iter().filter_map(|(_, _, c)| *c).collect();
     for code in [
         "invalid-project",
         "invalid-ref",
@@ -781,17 +954,11 @@ async fn the_plugin_answers_as_the_builtin_does() {
     ] {
         assert!(codes.contains(code), "no scenario ends in {code}");
     }
-    assert!(compared.iter().filter(|(_, ok, _)| *ok).count() >= 15);
+    assert!(covered.iter().filter(|(_, ok, _)| *ok).count() >= 15);
     let sent_to_gitlab_com = env.sent();
-    same_requests(&sent_to_gitlab_com, API, &server);
+    sent_only_to(&sent_to_gitlab_com, API, &routes);
 
     // ---- a self-managed GitLab under a path: the user enters it.
-    let own = Server::start("/gitlab/api/v4", answer, "private-token");
-    let own_reads = reading_from(&own, &launcher);
-    let own_opens = builtin(
-        &ActionParameters::new().with(gitlab::API_URL, ParameterValue::Text(OWN_API.into())),
-        &launcher,
-    );
     let settings = agent
         .set_settings(BTreeMap::from([(
             "apiUrl".to_owned(),
@@ -833,12 +1000,9 @@ async fn the_plugin_answers_as_the_builtin_does() {
             private_network: false,
         })
         .await;
-    let before = problems.len();
-    let on_own = compare_readings(
-        &plugin_side,
+    let on_own = check_readings(
+        &under_test,
         OWN_API,
-        &own,
-        &own_reads,
         Some(ON_THE_ENTERED_GITLAB),
         &mut problems,
     )
@@ -848,25 +1012,41 @@ async fn the_plugin_answers_as_the_builtin_does() {
         (
             "open a merge request of the entered GitLab",
             json!({"project": "group/sub/app", "mergeRequest": 12}),
+            Expect::Ok(
+                "opened https://code.example.com/gitlab/group/sub/app/-/merge_requests/12",
+                &[(
+                    "url",
+                    "https://code.example.com/gitlab/group/sub/app/-/merge_requests/12",
+                )],
+            ),
         ),
         (
             "open a page of the entered GitLab",
             json!({"url": "https://code.example.com/gitlab/group/app/-/pipelines/77?scope=failed"}),
+            Expect::Ok(
+                "opened https://code.example.com/gitlab/group/app/-/pipelines/77",
+                &[(
+                    "url",
+                    "https://code.example.com/gitlab/group/app/-/pipelines/77",
+                )],
+            ),
         ),
         (
             "open a page beside the entered GitLab",
             json!({"url": "https://code.example.com/wiki/Home"}),
+            Expect::Failed("url-not-allowed"),
         ),
         (
             "open GitLab.com from the entered GitLab",
             json!({"url": "https://gitlab.com/group/app"}),
+            Expect::Failed("url-not-allowed"),
         ),
     ];
-    compare_opens(&agent, &own_opens, &pages, &mut problems).await;
+    check_opens(&agent, &pages, &mut problems).await;
     assert!(
-        problems.len() == before,
+        problems.is_empty(),
         "{}\n{}",
-        problems[before..].join("\n"),
+        problems.join("\n"),
         agent.log()
     );
     assert_eq!(
@@ -877,14 +1057,7 @@ async fn the_plugin_answers_as_the_builtin_does() {
         ]
     );
     let sent = env.sent();
-    same_requests(&sent[sent_to_gitlab_com.len()..], OWN_API, &own);
-    // Everything both sides opened, in order: the same pages.
-    let started: Vec<String> = launcher
-        .plans()
-        .iter()
-        .map(|p| p.args.last().unwrap().clone())
-        .collect();
-    assert_eq!(env.opened(), started);
+    sent_only_to(&sent[sent_to_gitlab_com.len()..], OWN_API, &routes);
 
     // The consent revoked: refused on the very next call.
     agent
@@ -910,7 +1083,7 @@ async fn the_plugin_answers_as_the_builtin_does() {
     assert!(back.ok, "{back:?}");
     assert_eq!(back.data["url"], "https://gitlab.com/dev");
 
-    network_failures(&env, &agent).await;
+    network_failures(&agent).await;
     // The token is in no log line and no answer.
     assert!(
         !agent.log().contains(TOKEN),
@@ -919,44 +1092,12 @@ async fn the_plugin_answers_as_the_builtin_does() {
 }
 
 /// No answer at all: a name that does not resolve and a certificate that
-/// is not trusted end in the built-in's transport codes on both sides,
-/// with the transport's retryability for the plugin (`dns-failed`
-/// retryable, `tls-failed` not). The messages are each side's
-/// explanation of the same failure; neither names the token.
-async fn network_failures(env: &parity::Env, agent: &parity::Agent) {
-    let launcher = Arc::new(RecordingLauncher::new());
-    let root = env.dir.path().join("https-root");
-    std::fs::create_dir_all(&root).unwrap();
-    let untrusted = https::HttpsServer::start(&root);
-    let unresolved = builtin(
-        &ActionParameters::new().with(
-            gitlab::API_URL,
-            ParameterValue::Text("https://gitlab.invalid/api/v4".into()),
-        ),
-        &launcher,
-    );
-    let untrusted_api = builtin(
-        &ActionParameters::new()
-            .with(
-                gitlab::API_URL,
-                ParameterValue::Text(format!("https://127.0.0.1:{}/api/v4", untrusted.port)),
-            )
-            .with(gitlab::ALLOW_PRIVATE, ParameterValue::Boolean(true)),
-        &launcher,
-    );
+/// is not trusted end in the transport's codes, with its retryability
+/// (`dns-failed` retryable, `tls-failed` not), and a message that does
+/// not name the token.
+async fn network_failures(agent: &parity::Agent) {
     for (project, code) in NETWORK_FAILURES {
         let params = json!({ "project": project });
-        let modules = if *code == "dns-failed" {
-            &unresolved
-        } else {
-            &untrusted_api
-        };
-        let builtin = blocking(|| run_builtin(modules, "project", &params, Some(TOKEN)));
-        assert_eq!(
-            builtin.code.as_deref(),
-            Some(*code),
-            "the built-in: {builtin:?}"
-        );
         let outcome = agent.invoke_raw("project", &params).await;
         eprintln!("network {project}: {outcome:?}");
         let PluginActionOutcome::Failed {
@@ -969,9 +1110,8 @@ async fn network_failures(env: &parity::Env, agent: &parity::Agent) {
         };
         assert_eq!(plugin_code, code, "{outcome:?}");
         assert_eq!(*retryable, *code == "dns-failed", "{outcome:?}");
-        for text in [message.as_deref().unwrap_or_default(), &builtin.message] {
-            assert!(!text.contains(TOKEN), "{text}");
-            assert_ne!(text, "");
-        }
+        let message = message.as_deref().unwrap_or_default();
+        assert!(!message.contains(TOKEN), "{message}");
+        assert_ne!(message, "");
     }
 }

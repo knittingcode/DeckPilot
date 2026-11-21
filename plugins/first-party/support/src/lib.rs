@@ -5,8 +5,8 @@
 //! `Date` headers ([`Deadline`]; a guest has no clock), and how text from a
 //! server is shown.
 //!
-//! Each function is a port of what the built-in modules do
-//! (`modules/gitlab`, `modules/jira`), so a plugin gives the built-in's
+//! Each function is a port of what the former built-in `gitlab` and
+//! `jira` modules did (removed in WP-C5), so a plugin gives the built-in's
 //! results on the same answers.
 #![deny(unsafe_code)]
 

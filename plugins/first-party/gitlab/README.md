@@ -1,8 +1,9 @@
 # deckpilot.gitlab
 
-The first-party GitLab plugin: the replacement of the built-in `gitlab`
-module (`modules/gitlab`), part of P11
-(`docs/marketplace/module-migration.md` §9). Bundled with class `migration`
+The first-party GitLab plugin: the replacement of the former built-in
+`gitlab` module (removed in WP-C5), part of P11
+(`docs/marketplace/module-migration.md` §9), and now its only
+implementation. Bundled with class `migration`
 (`../bundled.json`) and pinned in builds that enable bundled plugins.
 
 **Routed since the cut-over (P11)**, in builds with plugins only:
@@ -12,11 +13,12 @@ plan for `gitlab` (`apps/agent/src/plugins/migration.rs`) installs this
 plugin, copies the module's settings with the server you had entered and,
 once you approve, imports the credential and allows exactly that server.
 From then on the stored `gitlab.*` keys, workflow nodes and actions run
-here; nothing stored is rewritten, so a build without plugins (every
-release build today) keeps running the built-in on the same data. Until
-you approve, after a decline and for every computer that is not eligible
-(a server a plugin cannot reach, a per-action credential other than the
-module's), the built-in serves.
+here; nothing stored is rewritten. Until you approve, after a decline,
+for every computer that is not eligible (a server a plugin cannot reach,
+a per-action credential other than the module's) and in a build or start
+without plugins, they are unavailable with the reason: there is no
+built-in to fall back to since WP-C5. An older app on the same data still
+runs its built-in.
 `apps/agent/tests/plugins_cutover_servers.rs` runs that upgrade end to
 end.
 
@@ -54,14 +56,18 @@ keep it that way:
 
 - `crates/deckpilot-modules/tests/contracts.rs` (`first_party`): the
   manifest, converted as the agent registers plugin actions, against the
-  built-in's definitions: `alias::incompatibilities` (§5.3) for every
-  alias, and beyond it the definitions must be identical but for the
-  documented differences below. Also the variables (none on either side),
+  built-in's frozen 0.9.0 definitions
+  (`crates/deckpilot-modules/legacy/gitlab.json`):
+  `alias::incompatibilities` (§5.3) for every alias, and beyond it the
+  definitions must be identical but for the documented differences
+  below. Also the variables (none on either side),
   the settings and that the permissions are exactly the three below.
 - `apps/agent/tests/plugins_gitlab.rs`: every action of the plugin through
-  the real agent and sandboxed host, on canned GitLab answers, against the
-  built-in on the same answers served from 127.0.0.1: the same status,
-  message, outputs and error code, 31 readings (success and every error
+  the real agent and sandboxed host, on canned GitLab answers. Until WP-C5
+  it compared the plugin with the built-in on the same answers served
+  from 127.0.0.1; now it is a plugin-only regression test holding the
+  plugin to those answers: the same status, message, outputs and error
+  code, 31 readings (success and every error
   code) and 5 pages to open on GitLab.com; 11 readings and 4 pages again
   on a GitLab under a path that the user enters (refused before the
   consent and after its revocation); the same requests but for the page
@@ -95,7 +101,7 @@ idempotency flags and timeouts are identical.
 | --- | --- | --- |
 | `apiUrl` | `apiUrl` (same kind, default, portability) | an `https` address; the server is reached only with your consent to it (above). A plain `http` address on this computer, which the built-in accepts, is not reachable for a plugin and fails with `invalid-api-url` |
 | `timeoutSeconds` | `timeoutSeconds` (same) | the time limit of one action, counted with GitLab's `Date` headers (a guest has no clock) |
-| `credential` (a credential id, default `gitlab.token`) | the credential slot `token` (`PRIVATE-TOKEN`; GitLab.com or the allowed server only) | the per-action `credential` override is dropped by the alias when it is empty or the module's own (`ParamRule::DropIfDefault`); any other value keeps the built-in until G5 |
+| `credential` (a credential id, default `gitlab.token`) | the credential slot `token` (`PRIVATE-TOKEN`; GitLab.com or the allowed server only) | the per-action `credential` override is dropped by the alias when it is empty or the module's own (`ParamRule::DropIfDefault`); any other value is not eligible (the keys stay unavailable) until G5 |
 | `allowPrivateHost` | not declared | replaced by the private-network consent per server, which is never assumed |
 
 ## What the plugin does not reproduce

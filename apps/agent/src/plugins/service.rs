@@ -664,7 +664,13 @@ impl PluginService {
             .filter(|known| !records.iter().any(|r| r.id == known.id))
             .map(|known| CatalogPlugin {
                 id: known.id.to_string(),
-                name: known.display_name,
+                // A translated name (`t:plugin.name`) cannot be shown once
+                // its locales are gone with the plugin: its id instead.
+                name: if known.display_name.is_empty() || known.display_name.starts_with("t:") {
+                    known.id.to_string()
+                } else {
+                    known.display_name
+                },
                 default_names: BTreeMap::new(),
                 version: known.last_version,
                 description: String::new(),
@@ -678,6 +684,7 @@ impl PluginService {
                 visual_assets: Vec::new(),
                 project_context: false,
                 resources: false,
+                wrap_around: None,
             });
         let graph = self.graph();
         self.locales
@@ -710,6 +717,18 @@ impl PluginService {
                     })
                     .filter(|(_, names)| !names.is_empty())
                     .collect();
+                let project_context = grants.iter().any(|g| {
+                    g.key.kind == deckpilot_plugin_manifest::PermissionKind::ProjectContext
+                        && g.key.key.is_empty()
+                        && g.status == deckpilot_plugin_store::GrantStatus::Granted
+                });
+                let wrap_around = project_context.then(|| {
+                    store
+                        .settings(&record.id)
+                        .ok()
+                        .and_then(|settings| settings.get("wrapAround")?.as_bool())
+                        .unwrap_or(true)
+                });
                 Some(CatalogPlugin {
                     id: record.id.to_string(),
                     name: manifest.name.clone(),
@@ -725,11 +744,8 @@ impl PluginService {
                         .collect(),
                     default_names,
                     visual_assets: self.drawable_assets(record, &dir),
-                    project_context: grants.iter().any(|g| {
-                        g.key.kind == deckpilot_plugin_manifest::PermissionKind::ProjectContext
-                            && g.key.key.is_empty()
-                            && g.status == deckpilot_plugin_store::GrantStatus::Granted
-                    }),
+                    project_context,
+                    wrap_around,
                     resources: grants.iter().any(|g| {
                         g.key.kind == deckpilot_plugin_manifest::PermissionKind::Resources
                             && g.key.key.is_empty()
@@ -2616,12 +2632,20 @@ impl PluginService {
         }
     }
 
-    /// Whether the Projects feature is on (the built-in `projects`
-    /// module, enabled): only then do plugins' project roles resolve.
+    /// Whether the Projects feature is on: the Projects plugin
+    /// (`deckpilot.projects`) is enabled, the only project context provider
+    /// since the built-in `projects` module is gone (WP-C6; as the agent's
+    /// `Agent::project_context_active`). Only then do plugins' project
+    /// roles resolve.
     fn projects_enabled(&self) -> bool {
-        self.builtins
-            .get("projects")
-            .is_some_and(|module| module.enabled && module.supported)
+        PluginId::parse(crate::service::PROJECTS_PLUGIN).is_ok_and(|id| {
+            self.manager
+                .store()
+                .plugin(&id)
+                .ok()
+                .flatten()
+                .is_some_and(|record| record.state == PluginState::Enabled)
+        })
     }
 
     /// The state of a key bound to a plugin action, for the engine's live

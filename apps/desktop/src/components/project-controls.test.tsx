@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest"
 
-// Project controls come with the Projects plugin (or its legacy module
-// before the migration); without it what is stored stays, read-only.
+// Project controls come with the Projects plugin; without it what is
+// stored stays, read-only.
 
 import { cleanup, screen } from "@testing-library/react"
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
@@ -85,11 +85,12 @@ describe("project controls", () => {
     expect(screen.queryByRole("switch")).not.toBeInTheDocument()
   })
 
-  it("follow the legacy Projects module in builds without plugins", () => {
+  it("are read-only in builds without plugins: the built-in Projects module is gone", () => {
+    // Not even a stale `projects` module (an older agent's) provides them.
     renderWithApp(field(), { modules: [moduleInfo({ id: "projects" })] })
-    expect(screen.getByRole("combobox")).toBeInTheDocument()
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument()
     cleanup()
-    renderWithApp(field(), { modules: [moduleInfo({ id: "projects", enabled: false })] })
+    renderWithApp(field(), { modules: [] })
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument()
   })
 

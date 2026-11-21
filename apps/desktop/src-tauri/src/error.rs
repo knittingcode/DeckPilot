@@ -13,10 +13,10 @@
 
 use std::collections::BTreeMap;
 
+use deckpilot_core::CatalogError;
 use deckpilot_core::registry::RegistryError;
 use deckpilot_core::{EngineError, ModuleError, ProfileIssue, project::ProjectContextError};
 use deckpilot_ipc::{ClientError, ErrorCode, IpcError};
-use deckpilot_modules::projects::CatalogError;
 use deckpilot_storage::{StorageError, crypto::CryptoError};
 use serde::{Serialize, Serializer};
 

@@ -7,6 +7,17 @@ statements also cover the open pull requests #231 (plugin variables,
 cancellation) and #232 (storage, credentials as handles, settings), read
 from their heads on 2026-11-15. Paths are relative to the repository root.
 
+**Status (WP-C5, WP-C6).** The built-ins `github`, `gitlab`, `jira`, `git`,
+`docker`, `workspace` and `projects` are **removed** from the workspace,
+`crates/deckpilot-modules` and the app. Their first-party plugins
+(`deckpilot.<id>`, class `migration`) are the only implementation; the
+legacy action ids stay in `ACTION_ALIASES` and are unavailable with a
+reason until the plugin serves, with no built-in fallback. Their frozen
+0.9.0 contracts are `crates/deckpilot-modules/legacy/<id>.json`. Citations
+of their sources below are to the former built-ins at `21fc2de2`
+(`modules/<id>/…`, which no longer exist) and are kept as the audit's
+evidence.
+
 ## What a plugin can do today
 
 The baseline every row below is judged against: an ABI 1 wasm module in the
@@ -46,23 +57,23 @@ The rows for `projects`, `workspace`, `git`, `docker`, `http`, `github`,
 `gitlab` and `jira`, and the new Workflows row, now carry the new verdicts.
 The X entries are the plugin API 1.9 security reviews
 ([module-migration.md §7](module-migration.md#plugin-api-19-security-reviews-2026-11-20)).
-Nothing in them is implemented yet. The evidence columns describe the code
-as audited.
+They are implemented since (plugin API 1.9). The evidence columns describe
+the code as audited.
 
 | Module | Actions / variables | Internal APIs | Essential | Sandbox today | New host capabilities | Config and DB | Complexity / risk | Verdict |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `general` | 2 actions, 0 variables | profile and project (read), cancellation, progress | yes | no (no clock or sleep, no profile read) | G8 profile read, G10 sleep | none | low / high (every test and many workflows use `general.log`) | core |
-| `projects` | 9 actions (3 deprecated), 3 variables + 3 `ALIASES` | profile, `ContextEffect`, faces, machine and project resources; agent and app call its crate directly | yes | no | project-context write (never grantable) | `wrapAround`; module schema 1 adopting core tables | high / high | **plugin** `deckpilot.projects` (2026-11-20) for actions, variables, views, cycling; the project data model stays a core primitive |
+| `projects` | 9 actions (3 deprecated), 3 variables + 3 `ALIASES` | profile, `ContextEffect`, faces, machine and project resources; agent and app call its crate directly | yes | no | project-context write (never grantable) | `wrapAround`; module schema 1 adopting core tables | high / high | **plugin** `deckpilot.projects` (2026-11-20) for actions, variables, views, cycling; the project data model stays a core primitive. **Built-in removed** (WP-C6) |
 | `work-session` | 0 actions, 6 variables + 6 `ALIASES` | live session snapshot from the agent; page in the app | yes | no | work-session read/write (state is the agent's) | core schema 9 tables | high / high | core |
 | `system` | 6 actions | OS launcher, `run_process`, `sysinfo`, file checks, `PATH`, machine resources | launcher actions: yes | no | G12 resource launch, G11 process inspect, `process.exec` (refused) | `allowCommands` | high / high | core (launchers) + built-in (`run-command`, `process-status`) |
 | `notifications` | 2 actions | core notifier, run summary, workflow name | no | yes since P10 (G8 run summary, G9 severity, routing and delivery) | G9 notify severity, G8 run summary | 3 portable settings | low / medium (widely used) | default plugin (P10: `deckpilot.notifications`) |
-| `workspace` | 3 actions | OS launcher, path checks and canonicalize, project resources; depends on the `system` crate | no | no | G12 resource launch | none | medium / medium | **plugin** `deckpilot.workspace` (2026-11-20; X1, X2, X4, X5) |
-| `git` | 6 actions | `git` CLI with a curated environment, `is_dir`, launcher, 30 s button state | no | no | `process.exec` for `git` (refused), G7 button state | 3 settings | high / medium | **plugin** `deckpilot.git` (2026-11-20; X1, X2, X3a, X4) |
-| `docker` | 7 actions | `docker` CLI with TLS, config and SSH-agent variables, path checks, 30 s button state | no | no | `process.exec` for `docker` (refused), G7 | 5 settings, `allowStateChanges` | high / medium | **plugin** `deckpilot.docker` (2026-11-20; X1, X2, X3b, X3c) |
+| `workspace` | 3 actions | OS launcher, path checks and canonicalize, project resources; depends on the `system` crate | no | no | G12 resource launch | none | medium / medium | **plugin** `deckpilot.workspace` (2026-11-20; X1, X2, X4, X5). **Built-in removed** (WP-C6) |
+| `git` | 6 actions | `git` CLI with a curated environment, `is_dir`, launcher, 30 s button state | no | no | `process.exec` for `git` (refused), G7 button state | 3 settings | high / medium | **plugin** `deckpilot.git` (2026-11-20; X1, X2, X3a, X4). **Built-in removed** (WP-C6) |
+| `docker` | 7 actions | `docker` CLI with TLS, config and SSH-agent variables, path checks, 30 s button state | no | no | `process.exec` for `docker` (refused), G7 | 5 settings, `allowStateChanges` | high / medium | **plugin** `deckpilot.docker` (2026-11-20; X1, X2, X3b, X3c). **Built-in removed** (WP-C6) |
 | `http` | 2 actions | its own HTTP client and SSRF policy, which the plugin executor and three modules reuse; credentials by id | no (its transport is) | no | G2 user origins, G3 private network, G4 limits, G5 credential selection | 3 settings, any `credentials` row | high / high | **core** (2026-11-20, D1); transport already in `deckpilot-net` |
-| `github` | 6 actions | HTTP client, credentials by id, launcher for `open` | no | partly (api.github.com reads work with #232; `open`, GHE, paging headers do not) | G1 openUrl, G2, G4, G6, G5 (credential import) | 4 settings, `github.token` | medium / low | plugin (first); built-in removed after GHE slot and WP-T1 (2026-11-20, D2) |
-| `gitlab` | 6 actions | as github, `PRIVATE-TOKEN` header | no | partly (gitlab.com only) | G1, G2, G4, G6 (`x-total`), G5 | 4 settings, `gitlab.token` | medium / low | plugin; built-in removed after WP-T1 (2026-11-20, D2) |
-| `jira` | 4 actions | as github; basic or bearer by deployment | no | no (no fixed host) | G1, G2 (always), G4, G5 | 5 settings, `jira.token` | medium / low | plugin; built-in removed after WP-T1 (2026-11-20, D2) |
+| `github` | 6 actions | HTTP client, credentials by id, launcher for `open` | no | partly (api.github.com reads work with #232; `open`, GHE, paging headers do not) | G1 openUrl, G2, G4, G6, G5 (credential import) | 4 settings, `github.token` | medium / low | plugin (first); **built-in removed** (WP-C5, after the GHE slot and WP-T1; D2) |
+| `gitlab` | 6 actions | as github, `PRIVATE-TOKEN` header | no | partly (gitlab.com only) | G1, G2, G4, G6 (`x-total`), G5 | 4 settings, `gitlab.token` | medium / low | plugin; **built-in removed** (WP-C5, after WP-T1; D2) |
+| `jira` | 4 actions | as github; basic or bearer by deployment | no | no (no fixed host) | G1, G2 (always), G4, G5 | 5 settings, `jira.token` | medium / low | plugin; **built-in removed** (WP-C5, after WP-T1; D2) |
 | Workflows (not a module) | management UI only: list, editor, save/duplicate/delete (`apps/desktop/src-tauri/src/commands/workflows.rs`, `pages/workflows.tsx`, `workflow-builder/*`) | the core engine, execution IPC | engine yes, management no | n/a (no data ABI needed) | X8 `hostViews` | workflows stay in `profiles.document` | low / medium | **plugin** `deckpilot.workflows` (2026-11-20): manifest-only, activates the app-drawn `workflows` view; engine, `BindingTarget::Workflow` and run monitoring stay core |
 
 Size of each crate and its exclusive dependencies:
@@ -113,19 +124,21 @@ declares SQL: only `projects` declares a migration, and its SQL is empty.
 
 ## Action inventory
 
-Every built-in action type id. *Params*: required in bold.
+Every built-in action type id at `21fc2de2`. *Params*: required in bold.
+*Former built-in*: a module removed in WP-C5 or WP-C6; its ids are legacy
+aliases of its plugin, its contract is `crates/deckpilot-modules/legacy/<id>.json`.
 
 | Action type id | Params | Source |
 | --- | --- | --- |
 | `general.log` | **`message`** | `modules/general/src/lib.rs:13` |
 | `general.wait` | **`seconds`** (1–300) | `modules/general/src/lib.rs:14` |
-| `projects.cycle` | **`direction`** | `modules/projects/src/actions.rs:31` |
-| `projects.select` | `project_id` | `modules/projects/src/actions.rs:32` |
-| `projects.current` | — | `modules/projects/src/actions.rs:33` |
-| `projects.repository` | `project_id` | `modules/projects/src/actions.rs:34` |
-| `projects.documentation` | `project_id` | `modules/projects/src/actions.rs:35` |
-| `projects.resolve-resource` | `project_id`, **`resource`** | `modules/projects/src/actions.rs:36` |
-| `projects.next`, `projects.previous`, `projects.active` | — (deprecated) | `modules/projects/src/actions.rs:38-42` |
+| `projects.cycle` | **`direction`** | former built-in, `src/actions.rs:31` |
+| `projects.select` | `project_id` | former built-in, `src/actions.rs:32` |
+| `projects.current` | — | former built-in, `src/actions.rs:33` |
+| `projects.repository` | `project_id` | former built-in, `src/actions.rs:34` |
+| `projects.documentation` | `project_id` | former built-in, `src/actions.rs:35` |
+| `projects.resolve-resource` | `project_id`, **`resource`** | former built-in, `src/actions.rs:36` |
+| `projects.next`, `projects.previous`, `projects.active` | — (deprecated) | former built-in, `src/actions.rs:38-42` |
 | `system.open-app` | **`application`**, `arguments` | `modules/system/src/actions.rs:17` |
 | `system.open-url` | **`url`** | `modules/system/src/actions.rs:18` |
 | `system.open-file` | **`location`**, **`path`**, `application` | `modules/system/src/actions.rs:19` |
@@ -134,36 +147,36 @@ Every built-in action type id. *Params*: required in bold.
 | `system.process-status` | **`name`** | `modules/system/src/actions.rs:22` |
 | `notifications.show` | **`title`**, `body`, **`severity`**, **`critical`** | `modules/notifications/src/lib.rs:22` |
 | `notifications.workflow-summary` | `title`, `details`, **`onlyOnFailure`**, **`critical`** | `modules/notifications/src/lib.rs:23` |
-| `workspace.open-in-editor` | **`application`**, **`editor`**, `location`, `path`, `line`, `column` | `modules/workspace/src/actions.rs:19` |
-| `workspace.open-urls` | **`urls`**, `browser` | `modules/workspace/src/actions.rs:20` |
-| `workspace.open-project` | **`editor`**, **`editorRole`**, **`repositoryRole`**, **`docsRole`**, `urlRoles`, `browser` | `modules/workspace/src/actions.rs:21` |
-| `git.status`, `git.branch` | `repository`, `project_id` | `modules/git/src/actions.rs:19-20` |
-| `git.changes` | `repository`, `project_id`, **`limit`** | `modules/git/src/actions.rs:21` |
-| `git.last-commit` | `repository`, `project_id` | `modules/git/src/actions.rs:22` |
-| `git.remote-status` | `repository`, `project_id`, **`refresh`** | `modules/git/src/actions.rs:23` |
-| `git.open-repository` | `repository`, `project_id`, `application` | `modules/git/src/actions.rs:24` |
-| `docker.status` | `context` | `modules/docker/src/actions.rs:19` |
-| `docker.containers` | **`all`**, `name`, `context` | `modules/docker/src/actions.rs:20` |
-| `docker.compose-status` | `compose`, `project_id`, `projectName`, `context` | `modules/docker/src/actions.rs:21` |
-| `docker.compose-up`, `docker.compose-restart` | compose set, `services` | `modules/docker/src/actions.rs:22,24` |
-| `docker.compose-down` | compose set, **`removeOrphans`** | `modules/docker/src/actions.rs:23` |
-| `docker.logs` | `container`, `service`, **`lines`**, `since`, compose set | `modules/docker/src/actions.rs:25` |
+| `workspace.open-in-editor` | **`application`**, **`editor`**, `location`, `path`, `line`, `column` | former built-in, `src/actions.rs:19` |
+| `workspace.open-urls` | **`urls`**, `browser` | former built-in, `src/actions.rs:20` |
+| `workspace.open-project` | **`editor`**, **`editorRole`**, **`repositoryRole`**, **`docsRole`**, `urlRoles`, `browser` | former built-in, `src/actions.rs:21` |
+| `git.status`, `git.branch` | `repository`, `project_id` | former built-in, `src/actions.rs:19-20` |
+| `git.changes` | `repository`, `project_id`, **`limit`** | former built-in, `src/actions.rs:21` |
+| `git.last-commit` | `repository`, `project_id` | former built-in, `src/actions.rs:22` |
+| `git.remote-status` | `repository`, `project_id`, **`refresh`** | former built-in, `src/actions.rs:23` |
+| `git.open-repository` | `repository`, `project_id`, `application` | former built-in, `src/actions.rs:24` |
+| `docker.status` | `context` | former built-in, `src/actions.rs:19` |
+| `docker.containers` | **`all`**, `name`, `context` | former built-in, `src/actions.rs:20` |
+| `docker.compose-status` | `compose`, `project_id`, `projectName`, `context` | former built-in, `src/actions.rs:21` |
+| `docker.compose-up`, `docker.compose-restart` | compose set, `services` | former built-in, `src/actions.rs:22,24` |
+| `docker.compose-down` | compose set, **`removeOrphans`** | former built-in, `src/actions.rs:23` |
+| `docker.logs` | `container`, `service`, **`lines`**, `since`, compose set | former built-in, `src/actions.rs:25` |
 | `http.request` | **`method`**, **`url`**, `query`, `headers`, `body`, **`bodyType`**, `credential`, **`authScheme`**, `authName`, **`timeoutSeconds`**, **`followRedirects`**, **`failOnHttpError`**, `extract` | `modules/http/src/actions.rs:15` |
 | `http.health-check` | **`url`**, **`expectedStatus`**, `contains`, **`timeoutSeconds`**, **`failWhenUnhealthy`**, `credential`, **`authScheme`**, `authName` | `modules/http/src/actions.rs:16` |
-| `github.current-user` | `credential` | `modules/github/src/actions.rs:18` |
-| `github.repository` | **`repository`**, `credential` | `modules/github/src/actions.rs:19` |
-| `github.pull-requests`, `github.review-requests` | `repository`, **`filter`** (pull requests only), **`limit`**, `credential` | `modules/github/src/actions.rs:20-21` |
-| `github.checks` | **`repository`**, `ref`, `pullRequest`, `credential` | `modules/github/src/actions.rs:22` |
-| `github.open` | `url`, `repository`, `pullRequest` | `modules/github/src/actions.rs:23` |
-| `gitlab.current-user` | `credential` | `modules/gitlab/src/actions.rs:18` |
-| `gitlab.project` | **`project`**, `credential` | `modules/gitlab/src/actions.rs:19` |
-| `gitlab.merge-requests`, `gitlab.review-requests` | `project`, **`filter`** (merge requests only), **`limit`**, `credential` | `modules/gitlab/src/actions.rs:20-21` |
-| `gitlab.pipeline` | **`project`**, `ref`, `mergeRequest`, `credential` | `modules/gitlab/src/actions.rs:22` |
-| `gitlab.open` | `url`, `project`, `mergeRequest` | `modules/gitlab/src/actions.rs:23` |
-| `jira.myself` | `credential` | `modules/jira/src/actions.rs:19` |
-| `jira.issue` | **`issue`**, `credential` | `modules/jira/src/actions.rs:20` |
-| `jira.issues` | **`source`**, `filterId`, `project`, **`includeDone`**, **`limit`**, `credential` | `modules/jira/src/actions.rs:21` |
-| `jira.open` | `url`, `issue` | `modules/jira/src/actions.rs:22` |
+| `github.current-user` | `credential` | former built-in, `src/actions.rs:18` |
+| `github.repository` | **`repository`**, `credential` | former built-in, `src/actions.rs:19` |
+| `github.pull-requests`, `github.review-requests` | `repository`, **`filter`** (pull requests only), **`limit`**, `credential` | former built-in, `src/actions.rs:20-21` |
+| `github.checks` | **`repository`**, `ref`, `pullRequest`, `credential` | former built-in, `src/actions.rs:22` |
+| `github.open` | `url`, `repository`, `pullRequest` | former built-in, `src/actions.rs:23` |
+| `gitlab.current-user` | `credential` | former built-in, `src/actions.rs:18` |
+| `gitlab.project` | **`project`**, `credential` | former built-in, `src/actions.rs:19` |
+| `gitlab.merge-requests`, `gitlab.review-requests` | `project`, **`filter`** (merge requests only), **`limit`**, `credential` | former built-in, `src/actions.rs:20-21` |
+| `gitlab.pipeline` | **`project`**, `ref`, `mergeRequest`, `credential` | former built-in, `src/actions.rs:22` |
+| `gitlab.open` | `url`, `project`, `mergeRequest` | former built-in, `src/actions.rs:23` |
+| `jira.myself` | `credential` | former built-in, `src/actions.rs:19` |
+| `jira.issue` | **`issue`**, `credential` | former built-in, `src/actions.rs:20` |
+| `jira.issues` | **`source`**, `filterId`, `project`, **`includeDone`**, **`limit`**, `credential` | former built-in, `src/actions.rs:21` |
+| `jira.open` | `url`, `issue` | former built-in, `src/actions.rs:22` |
 
 Variables (only two modules declare any; namespaces are fixed in
 `crates/deckpilot-core/src/variables/registry.rs:53`, aliases in
@@ -171,12 +184,14 @@ Variables (only two modules declare any; namespaces are fixed in
 
 | Variable | Type | Legacy alias | Owner |
 | --- | --- | --- | --- |
-| `projects.current.id`, `.key`, `.name` | ProjectId, String, String | `system.project.current.id`, `.key`, `.name` | `projects` (`modules/projects/src/variables.rs:14-45`) |
+| `projects.current.id`, `.key`, `.name` | ProjectId, String, String | `system.project.current.id`, `.key`, `.name` | `projects`, former built-in (`src/variables.rs:14-45`); now host-published for `deckpilot.projects` (X7) |
 | `workSession.id`, `.state`, `.startedAt`, `.elapsedSeconds`, `.projectId`, `.canFinish` | String, String, String, Integer, ProjectId, Boolean | `system.work.session.*` | `work-session` (`modules/work-session/src/variables.rs:20-57`) |
 
 ## Modules
 
-Common to all twelve: registered in `crates/deckpilot-modules/src/lib.rs:28-67`;
+Common to all twelve (at `21fc2de2`; six remain built-in: `deck`, `general`,
+`http`, `notifications`, `system`, `work-session`): registered in
+`crates/deckpilot-modules/src/lib.rs:28-67`;
 no module declares windows (`ModuleManifest.windows` is empty) or SQL
 migrations; none uses the clipboard, key synthesis, media keys, the device
 runtime or the OS keychain (secrets are in the encrypted `credentials`
@@ -211,14 +226,15 @@ table, not the keychain).
 
 1. **Actions.** `projects.cycle`, `.select`, `.current`, `.repository`,
    `.documentation`, `.resolve-resource`, deprecated `.next`, `.previous`,
-   `.active` (`modules/projects/src/actions.rs:31-53`). Variables
+   `.active` (the former built-in's `src/actions.rs:31-53`). Variables
    `projects.current.id|key|name` (`src/variables.rs:14-45`).
 2. **Internal APIs.** `ContextEffect::SelectProject` and `CycleProject`
    (`src/actions.rs:247,487`; `crates/deckpilot-core/src/execution.rs:385-402`),
    `decorate_face` (`src/actions.rs:200-211`), `ProjectSwitcher`,
    `resolve_project_resource` (`src/resources.rs:79`). The agent calls
    `switching` directly (`apps/agent/src/service.rs:1126-1127`), the app its
-   `ProjectCatalog` (`apps/desktop/src-tauri/src/modules/projects.rs:19`).
+   `ProjectCatalog` (`apps/desktop/src-tauri/src/modules/projects.rs:19`;
+   since WP-C6 in the core, `crates/deckpilot-core/src/project_catalog.rs`).
 3. **Capabilities.** `ProfileRead`, `ProjectContext`, `MachineResources`
    (`src/lib.rs:58-62`).
 4. **Essential.** Yes: the core profile model, label templates, step
@@ -297,7 +313,8 @@ moves to core Settings › Resources.
    caller adds nothing.
 7. **Config and DB.** `allowCommands` (boolean, default false,
    machine-specific, never exported; `src/lib.rs:92-112`). No credentials.
-   `modules/workspace` reuses its `support` code (`modules/workspace/src/actions.rs:13-14`).
+   The former built-in `workspace` reused its `support` code (its
+   `src/actions.rs:13-14`).
 8. **Referenced ids.** All six.
 9. **Complexity and risk.** High and high. **Core** (launchers) and
    **built-in** (`run-command`, `process-status`).
@@ -340,7 +357,7 @@ Parity and the remaining differences:
 ### `workspace`
 
 1. **Actions.** `workspace.open-in-editor`, `.open-urls` (at most 10),
-   `.open-project` (`modules/workspace/src/actions.rs:19-21,141-283`). No
+   `.open-project` (the former built-in's `src/actions.rs:19-21,141-283`). No
    variables.
 2. **Internal APIs.** `launch::plan` and `SystemLauncher` (`src/lib.rs:17,53`,
    `src/editor.rs:123-195`), `system::support::{existing, existing_inside,
@@ -366,7 +383,7 @@ resource handles (X1, X2), `resource.open` (X4, high) and
 ### `git`
 
 1. **Actions.** `git.status`, `.branch`, `.changes`, `.last-commit`,
-   `.remote-status`, `.open-repository` (`modules/git/src/actions.rs:19-24`),
+   `.remote-status`, `.open-repository` (the former built-in's `src/actions.rs:19-24`),
    each with optional `repository` (directory resource) and `project_id`
    (`:84-102`). No variables.
 2. **Internal APIs.** Runs the `git` executable (`src/repo.rs:122`) with
@@ -403,7 +420,7 @@ host. The gain is removability, not isolation of the process run.
 
 1. **Actions.** `docker.status`, `.containers`, `.compose-status`,
    `.compose-up`, `.compose-down`, `.compose-restart`, `.logs`
-   (`modules/docker/src/actions.rs:19-25`); the three changing actions are
+   (the former built-in's `src/actions.rs:19-25`); the three changing actions are
    refused unless `allowStateChanges` (`:720-728`). No variables.
 2. **Internal APIs.** Runs the `docker` executable (`src/actions.rs:569`)
    with `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`,
@@ -475,7 +492,7 @@ is already `crates/deckpilot-net`.
 1. **Actions.** `github.current-user`, `.repository`, `.pull-requests`
    (`filter` all, author-me, review-requested), `.review-requests`,
    `.checks` (paged through `Link`, at most 5 pages), `.open`
-   (`modules/github/src/actions.rs:18-23`); every action but `open` takes an
+   (the former built-in's `src/actions.rs:18-23`); every action but `open` takes an
    optional `credential` that overrides the setting (`:89-97`).
 2. **Internal APIs.** `deckpilot_module_http::client::send`, credentials by
    id, `Authorization: Bearer` with fixed `Accept` and API version headers
@@ -514,7 +531,7 @@ WP-T1 passes. The §5.7 two-release rule is waived (D2).
 ### `gitlab`
 
 1. **Actions.** `gitlab.current-user`, `.project`, `.merge-requests`,
-   `.review-requests`, `.pipeline`, `.open` (`modules/gitlab/src/actions.rs:18-23`),
+   `.review-requests`, `.pipeline`, `.open` (the former built-in's `src/actions.rs:18-23`),
    with the same optional `credential` override.
 2. **Internal APIs.** As github; `PRIVATE-TOKEN` header (`src/api.rs:35,394`);
    counts from `X-Total` or up to 5 pages (`src/actions.rs:595-605`);

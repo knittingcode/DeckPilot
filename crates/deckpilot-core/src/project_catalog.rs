@@ -1,10 +1,13 @@
 //! Managing the projects of a profile.
 //!
-//! Every operation works on exactly one profile. Projects are never shared:
+//! Part of the core's project-context primitive (`module-migration.md` §11:
+//! the project data model stays in the core; the Projects plugin owns the
+//! user-facing parts). The configuration app's project commands and the
+//! tools use it. Every operation works on exactly one profile. Projects are never shared:
 //! [`ProjectCatalog::copy_project_to`] is the only way to bring a project into
 //! another profile, and it creates an independent copy with a new id.
 
-use deckpilot_core::{Profile, Project, ProjectId};
+use crate::{Profile, Project, ProjectId};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -131,9 +134,9 @@ impl ProjectCatalog for Profile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use deckpilot_core::{
-        ActionInstance, ActionInstanceId, ActionParameters, OnFailure, ParameterValue, ProjectKey,
-        ResourceKey, StepCondition, Workflow,
+    use crate::{
+        ActionInstance, ActionInstanceId, ActionParameters, ActionTypeId, OnFailure,
+        ParameterValue, ProjectKey, ResourceKey, StepCondition, Workflow,
     };
 
     fn project(key: &str) -> Project {
@@ -188,7 +191,8 @@ mod tests {
         let action = ActionInstance {
             id: ActionInstanceId::new(),
             name: "Select".into(),
-            action_type: crate::actions::select_id(),
+            // The legacy id of the Projects plugin's select action.
+            action_type: ActionTypeId::new("projects.select").unwrap(),
             parameters: ActionParameters::new().with("project_id", ParameterValue::Project(shop)),
             description: String::new(),
             icon: None,

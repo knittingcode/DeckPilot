@@ -260,13 +260,26 @@ released either. 0.6.0 is the first version intended for publication.
 
 ### Changed
 
+- The GitHub, GitLab, Jira, Git, Docker, Workspace and Projects built-in
+  modules are replaced by their bundled first-party plugins
+  (`deckpilot.github`, `.gitlab`, `.jira`, `.git`, `.docker`, `.workspace`,
+  `.projects`), now their only implementation
+  (`docs/integration-modules.md`, "Moved to first-party plugins"). Existing
+  keys, actions and workflows keep their ids and are never rewritten: they
+  run again once the plugin is allowed (installed, enabled and, where it
+  asks, consented in Settings › Plugins), and until then they are
+  unavailable with the reason; there is no built-in fallback. An upgrade
+  from 0.9.x migrates as before. Settings, credentials, projects and
+  resource bindings are preserved. A build or a start without plugins has
+  no project switching: the agent refuses it with "the Projects plugin is
+  not active", and nothing is deleted.
 - In builds with plugins, Workflows and Projects are what their plugins
   make them: the Workflows screen and its navigation entry only while
   `deckpilot.workflows` is enabled, and the Projects screen, the active
   project in the status bar, its dashboard card and every project control
   (project parameters, `{project.*}` hints, "while project" conditions, a
-  workflow's project permission) only while `deckpilot.projects` is (or
-  its legacy module, before the migration). Enabling or disabling the
+  workflow's project permission) only while `deckpilot.projects` is.
+  Enabling or disabling the
   plugin shows or hides them at once. Nothing is deleted: keys that run
   workflows still run them, and graph workflows already on keys show
   read-only with the reason; Multi Actions stay the key editor's own. The
@@ -276,7 +289,7 @@ released either. 0.6.0 is the first version intended for publication.
   the new optional `statusItems` and `dashboardCards` (no protocol
   change). Git, Docker, Workspace, GitHub, GitLab, Jira and Projects no
   longer have module cards or settings pages there: their plugins' pages
-  replace them. Builds without plugins are unchanged.
+  replace them. Builds without plugins keep the Workflows screen.
 - This computer's resource bindings moved from the Projects screen to
   **Settings › Resources**, which works without the Projects plugin (the
   core's `system.open-*` launchers use them).

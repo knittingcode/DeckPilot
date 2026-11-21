@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
+use deckpilot_core::ProjectCatalog;
 use deckpilot_core::{
     ActionParameters, BindingTarget, Color, ControlBinding, DeviceLayout, ExecutionState,
     ExecutionTrigger, FaceStyle, IconFit, IconRef, KeyAppearance, KeyFace, LayoutPage,
@@ -24,7 +25,6 @@ use deckpilot_ipc::{
     AgentClient, AgentEvent, AgentPaths, AgentStatus, ClientKind, KeyMaterial, Request, Response,
 };
 use deckpilot_modules::general;
-use deckpilot_modules::projects::{ProjectCatalog, actions};
 use deckpilot_storage::ConfigStore;
 use support::{TIMEOUT, TempDir, TestAgent};
 
@@ -66,7 +66,7 @@ fn icon(profile: &mut Profile, name: &str, color: [u8; 3]) -> KeyAppearance {
     }
 }
 
-/// "Work": SHOP and CMR; key 0 next project, key 1 "A key" with a yellow
+/// "Work": SHOP and CMR; key 0 "Next project" (a log action), key 1 "A key" with a yellow
 /// icon, key 3 the "Build" workflow, key 5 opens "Folder" (key 2 there:
 /// "In folder"; no Back key, so key 0 becomes an automatic Back).
 fn work() -> Profile {
@@ -77,11 +77,8 @@ fn work() -> Profile {
             .unwrap();
     }
     profile.default_project = Some(profile.projects[0].id);
-    let next = support::registry()
-        .create_instance("Next project", actions::next_id(), &ActionParameters::new())
-        .unwrap();
-    let next_target = BindingTarget::action(next.id);
-    profile.actions.push(next);
+    // Switching projects is the Projects plugin's (WP-C6): a core key.
+    let next_target = log_action(&mut profile, "Next project");
     let a_key = log_action(&mut profile, "A key");
     let in_folder = log_action(&mut profile, "In folder");
     let look = icon(&mut profile, "Sun", [250, 200, 0]);
@@ -398,7 +395,7 @@ async fn the_mock_agent_navigates_runs_workflows_and_switches_profiles() {
     agent.tap(&device, key(0)).await;
     assert_eq!(next(&mut events, completed).await, "B key");
 
-    // And back: key 0 is the project switcher again.
+    // And back: key 0 is "Next project" again.
     agent
         .request(Request::SetActiveProfile { profile: work.id })
         .await;
@@ -407,13 +404,6 @@ async fn the_mock_agent_navigates_runs_workflows_and_switches_profiles() {
         .await;
     agent.tap(&device, key(0)).await;
     assert_eq!(next(&mut events, completed).await, "Next project");
-    agent
-        .wait_status(|s| {
-            s.active_project
-                .as_ref()
-                .is_some_and(|p| p.key.as_str() == "CMR")
-        })
-        .await;
     agent.stop().await;
 }
 

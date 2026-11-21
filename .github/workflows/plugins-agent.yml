@@ -209,8 +209,14 @@ jobs:
           # classes. The fixture builds below contain it too, and are checked
           # against an agent compiled with their pins.
           plugins/first-party/build.sh --out "$RUNNER_TEMP/bundle-release"
-          jq -c '[.plugins[] | {id, class}]' "$RUNNER_TEMP/bundle-release/bundled/pins.json" | tr -d '\r' > "$RUNNER_TEMP/release-set.json"
-          echo '[{"id":"deckpilot.github","class":"migration"},{"id":"deckpilot.gitlab","class":"migration"},{"id":"deckpilot.jira","class":"migration"},{"id":"deckpilot.notifications","class":"default"},{"id":"deckpilot.projects","class":"migration"},{"id":"deckpilot.workflows","class":"default"},{"id":"deckpilot.workspace","class":"migration"}]' | diff - "$RUNNER_TEMP/release-set.json"
+          jq -c '[.plugins[] | {id, class}] | sort_by(.id)' "$RUNNER_TEMP/bundle-release/bundled/pins.json" | tr -d '\r' > "$RUNNER_TEMP/release-set.json"
+          # What bundled.json lists (each directory's manifest id is
+          # `deckpilot.<directory>`, checked here too), as the built pins must say.
+          for path in $(jq -r '.plugins[].path' plugins/first-party/bundled.json); do
+            id=$(jq -r .id "plugins/first-party/$path/manifest.json")
+            [ "$id" = "deckpilot.$path" ] || { echo "plugins/first-party/$path has id $id"; exit 1; }
+          done
+          jq -c '[.plugins[] | {id: ("deckpilot." + .path), class}] | sort_by(.id)' plugins/first-party/bundled.json | tr -d '\r' | diff - "$RUNNER_TEMP/release-set.json"
           for run in a b; do
             plugins/first-party/build.sh --test-fixtures --out "$RUNNER_TEMP/bundle-$run" --target-dir "$RUNNER_TEMP/first-party-$run"
           done

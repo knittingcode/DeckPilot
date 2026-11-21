@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use deckpilot_core::{
@@ -102,8 +102,10 @@ pub struct Artifacts {
 /// The host and the plugin's module, built from `plugins/runtime` (or
 /// taken from `DECKPILOT_E2E_PLUGIN_HOST` and `DECKPILOT_E2E_WASM_DIR`).
 pub fn artifacts(plugin: FirstParty) -> &'static Artifacts {
-    static ARTIFACTS: OnceLock<Artifacts> = OnceLock::new();
-    ARTIFACTS.get_or_init(|| {
+    static ARTIFACTS: Mutex<BTreeMap<&'static str, &'static Artifacts>> =
+        Mutex::new(BTreeMap::new());
+    let mut built = ARTIFACTS.lock().unwrap_or_else(PoisonError::into_inner);
+    built.entry(plugin.krate).or_insert_with(|| {
         let file = format!("{}.wasm", plugin.krate.replace('-', "_"));
         let wasm_dir = std::env::var_os("DECKPILOT_E2E_WASM_DIR")
             .map(PathBuf::from)
@@ -138,10 +140,10 @@ pub fn artifacts(plugin: FirstParty) -> &'static Artifacts {
             },
             PathBuf::from,
         );
-        Artifacts {
+        Box::leak(Box::new(Artifacts {
             host,
             module: wasm_dir.join(file),
-        }
+        }))
     })
 }
 
@@ -158,7 +160,20 @@ pub struct Env {
     /// `git` first on its `PATH`).
     #[allow(clippy::struct_field_names)] // `env.extra_env`, as it reads.
     pub extra_env: Vec<(String, std::ffi::OsString)>,
+    /// Bundled next to the plugin, as `default`-class plugins
+    /// ([`Env::with_projects`]).
+    pub companions: Vec<FirstParty>,
 }
+
+/// The Projects plugin: the only project context provider since the
+/// built-in `projects` module is gone (WP-C6). Plugins that read the active
+/// project's roles (git, docker, workspace) need it enabled.
+pub const PROJECTS: FirstParty = FirstParty {
+    id: "deckpilot.projects",
+    dir: "projects",
+    krate: "deckpilot-projects",
+    released: "migration",
+};
 
 impl Env {
     /// A fresh install with `profile` active (and `project` its active
@@ -192,9 +207,21 @@ impl Env {
             key,
             plugin,
             extra_env: Vec::new(),
+            companions: Vec::new(),
         };
         env.stage(class);
         env
+    }
+
+    /// The same with the Projects plugin bundled too (class `default`, so
+    /// it is seeded; [`Env::start`] enables it with the user's consent), as
+    /// an installed app bundles it: the active project's roles resolve only
+    /// with it.
+    #[must_use]
+    pub fn with_projects(mut self, class: BundleClass) -> Self {
+        self.companions.push(PROJECTS);
+        self.stage(class);
+        self
     }
 
     pub fn bundled(&self) -> PathBuf {
@@ -254,7 +281,23 @@ impl Env {
     /// the icon, the locales and the module, and the pins the agent "was
     /// compiled with".
     fn stage(&self, class: BundleClass) {
-        let plugin = self.plugin;
+        let mut pinned = Vec::new();
+        for (plugin, class) in std::iter::once((self.plugin, class))
+            .chain(self.companions.iter().map(|c| (*c, BundleClass::Default)))
+        {
+            pinned.push(self.stage_one(plugin, class));
+        }
+        let pins = Pins::compute(&self.bundled(), &pinned).unwrap();
+        std::fs::write(self.bundled().join("pins.json"), pins.to_json_pretty()).unwrap();
+        std::fs::write(self.pins_file(), pins.to_json_pretty()).unwrap();
+    }
+
+    /// `bundled/<id>/` of `plugin`, and its pin.
+    fn stage_one(
+        &self,
+        plugin: FirstParty,
+        class: BundleClass,
+    ) -> (PluginId, semver::Version, BundleClass) {
         plugin.assert_released();
         let dir = self.bundled().join(plugin.id);
         let _ = std::fs::remove_dir_all(&dir);
@@ -281,13 +324,7 @@ impl Env {
         }
         std::fs::copy(&artifacts(plugin).module, dir.join("plugin.wasm")).unwrap();
         let version = semver::Version::parse(manifest["version"].as_str().unwrap()).unwrap();
-        let pins = Pins::compute(
-            &self.bundled(),
-            &[(PluginId::parse(plugin.id).unwrap(), version, class)],
-        )
-        .unwrap();
-        std::fs::write(self.bundled().join("pins.json"), pins.to_json_pretty()).unwrap();
-        std::fs::write(self.pins_file(), pins.to_json_pretty()).unwrap();
+        (PluginId::parse(plugin.id).unwrap(), version, class)
     }
 
     /// Starts the agent and unlocks it.
@@ -335,6 +372,9 @@ impl Env {
                 key: KeyMaterial::new(self.key.to_hex()),
             })
             .await;
+        for companion in &self.companions {
+            agent.enable_plugin(companion.id).await;
+        }
         agent
     }
 }
@@ -472,6 +512,43 @@ impl Agent {
         .await;
         self.wait_state(PluginState::Enabled).await;
         consent
+    }
+
+    /// Enables another bundled plugin (`Env::with_projects`) once it is
+    /// seeded, with the user's consent to every permission it declares.
+    pub async fn enable_plugin(&self, id: &str) {
+        let deadline = Instant::now() + SETTLE;
+        let details = loop {
+            if let Ok(Response::Plugin { plugin }) =
+                self.request(Request::GetPlugin { plugin: id.into() }).await
+            {
+                break *plugin;
+            }
+            assert!(Instant::now() < deadline, "{id} not seeded\n{}", self.log());
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        };
+        if details.summary.state != PluginState::Enabled {
+            self.ok(Request::EnablePlugin {
+                plugin: id.into(),
+                consent: details.permissions.iter().map(|p| p.key.clone()).collect(),
+            })
+            .await;
+        }
+        loop {
+            let enabled = matches!(
+                self.ok(Request::GetPlugin { plugin: id.into() }).await,
+                Response::Plugin { plugin } if plugin.summary.state == PluginState::Enabled
+            );
+            if enabled {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{id} not enabled\n{}",
+                self.log()
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 
     /// Enables the plugin with the user's consent to every permission it

@@ -1,0 +1,620 @@
+{
+  "actionTypes": [
+    {
+      "category": "GitHub",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "The account the token belongs to; also checks that the token works.",
+      "id": "github.current-user",
+      "name": "Current GitHub user",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "user",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "login",
+            "kind": "text",
+            "label": "Login"
+          },
+          {
+            "always": false,
+            "key": "name",
+            "kind": "text",
+            "label": "Name"
+          },
+          {
+            "always": true,
+            "key": "url",
+            "kind": "url",
+            "label": "Profile"
+          },
+          {
+            "always": false,
+            "key": "rateLimitRemaining",
+            "kind": "integer",
+            "label": "Requests left"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 130000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "The name of a stored credential with a GitHub token. Empty: the module's (Settings › Modules › GitHub). Never the token itself.",
+          "key": "credential",
+          "kind": {
+            "type": "credential"
+          },
+          "label": "Token credential",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "GitHub",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "A repository's default branch, visibility, counts and when it was last pushed.",
+      "id": "github.repository",
+      "name": "GitHub repository",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "book-open",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "fullName",
+            "kind": "text",
+            "label": "Repository"
+          },
+          {
+            "always": false,
+            "key": "description",
+            "kind": "text",
+            "label": "Description",
+            "sensitive": true
+          },
+          {
+            "always": true,
+            "key": "defaultBranch",
+            "kind": "text",
+            "label": "Default branch"
+          },
+          {
+            "always": true,
+            "key": "private",
+            "kind": "boolean",
+            "label": "Private"
+          },
+          {
+            "always": true,
+            "key": "archived",
+            "kind": "boolean",
+            "label": "Archived"
+          },
+          {
+            "always": true,
+            "key": "openIssues",
+            "kind": "integer",
+            "label": "Open issues and pull requests"
+          },
+          {
+            "always": true,
+            "key": "stars",
+            "kind": "integer",
+            "label": "Stars"
+          },
+          {
+            "always": true,
+            "key": "forks",
+            "kind": "integer",
+            "label": "Forks"
+          },
+          {
+            "always": true,
+            "key": "url",
+            "kind": "url",
+            "label": "Page"
+          },
+          {
+            "always": false,
+            "key": "pushedAt",
+            "kind": "text",
+            "label": "Last push"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 130000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "owner/name, e.g. octo-org/website.",
+          "key": "repository",
+          "kind": {
+            "max_length": 140,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Repository",
+          "required": true
+        },
+        {
+          "description": "The name of a stored credential with a GitHub token. Empty: the module's (Settings › Modules › GitHub). Never the token itself.",
+          "key": "credential",
+          "kind": {
+            "type": "credential"
+          },
+          "label": "Token credential",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "GitHub",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Counts and lists open pull requests of a repository, or yours across repositories.",
+      "id": "github.pull-requests",
+      "name": "Open pull requests",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "git-branch",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "count",
+            "kind": "integer",
+            "label": "Open pull requests"
+          },
+          {
+            "always": true,
+            "key": "listed",
+            "kind": "integer",
+            "label": "Listed"
+          },
+          {
+            "always": true,
+            "key": "items",
+            "kind": "text",
+            "label": "Pull requests",
+            "sensitive": true
+          },
+          {
+            "always": true,
+            "key": "truncated",
+            "kind": "boolean",
+            "label": "List truncated"
+          },
+          {
+            "always": false,
+            "key": "firstUrl",
+            "kind": "url",
+            "label": "First pull request"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 130000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "owner/name, e.g. octo-org/website. Empty: every repository.",
+          "key": "repository",
+          "kind": {
+            "max_length": 140,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Repository",
+          "required": false
+        },
+        {
+          "default": {
+            "type": "choice",
+            "value": "all"
+          },
+          "description": "all: every open pull request of the repository; author-me: opened by you; review-requested: waiting for your review (also of your teams).",
+          "key": "filter",
+          "kind": {
+            "options": ["all", "author-me", "review-requested"],
+            "type": "choice"
+          },
+          "label": "Which",
+          "required": true
+        },
+        {
+          "default": {
+            "type": "integer",
+            "value": 20
+          },
+          "description": "At most this many pull requests in the list; the count is always complete.",
+          "key": "limit",
+          "kind": {
+            "max": 100,
+            "min": 1,
+            "type": "integer"
+          },
+          "label": "Listed",
+          "required": true
+        },
+        {
+          "description": "The name of a stored credential with a GitHub token. Empty: the module's (Settings › Modules › GitHub). Never the token itself.",
+          "key": "credential",
+          "kind": {
+            "type": "credential"
+          },
+          "label": "Token credential",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "GitHub",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Open pull requests waiting for your review (directly or through a team), in every repository or one.",
+      "id": "github.review-requests",
+      "name": "Review requests",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "search",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "count",
+            "kind": "integer",
+            "label": "Open pull requests"
+          },
+          {
+            "always": true,
+            "key": "listed",
+            "kind": "integer",
+            "label": "Listed"
+          },
+          {
+            "always": true,
+            "key": "items",
+            "kind": "text",
+            "label": "Pull requests",
+            "sensitive": true
+          },
+          {
+            "always": true,
+            "key": "truncated",
+            "kind": "boolean",
+            "label": "List truncated"
+          },
+          {
+            "always": false,
+            "key": "firstUrl",
+            "kind": "url",
+            "label": "First pull request"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 130000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "owner/name, e.g. octo-org/website. Empty: every repository.",
+          "key": "repository",
+          "kind": {
+            "max_length": 140,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Repository",
+          "required": false
+        },
+        {
+          "default": {
+            "type": "integer",
+            "value": 20
+          },
+          "description": "At most this many pull requests in the list; the count is always complete.",
+          "key": "limit",
+          "kind": {
+            "max": 100,
+            "min": 1,
+            "type": "integer"
+          },
+          "label": "Listed",
+          "required": true
+        },
+        {
+          "description": "The name of a stored credential with a GitHub token. Empty: the module's (Settings › Modules › GitHub). Never the token itself.",
+          "key": "credential",
+          "kind": {
+            "type": "credential"
+          },
+          "label": "Token credential",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "GitHub",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "The checks and commit statuses of a branch, tag, commit or pull request: overall ok, failing or pending, and counts.",
+      "id": "github.checks",
+      "name": "Checks",
+      "node": {
+        "cancellable": true,
+        "changesContext": false,
+        "effect": "readOnly",
+        "icon": "list-checks",
+        "idempotent": true,
+        "outputs": [
+          {
+            "always": true,
+            "key": "state",
+            "kind": "text",
+            "label": "State (ok, failing, pending, none)"
+          },
+          {
+            "always": true,
+            "key": "sha",
+            "kind": "text",
+            "label": "Commit"
+          },
+          {
+            "always": true,
+            "key": "total",
+            "kind": "integer",
+            "label": "Checks"
+          },
+          {
+            "always": true,
+            "key": "passed",
+            "kind": "integer",
+            "label": "Passed"
+          },
+          {
+            "always": true,
+            "key": "failed",
+            "kind": "integer",
+            "label": "Failed"
+          },
+          {
+            "always": true,
+            "key": "pending",
+            "kind": "integer",
+            "label": "Pending"
+          },
+          {
+            "always": true,
+            "key": "failing",
+            "kind": "text",
+            "label": "Failing checks"
+          },
+          {
+            "always": true,
+            "key": "truncated",
+            "kind": "boolean",
+            "label": "Not all read"
+          },
+          {
+            "always": true,
+            "key": "url",
+            "kind": "url",
+            "label": "Page"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 130000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "owner/name, e.g. octo-org/website.",
+          "key": "repository",
+          "kind": {
+            "max_length": 140,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Repository",
+          "required": true
+        },
+        {
+          "description": "Used when no pull request is given.",
+          "key": "ref",
+          "kind": {
+            "max_length": 250,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Branch, tag or commit",
+          "required": false
+        },
+        {
+          "description": "Its latest commit is checked.",
+          "key": "pullRequest",
+          "kind": {
+            "min": 1,
+            "type": "integer"
+          },
+          "label": "Pull request",
+          "required": false
+        },
+        {
+          "description": "The name of a stored credential with a GitHub token. Empty: the module's (Settings › Modules › GitHub). Never the token itself.",
+          "key": "credential",
+          "kind": {
+            "type": "credential"
+          },
+          "label": "Token credential",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    },
+    {
+      "category": "GitHub",
+      "controls": {
+        "key": ["press", "release", "click", "double-click", "long-press"]
+      },
+      "description": "Opens a repository, a pull request or a GitHub page in the browser.",
+      "id": "github.open",
+      "name": "Open on GitHub",
+      "node": {
+        "cancellable": false,
+        "changesContext": false,
+        "effect": "opens",
+        "icon": "link",
+        "idempotent": false,
+        "outputs": [
+          {
+            "always": true,
+            "key": "url",
+            "kind": "url",
+            "label": "Opened"
+          }
+        ],
+        "retrySafe": true,
+        "timeoutMs": 15000,
+        "version": 1
+      },
+      "parameters": [
+        {
+          "description": "An https page on the configured GitHub, e.g. a pull request's URL from an earlier node. Empty: the repository below.",
+          "key": "url",
+          "kind": {
+            "max_length": 2048,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Page",
+          "required": false
+        },
+        {
+          "description": "owner/name, e.g. octo-org/website. Empty: every repository.",
+          "key": "repository",
+          "kind": {
+            "max_length": 140,
+            "multiline": false,
+            "type": "text"
+          },
+          "label": "Repository",
+          "required": false
+        },
+        {
+          "description": "Opens this pull request of the repository.",
+          "key": "pullRequest",
+          "kind": {
+            "min": 1,
+            "type": "integer"
+          },
+          "label": "Pull request",
+          "required": false
+        }
+      ],
+      "requiresProject": false
+    }
+  ],
+  "manifest": {
+    "capabilities": ["network", "credentials", "open-external"],
+    "config": [
+      {
+        "default": {
+          "type": "text",
+          "value": "https://api.github.com"
+        },
+        "description": "https://api.github.com, or https://<host>/api/v3 for GitHub Enterprise Server. Only for this computer.",
+        "key": "apiUrl",
+        "kind": {
+          "max_length": 512,
+          "multiline": false,
+          "type": "text"
+        },
+        "label": "API URL",
+        "required": true
+      },
+      {
+        "default": {
+          "type": "text",
+          "value": "github.token"
+        },
+        "description": "The name of a credential stored on this computer (Settings › HTTP › Credentials) that holds a GitHub token. Never the token itself.",
+        "key": "credential",
+        "kind": {
+          "type": "credential"
+        },
+        "label": "Token credential",
+        "required": true
+      },
+      {
+        "default": {
+          "type": "integer",
+          "value": 20
+        },
+        "description": "For all requests of one action.",
+        "key": "timeoutSeconds",
+        "kind": {
+          "max": 120,
+          "min": 1,
+          "type": "integer"
+        },
+        "label": "Time limit (s)",
+        "required": true
+      },
+      {
+        "default": {
+          "type": "boolean",
+          "value": false
+        },
+        "description": "For GitHub Enterprise Server inside a company network: lets requests to the API host reach private addresses. Off by default; only for this computer.",
+        "key": "allowPrivateHost",
+        "kind": {
+          "type": "boolean"
+        },
+        "label": "API host may be on a private network",
+        "required": true
+      }
+    ],
+    "dependencies": [],
+    "description": "Pull requests, review requests, checks and repositories from GitHub or GitHub Enterprise. Read-only.",
+    "enabledByDefault": true,
+    "id": "github",
+    "name": "GitHub",
+    "pages": [],
+    "platforms": [],
+    "portability": {
+      "settings": {
+        "allowPrivateHost": "machineSpecific",
+        "apiUrl": "machineSpecific",
+        "credential": "portable",
+        "timeoutSeconds": "portable"
+      },
+      "version": 1
+    },
+    "version": "0.9.0",
+    "windows": []
+  }
+}

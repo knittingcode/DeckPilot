@@ -235,7 +235,8 @@ fn env(name: &str, f: &Fixture) -> Env {
         BundleClass::Default,
         Some((&f.profile, Some(f.project))),
         Some(&f.machine),
-    );
+    )
+    .with_projects(BundleClass::Default);
     // The fake first on the agent's own `PATH`: the host runs the user's
     // `git` from there (the executable is never the plugin's).
     let path = std::env::var_os("PATH").unwrap_or_default();

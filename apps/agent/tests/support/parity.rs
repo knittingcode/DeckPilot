@@ -1,9 +1,14 @@
-//! What the parity tests of the first-party plugins for a server the user
-//! enters share (`plugins_gitlab.rs`, `plugins_jira.rs`): the plugin built
+//! What the regression tests of the first-party plugins that replaced the
+//! removed built-in modules share (`plugins_github.rs`, `plugins_gitlab.rs`,
+//! `plugins_jira.rs`, and `plugins_cutover_servers.rs`): the plugin built
 //! to wasm and staged as an installed application ships it, a real agent
 //! process with the real sandboxed host, canned answers for the plugin's
-//! HTTP, a stand-in server on 127.0.0.1 for the built-in module, and the
-//! comparison of what each side answered.
+//! HTTP, the expected outcome of each scenario, and the check of a
+//! plugin's action definitions against the frozen contracts of the
+//! built-ins (`crates/deckpilot-modules/legacy`). The plugins were proven
+//! to answer as the built-ins did before those were removed
+//! (`docs/marketplace/module-migration.md` §11, D2); the expectations are
+//! those answers.
 //!
 //! Not part of `support/mod.rs`: only those tests include it (`#[path]`),
 //! since it needs the agent's `plugins` feature.
@@ -11,18 +16,14 @@
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use deckpilot_core::{
-    ActionParameters, ActionStatus, ActionTypeId, CredentialId, ExecutionContext, MachineConfig,
-    MemoryCredentials, ModuleRegistry, Os, ParameterValue, Profile, Secret,
-};
-use deckpilot_ipc::plugins::{PluginActionOutcome, PluginSettings};
+use deckpilot_core::ActionType;
+use deckpilot_core::alias::{self, ActionAlias, ParamRule};
+use deckpilot_ipc::plugins::{PluginActionInfo, PluginActionOutcome, PluginSettings};
 use deckpilot_ipc::{
     AgentClient, AgentPaths, ClientError, ClientKind, KeyMaterial, Request, Response,
 };
@@ -129,7 +130,7 @@ pub fn artifacts(plugin: &Plugin) -> &'static Artifacts {
 
 // ----------------------------------------------------------- the answers
 
-/// One answer of a stand-in server.
+/// One canned answer.
 #[derive(Debug, Clone)]
 pub struct Answer {
     pub status: u16,
@@ -195,7 +196,7 @@ pub fn query(target: &str) -> BTreeMap<String, String> {
         .unwrap_or_default()
 }
 
-/// The stand-in server's data: the answer to `GET <base><target>`, where
+/// The canned answers' data: the answer to `GET <base><target>`, where
 /// `base` is the API's address as the asking side knows it (for links to
 /// further pages) and `target` the path below it, with the query.
 pub type Answers = fn(base: &str, target: &str) -> Answer;
@@ -290,245 +291,167 @@ pub fn from_plugin(outcome: PluginActionOutcome) -> Outcome {
     }
 }
 
-impl Outcome {
-    /// With `from` replaced by `to` in the message and every output: the
-    /// built-in's own address (127.0.0.1) as the plugin's server.
-    #[must_use]
-    pub fn replacing(mut self, from: &str, to: &str) -> Self {
-        self.message = self.message.replace(from, to);
-        for value in self.data.values_mut() {
-            *value = value.replace(from, to);
+/// What a scenario is expected to end in.
+#[derive(Debug, Clone, Copy)]
+pub enum Expect {
+    /// Succeeds with this message and (among others) these outputs.
+    Ok(&'static str, &'static [(&'static str, &'static str)]),
+    /// Fails with this code, with a message that explains it.
+    Failed(&'static str),
+}
+
+impl Expect {
+    pub fn ok(self) -> bool {
+        matches!(self, Self::Ok(..))
+    }
+
+    pub fn code(self) -> Option<&'static str> {
+        match self {
+            Self::Ok(..) => None,
+            Self::Failed(code) => Some(code),
         }
-        self
     }
 }
 
-/// Compares what both sides answered. A failure listed in `different`
-/// (by scenario name, with the reason) may have another message; its code
-/// is the same.
-pub fn compare(
+/// Checks what the plugin answered for the scenario `name` against
+/// `expect`, where every `(from, to)` of `vars` replaces `from` in the
+/// expected message and outputs (`{web}`: the server's web address).
+/// Adds what does not match to `problems`.
+pub fn check(
     name: &str,
-    builtin: &Outcome,
-    plugin: &Outcome,
-    different: &[(&str, &str)],
+    outcome: &Outcome,
+    expect: Expect,
+    vars: &[(&str, &str)],
     problems: &mut Vec<String>,
 ) {
-    let mut expected = builtin.clone();
-    if !builtin.ok && different.iter().any(|(n, _)| *n == name) {
-        expected.message.clone_from(&plugin.message);
-    }
-    // The table of the report: what each side answered.
+    let fill = |text: &str| {
+        vars.iter()
+            .fold(text.to_owned(), |text, (from, to)| text.replace(from, to))
+    };
+    // The table of the report: what the plugin answered.
     eprintln!(
         "{name}: {}",
-        if plugin.ok {
-            format!("ok, {} outputs", plugin.data.len())
+        if outcome.ok {
+            format!("ok, {} outputs", outcome.data.len())
         } else {
-            format!("failed, {}", plugin.code.as_deref().unwrap_or("?"))
+            format!("failed, {}", outcome.code.as_deref().unwrap_or("?"))
         }
     );
-    if expected != *plugin {
+    let mut wrong = Vec::new();
+    match expect {
+        Expect::Ok(message, outputs) => {
+            if !outcome.ok {
+                wrong.push("not ok".to_owned());
+            }
+            if outcome.message != fill(message) {
+                wrong.push(format!("the message is not {:?}", fill(message)));
+            }
+            for (key, value) in outputs {
+                let value = fill(value);
+                if outcome.data.get(*key) != Some(&value) {
+                    wrong.push(format!("{key} is not {value:?}"));
+                }
+            }
+        }
+        Expect::Failed(code) => {
+            if outcome.ok || outcome.code.as_deref() != Some(code) {
+                wrong.push(format!("not failed with {code}"));
+            }
+            if outcome.message.trim().is_empty() {
+                wrong.push("no message".to_owned());
+            }
+        }
+    }
+    if !wrong.is_empty() {
         problems.push(format!(
-            "{name}:\n  built-in: {builtin:?}\n  plugin:   {plugin:?}"
+            "{name}: {}
+  plugin: {outcome:?}",
+            wrong.join("; ")
         ));
     }
 }
 
-// ------------------------------------------------------------- built-in
-
-/// A stand-in server on 127.0.0.1 for the built-in module: `answers`
-/// below `prefix` (the API's path), with links on its own address.
-pub struct Server {
-    port: u16,
-    prefix: String,
-    stop: Arc<AtomicBool>,
-    /// `target<TAB>credential header value` of every request.
-    pub seen: Arc<Mutex<Vec<String>>>,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
-
-impl Server {
-    /// `credential_header`: the request header that carries the secret
-    /// (`authorization`, `private-token`), recorded with each request.
-    pub fn start(prefix: &str, answers: Answers, credential_header: &'static str) -> Self {
-        let listener = support::http::bind_local();
-        let port = listener.local_addr().unwrap().port();
-        listener.set_nonblocking(true).unwrap();
-        let stop = Arc::new(AtomicBool::new(false));
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let thread = {
-            let (stop, seen, prefix) = (stop.clone(), seen.clone(), prefix.to_owned());
-            std::thread::spawn(move || {
-                let base = format!("http://127.0.0.1:{port}{prefix}");
-                while !stop.load(Ordering::SeqCst) {
-                    match listener.accept() {
-                        Ok((stream, _)) => {
-                            let _ = stream.set_nonblocking(false);
-                            serve(stream, &base, &prefix, answers, credential_header, &seen);
-                        }
-                        Err(_) => std::thread::sleep(Duration::from_millis(2)),
-                    }
-                }
-            })
-        };
-        Self {
-            port,
-            prefix: prefix.to_owned(),
-            stop,
-            seen,
-            thread: Some(thread),
-        }
-    }
-
-    /// `http://127.0.0.1:<port>`.
-    pub fn origin(&self) -> String {
-        format!("http://127.0.0.1:{}", self.port)
-    }
-
-    /// The API's address: the origin and the prefix.
-    pub fn base(&self) -> String {
-        format!("{}{}", self.origin(), self.prefix)
-    }
-
-    pub fn seen(&self) -> Vec<String> {
-        self.seen.lock().unwrap().clone()
-    }
-}
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-    }
-}
-
-fn serve(
-    stream: std::net::TcpStream,
-    base: &str,
-    prefix: &str,
-    answers: Answers,
-    credential_header: &str,
-    seen: &Mutex<Vec<String>>,
-) {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    if reader.read_line(&mut line).is_err() {
-        return;
-    }
-    let full = line.split(' ').nth(1).unwrap_or("/").to_owned();
-    let mut credential = String::new();
-    loop {
-        let mut header = String::new();
-        if reader.read_line(&mut header).unwrap_or(0) == 0 || header == "\r\n" {
-            break;
-        }
-        if let Some((name, value)) = header.split_once(':')
-            && name.eq_ignore_ascii_case(credential_header)
-        {
-            value.trim().clone_into(&mut credential);
-        }
-    }
-    let answer = if let Some(target) = full.strip_prefix(prefix) {
-        seen.lock().unwrap().push(format!("{target}\t{credential}"));
-        answers(base, target)
-    } else {
-        // Outside the API: nothing a module should ask for.
-        seen.lock()
-            .unwrap()
-            .push(format!("OUTSIDE {full}\t{credential}"));
-        json_answer(404, &json!({"message": "outside the API"}))
-    };
-    let mut stream = reader.into_inner();
-    let mut head = format!("HTTP/1.1 {} X\r\n", answer.status);
-    for (name, value) in &answer.headers {
-        let _ = std::fmt::Write::write_fmt(&mut head, format_args!("{name}: {value}\r\n"));
-    }
-    let _ = std::fmt::Write::write_fmt(
-        &mut head,
-        format_args!(
-            "Content-Length: {}\r\nConnection: close\r\n\r\n",
-            answer.body.len()
-        ),
-    );
-    let _ = stream.write_all(head.as_bytes());
-    let _ = stream.write_all(answer.body.as_bytes());
-    let _ = stream.flush();
-}
-
-/// Action parameters from JSON: `choices` are the keys of choice
-/// parameters, `booleans` come from JSON booleans.
-pub fn parameters(params: &Value, choices: &[&str]) -> ActionParameters {
-    let mut out = ActionParameters::new();
-    for (key, value) in params.as_object().unwrap() {
-        let value = match value {
-            Value::String(s) if choices.contains(&key.as_str()) => {
-                ParameterValue::Choice(s.clone())
-            }
-            Value::String(s) => ParameterValue::Text(s.clone()),
-            Value::Number(n) => ParameterValue::Integer(n.as_i64().unwrap()),
-            Value::Bool(b) => ParameterValue::Boolean(*b),
-            other => panic!("{other:?}"),
-        };
-        out = out.with(key.clone(), value);
-    }
-    out
-}
-
-/// Runs a built-in action as the agent does (normalized, through the
-/// registry), with `secret` stored as the credential `credential`.
-pub fn run_builtin(
-    modules: &ModuleRegistry,
-    action_type: &str,
-    params: &ActionParameters,
-    credential: &str,
-    secret: Option<&str>,
-) -> Outcome {
-    let registry = modules.action_registry();
-    let id = ActionTypeId::new(action_type).unwrap();
-    let normalized = registry.normalize(&id, params).unwrap();
-    let profile = Profile::new("Parity");
-    let machine = MachineConfig::new(Os::current());
-    let mut credentials = MemoryCredentials::new();
-    if let Some(secret) = secret {
-        credentials = credentials.with(CredentialId::new(credential).unwrap(), Secret::new(secret));
-    }
-    let context = ExecutionContext::new(&profile, None, &machine).with_credentials(&credentials);
-    let result = registry.dispatch(&id, &normalized, &context);
-    Outcome {
-        ok: result.status == ActionStatus::Succeeded,
-        message: result.message,
-        // A failure's data (`retryAfterSeconds` of `rate-limited`) is not
-        // an output; plugin failures carry none.
-        data: if result.status == ActionStatus::Succeeded {
-            result.data
-        } else {
-            BTreeMap::new()
-        },
-        code: result.code,
-    }
-}
-
-/// The built-in blocks on its own HTTP runtime: off this test's.
-pub fn blocking<T>(run: impl FnOnce() -> T) -> T {
-    tokio::task::block_in_place(run)
-}
-
-/// The paths of requests (`url-or-target<TAB>…` lines), without `base`
-/// and the query, repeats in a row counted once: the same requests but
-/// for the page size.
-pub fn paths(lines: &[String], base: &str) -> Vec<String> {
-    let mut paths: Vec<String> = lines
-        .iter()
-        .map(|l| {
-            let target = l.split('\t').next().unwrap();
-            let target = target.strip_prefix(base).unwrap_or(target);
-            target.split('?').next().unwrap().to_owned()
+/// The requests of `sent` (`url<TAB>credential` lines) that none of the
+/// canned `routes` answers: what the plugin asked for beyond what its
+/// scenarios are known to ask for.
+pub fn unrouted(sent: &[String], routes: &[Value]) -> Vec<String> {
+    sent.iter()
+        .filter(|line| {
+            let url = line.split('\t').next().unwrap_or_default();
+            !routes
+                .iter()
+                .any(|r| r["url"].as_str().is_some_and(|r| url.starts_with(r)))
         })
-        .collect();
-    paths.dedup();
-    paths
+        .cloned()
+        .collect()
+}
+
+// ------------------------------------------------------------ contracts
+
+/// The action types of a removed built-in as 0.9.0 declared them: the
+/// `actionTypes` of its frozen contract (`crates/deckpilot-modules/legacy`,
+/// written from the crate before it was removed).
+pub fn frozen_action_types(contract: &str) -> Vec<ActionType> {
+    let mut frozen: Value = serde_json::from_str(contract).expect("a frozen contract parses");
+    serde_json::from_value(frozen["actionTypes"].take()).expect("its action types parse")
+}
+
+/// The alias the cut-over adds for `<module>.<action>`
+/// (`crates/deckpilot-modules/tests/contracts.rs`).
+pub fn alias(module: &'static str, plugin: &'static str, action: &str) -> ActionAlias {
+    let legacy: &'static str = Box::leak(format!("{module}.{action}").into_boxed_str());
+    let target: &'static str = Box::leak(format!("{plugin}.{action}").into_boxed_str());
+    ActionAlias {
+        legacy,
+        target,
+        module,
+        plugin,
+        since: "0.6.0",
+        params: if action == "open" {
+            &[]
+        } else {
+            &[ParamRule::DropIfDefault("credential")]
+        },
+    }
+}
+
+/// §5.3's rules for the plugin's action definitions (as the agent's engine
+/// registers them) against the frozen built-in's, the check the registry
+/// makes before it routes a legacy type to the plugin; and every action of
+/// the built-in has its plugin action.
+pub fn contract_problems(
+    module: &'static str,
+    plugin: &'static str,
+    contract: &str,
+    actions: &[PluginActionInfo],
+) -> Vec<String> {
+    let builtins = frozen_action_types(contract);
+    let mut problems = Vec::new();
+    for action in actions {
+        let Some(definition) = action.definition.as_ref() else {
+            problems.push(format!("{} does not convert", action.action));
+            continue;
+        };
+        let alias = alias(module, plugin, &action.action);
+        let Some(builtin) = builtins.iter().find(|t| t.id == alias.legacy_id()) else {
+            problems.push(format!("{} is not a built-in action", alias.legacy));
+            continue;
+        };
+        for problem in alias::incompatibilities(&alias, builtin, definition) {
+            problems.push(format!("{}: {problem}", alias.legacy));
+        }
+    }
+    for builtin in &builtins {
+        let action = builtin
+            .id
+            .as_str()
+            .strip_prefix(&format!("{module}."))
+            .unwrap_or_default();
+        if !actions.iter().any(|a| a.action == action) {
+            problems.push(format!("{} has no plugin action", builtin.id.as_str()));
+        }
+    }
+    problems
 }
 
 // ---------------------------------------------------------------- pace

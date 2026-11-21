@@ -14,7 +14,6 @@ import { CAPABILITIES } from "@/lib/capabilities"
 import { useAppContext } from "@/lib/app-context"
 import { osLabel } from "@/lib/format"
 import { type ModuleFilter, moduleMatches, moduleToggle } from "@/lib/modules"
-import { isExtractedModule } from "@/lib/plugin-features"
 import type { ModuleInfo } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { moduleIcon, moduleSettingsPages } from "@/modules"
@@ -36,9 +35,7 @@ const FILTERS: { value: ModuleFilter; label: TranslationKey }[] = [
 export function ModulesSettings() {
   const { t } = useTranslation()
   const format = useFormat()
-  const { modules: all, setModules, refresh } = useAppContext()
-  // Modules whose UI moved to a plugin are managed there (Settings › Plugins).
-  const modules = all.filter((m) => !isExtractedModule(m.id))
+  const { modules, setModules, refresh } = useAppContext()
   const [query, setQuery] = useState("")
   const [filter, setFilter] = useState<ModuleFilter>("all")
   const [pending, setPending] = useState<string | null>(null)
@@ -75,7 +72,7 @@ export function ModulesSettings() {
   const shown = modules
     .filter((m) => moduleMatches(m, filter, query))
     .sort((a, b) => format.compare(a.name, b.name))
-  const withSettings = new Set(moduleSettingsPages(all).map((page) => page.module.id))
+  const withSettings = new Set(moduleSettingsPages(modules).map((page) => page.module.id))
 
   return (
     <>
@@ -128,7 +125,7 @@ export function ModulesSettings() {
               <ModuleItem
                 key={module.id}
                 module={module}
-                modules={all}
+                modules={modules}
                 busy={pending !== null}
                 hasSettings={withSettings.has(module.id)}
                 onToggle={(enabled) => {

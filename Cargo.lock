@@ -1103,6 +1103,7 @@ dependencies = [
  "deckpilot-ipc",
  "deckpilot-keystore",
  "deckpilot-modules",
+ "deckpilot-plugin-bundled",
  "deckpilot-plugin-manifest",
  "deckpilot-plugin-registry",
  "deckpilot-plugin-store",
@@ -1215,49 +1216,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "deckpilot-module-docker"
-version = "0.9.0"
-dependencies = [
- "deckpilot-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "deckpilot-module-general"
 version = "0.9.0"
 dependencies = [
  "deckpilot-core",
-]
-
-[[package]]
-name = "deckpilot-module-git"
-version = "0.9.0"
-dependencies = [
- "deckpilot-core",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "deckpilot-module-github"
-version = "0.9.0"
-dependencies = [
- "deckpilot-core",
- "deckpilot-net",
- "reqwest",
- "serde_json",
- "url",
-]
-
-[[package]]
-name = "deckpilot-module-gitlab"
-version = "0.9.0"
-dependencies = [
- "deckpilot-core",
- "deckpilot-net",
- "reqwest",
- "serde_json",
- "url",
 ]
 
 [[package]]
@@ -1271,31 +1233,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "deckpilot-module-jira"
-version = "0.9.0"
-dependencies = [
- "base64 0.23.1",
- "deckpilot-core",
- "deckpilot-net",
- "reqwest",
- "serde_json",
- "url",
-]
-
-[[package]]
 name = "deckpilot-module-notifications"
 version = "0.9.0"
 dependencies = [
  "deckpilot-core",
-]
-
-[[package]]
-name = "deckpilot-module-projects"
-version = "0.9.0"
-dependencies = [
- "deckpilot-core",
- "deckpilot-device",
- "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1316,38 +1257,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "deckpilot-module-workspace"
-version = "0.9.0"
-dependencies = [
- "deckpilot-core",
- "deckpilot-module-system",
- "url",
-]
-
-[[package]]
 name = "deckpilot-modules"
 version = "0.9.0"
 dependencies = [
- "base64 0.23.1",
  "deckpilot-core",
  "deckpilot-device",
  "deckpilot-module-deck",
- "deckpilot-module-docker",
  "deckpilot-module-general",
- "deckpilot-module-git",
- "deckpilot-module-github",
- "deckpilot-module-gitlab",
  "deckpilot-module-http",
- "deckpilot-module-jira",
  "deckpilot-module-notifications",
- "deckpilot-module-projects",
  "deckpilot-module-system",
  "deckpilot-module-work-session",
- "deckpilot-module-workspace",
  "deckpilot-plugin-manifest",
- "rustls",
  "serde_json",
- "url",
 ]
 
 [[package]]

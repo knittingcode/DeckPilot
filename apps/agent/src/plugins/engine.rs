@@ -91,6 +91,11 @@ pub(crate) struct CatalogPlugin {
     /// project's roles (`resource.resolve`, X2) even without a `resource`
     /// parameter, so its module reads the profile and the bindings.
     pub resources: bool,
+    /// Its `wrapAround` setting while it holds `projectContext`: how the
+    /// app's and the tray's project cycling (`cycleProject`) steps past
+    /// the ends, as the plugin's own `cycle` does. `None` for every other
+    /// plugin.
+    pub wrap_around: Option<bool>,
 }
 
 impl CatalogPlugin {
@@ -237,10 +242,13 @@ impl FeatureModule for PluginModule {
     }
 
     fn unavailable_reason(&self) -> Option<String> {
-        self.plugin
-            .unavailable
-            .as_ref()
-            .map(|why| format!("{} ({}): {why}", self.plugin.name, self.plugin.id))
+        self.plugin.unavailable.as_ref().map(|why| {
+            if self.plugin.name == self.plugin.id {
+                format!("{}: {why}", self.plugin.id)
+            } else {
+                format!("{} ({}): {why}", self.plugin.name, self.plugin.id)
+            }
+        })
     }
 }
 

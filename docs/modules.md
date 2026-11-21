@@ -13,31 +13,31 @@ individual features. A module contributes:
 Modules are compiled in and registered explicitly. There is no loading of
 third-party executables and no remote installation.
 
-In builds with the experimental plugin marketplace enabled, built-in
-modules move to first-party plugins one by one
-([marketplace/module-migration.md](marketplace/module-migration.md)).
-The first is `github`: such a build runs the stored `github.*` actions in
-the bundled plugin `deckpilot.github` once the user approves the use of
-the token, and keeps the built-in as the fallback and for every
-configuration the plugin cannot serve yet (GitHub Enterprise, private
-hosts). Release builds keep plugins off, and so every module below.
+Developer features are not built-in modules. The former built-in
+`github`, `gitlab`, `jira`, `git`, `docker`, `workspace` and `projects`
+modules were removed (WP-C5, WP-C6;
+[marketplace/module-migration.md](marketplace/module-migration.md) §11 D1,
+D2). Their only implementation is now DeckPilot's own bundled plugins
+`deckpilot.github`, `.gitlab`, `.jira`, `.git`, `.docker`, `.workspace` and
+`.projects` (class `migration` in `plugins/first-party/bundled.json`), and
+workflow management is `deckpilot.workflows` (class `default`). Stored
+actions keep their legacy ids (`git.status`), which the core maps to the
+plugin's action types (`ACTION_ALIASES`,
+`crates/deckpilot-core/src/alias.rs`); without the plugin such an action
+is unavailable with the reason ("`git.status` now comes from Git
+(`deckpilot.git`): …"), never an unknown type, and no built-in runs it
+instead ([Integration modules](integration-modules.md#moved-to-first-party-plugins)).
 
 ## Built-in modules
 
 | Module     | Pages | Capabilities |
 | ---------- | ----- | ------------ |
 | `deck` | — | change pages and profiles on the deck |
-| `docker` | — (settings) | read profile, read machine resources, run programs (`docker`) |
 | `general`  | — | read profile |
-| `git` | — (settings) | read profile, read machine resources, run programs (`git`), open folders |
-| `github` | — (settings) | send network requests, use stored credentials, open pages |
-| `gitlab` | — (settings) | send network requests, use stored credentials, open pages |
 | `http` | — (settings with credentials) | send network requests, use stored credentials |
-| `jira` | — (settings) | send network requests, use stored credentials, open pages |
 | `notifications` | — (settings) | read profile, show notifications |
-| `projects` | Projects | read profile, change active project, read machine resources |
 | `system` | — (settings) | read machine resources, open applications/files/pages, run programs, see running programs |
-| `workspace` | — | read profile, read machine resources, open applications/files/pages |
+| `work-session` | Work Session | — (variables only) |
 
 The integration modules and their actions are described in
 [Integration modules](integration-modules.md).
@@ -59,14 +59,6 @@ and nothing is added to the Action Library automatically.
 | `general.log` | `message` | the rendered message |
 | `general.wait` | `seconds` (1–300) | waits; output `waitedMs`; stops at once when cancelled (the reference workflow node) |
 | `general.delay` | `milliseconds` (10–300000, default 500) | waits; output `waitedMs`; stops at once when cancelled. The delay row of a Multi Action's step list: the step sets its own `milliseconds` as an override |
-| `projects.cycle` | `direction` (`next` \| `previous`, default `next`) | switches along the project order (respects `wrapAround`) |
-| `projects.select` | `project_id` (optional) | with a project: selects it; without: reports the current project and changes nothing |
-| `projects.current` | — | reports the current project: `projectId`, `projectKey`, `projectName`, `profileId` |
-| `projects.repository` | `project_id` (optional) | resolves the project's `repository` resource |
-| `projects.documentation` | `project_id` (optional) | resolves the project's `docs` resource |
-| `projects.resolve-resource` | `project_id` (optional), `resource` (name) | resolves any named resource of the project |
-| `projects.next` / `projects.previous` | — | *deprecated*: `projects.cycle` with that direction |
-| `projects.active` | — | *deprecated*: `projects.current` without `profileId` |
 
 A type marked `deprecated` (`ActionType.deprecated`, sent to the app only
 when true) is replaced by another one. Saved actions, workflow nodes and
@@ -77,7 +69,7 @@ Library and the workflow builder no longer offer it for new ones.
 
 The `deck` module's actions act on the deck itself: the pages and layouts
 a device shows and the active profile. A handler cannot reach the device runtime or
-the agent, so each action *asks*, as the project actions do with
+the agent, so each action *asks*, as a project switch does with
 `ContextEffect`: its result carries a `DeckRequest`
 (`crates/deckpilot-core/src/execution.rs`), which the registry lets
 through only for a module with the capability `DeckControl`.
@@ -132,66 +124,41 @@ setting, so the app shows the new level, it is kept across restarts, and
 it reaches only devices whose model has a brightness. A step stops at 0
 and 100.
 
-### Cycling projects
+### Projects
 
-`projects.cycle` is one action for both directions. The handler reports the
-project it leads to and requests a `ContextEffect::CycleProject`; the engine
-applies it against the project that is active *when it applies it*, and
-reports the applied effect as the `SelectProject` it resulted in. The agent
-handles key presses, IPC requests and tray commands one at a time, so N
-presses — however quickly they arrive, from the device or several clients —
-move exactly N projects on.
+The `projects.*` actions (`cycle`, `select`, `current`, `repository`,
+`documentation`, `resolve-resource`, deprecated `next`, `previous`,
+`active`), the `projects.current.*` variables, the Projects page and the
+`wrapAround` setting come from the Projects plugin `deckpilot.projects`
+since the built-in `projects` module was removed (WP-C6); the differences
+are listed in `plugins/first-party/projects/src/lib.rs`. The project data
+model stays in the core as a neutral primitive
+([below](#the-project-context-primitive-in-the-core)), and so does
+switching: the plugin asks the agent (`project.select`, `project.cycle`,
+[module-migration.md](marketplace/module-migration.md#x6-project-operations-projectcontext)),
+which steps with `ProjectSwitcher::step` against the project that is
+active when it applies the switch, so N presses move exactly N projects
+on:
 
 - No projects: fails with `no-projects`, nothing changes.
-- One project: succeeds without a change (`"<KEY> is the only project"`),
-  also without `wrapAround`.
+- One project: succeeds without a change, also without `wrapAround`.
 - Without `wrapAround` the ends fail with `at-last-project` /
   `at-first-project`.
 - The order is the profile's current order, so a reorder takes effect on
   the next press.
-- The active project was deleted: when the agent reloads the profile, its
-  default (or first) project becomes active; the next press continues from
-  there. A context still naming a deleted project starts from the first
-  (next) or last (previous) project.
-- Each profile keeps its own active project: after a profile change, presses
-  cycle the new profile's projects, and coming back shows and continues from
-  the project the first profile had.
-- On a key press the change goes to the global active project: the agent
-  persists it, redraws the keys that show the project at once and sends a
-  `state` event with the new `activeProject`. Inside a workflow it changes
-  the run's project, and the workflow's `projectScope` decides whether it
-  becomes the active project when the run ends.
+- Each profile keeps its own active project.
+- Inside a workflow a switch changes the run's project, and the
+  workflow's `projectScope` decides whether it becomes the active project
+  when the run ends.
 
-`project_id` is a stable project id. Unset (absent or `null`) means *the
-current project*, decided when the action runs; the editor's "Current
-project" option stores exactly that, never the id of the project active at
-configuration time. An explicit project must belong to the action's profile:
-the app refuses to save anything else and the engine refuses to run it.
-
-The three resource types share one resolver
-(`modules/projects/src/resources.rs`). They only report what this computer
-binds to the resource; opening a folder or a browser, running Git, Docker or
-an editor belongs to the modules for those tools. Results are structured
-(`ActionResult.data`): `projectId`, `projectKey`, `projectName`, and for
-resources `resource`, `resourceKey`, `kind` and `value`. Missing resources
-fail with a message naming the project and resource.
-
-Failures carry the shared codes `no-active-project`, `not-permitted`,
-`resource-role-missing`, `resource-unbound`, `resource-kind-mismatch` and
-`invalid-parameters`, plus `project-not-in-profile` (an explicit project of
-another profile), `no-projects`, `at-last-project` and `at-first-project`
-(cycling without `wrapAround`). `projects.cycle`, `projects.next`,
-`projects.previous` and `projects.select` are declared as modifying, since
-switching the active project changes state; cycling is neither idempotent
-nor retry-safe. The resource types, `projects.current` and
-`projects.active` only read.
-
-The projects module owns the Projects page, project management (create,
-edit, reorder, delete, default project, explicit copy to another profile),
-active project switching (actions, the tray and the app all step with
-`ProjectSwitcher::step`, through `switching::step` outside the engine) and
-project resources. Its setting `wrapAround` decides whether cycling wraps
-around at the ends.
+Without the plugin (not installed, disabled, waiting for consent, or a
+build without plugins) nothing switches projects: the agent refuses
+`getActiveProject`, `selectProject` and `cycleProject` with "the Projects
+plugin is not active", the tray and the app's project commands are
+refused ("the Projects plugin is off"), and no project is deleted. With
+the plugin on but the agent not running, the app's `cycle_project` steps
+with wrap-around on, the plugin's default (its setting lives in the
+agent's plugin store).
 
 ## Workflow node contract
 
@@ -287,7 +254,7 @@ action's late result is discarded.
 A node's time limit is at most 10 minutes (`MAX_TIMEOUT_MS`), whether it is
 the action type's own or the node's override: action types declare at most
 that, and the engine caps anything longer. An action's own longer limit — a
-command's `timeoutSeconds`, the Docker module's time limit — still applies
+command's `timeoutSeconds` — still applies
 when it runs outside a workflow, e.g. from a key. Cooperative handlers stop
 at the deadline; a result arriving late is a timeout and its effects are
 discarded.
@@ -334,8 +301,11 @@ reports. Its tests show each part.
 | Button state types (`ButtonState`, `RefreshPolicy`, `StateError`) | `crates/deckpilot-core/src/button_state.rs` |
 | Scheduling and caching of button states in the agent | `apps/agent/src/service/states.rs` |
 | Action dispatch and capability checks | `crates/deckpilot-core/src/registry.rs` |
-| Module crates | `modules/general`, `modules/projects` |
+| Module crates | `modules/{deck,general,http,notifications,system,work-session}` |
 | List of built-in modules | `crates/deckpilot-modules` (the only place that names them) |
+| Frozen 0.9.0 contracts of the removed built-ins | `crates/deckpilot-modules/legacy/<id>.json`, checked against the plugins by `crates/deckpilot-modules/tests/contracts.rs` |
+| Legacy action ids of the removed built-ins | `ACTION_ALIASES` (`crates/deckpilot-core/src/alias.rs`) |
+| Project management (`ProjectCatalog`) | `crates/deckpilot-core/src/project_catalog.rs` |
 | Module state | `modules` table (`ConfigStore::module_states`) |
 | Backend commands of a module | `apps/desktop/src-tauri/src/modules/` |
 | Frontend of a module | `apps/desktop/src/modules/<id>/`, registered in `src/modules/index.ts` |
@@ -373,8 +343,8 @@ reports. Its tests show each part.
 
 ## Button state
 
-A module can show live state on keys that run its actions: a repository's
-branch, whether a Compose project is up. The contract
+A module can show live state on keys that run its actions: the CPU load,
+a disk's free space. The contract
 (`crates/deckpilot-core/src/button_state.rs`, `ActionHandler` in
 `registry.rs`):
 
@@ -452,8 +422,7 @@ instance's normalized parameters.
 **Rules for providers.**
 
 - Read only. A provider never changes anything, whatever the action does
-  when pressed (the Docker *Compose up* key shows whether the project is
-  up; it does not start it).
+  when pressed.
 - Be cheap and bounded: one short command or request, its own time limit.
   Declare the longest interval that is still useful; polled providers that
   run programs should use at least 30 s.
@@ -478,26 +447,20 @@ back does not draw its image again.
 
 | Action types | State | Interval |
 | ------------ | ----- | -------- |
-| `git.status` | branch as detail; green clean, amber uncommitted changes, red conflicts | 30 s |
-| `git.branch` | branch as detail (`@<commit>` when detached) | 30 s |
-| `docker.status` | green when the engine answers, red (`Unavailable`) otherwise | 30 s |
-| `docker.containers` | `N running`; green when any runs, grey otherwise | 30 s |
-| `docker.compose-status`, `-up`, `-down`, `-restart` | `running/total up`; green all, amber some, grey none; up and down keys also toggle (on when all run) | 30 s |
 | `system.cpu` | `n%` under the title, the use as a bar and its recent values as a chart; green, amber from the warning threshold, red from the critical one | 2 s |
 | `system.memory` | used and installed GiB under the title (`12.4/32 GiB`) and the used share as a bar; thresholds as CPU | 2 s |
 | `system.network` | received and sent per second under the title, one line each (`↓ 2.1 MB/s`, `↑ 340 kB/s`) | 2 s |
 | `system.disk` | `n% used` under the title and the used share as a bar; amber and red at or below the free-space thresholds | 30 s |
 
-Each reads with the module's existing read-only command (`git status`
-without optional locks; `docker version`, `docker ps`, `docker compose
-ps`). The System monitor keys share one in-process `sysinfo` sampler,
+The Git and Docker keys' states come from their plugins (the last run's
+result, see their READMEs). The System monitor keys share one in-process
+`sysinfo` sampler,
 which reads a value at most every 1.5 s and only while such a key is shown
 ([integration-modules.md](integration-modules.md#system-system)).
 
 **Testing a provider.** Call `ActionHandler::button_state` with an
 `ExecutionContext`, or `ActionRegistry::button_state` to include the
-capability limits; use a fake program for external tools (see the Git and
-Docker module tests). The agent's scheduler is tested with explicit times
+capability limits; use a fake program for external tools. The agent's scheduler is tested with explicit times
 in `apps/agent/src/service/states.rs`.
 
 **Previewing states in the app.** `KeyFace` carries `indicator`,
@@ -518,8 +481,8 @@ Within that scope:
 | ---- | ----------- |
 | Action execution (keys, workflows, IPC `runAction`/`runWorkflow`) | registry dispatch; disabled modules have no handler; restricted context; effect check |
 | Profile checks and key faces | registry; profile/project hidden without `profile-read` |
-| Tray and app project switching | agent and app refuse while the projects module is disabled |
-| Project management and resource checks in the app | `AppState::require_module` |
+| Tray and app project switching | agent and app refuse while the Projects plugin is not active (`require_projects`, `AppState::require_feature`) |
+| Project management in the app | `AppState::require_feature(PROJECTS_PLUGIN)` |
 | Module enable/disable | the app waits until a running agent has reloaded |
 
 ## Enabling and disabling
@@ -529,19 +492,20 @@ asks the agent to reload. When a module is disabled:
 
 - its pages, dashboard entries and action types disappear from the app,
 - its action types are not executable; running a stored action reports
-  "the Projects module is disabled",
+  "the HTTP module is disabled",
 - actions, workflows and layouts that use it are kept unchanged and shown as
   unavailable; they work again once the module is enabled,
-- its backend commands are refused (for projects: editing projects and
-  switching the active project, including from the tray).
+- its backend commands are refused.
 
 A module cannot be disabled while an enabled module depends on it, and cannot
 be enabled without its dependencies or on an unsupported platform. Invalid
 stored states fall back to safe values instead of failing the start.
 
-## Remaining dependencies of the core on projects
+## The project-context primitive in the core
 
-These are deliberate for now and documented so they can move later:
+The project data model stays in the core (§11 of
+[module-migration.md](marketplace/module-migration.md#11-owner-decisions-of-2026-11-20));
+the Projects plugin owns every user-facing part of it:
 
 - `Profile.projects`, `Profile.default_project`, `Project`, `ProjectKey`,
   `ActiveProjectContext`, `ProjectSwitcher` and `CycleDirection` are part of
@@ -557,7 +521,8 @@ These are deliberate for now and documented so they can move later:
 - Storage tables `projects`, `default_projects`, `active_projects`.
 
 None of these depend on a module crate; `deckpilot-core` has no dependency on
-any module.
+any module. Without the Projects plugin the IPC requests above are refused
+with "the Projects plugin is not active"; the data is kept.
 
 ## Portability contract
 
@@ -585,15 +550,16 @@ Modules can own database tables through declared, versioned SQL steps
 registered module — enabled or not, so enabling a module later never meets
 an old schema — in one transaction per module, and records the version in
 `module_schemas`. A module schema newer than the installed module is
-refused. The projects module declares version 1 to take ownership of the
-`projects`, `default_projects` and `active_projects` tables created by core
-schema 3; later changes to those tables belong in its own steps.
+refused. The former built-in `projects` module (removed in WP-C6) declared
+version 1, with empty SQL, for the `projects`, `default_projects` and
+`active_projects` tables created by core schema 3; those tables are part of
+the core's project-context primitive.
 
 ## Still planned
 
 - **Module-owned profile data:** a per-profile, per-module document handed
   to the module, with the profile's lifecycle (duplicate, delete) applied by
-  the core through hooks, so that projects can leave the core profile model.
+  the core through hooks.
 - **Runtime context slots** instead of the built-in active project, with
   effects checked against a capability per slot, and module-provided label
   placeholders.
@@ -603,14 +569,18 @@ schema 3; later changes to those tables belong in its own steps.
 
 ## Adding a module
 
+Developer features (tools, services, project workflows) are plugins, not
+built-in modules ([module-migration.md](marketplace/module-migration.md)
+§11 D1). A built-in module is for a system capability of the core.
+
 1. Create a crate under `modules/<id>` that depends on `deckpilot-core` and
    implements `FeatureModule` with a manifest and its handlers. Use
    `<id>.<name>` action type ids.
 2. Register it in `deckpilot_modules::builtin`.
 3. If it has pages, add `apps/desktop/src/modules/<id>/` and list it in
    `FRONTEND_MODULES`; backend commands go to
-   `apps/desktop/src-tauri/src/modules/<id>.rs` and check
-   `AppState::require_module`.
+   `apps/desktop/src-tauri/src/modules/<id>.rs` and refuse while the
+   module is disabled.
 4. Add tests for the handlers (with an `ExecutionContext`) and for the module
    in `crates/deckpilot-modules/src/tests.rs`.
 
