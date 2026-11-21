@@ -30,6 +30,9 @@ pub enum KeyRole {
     Root,
     Index,
     Timestamp,
+    /// The first-party publisher role (`crate::publisher`): signs release
+    /// artifacts, never registry documents.
+    Publisher,
 }
 
 impl KeyRole {
@@ -38,7 +41,10 @@ impl KeyRole {
             "root" => Ok(Self::Root),
             "index" => Ok(Self::Index),
             "timestamp" => Ok(Self::Timestamp),
-            other => fail(format!("unknown role `{other}` (root, index or timestamp)")),
+            "publisher" => Ok(Self::Publisher),
+            other => fail(format!(
+                "unknown role `{other}` (root, index, timestamp or publisher)"
+            )),
         }
     }
 
@@ -47,6 +53,7 @@ impl KeyRole {
             Self::Root => "root",
             Self::Index => "index",
             Self::Timestamp => "timestamp",
+            Self::Publisher => "publisher",
         }
     }
 }
@@ -170,28 +177,34 @@ impl SigningKey {
             std::fs::read_to_string(path)
                 .map_err(|e| PublishError(format!("{}: {e}", path.display())))?,
         );
-        let bad = || PublishError(format!("{}: not a minisign secret key", path.display()));
+        Self::from_text(&text, &path.display().to_string(), password)
+    }
+
+    /// [`SigningKey::load`] from the text of a secret key file (for example
+    /// an environment secret), named `source` in messages. The text is
+    /// never printed.
+    pub fn from_text(text: &str, source: &str, password: Option<&Password>) -> Result<Self> {
+        let bad = || PublishError(format!("{source}: not a minisign secret key"));
         let encoded = text.lines().nth(1).ok_or_else(bad)?;
         let raw = Zeroizing::new(STANDARD.decode(encoded.trim()).map_err(|_| bad())?);
         let encrypted = SecretKey::from_bytes(&raw)
             .map_err(|_| bad())?
             .is_encrypted();
-        let secret_box = SecretKeyBox::from_string(&text).map_err(|_| bad())?;
+        let secret_box = SecretKeyBox::from_string(text).map_err(|_| bad())?;
         let secret = if encrypted {
             let Some(password) = password else {
                 return fail(format!(
-                    "{} is encrypted; give its password with --password-stdin or an \
-                     environment variable (--password-env)",
-                    path.display()
+                    "{source} is encrypted; give its password with --password-stdin or an \
+                     environment variable (--password-env)"
                 ));
             };
             SecretKey::from_box(secret_box, Some(password.reveal()))
         } else {
             SecretKey::from_unencrypted_box(secret_box)
         }
-        .map_err(|e| PublishError(format!("{}: {e}", path.display())))?;
+        .map_err(|e| PublishError(format!("{source}: {e}")))?;
         let public = PublicKey::from_secret_key(&secret)
-            .map_err(|e| PublishError(format!("{}: {e}", path.display())))?;
+            .map_err(|e| PublishError(format!("{source}: {e}")))?;
         let public = wrap_public(&public)?;
         Ok(Self { secret, public })
     }

@@ -65,6 +65,10 @@ led to it; where the code differs, the code and the tests win.
   migration. *Design record; the extraction's built-ins are removed
   (WP-C5, WP-C6).* Its evidence is the
   [module classification matrix](marketplace/module-matrix.md).
+- [First-party publisher signature](marketplace/publisher-signature.md):
+  how a build verifies the signed release artifacts of DeckPilot's own
+  plugins from `knittingcode/deckpilot-plugins` (not provisioned yet), and
+  its [security review request](marketplace/publisher-review-request.md).
 
 ## Contributing and development
 
